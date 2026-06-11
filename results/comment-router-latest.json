@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T09:08:11.153Z",
-  "repo": "openclaw/crabbox",
+  "generated_at": "2026-06-11T09:08:28.923Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T06:08:10.716Z",
+  "since": "2026-06-11T06:08:26.875Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    267
+    92130
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,142 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92130:4678955865:2026-06-11T09:08:23Z:clawsweeper_needs_human",
+      "comment_id": "4678955865",
+      "comment_version_key": "4678955865:2026-06-11T09:08:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92130#issuecomment-4678955865",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92130,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T09:07:19Z",
+      "comment_updated_at": "2026-06-11T09:08:23Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=3484647baa13038c50519d5bdd38a83b0e606cd7)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source -1, Tests +22, Other +89. Total +110 across 3 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "3484647baa13038c50519d5bdd38a83b0e606cd7",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(session-lock): remove ctimeNs from fingerprint to avoid Btrfs false takeover",
+        "body": "## Summary\n\nOn Btrfs filesystems (common on NAS devices like Zspace, Synology, QNAP), background filesystem maintenance tasks (snapshots, scrub, quota recalculation, metadata balancing) spontaneously update file `ctime` without any user-initiated write. This caused `sameSessionFileFingerprint()` to return `false` because it compared `ctimeNs`, triggering `EmbeddedAttemptSessionTakeoverError` on every cron job and subagent spawn that held a session for more than a few seconds.\n\n`dev + ino + size + mtimeNs` is sufficient to detect real external writes — any content-changing write also changes `mtimeNs` and/or `size`. `ctimeNs` adds no meaningful protection against takeovers while creating a false-positive trap on Btrfs.\n\nFixes #92109.\n\n## Changes\n\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.ts`: Removed `ctimeNs` from `sameSessionFileFingerprint()` comparison (line 82).\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`: Added regression test that simulates Btrfs `ctime` drift via `chmod` and verifies the session lock controller does not treat it as a takeover.\n- `scripts/repro/issue-92109-btrfs-ctiens-instability.mts`: Standalone reproduction script.\n\n## Real behavior proof\n\n- **Behavior addressed**: `EmbeddedAttemptSessionTakeoverError` on Btrfs filesystems caused by spontaneous `ctimeNs` changes from background filesystem maintenance.\n- **Real environment tested**: Linux 4.19.112-2.el8.x86_64, Node.js v22.19.0, local source checkout at `main`.\n- **Exact steps or command run after this patch**:\n  - `npx tsx scripts/repro/issue-92109-btrfs-ctiens-instability.mts`\n  - `pnpm test src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts --run`\n- **Evidence after fix**:\n\n```text\n=== Reproduction for issue #92109 ===\nSession file: /tmp/openclaw-repro-92109-6x6rrI/session.jsonl\n\nInitial fingerprint:\n  dev: 64768\n  ino: 4922456\n  size: 19\n  mtimeNs: 1781165688717211960\n  ctimeNs: 1781165688717211960\n\nAfter chmod (simulated Btrfs ctime drift):\n  dev: 64768\n  ino: 4922456\n  size: 19\n  mtimeNs: 1781165688717211960\n  ctimeNs: 1781165688721212176\n\nFields changed:\n  dev: same\n  ino: same\n  size: same\n  mtimeNs: same\n  ctimeNs: CHANGED\n\nsameSessionFileFingerprint result:\n  Before fix (includes ctimeNs): MISMATCH ← takeover\n  After fix (excludes ctimeNs): MATCH ← ok\n\nPASS: ctimeNs-only change no longer triggers session takeover.\n```\n\n- **Observed result after fix**: The session lock controller correctly ignores `ctimeNs`-only changes and allows post-prompt writes to proceed without throwing `EmbeddedAttemptSessionTakeoverError`.\n- **What was not tested**: Actual Btrfs filesystem (repro uses `chmod` which changes `ctime` on all Linux filesystems); live gateway cron/subagent execution on a Btrfs NAS.\n\n## Verification\n\n- `pnpm test src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts --run` — 50 passed (including new regression test)\n- `pnpm build` — passed\n- `npx oxlint --import-plugin --config .oxlintrc.json src/agents/embedded-agent-runner/run/attempt.session-lock.ts src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts` — passed\n- `pnpm format:fix src/agents/embedded-agent-runner/run/attempt.session-lock.ts src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts` — no changes needed",
+        "branch": "fix/92109-btrfs-ctiens-instability",
+        "head_sha": "3484647baa13038c50519d5bdd38a83b0e606cd7",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "scripts",
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "rating: 🌊 off-meta tidepool"
+        ],
+        "files": [
+          {
+            "path": "scripts/repro/issue-92109-btrfs-ctiens-instability.mts",
+            "additions": 89,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
+            "additions": 22,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92130",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92130.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 54,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 13,
+            "QUEUED": 3,
+            "SKIPPED": 33,
+            "IN_PROGRESS": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "preflight:FAILURE",
+            "Security High (core-auth-secrets):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:FAILURE",
+            "actionlint:FAILURE",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (core-auth-secrets):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "preflight:FAILURE",
+            "security-fast:FAILURE",
+            "actionlint:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 838,
+    "total_ms": 2364,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 426
+        "ms": 453
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1582
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 401
+        "ms": 306
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
