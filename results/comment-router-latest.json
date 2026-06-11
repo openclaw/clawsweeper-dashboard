@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T00:10:05.538Z",
+  "generated_at": "2026-06-11T00:10:48.322Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T21:10:02.867Z",
+  "since": "2026-06-10T21:10:47.718Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     92055
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4675875600
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,102 +63,32 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(media): resolve state-relative inbound attachments",
-        "body": "## Summary\n\n- Resolves state-relative inbound media paths (for example `media/inbound/photo.jpg`) against the OpenClaw state directory before falling back to the process cwd.\n- Preserves existing precedence for `MediaWorkspaceDir`/`workspaceDir` and keeps the old cwd-relative fallback when no state-dir file exists.\n- Keeps the new state-dir candidate behind the existing inbound root allowlist and canonical file-open checks.\n- Adds regression coverage for the attachment cache and the current-turn native image hydration path.\n- AI-assisted: yes. I understand the code path changed here and validated the behavior locally.\n\n## Linked context\n\nCloses none.\n\nRelated: redacted downstream production report for Telegram inbound image messages saved under `media/inbound/...` while current-turn native image hydration dropped the image when the gateway cwd differed from the OpenClaw state directory.\n\nWas this requested by a maintainer or owner? No public maintainer request; this is a focused bug fix PR.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: Telegram-style inbound image references can arrive as state-relative paths such as `media/inbound/telegram-proof.jpg`. Before this patch, `MediaAttachmentCache` resolved those relative paths from `process.cwd()` when no `workspaceDir` was provided, so current-turn image hydration could silently skip the image even though the file existed under `$OPENCLAW_STATE_DIR/media/inbound`.\n- Real environment tested: local OpenClaw source checkout on macOS (`Darwin 25.5.0 arm64`), Node `v25.6.1`, pnpm `11.2.2`, commit `7dab5cf9b976` on top of `origin/main` `13dce4832158`.\n- Exact steps or command run after this patch:\n\n```sh\nSTATE_DIR=\"$(mktemp -d -t openclaw-state-media-proof.XXXXXX)\" CWD_DIR=\"$(mktemp -d -t openclaw-cwd-proof.XXXXXX)\" OPENCLAW_STATE_DIR=\"$STATE_DIR\" pnpm exec tsx <<'TS'\nimport fs from \"node:fs/promises\";\nimport path from \"node:path\";\nimport { resolveCurrentTurnImages } from \"./src/auto-reply/reply/current-turn-images.ts\";\n\nconst stateDir = process.env.OPENCLAW_STATE_DIR;\nconst cwdDir = process.env.CWD_DIR;\nif (!stateDir || !cwdDir) {\n  throw new Error(\"missing temp dirs\");\n}\nconst relativePath = \"media/inbound/telegram-proof.jpg\";\nconst filePath = path.join(stateDir, relativePath);\nconst imageBytes = Buffer.from(\"telegram-proof-image\");\nawait fs.mkdir(path.dirname(filePath), { recursive: true });\nawait fs.writeFile(filePath, imageBytes);\nprocess.chdir(cwdDir);\n\nconst result = await resolveCurrentTurnImages({\n  ctx: {\n    Body: \"caption\",\n    MediaPath: relativePath,\n    MediaPaths: [relativePath],\n    MediaType: \"image/jpeg\",\n    MediaTypes: [\"image/jpeg\"],\n  },\n  cfg: {},\n});\n\nconsole.log(JSON.stringify({\n  cwd: process.cwd(),\n  stateRelativePath: relativePath,\n  imageCount: result.images?.length ?? 0,\n  imageOrder: result.imageOrder,\n  mimeType: result.images?.[0]?.mimeType,\n  dataMatches: result.images?.[0]?.data === imageBytes.toString(\"base64\"),\n}, null, 2));\nTS\n```\n\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):\n\n```json\n{\n  \"cwd\": \"/private/var/folders/5k/_lrv6h455vg07_fxcqpf524m0000gn/T/openclaw-cwd-proof.XXXXXX.vDKvVmktgE\",\n  \"stateRelativePath\": \"media/inbound/telegram-proof.jpg\",\n  \"imageCount\": 1,\n  \"imageOrder\": [\n    \"inline\"\n  ],\n  \"mimeType\": \"image/jpeg\",\n  \"dataMatches\": true\n}\n```\n\n- Observed result after fix: current-turn image hydration found the existing `$OPENCLAW_STATE_DIR/media/inbound/telegram-proof.jpg` file even though `process.cwd()` was a different temporary directory, produced one native image, preserved inline image order, and emitted the expected image MIME/data.\n- What was not tested: I did not run a live Telegram bot turn or a live OpenAI vision request from this checkout. I also did not run the full repo-wide `pnpm build && pnpm check && pnpm test` locally.\n- Proof limitations or environment constraints: this proof exercises the real OpenClaw source path for `resolveCurrentTurnImages` and `MediaAttachmentCache`, but uses a temporary local state directory instead of a live Telegram account so no private channel data or tokens are exposed.\n- Before evidence (optional but encouraged): the downstream repro used OpenClaw `2026.6.5` with a Telegram inbound image persisted under `media/inbound/...`; the gateway cwd was not the state directory, and the current-turn vision path treated the image as missing. The test added in this PR encodes that exact path shape.\n\n## Tests and validation\n\nCommands run:\n\n```sh\npnpm exec oxfmt --check --threads=1 src/media-understanding/attachments.cache.ts src/media-understanding/media-understanding-misc.test.ts src/auto-reply/reply/current-turn-images.test.ts\ngit diff --check\npnpm test src/media-understanding/media-understanding-misc.test.ts src/auto-reply/reply/current-turn-images.test.ts\ncodex review --base origin/main\n```\n\nAdditional checks run by `codex review --base origin/main`:\n\n```sh\nnode scripts/run-vitest.mjs src/media-understanding/media-understanding-misc.test.ts src/auto-reply/reply/current-turn-images.test.ts\nnode scripts/run-vitest.mjs src/auto-reply/reply/get-reply-run.media-only.test.ts -- -t \"hydrates current image MediaPaths|rehydrates only current MediaPaths|does not rehydrate current MediaPaths\"\ngit diff --check 13dce4832158cd722f2c0d2e130a185f0a5ed72d\n```\n\nRegression coverage added or updated:\n\n- `MediaAttachmentCache` resolves an existing state-relative `media/inbound/...` path when cwd differs from state dir.\n- `MediaAttachmentCache` still falls back to cwd-relative paths when no state-dir candidate exists.\n- `resolveCurrentTurnImages` hydrates Telegram-style state-relative image paths into native prompt images.\n\nWhat failed before this fix: state-relative `MediaPath` values without `MediaWorkspaceDir` were resolved from cwd, so the cache could miss files that were actually present under `$OPENCLAW_STATE_DIR/media/inbound`.\n\nIf no test was added, why not? Not applicable; this PR adds focused regression tests.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes. Inbound images referenced by existing state-relative paths can now reach native image hydration instead of being skipped.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nYes, local path resolution behavior changed. Auth, secrets, network, and tool execution behavior did not change.\n\nWhat is the highest-risk area?\n\nLocal attachment path resolution.\n\nHow is that risk mitigated?\n\nThe state-dir candidate is only used for non-absolute paths, only when the candidate exists, and only when `isInboundPathAllowed` accepts it under the configured inbound local roots. The existing `ensureLocalStat` path still validates the resolved path against allowed roots and then opens it through `openLocalFileSafely` before reading bytes.\n\n## Current review state\n\nWhat is the next action?\n\nCI and maintainer review.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\nNo known author-side blocker. CI still needs to run the full repo matrix.\n\nWhich bot or reviewer comments were addressed?\n\nLocal `codex review --base origin/main` reported: \"No actionable regressions were found in the changed media attachment resolution or new tests. Focused Vitest coverage for media-understanding and current-turn image hydration passed.\"\n\nFork PR note: opened from `sercada:fix-state-relative-media-attachments`; maintainer edits should remain enabled for takeover/merge prep.\n",
-        "branch": "fix-state-relative-media-attachments",
-        "head_sha": "7dab5cf9b976d7690fc0e9108bf55580da140218",
-        "author": "sercada",
-        "labels": [
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/auto-reply/reply/current-turn-images.test.ts",
-            "additions": 62,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/media-understanding/attachments.cache.ts",
-            "additions": 23,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/media-understanding/media-understanding-misc.test.ts",
-            "additions": 54,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "generated_issue_branch": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_issue_job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92055",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92055.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 129,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "Security High (channel-runtime-boundary):IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (channel-runtime-boundary):IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2935,
+    "total_ms": 1409,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 392
+        "ms": 591
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2265
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 253
+        "ms": 806
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
