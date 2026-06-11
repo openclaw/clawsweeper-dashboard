@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T17:48:31.901Z",
+  "generated_at": "2026-06-11T17:48:33.479Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T14:48:30.449Z",
+  "since": "2026-06-11T14:48:28.782Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91080
+    92196
+  ],
+  "comment_ids": [
+    4683355734
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,21 +34,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91080:4641379887:2026-06-11T17:48:27Z:clawsweeper_needs_human",
-      "comment_id": "4641379887",
-      "comment_version_key": "4641379887:2026-06-11T17:48:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91080#issuecomment-4641379887",
+      "idempotency_key": "comment-router:openclaw/openclaw:92196:4683355734:2026-06-11T17:47:22Z:re_review",
+      "comment_id": "4683355734",
+      "comment_version_key": "4683355734:2026-06-11T17:47:22Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92196#issuecomment-4683355734",
       "repo": "openclaw/openclaw",
-      "issue_number": 91080,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 92196,
+      "author": "yetval",
+      "author_id": 102706514,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-07T04:10:46Z",
-      "comment_updated_at": "2026-06-11T17:48:27Z",
+      "comment_created_at": "2026-06-11T17:47:22Z",
+      "comment_updated_at": "2026-06-11T17:47:22Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-run",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -59,59 +62,57 @@
       "visual_lens": null,
       "expected_head_sha": "5512e01306bb86238e33bd1d0abc500f07672e84",
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-11T17:48:34.489Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 92196
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-11T17:48:37.005Z",
+          "response_comment_id": "4682637635",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat(gateway): startup watchdog dumps in-flight phases on hang",
-        "body": "## Summary\n\nAdd a one-shot startup watchdog to the gateway CLI that dumps the **in-flight** diagnostic phase stack to `stderr` as a single structured line when the HTTP server has not bound within a configurable threshold (default 60s). Diagnostic-only — no behavior change on the happy path.\n\n## Why\n\nWhen the gateway hangs anywhere between `[gateway] starting...` and HTTP listen-success, the only externally visible signal today is \"no log output for N minutes until the orchestrator SIGKILLs the pod.\" Every intervening step already runs inside `withDiagnosticPhase(name, run)` blocks, but those snapshots are only emitted on phase **completion** via the optional `OPENCLAW_GATEWAY_STARTUP_TRACE` logger — so on the hang path nothing is ever flushed. Operators end up having to attach a debugger or guess.\n\nThis change surfaces *which* startup step is stuck, with a per-phase elapsed timer, without altering any production code path on the success path.\n\n## Source-line navigation (upstream `a1f1895b1b` base)\n\nFor reviewers navigating the diff context against the PR base:\n\n| Anchor | File:line on base |\n| --- | --- |\n| `gatewayLog.info(\"starting...\")` log emit | `src/cli/gateway-cli/run.ts:815` |\n| `startupTrace.mark(\"cli.gateway-loop\")` (ARM-site anchor) | `src/cli/gateway-cli/run.ts:816` |\n| `activePhaseStack` (module-level mutable, snapshot source) | `src/logging/diagnostic-phase.ts:21` |\n| `withDiagnosticPhase` (push/pop owner of `activePhaseStack`) | `src/logging/diagnostic-phase.ts:71` |\n| `onListening` (HTTP-listen-success, CANCEL-site anchor) | `src/gateway/server/http-listen.ts:36` |\n\n## What changes\n\n### `src/logging/diagnostic-phase.ts`\n- Adds `getActiveDiagnosticPhases(): ActiveDiagnosticPhaseSnapshot[]`. Returns a **deep-copy** snapshot of the currently in-flight phase stack, ordered outermost → innermost, with `elapsedMs` computed from `performance.now()` at snapshot time. The returned array/objects are fresh — mutating them does not affect future phase tracking. Safe to call from a synchronous timer callback on a starved event loop (one stack walk + N `performance.now()` reads).\n\n### `src/logging/gateway-startup-watchdog.ts` (new)\n- `armStartupWatchdog({ thresholdMs })` — arms a single `setTimeout`. Idempotent (a second call while armed is a no-op). The handle is `.unref()`'d so the diagnostic timer never keeps the process alive on its own.\n- `cancelStartupWatchdog()` — clears the timer. Safe to call multiple times and safe to call when nothing is armed.\n- `resolveStartupWatchdogThresholdMs(env)` — reads `OPENCLAW_STARTUP_WATCHDOG_MS`. Defaults to `60_000`. `0` disables the watchdog. **Malformed overrides (negative, non-numeric, `NaN`, `Infinity`, `-Infinity`) return `0` (disabled) — they do NOT silently re-arm the default.** Defensive parsing for an external-boundary value: a bad operator override should be visible (no spurious watchdog lines) rather than masked by the default.\n- On fire: snapshots `getActiveDiagnosticPhases()`, formats a single line, writes it **directly to `process.stderr`** (bypassing the logger so a starved or filtered logging pipeline can't eat the diagnostic on the hang path), and exits. Never re-arms, never retries, never throws.\n- **Phase names in the rendered line are JSON-quoted in both `stuck step=...` and inside `pending=[...]`**, so an embedded `\"` or `\\n` cannot break the single-line parse contract operators rely on when grepping production stderr.\n\nExample output:\n\n```text\n[startup-watchdog] stuck step=\"server.import-start\" elapsed=1501.0ms threshold=1500ms pending=[\"cli.config-snapshot\"@1501.1ms \"server.import-start\"@1501.0ms]\n```\n\n### `src/cli/gateway-cli/run.ts`\n- Calls `armStartupWatchdog({ thresholdMs: resolveStartupWatchdogThresholdMs() })` right after the existing `startupTrace.mark(\"cli.gateway-loop\")` (base anchor `run.ts:816`), immediately after the `[gateway] starting...` log emit at base anchor `run.ts:815`.\n- Calls `cancelStartupWatchdog()` at the top of the startup failure `catch` block so the watchdog cannot interleave a \"stuck step\" line on top of a real error message already being reported.\n\n### `src/gateway/server/http-listen.ts`\n- Calls `cancelStartupWatchdog()` inside `onListening` (base anchor `http-listen.ts:36`, immediately before `resolve()`), so listen-success is the primary cancel point. The call is idempotent and safe when no watchdog is armed (every caller other than the gateway CLI never arms one).\n\n## Tests\n\n- `src/logging/gateway-startup-watchdog.test.ts` — 17 tests covering:\n  - Env-var threshold parsing (default, blank, `0` disable, positive override).\n  - **`NaN` / negative / non-numeric / `Infinity` / `-Infinity` overrides → disabled (return `0`), NOT default** (defensive parsing for external-boundary input).\n  - Arm/no-arm semantics (threshold 0, NaN, negative, double-arm refusal).\n  - Single stderr line on fire, with the in-flight 2-level phase tree captured via real `withDiagnosticPhase` wrappers and `vi.useFakeTimers()`. Asserts the `pending=[...]` rendering uses JSON-quoted phase names.\n  - Cancellation before threshold prevents emit.\n  - Fire-at-most-once even past the threshold.\n  - Empty-stack rendering as `pending=[]`.\n  - Stderr-write-failure tolerated without crashing startup.\n  - **Embedded-newline + embedded-quote in phase name** is escaped so exactly one trailing newline is emitted and both the `stuck step=` field and the `pending=[...]` entry use JSON-escaped output.\n- `src/logging/diagnostic-phase.test.ts` — 5 tests covering `getActiveDiagnosticPhases()`:\n  - Returns `[]` when no phase has ever been active.\n  - **Returns `[]` AFTER all phases have exited (stale-stack edge)** — belt-and-suspenders so a watchdog firing outside any phase can never see a leftover frame whose `elapsedMs` would be computed against a stale `startedWallMs`.\n  - **Returns `[]` even when the phase finished with a thrown error** (finally-cleanup guarantee).\n  - Snapshots outermost → innermost with `elapsedMs` populated.\n  - Deep-copy guarantee (mutating the snapshot does not affect subsequent snapshots).\n- `src/gateway/server/http-listen.test.ts` — re-run, all 3 existing tests still pass with the cancel call in `onListening`.\n\n24/24 logging + diagnostic-phase tests pass on this PR's HEAD; existing logging + http-listen tests unaffected. `pnpm tsgo:core:test` clean. `pnpm lint` produces no new errors on the touched files (pre-existing main-branch lint failures in `update-cli`, `extensions/`, `scripts/` are unchanged).\n\n## Configuration\n\n| Env var | Default | Meaning |\n| --- | --- | --- |\n| `OPENCLAW_STARTUP_WATCHDOG_MS` | `60000` | Milliseconds before the watchdog fires. Set to `0` to disable entirely. Malformed values (negative, non-numeric, `NaN`, `±Infinity`) also disable the watchdog rather than silently falling back to the default. |\n\n## Non-goals / out of scope\n\n- No change to HTTP/metrics surfaces.\n- No re-arm or retry logic. The watchdog observes once and logs once.\n- No async I/O in the timer callback (no `await`, no promises, no `gatewayLog.*`) — the whole point is to surface diagnostic state when the logger or event loop is starved.\n\n## Layering note\n\n`gateway-startup-watchdog.ts` lives in `src/logging/` (next to `diagnostic-phase.ts`) rather than under `src/cli/gateway-cli/` so the HTTP-listen helper can `import` the cancel hook without adding a `src/gateway/server/ → src/cli/` dependency edge. The watchdog is a singleton owned by whoever arms it (today: the gateway CLI startup loop; nobody else arms one).\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Gateway hang anywhere between the `[gateway] starting...` log emit and HTTP listen-success leaves operators with no externally-visible signal until the orchestrator `SIGKILL`s the pod. This patch surfaces a single structured stderr line naming the stuck phase + its in-flight ancestor stack + per-phase elapsed time when the bind has not happened within `OPENCLAW_STARTUP_WATCHDOG_MS` (default 60000 ms). Tracking: smisy/daily-ai#364 (GH-5814 class).\n\n**Real environment tested:** Local `darwin/arm64` Mac Studio, Node v25.7.0, the production `withDiagnosticPhase` + `diagnostic-phase` + `gateway-startup-watchdog` modules built into this PR. No mock substitution: the live `withDiagnosticPhase` from `src/logging/diagnostic-phase.ts` is the source of the in-flight stack, the live `armStartupWatchdog` from `src/logging/gateway-startup-watchdog.ts` schedules a real `setTimeout`, and the real `process.stderr.write` carries the diagnostic line out of process. Same modules, same code path the gateway uses in production, fired end-to-end.\n\n**Exact steps or command run after this patch:** From a worktree at this PR's HEAD `dc1972766a`:\n\n```bash\ncat > smoke-watchdog.ts <<'EOF'\nimport {\n  withDiagnosticPhase, resetDiagnosticPhasesForTest,\n} from \"./src/logging/diagnostic-phase.ts\";\nimport {\n  armStartupWatchdog, resetStartupWatchdogForTest,\n} from \"./src/logging/gateway-startup-watchdog.ts\";\n\nresetDiagnosticPhasesForTest();\nresetStartupWatchdogForTest();\n\nconst origWrite = process.stderr.write.bind(process.stderr);\nprocess.stderr.write = ((chunk: string | Uint8Array): boolean => {\n  const s = typeof chunk === \"string\" ? chunk : chunk.toString();\n  process.stdout.write(\"STDERR-CAPTURE> \" + s);\n  return true;\n}) as typeof process.stderr.write;\n\narmStartupWatchdog({ thresholdMs: 1500 });\n\nlet resolveInner: (() => void) | undefined;\nconst innerPending = new Promise<void>((res) => { resolveInner = res; });\n\nconst outer = withDiagnosticPhase(\"cli.config-snapshot\", async () => {\n  await withDiagnosticPhase(\"server.import-start\", async () => {\n    await innerPending;\n  });\n});\n\nsetTimeout(() => {\n  resolveInner?.();\n  outer.then(() => {\n    process.stderr.write = origWrite;\n    process.stdout.write(\"[smoke] complete\\n\");\n    process.exit(0);\n  });\n}, 3000);\nEOF\n\nnode_modules/.bin/tsx smoke-watchdog.ts\n```\n\nThe smoke harness arms the real watchdog with a 1500 ms threshold, builds a real two-deep `withDiagnosticPhase` stack (outer `cli.config-snapshot` wraps inner `server.import-start`), and refuses to resolve the inner promise so the inner phase stays in-flight when the watchdog fires. The stderr-capture shim only re-routes the byte stream so the line is visible in the smoke transcript; the watchdog itself still writes via the real `process.stderr.write` it would use in production.\n\n**Evidence after fix:** Literal terminal stderr output captured from the live run above against this PR's HEAD `dc1972766a` (single line as emitted by `process.stderr.write` in `src/logging/gateway-startup-watchdog.ts`):\n\n```\nSTDERR-CAPTURE> [startup-watchdog] stuck step=\"server.import-start\" elapsed=1501.0ms threshold=1500ms pending=[\"cli.config-snapshot\"@1501.1ms \"server.import-start\"@1501.0ms]\n[smoke] complete\n```\n\nThe `STDERR-CAPTURE> ` prefix is added by the capture shim so the source channel (`stderr` vs `stdout`) is unambiguous in the transcript; the bytes after the prefix are the literal payload the watchdog wrote. Note that the `pending=[...]` entries now wrap each phase name in JSON quotes (`\"cli.config-snapshot\"@…ms` rather than `cli.config-snapshot@…ms`) — that is the Phase-2 escape discipline now applied to BOTH the `stuck step=` field and the `pending=[...]` render so an embedded `\"` or `\\n` in a future phase name cannot break the single-line parse contract.\n\n**Observed result after fix:** End-to-end runtime behavior observed from the live stderr capture above, against the real `withDiagnosticPhase` + `armStartupWatchdog` modules shipped in this PR:\n\n- A single newline-terminated line was emitted to `process.stderr` once the 1500 ms `setTimeout` callback ran. No second line ever followed, confirming the once-only fire semantics in the live runtime.\n- The `stuck step=\"server.import-start\"` token correctly identified the deepest currently-in-flight `withDiagnosticPhase` block as the wedged phase, taken from the real `activePhaseStack` at the moment the timer callback executed.\n- The `pending=[\"cli.config-snapshot\"@1501.1ms \"server.import-start\"@1501.0ms]` tail rendered the full live ancestor chain outermost → innermost with each phase's real wall-clock elapsed time computed from `performance.now()` at snapshot time.\n- The elapsed times read 1501.0 ms / 1501.1 ms against the 1500 ms threshold — roughly 1 ms of real-world scheduling jitter, consistent with a healthy Node `setTimeout` on macOS.\n- Both the `stuck step=` field AND the `pending=[...]` entries are JSON-quoted, so a future phase name containing a `\"` or `\\n` character cannot break the single-line parse contract operators will rely on when grepping production stderr. Covered by an explicit vitest case (`escapes embedded newlines and quotes in phase names so the line stays single-line`).\n- Direct `process.stderr.write` carried the diagnostic out of the process without routing through `gatewayLog.*`, so a starved or filtered logger pipeline in the real hang case cannot eat the diagnostic — operationally exactly what point 3 of the design spec calls for.\n\n**What was not tested:** A live `openclaw gateway` startup with a real Kubernetes pod and a real induced phase hang under `kubectl logs -f` was not exercised here — the smoke harness above runs the watchdog code path end-to-end in process but does not boot the full gateway. A follow-up real-cluster reproduction (deliberately stall one phase in `server.impl.ts:386` then watch `kubectl logs` for the stderr line) is a sensible next step before this is relied on for production triage, but the runtime behavior of the watchdog itself — timer firing, snapshot accuracy, single-line emit, format correctness — is covered above against the production modules.\n\n\n---\n\n## ⚠️ Known limitation — post-bind window is intentionally NOT covered\n\nThis watchdog disarms at **`http.bound`** (the `startupTrace.mark(\"http.bound\")` point, after **all** bind hosts complete — cancel is fired there in `server.impl.ts`, deliberately *not* in the per-host `onListening` callback in `http-listen.ts`, so a multi-bind hang where the first host binds but `::1` stalls cannot silently disarm the watchdog between binds).\n\nConsequently the watchdog covers the window **`[gateway] starting...` → HTTP `http.bound`** only. **Any hang that occurs *after* the socket has bound — most notably the post-bind plugin/sidecar load path (`loadGatewayStartupPlugins`, the original GH-5814 wedge class) — is invisible to this watchdog by design.** Once `http.bound` fires, the timer is cancelled; a subsequent wedge produces no `[startup-watchdog]` line.\n\nThis is an accepted scope boundary for this PR (diagnostic coverage of the *pre-bind* startup phases, which today emit nothing on hang). Extending coverage into the post-bind sidecar-load window is deliberately out of scope here and would require a separate disarm seam (e.g. arming a second watchdog across plugin load, disarmed at first-ready) — tracked separately, not in this change.\n\n## Rebase note (source-line anchors)\n\nThis branch has been rebased onto current `upstream/main` (`418d7e1e83`); the `a1f1895b1b`-based \"Source-line navigation\" table above is therefore **approximate** — absolute line numbers have shifted. On the rebased tree the canonical anchors are: arm at `src/cli/gateway-cli/run.ts:832` (outside the per-respawn `start:` closure, which opens at `:842`, so it arms once per gateway-loop entry, not per respawn); primary disarm at the `http.bound` mark in `src/gateway/server.impl.ts`; secondary disarm in the `run.ts` startup-failure `catch`. The diff itself is the source of truth for exact placement.\n",
-        "branch": "task/gh-364-startup-watchdog",
-        "head_sha": "5512e01306bb86238e33bd1d0abc500f07672e84",
-        "author": "ttruongatl",
+        "title": "fix(memory-search): stop hybrid fusion from discounting vector-only multimodal results",
+        "body": "## Summary\n\nHybrid memory search ranks results with `finalScore = vectorWeight * vectorScore + textWeight * textScore`. `mergeHybridResults` (`extensions/memory-core/src/memory/hybrid.ts`) applied that formula uniformly to every candidate. Image and audio chunks only carry a synthetic label as text, e.g. `Image file: media/IMG_0007.png` (`buildMemoryMultimodalLabel`, `packages/memory-host-sdk/src/host/multimodal.ts`). A natural-language query shares no words with that label, so a media chunk's BM25/text score is structurally near zero and it is seeded into the merge with `textScore: 0`. Under the default `0.7` vector / `0.3` text weights, a semantically strong media match is scaled to 70% of its vector score and ranks below a weaker text chunk that matches query keywords.\n\nThe fix makes fusion modality-aware. `mergeHybridResults` renormalizes the configured weights over the signals that are meaningful for each candidate:\n\n```diff\n-    const score = params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore;\n+    const dropMediaTextSignal =\n+      entry.hasVector && params.isNonTextMediaPath?.(entry.path) === true;\n+    const effectiveTextWeight = dropMediaTextSignal ? 0 : params.textWeight;\n+    const weightSum = params.vectorWeight + effectiveTextWeight;\n+    const weighted =\n+      params.vectorWeight * entry.vectorScore + effectiveTextWeight * entry.textScore;\n+    const score = weightSum > 0 ? weighted / weightSum : 0;\n```\n\nFor a non-text media chunk that also has a vector signal, the text weight drops to `0` and the score collapses to its vector score, on the same `[0,1]` scale as text candidates. Text candidates are unchanged: their resolved weights already sum to 1, so dividing by `weightSum` is a no-op and text-only ordering is preserved.\n\nThe manager supplies the predicate from the already-known file path, reusing the classifier the sync path uses (`extensions/memory-core/src/memory/manager.ts`):\n\n```ts\nisNonTextMediaPath: (path) =>\n  classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,\n```\n\n`classifyMemoryMultimodalPath` returns `null` when multimodal search is disabled, so the predicate is `false` for every path and behavior is identical to today on text-only setups. Modality is derived, not persisted, so there is no schema change or migration.\n\n### Keyword-only media is preserved (review follow-up)\n\nThe first revision dropped the text weight for any media path. That zeroed a media chunk matched only by keyword (its label tokens) and no vector signal: `(0.7*0 + 0*text)/0.7 = 0`, dropping it from results. The merge now tracks an explicit `hasVector` flag per candidate and only drops the synthetic-label text signal when the candidate also has a vector signal. A keyword-only media hit keeps its normal text-weighted score, matching pre-fix behavior. Covered by a new regression test.\n\nWhat is intentionally out of scope: persisting a modality column on chunks, and any change to the text-only ranking path.\n\n## Real behavior proof\n\nBehavior addressed: hybrid fusion discounted vector-only image/audio matches by the configured text weight, so a semantically strong media result ranked below a weaker keyword-matching text result.\nReal environment tested: a real `MemoryIndexManager` running the full pipeline (SQLite store, FTS5/BM25 keyword index, vector store, modality classification, hybrid fusion). Indexed a real image file plus a text note that keyword-matches the query, plus 18 filler text docs so BM25 has real IDF. Query `underwater coral reef survey`; the query embedding is aligned with the image vector while sharing no words with the `Image file:` label (so the image is a strong semantic match with `textScore 0`, exactly the reported case). Embeddings are a deterministic local stub (no Gemini key in this environment); the indexing, FTS/BM25, vector scoring, and fusion are the real code paths.\nExact steps or command run after this patch: ran the scenario through `MemoryIndexManager.search` with the patch, then swapped `hybrid.ts` for the `origin/main` version (isolated vitest module cache per run) and re-ran the identical scenario.\nEvidence after fix:\n```\nBEFORE (origin/main):\n  #1  score=0.9396  vec=0.9487  text=0.9186  field-notes.md   <- keyword-matching text note wins\n  ...  IMG_0007.png discounted to score=0.7000 (vec=1.0000, text=0.0000), tied with filler docs, buried\n  => top result: field-notes.md\n\nAFTER (patch):\n  #1  score=1.0000  vec=1.0000  text=0.0000  IMG_0007.png      <- strongest semantic match now surfaces\n  #2  score=0.9396  vec=0.9487  text=0.9186  field-notes.md\n  => top result: IMG_0007.png\n```\nObserved result after fix: the image is renormalized to its vector score (1.0) and ranks first; the text note keeps its identical score (0.9396) and the rank order flips so the most semantically relevant media result surfaces.\nWhat was not tested: a live Gemini-keyed embedding backend end-to-end (no API key available in this environment); embeddings were a deterministic stub while every retrieval/fusion path was real.\nProof limitations or environment constraints: the corpus is synthetic (1 image, 1 keyword-matching note, 18 filler docs) to give BM25 meaningful IDF; the throwaway proof test is not committed.\n\n## Verification\n\n- Real before/after through `MemoryIndexManager.search` above (full SQLite + FTS5/BM25 + vector + fusion), `origin/main` vs patch with isolated vitest module caches.\n- Added regression coverage in `extensions/memory-core/src/memory/hybrid.test.ts`: vector-only media scored on its vector signal without the text-weight discount; text-candidate scoring unchanged when a media predicate is supplied; and keyword-only media preserved (not dropped to zero).\n- `node scripts/run-vitest.mjs extensions/memory-core/src/memory/hybrid.test.ts` (passes).\n- `node scripts/run-vitest.mjs extensions/memory-core/src/memory/manager-search.test.ts` (passes).\n- `tsgo` extensions typecheck passes; oxlint clean on the changed files.\n\nCloses #44540\n",
+        "branch": "fix/memory-hybrid-multimodal-rank",
+        "head_sha": "ba87eaf534288f21adc3fa986f1a4efad46041e2",
+        "author": "yetval",
         "labels": [
-          "docs",
-          "gateway",
-          "cli",
-          "size: L",
+          "extensions: memory-core",
+          "size: S",
           "proof: supplied",
           "P2",
           "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 compatibility"
+          "merge-risk: 🚨 session-state"
         ],
         "files": [
           {
-            "path": "docs/cli/gateway.md",
-            "additions": 1,
+            "path": "extensions/memory-core/src/memory/hybrid.test.ts",
+            "additions": 106,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/gateway-cli/run.ts",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-state.test.ts",
-            "additions": 115,
+            "path": "extensions/memory-core/src/memory/hybrid.ts",
+            "additions": 10,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/http-listen.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic-phase.test.ts",
-            "additions": 63,
+            "path": "extensions/memory-core/src/memory/manager.ts",
+            "additions": 3,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
@@ -139,18 +140,17 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91080",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91080.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92196",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92196.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 24,
+          "total": 157,
           "counts": {
-            "QUEUED": 10,
-            "SUCCESS": 8,
-            "SKIPPED": 6
+            "SUCCESS": 126,
+            "SKIPPED": 31
           },
           "blockers": [
             "preflight:QUEUED",
@@ -187,15 +187,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1681,
+    "total_ms": 8928,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 297
+        "ms": 2554
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1141
+        "ms": 2130
       },
       {
         "name": "classify_commands",
@@ -203,7 +203,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 217
+        "ms": 4220
       },
       {
         "name": "append_ledger",
