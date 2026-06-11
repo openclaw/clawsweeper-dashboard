@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T22:24:30.498Z",
-  "repo": "steipete/vox",
+  "generated_at": "2026-06-11T22:24:59.580Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T19:24:29.232Z",
+  "since": "2026-06-11T19:24:58.010Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    8
+    1437
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 4,
+  "scanned_comments": 3,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:steipete/vox:8:4685375442:2026-06-11T22:24:25Z:clawsweeper_needs_human",
-      "comment_id": "4685375442",
-      "comment_version_key": "4685375442:2026-06-11T22:24:25Z",
-      "comment_url": "https://github.com/steipete/vox/pull/8#issuecomment-4685375442",
-      "repo": "steipete/vox",
-      "issue_number": 8,
+      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:1437:4680816812:2026-06-11T22:24:55Z:clawsweeper_needs_human",
+      "comment_id": "4680816812",
+      "comment_version_key": "4680816812:2026-06-11T22:24:55Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1437#issuecomment-4680816812",
+      "repo": "steipete/CodexBar",
+      "issue_number": 1437,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "NONE",
-      "comment_created_at": "2026-06-11T21:44:26Z",
-      "comment_updated_at": "2026-06-11T22:24:25Z",
+      "comment_created_at": "2026-06-11T13:00:29Z",
+      "comment_updated_at": "2026-06-11T22:24:55Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,56 +52,72 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] No repair lane is needed; the clean implementation PR should proceed through normal maintainer merge handling.; Cleared: The diff adds no dependencies, workflow permissions, secret handling, artifact downloads, or new external code-execution paths. (sha=47f41a90a75478f0969d96c5274a8ece27e08703)",
-      "review_summary": "The PR makes call logging and call cleanup idempotent, suppresses tool callbacks after teardown, and adds logger and server teardown regression tests.\n\nReproducibility: yes. The PR provides a deterministic current-main reproduction through the real server and subprocess-agent path, and the maintainer update reports the child process exiting with `ERR_STREAM_WRITE_AFTER_END`.",
-      "review_followup": "- [P2] No repair lane is needed; the clean implementation PR should proceed through normal maintainer merge handling.",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=f37c06c5f508c7541989e6e9689a7abb2aca51af)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "47f41a90a75478f0969d96c5274a8ece27e08703",
+      "expected_head_sha": "f37c06c5f508c7541989e6e9689a7abb2aca51af",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(logger): guard call-log writes after close so late events cannot crash the server",
-        "body": "## Summary\n\n**Classification: runtime bug fix — single-call defect with whole-server blast radius (process crash).**\n\n`createCallLogger`'s WriteStream has no closed-state guard and no `error` listener. Any `logger.event(...)` after `logger.close()` writes to an ended stream, which emits `ERR_STREAM_WRITE_AFTER_END` on a stream with **no error listener** — an uncaught exception that kills the entire `vox serve` process and every concurrent call on it.\n\nThis is reachable in production via an async path that #5's `closed` guard in `server.ts` doesn't cover:\n\n1. The model calls `query_agent`; `handleResponseDone` is fired-and-forgotten with a `.catch` that logs `tool.error` (`src/server.ts:235-247`).\n2. The caller hangs up while the agent query is in flight → Twilio `stop` / WS close → `cleanupCall()` closes the agent client **and the logger**.\n3. The pending agent query rejects (`\"Agent process closed\"`) → the `.catch` calls `logger.event(\"vox\", { type: \"tool.error\", ... })` → write-after-end → uncaught exception → server down.\n\nA hung agent + impatient caller is the *normal* failure mode this path exists for, so the crash triggers exactly when the system is already degraded.\n\n### The fix\n\nAll inside `src/logger.ts` (14 lines), so every call-site — including future ones — is covered at the single chokepoint:\n\n- `event()` becomes a no-op once the logger is closed. Late events are dropped deliberately: the call is over and `events.jsonl` is complete; previously those events were never persisted either (the process died instead).\n- `close()` is idempotent.\n- The stream gets an `error` listener that warns on stderr, so even a genuine fs error (ENOSPC, EBADF) degrades to a lost log line instead of a dead bridge.\n\nNo behavior change for any live call path; nothing about audio, barge-in, or tool dispatch is touched.\n\n## Reproducibility — deterministic, from production code\n\n`test/server-teardown.test.ts` drives the **real `handleTwilioSocket`** with a **real subprocess agent** (`node -e \"process.stdin.resume()\"` — accepts the query, never answers) through the exact production sequence above. Unlike a timing-dependent live-call defect, the crash mechanism here is the local fs WriteStream — the process death is real and reproduces deterministically. Only the two WS transports are stubbed; the defect does not involve them.\n\nAgainst the unfixed logger (`git checkout origin/main -- src/logger.ts`):\n\n```\n$ node --import tsx --test test/server-teardown.test.ts\nnot ok 1 - hang-up during an in-flight agent query does not crash the process\n  failureType: 'uncaughtException'\n  error: 'write after end'\n  code: 'ERR_STREAM_WRITE_AFTER_END'\n# tests 1\n# pass 0\n# fail 1\n```\n\nThat `uncaughtException` is the real process-killer observed end-to-end, not an assertion on mocked state. With the fix restored, the same test passes and asserts `events.jsonl` ends cleanly (contains `twilio.ws.closed`, does **not** contain a post-teardown `tool.error` line).\n\n`test/logger.test.ts` additionally pins the unit-level contract: events before close are persisted, events after close are dropped, `close()` is idempotent. The post-close test also fails on the unfixed logger (verified the same way: 3 tests → pass 2 / fail 1, uncaught `ERR_STREAM_WRITE_AFTER_END`).\n\n## Test plan — local run output (proof)\n\nRan the exact CI pipeline (`lint` → `typecheck` → `test` → `build`) on both matrix versions.\n\n### Node v22.22.3\n\n```\n$ pnpm run lint\n> oxfmt --check .\nAll matched files use the correct format.\n> oxlint --deny-warnings src test\n(clean exit)\n\n$ pnpm run typecheck\n> tsgo -p tsconfig.json --noEmit\n(clean exit, no output)\n\n$ pnpm test\n# tests 32\n# pass 32\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 539.129\n\n$ pnpm run build\nESM dist/cli.js     33.53 KB\nESM dist/cli.js.map 66.25 KB\nESM ⚡️ Build success in 35ms\n```\n\n### Node v24.16.0\n\n```\n$ pnpm test\nℹ tests 32\nℹ pass 32\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 487.813792\n```\n\n## Hosted workflow run — live proof (this exact head SHA, on GitHub-hosted runners)\n\nThe CI workflow also triggers on `push` (`branches: [\"**\"]`), so the exact head commit of this PR already ran the full pipeline end-to-end on GitHub's hosted infrastructure:\n\n**Run:** https://github.com/joeVenner/vox/actions/runs/27379247773 (commit `d58f02fa6e10423029aca098e6efeb9f448a582e`, the current PR head) — ✅ both matrix jobs succeeded: `test (22)` and `test (24)`.\n\nLive output from the hosted run confirming the new tests executed there:\n\n```\ntest (22)  Run pnpm test   # tests 32\ntest (22)  Run pnpm test   # pass 32\ntest (22)  Run pnpm test   # fail 0\ntest (22)  Run pnpm run build  ESM ⚡️ Build success in 24ms\ntest (24)  Run pnpm test   ℹ tests 32\ntest (24)  Run pnpm test   ℹ pass 32\ntest (24)  Run pnpm test   ℹ fail 0\ntest (24)  Run pnpm run build  ESM ⚡️ Build success in 29ms\n```\n\n## Risk notes\n\n- The only intentional behavior change is that events arriving after teardown are dropped instead of (attempted to be) written. Before this PR they were never written anyway — the write crashed the server. If post-teardown events should be persisted instead, that requires keeping the stream open past `cleanupCall()`, which is a different lifecycle decision; happy to follow up if preferred.\n- Security: no dependency, workflow, permission, or secret-handling changes.\n\n\n## Maintainer update — final candidate `47f41a90a754`\n\nI independently reproduced the current-`main` failure in a child process using the real `handleTwilioSocket` and subprocess agent path: the process exited with `ERR_STREAM_WRITE_AFTER_END` after hang-up rejected the in-flight query.\n\nThe contributor logger guard is retained, but the final candidate also repairs the broader teardown race instead of merely hiding it:\n\n- `createCallLogger` drops post-close writes, closes idempotently, handles stream errors, and stops accepting writes after an underlying stream failure.\n- `handleResponseDone` receives call-lifecycle state, stops after teardown, does not resume a closed OpenAI session, and suppresses the expected agent-close rejection instead of attempting a late `tool.error` log.\n- Focused regressions cover late events after teardown, logger double-close, overlapping Twilio `stop` and duplicate WebSocket close callbacks, single transport cleanup, and no late OpenAI function output.\n- `CHANGELOG.md` records the user-facing crash fix and credits @joeVenner.\n\n### Final verification\n\n- Focused: `node --import tsx --test test/logger.test.ts test/server-teardown.test.ts test/server-truncate.test.ts` — 10 passed.\n- Full CI-equivalent gate: frozen install, lint, typecheck, 33 tests, and build all passed.\n- Structured review: `$autoreview --mode branch --base origin/main --parallel-tests 'pnpm install --frozen-lockfile && pnpm run lint && pnpm run typecheck && pnpm test && pnpm run build'` — clean, no accepted/actionable findings.\n- PR CI on exact head: Node.js 22, Node.js 24, and GitGuardian all passed: https://github.com/steipete/vox/actions/runs/27380834533\n- Real built-server proof on exact pushed SHA: `dist/cli.js` handled a safe owned-number Twilio/OpenAI call where OpenAI issued one `query_agent` function call and the subprocess agent deliberately remained in flight through hang-up. The call completed; Twilio teardown was logged; the Vox process and local/public health endpoints remained alive at HTTP 200; `events.jsonl` ended cleanly; no function output resumed the closed session; and tool, OpenAI, logger/write-after-end error counts were all zero. The temporary destination webhook was restored successfully.\n\nThe ClawSweeper comments above are transport-failure states, not findings against the patch; maintainer autoreview completed successfully on the final branch.\n\n",
-        "branch": "fix/call-log-write-after-close",
-        "head_sha": "47f41a90a75478f0969d96c5274a8ece27e08703",
-        "author": "joevenner",
+        "title": "Add debug-build main thread hang watchdog with activity breadcrumbs",
+        "body": "## Summary\n\nWhile chasing menu lag I kept hitting stalls that the existing slow-operation logs couldn't attribute — the hang happened in uninstrumented code, or spanned several pieces of main-thread work. This adds a main-thread hang watchdog that detects stalls wherever they originate and names what the main thread was doing at the time.\n\n**Debug builds only**: the watchdog is started behind `#if DEBUG`, so release builds never spawn the watchdog thread or the sampling subprocess.\n\n### How it works\n- A utility thread pings the main queue; if a ping isn't answered within the hang threshold (150ms), the stall is traced until the main thread responds, then logged with its duration.\n- `MainThreadActivityBreadcrumb` is a lightweight push/pop stack that instrumented operations (menu populate, hosted submenu display, provider refresh) maintain, so hang reports name the active operation even when the stall is in uninstrumented code. Breadcrumbs are sampled throughout the hang, so one report can attribute a stall that spans several operations.\n- Hangs over 2s additionally capture a `/usr/bin/sample` of the process into `~/Library/Logs/CodexBar/hang-sample-*.txt` (5-minute cooldown), so the guilty stack is available without reproducing under a profiler.\n- Also adds a slow-refresh log to `UsageStore` and a hosted-subview display settle probe — chart construction returns before SwiftUI's first draw, so a fast hydrate can still display with a visible hitch; the probe measures to the next runloop turn.\n\n### Tests\n- `MainThreadHangWatchdogTests`: breadcrumb stack nesting, and an end-to-end synthetic stall asserting the watchdog reports the hang with the active breadcrumb.\n\n## Test plan\n\n- [x] `swift test --filter MainThreadHangWatchdogTests` — 2/2 pass\n- [x] `./Scripts/lint.sh lint` — 0 violations\n- [x] `swift build -c release` — compiles with the watchdog gated out\n- [x] Manual verification — ran a local debug build, induced menu stalls, confirmed hang logs name the breadcrumb and a sample file lands in ~/Library/Logs/CodexBar",
+        "branch": "jv/main-thread-hang-watchdog",
+        "head_sha": "f37c06c5f508c7541989e6e9689a7abb2aca51af",
+        "author": "joshuavial",
         "labels": [
-          "proof: sufficient",
-          "status: 👀 ready for maintainer look",
-          "rating: 🦞 diamond lobster",
-          "P1"
+          "P2",
+          "rating: 🌊 off-meta tidepool"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
-            "additions": 2,
+            "path": "Sources/CodexBar/CodexbarApp.swift",
+            "additions": 3,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/logger.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/server.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/logger.test.ts",
-            "additions": 67,
+            "path": "Sources/CodexBar/MainThreadHangWatchdog.swift",
+            "additions": 203,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "test/server-teardown.test.ts",
-            "additions": 199,
+            "path": "Sources/CodexBar/StatusItemController+HostedSubmenus.swift",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Sources/CodexBar/StatusItemController+Menu.swift",
+            "additions": 6,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Sources/CodexBar/StatusItemController+MenuInteractionRefresh.swift",
+            "additions": 47,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Sources/CodexBar/StatusItemController.swift",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Sources/CodexBar/UsageStore+Refresh.swift",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Tests/CodexBarTests/MainThreadHangWatchdogTests.swift",
+            "additions": 117,
             "deletions": 0,
             "changeType": "ADDED"
           }
@@ -111,19 +127,29 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-steipete-vox-8",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-vox-8.md",
+        "automerge_cluster_id": "automerge-steipete-codexbar-1437",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1437.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 3,
+          "total": 4,
           "counts": {
-            "SUCCESS": 3
+            "QUEUED": 1,
+            "IN_PROGRESS": 2,
+            "SUCCESS": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "lint-build-test:QUEUED",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
+          ],
+          "pending": [
+            "lint-build-test:QUEUED",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -131,188 +157,19 @@
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:steipete/vox:8:4685544720:2026-06-11T22:12:29Z:re_review",
-      "comment_id": "4685544720",
-      "comment_version_key": "4685544720:2026-06-11T22:12:29Z",
-      "comment_url": "https://github.com/steipete/vox/pull/8#issuecomment-4685544720",
-      "repo": "steipete/vox",
-      "issue_number": 8,
-      "author": "joeVenner",
-      "author_id": 61122897,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-11T22:12:29Z",
-      "comment_updated_at": "2026-06-11T22:12:29Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(logger): guard call-log writes after close so late events cannot crash the server",
-        "body": "## Summary\n\n**Classification: runtime bug fix — single-call defect with whole-server blast radius (process crash).**\n\n`createCallLogger`'s WriteStream has no closed-state guard and no `error` listener. Any `logger.event(...)` after `logger.close()` writes to an ended stream, which emits `ERR_STREAM_WRITE_AFTER_END` on a stream with **no error listener** — an uncaught exception that kills the entire `vox serve` process and every concurrent call on it.\n\nThis is reachable in production via an async path that #5's `closed` guard in `server.ts` doesn't cover:\n\n1. The model calls `query_agent`; `handleResponseDone` is fired-and-forgotten with a `.catch` that logs `tool.error` (`src/server.ts:235-247`).\n2. The caller hangs up while the agent query is in flight → Twilio `stop` / WS close → `cleanupCall()` closes the agent client **and the logger**.\n3. The pending agent query rejects (`\"Agent process closed\"`) → the `.catch` calls `logger.event(\"vox\", { type: \"tool.error\", ... })` → write-after-end → uncaught exception → server down.\n\nA hung agent + impatient caller is the *normal* failure mode this path exists for, so the crash triggers exactly when the system is already degraded.\n\n### The fix\n\nAll inside `src/logger.ts` (14 lines), so every call-site — including future ones — is covered at the single chokepoint:\n\n- `event()` becomes a no-op once the logger is closed. Late events are dropped deliberately: the call is over and `events.jsonl` is complete; previously those events were never persisted either (the process died instead).\n- `close()` is idempotent.\n- The stream gets an `error` listener that warns on stderr, so even a genuine fs error (ENOSPC, EBADF) degrades to a lost log line instead of a dead bridge.\n\nNo behavior change for any live call path; nothing about audio, barge-in, or tool dispatch is touched.\n\n## Reproducibility — deterministic, from production code\n\n`test/server-teardown.test.ts` drives the **real `handleTwilioSocket`** with a **real subprocess agent** (`node -e \"process.stdin.resume()\"` — accepts the query, never answers) through the exact production sequence above. Unlike a timing-dependent live-call defect, the crash mechanism here is the local fs WriteStream — the process death is real and reproduces deterministically. Only the two WS transports are stubbed; the defect does not involve them.\n\nAgainst the unfixed logger (`git checkout origin/main -- src/logger.ts`):\n\n```\n$ node --import tsx --test test/server-teardown.test.ts\nnot ok 1 - hang-up during an in-flight agent query does not crash the process\n  failureType: 'uncaughtException'\n  error: 'write after end'\n  code: 'ERR_STREAM_WRITE_AFTER_END'\n# tests 1\n# pass 0\n# fail 1\n```\n\nThat `uncaughtException` is the real process-killer observed end-to-end, not an assertion on mocked state. With the fix restored, the same test passes and asserts `events.jsonl` ends cleanly (contains `twilio.ws.closed`, does **not** contain a post-teardown `tool.error` line).\n\n`test/logger.test.ts` additionally pins the unit-level contract: events before close are persisted, events after close are dropped, `close()` is idempotent. The post-close test also fails on the unfixed logger (verified the same way: 3 tests → pass 2 / fail 1, uncaught `ERR_STREAM_WRITE_AFTER_END`).\n\n## Test plan — local run output (proof)\n\nRan the exact CI pipeline (`lint` → `typecheck` → `test` → `build`) on both matrix versions.\n\n### Node v22.22.3\n\n```\n$ pnpm run lint\n> oxfmt --check .\nAll matched files use the correct format.\n> oxlint --deny-warnings src test\n(clean exit)\n\n$ pnpm run typecheck\n> tsgo -p tsconfig.json --noEmit\n(clean exit, no output)\n\n$ pnpm test\n# tests 32\n# pass 32\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 539.129\n\n$ pnpm run build\nESM dist/cli.js     33.53 KB\nESM dist/cli.js.map 66.25 KB\nESM ⚡️ Build success in 35ms\n```\n\n### Node v24.16.0\n\n```\n$ pnpm test\nℹ tests 32\nℹ pass 32\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 487.813792\n```\n\n## Hosted workflow run — live proof (this exact head SHA, on GitHub-hosted runners)\n\nThe CI workflow also triggers on `push` (`branches: [\"**\"]`), so the exact head commit of this PR already ran the full pipeline end-to-end on GitHub's hosted infrastructure:\n\n**Run:** https://github.com/joeVenner/vox/actions/runs/27379247773 (commit `d58f02fa6e10423029aca098e6efeb9f448a582e`, the current PR head) — ✅ both matrix jobs succeeded: `test (22)` and `test (24)`.\n\nLive output from the hosted run confirming the new tests executed there:\n\n```\ntest (22)  Run pnpm test   # tests 32\ntest (22)  Run pnpm test   # pass 32\ntest (22)  Run pnpm test   # fail 0\ntest (22)  Run pnpm run build  ESM ⚡️ Build success in 24ms\ntest (24)  Run pnpm test   ℹ tests 32\ntest (24)  Run pnpm test   ℹ pass 32\ntest (24)  Run pnpm test   ℹ fail 0\ntest (24)  Run pnpm run build  ESM ⚡️ Build success in 29ms\n```\n\n## Risk notes\n\n- The only intentional behavior change is that events arriving after teardown are dropped instead of (attempted to be) written. Before this PR they were never written anyway — the write crashed the server. If post-teardown events should be persisted instead, that requires keeping the stream open past `cleanupCall()`, which is a different lifecycle decision; happy to follow up if preferred.\n- Security: no dependency, workflow, permission, or secret-handling changes.\n\n\n## Maintainer update — final candidate `47f41a90a754`\n\nI independently reproduced the current-`main` failure in a child process using the real `handleTwilioSocket` and subprocess agent path: the process exited with `ERR_STREAM_WRITE_AFTER_END` after hang-up rejected the in-flight query.\n\nThe contributor logger guard is retained, but the final candidate also repairs the broader teardown race instead of merely hiding it:\n\n- `createCallLogger` drops post-close writes, closes idempotently, handles stream errors, and stops accepting writes after an underlying stream failure.\n- `handleResponseDone` receives call-lifecycle state, stops after teardown, does not resume a closed OpenAI session, and suppresses the expected agent-close rejection instead of attempting a late `tool.error` log.\n- Focused regressions cover late events after teardown, logger double-close, overlapping Twilio `stop` and duplicate WebSocket close callbacks, single transport cleanup, and no late OpenAI function output.\n- `CHANGELOG.md` records the user-facing crash fix and credits @joeVenner.\n\n### Final verification\n\n- Focused: `node --import tsx --test test/logger.test.ts test/server-teardown.test.ts test/server-truncate.test.ts` — 10 passed.\n- Full CI-equivalent gate: frozen install, lint, typecheck, 33 tests, and build all passed.\n- Structured review: `$autoreview --mode branch --base origin/main --parallel-tests 'pnpm install --frozen-lockfile && pnpm run lint && pnpm run typecheck && pnpm test && pnpm run build'` — clean, no accepted/actionable findings.\n- PR CI on exact head: Node.js 22, Node.js 24, and GitGuardian all passed: https://github.com/steipete/vox/actions/runs/27380834533\n- Real built-server proof on exact pushed SHA: `dist/cli.js` handled a safe owned-number Twilio/OpenAI call where OpenAI issued one `query_agent` function call and the subprocess agent deliberately remained in flight through hang-up. The call completed; Twilio teardown was logged; the Vox process and local/public health endpoints remained alive at HTTP 200; `events.jsonl` ended cleanly; no function output resumed the closed session; and tool, OpenAI, logger/write-after-end error counts were all zero. The temporary destination webhook was restored successfully.\n\nThe ClawSweeper comments above are transport-failure states, not findings against the patch; maintainer autoreview completed successfully on the final branch.\n\n",
-        "branch": "fix/call-log-write-after-close",
-        "head_sha": "47f41a90a75478f0969d96c5274a8ece27e08703",
-        "author": "joevenner",
-        "labels": [
-          "proof: sufficient",
-          "status: 👀 ready for maintainer look",
-          "rating: 🦞 diamond lobster",
-          "P1"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logger.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/server.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/logger.test.ts",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/server-teardown.test.ts",
-            "additions": 199,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-steipete-vox-8",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-vox-8.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 3,
-          "counts": {
-            "SUCCESS": 3
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:steipete/vox:8:4685465150:2026-06-11T21:58:57Z:re_review",
-      "comment_id": "4685465150",
-      "comment_version_key": "4685465150:2026-06-11T21:58:57Z",
-      "comment_url": "https://github.com/steipete/vox/pull/8#issuecomment-4685465150",
-      "repo": "steipete/vox",
-      "issue_number": 8,
-      "author": "joeVenner",
-      "author_id": 61122897,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-11T21:58:57Z",
-      "comment_updated_at": "2026-06-11T21:58:57Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:steipete/vox:8:4685421868:2026-06-11T21:51:31Z:re_review",
-      "comment_id": "4685421868",
-      "comment_version_key": "4685421868:2026-06-11T21:51:31Z",
-      "comment_url": "https://github.com/steipete/vox/pull/8#issuecomment-4685421868",
-      "repo": "steipete/vox",
-      "issue_number": 8,
-      "author": "joeVenner",
-      "author_id": 61122897,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-11T21:51:31Z",
-      "comment_updated_at": "2026-06-11T21:51:31Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3350,
+    "total_ms": 1917,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 366
+        "ms": 338
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 884
+        "ms": 1219
       },
       {
         "name": "classify_commands",
@@ -320,7 +177,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2073
+        "ms": 336
       },
       {
         "name": "append_ledger",
