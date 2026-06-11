@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T04:40:14.743Z",
-  "repo": "steipete/CodexBar",
+  "generated_at": "2026-06-11T04:41:08.975Z",
+  "repo": "openclaw/graincrawl",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T01:40:13.651Z",
+  "since": "2026-06-11T01:41:07.896Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    1404
+    23
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 11,
-  "commands_seen": 6,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:1404:4677038690:2026-06-11T04:40:11Z:clawsweeper_needs_human",
-      "comment_id": "4677038690",
-      "comment_version_key": "4677038690:2026-06-11T04:40:11Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1404#issuecomment-4677038690",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1404,
+      "idempotency_key": "clawsweeper-repair:openclaw/graincrawl:23:4677200544:2026-06-11T04:41:04Z:clawsweeper_needs_human",
+      "comment_id": "4677200544",
+      "comment_version_key": "4677200544:2026-06-11T04:41:04Z",
+      "comment_url": "https://github.com/openclaw/graincrawl/pull/23#issuecomment-4677200544",
+      "repo": "openclaw/graincrawl",
+      "issue_number": 23,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "NONE",
-      "comment_created_at": "2026-06-11T03:55:53Z",
-      "comment_updated_at": "2026-06-11T04:40:11Z",
+      "comment_created_at": "2026-06-11T04:33:06Z",
+      "comment_updated_at": "2026-06-11T04:41:04Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,75 +52,192 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] A maintainer should validate the exact current-main merge result and explicitly accept the bounded-retention and append-only assumptions before landing.; Cleared: The patch changes only local SQLite scanning, generated parser identity, and tests, with no new dependency, download, secret, permission, or supply-chain surface. (sha=0da7277a3c5132902ca1be2b67388601b3af33f1)",
-      "review_summary": "The PR adds a process-local, rowid-based incremental memo for Codex priority-turn trace scanning, regenerates the parser hash, and adds focused regression tests.\n\nReproducibility: yes. at source level: current main repeatedly executes a leading-wildcard SQLite scan for live priority metadata, and the PR supplies real-database timings demonstrating the cost. The contributor's private trace database was not independently accessed.",
-      "review_followup": "- [P2] A maintainer should validate the exact current-main merge result and explicitly accept the bounded-retention and append-only assumptions before landing.",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=0ca3cf5ac11f0a2392ac705c705f9ffe2bc19154)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "0da7277a3c5132902ca1be2b67388601b3af33f1",
+      "expected_head_sha": "0ca3cf5ac11f0a2392ac705c705f9ffe2bc19154",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "Resolve codex priority turns incrementally per refresh",
-        "body": "## Summary\nResolve codex priority-turn metadata incrementally per refresh: accumulate the trace-database query result in process memory and only examine rows appended since the last call, instead of re-running the full-table double-`LIKE` scan on every refresh past the scan interval.\n\n## Context\nThis is the dominant residual warm-refresh cost identified in #1392's follow-up measurements. `makeCodexRefreshPlan → codexPriorityTurns` runs\n\n```sql\nselect ts, feedback_log_body from logs\nwhere ts >= ? and ts < ?\n  and (feedback_log_body like '%websocket request:%' or feedback_log_body like '%response.completed%')\n```\n\nagainst the codex CLI's `logs_2.sqlite` on every refresh once `refreshMinIntervalSeconds` has elapsed. The leading-`%` `LIKE`s force examining every row body in the window, so the cost grows with the database forever. On this machine the database is 762 MB / 322k rows and the query costs tens of seconds per tick; #1392's reporter measured 26–51 s per CLI refresh on a larger archive — `sample` puts essentially all of that time inside `codexPriorityTurns → sqlite3_step`.\n\n## Change\n- The `logs` table is append-only with `INTEGER PRIMARY KEY AUTOINCREMENT`, so rowids are monotonic and never reused. A per-database in-process memo keeps the accumulated turns plus a rowid cursor; each refresh runs the same filters with `rowid > ?` (satisfied by the integer PK, so it touches only new rows).\n- Full rescan triggers: database file identity change (inode), `max(rowid)` shrinking (prune/replace), or the requested window expanding earlier than the accumulated coverage.\n- Windows that end before today keep the original bounded one-shot query, so historical lookups never pay an open-ended scan and never populate the memo.\n- The memo is process-local only — no cache schema change. The scanner source hash regeneration is included (one-time cache rebuild on update, which runs serialized off the cooperative pool after #1402).\n\n## Validation\n- `swift test --filter CostUsageScannerCodexPriorityTests` — 11 tests (3 new: incremental append pickup incl. late completed-model upgrade, window-expansion rescan, database-replacement rescan).\n- `swift test --filter CostUsage` — 184 tests in 17 suites pass, suite wall time unchanged (the bounded historical path exists precisely because an open-ended first scan regressed a real-database test path 150× during development; that regression is fixed and the suite runs in ~4 s).\n- `make check` — 0 violations; `git diff --check` clean.\n\n## Runtime Proof\nTiming harness (3 consecutive calls for the live 30-day window against the real 762 MB / 322k-row `logs_2.sqlite`, debug build, warm page cache; harness below, not committed). Result counts were identical in every run on both branches:\n\n```text\n# current main (cde92cfb): every call pays the full scan\nTIMING_RESULT runs=[34.83 s, 22.38 s, 24.60 s] counts=[5, 5, 5]\n\n# this branch: one full scan per process, then the rowid cursor\nTIMING_RESULT runs=[8.51 s, 0.0015 s, 0.0006 s] counts=[5, 5, 5]\n```\n\nSteady-state per-tick cost drops from tens of seconds to ~1 ms, with byte-identical query filters and equal results. (Absolute first-call times vary with page cache state; a cold-cache first call measured 79 s, equally one-time.)\n\n<details>\n<summary>Timing harness (drop into Tests/CodexBarTests to reproduce)</summary>\n\n```swift\nimport Foundation\nimport Testing\n@testable import CodexBarCore\n\nstruct PriorityTurnsTimingHarness {\n    @Test\n    func `priority turns timing harness real db`() throws {\n        let db = FileManager.default.homeDirectoryForCurrentUser\n            .appendingPathComponent(\".codex/logs_2.sqlite\")\n        try #require(FileManager.default.fileExists(atPath: db.path))\n        let now = Date()\n        let today = CostUsageScanner.CostUsageDayRange.dayKey(from: now)\n        let since = CostUsageScanner.CostUsageDayRange.dayKey(\n            from: Calendar.current.date(byAdding: .day, value: -29, to: now)!)\n        let clock = ContinuousClock()\n        var counts: [Int] = []\n        var durations: [Duration] = []\n        for _ in 0..<3 {\n            let duration = clock.measure {\n                counts.append(CostUsageScanner.codexPriorityTurns(\n                    databaseURL: db,\n                    sinceDayKey: since,\n                    untilDayKey: today).count)\n            }\n            durations.append(duration)\n        }\n        print(\"TIMING_RESULT runs=\\(durations) counts=\\(counts)\")\n        #expect(counts[0] == counts[1])\n        #expect(counts[1] == counts[2])\n    }\n}\n```\n\n</details>\n\n## Honesty / scope notes\n- The memo accumulates rows from the coverage start without an upper `ts` bound, so completed-model upgrades arriving after a turn's request row are applied even across ticks — marginally more complete attribution than the per-call query, identical for the standard advancing window.\n- The first scan per process (app launch / each CLI invocation) still pays the full query; the CLI therefore does not benefit. Persisting the memo would need a cache schema change and is left out deliberately.\n- The memo grows with the number of priority turns in the coverage window (small in practice; entries are turn-metadata only, no log bodies).\n\n\n<!-- proof-revision: 2026-06-10 r2 -->\n",
-        "branch": "perf/codex-priority-turns-memo",
-        "head_sha": "0da7277a3c5132902ca1be2b67388601b3af33f1",
-        "author": "prospectore",
+        "title": "feat: add encrypted JSON unlock",
+        "body": "## Summary\n\n- add an explicit macOS `encrypted-json` unlock path for modern Granola profiles\n- decrypt `cache-v6.json.enc` for desktop-cache import and `supabase.json.enc` for private API authentication\n- keep Keychain access behind `allow_encrypted_json = true` plus `unlock encrypted-json` or `--unlock encrypted-json`\n- retain OPFS as unsupported and remove any hidden helper command path\n\n## Security\n\n- snapshot only the two allowlisted regular files before Keychain access, with stable-file and 64 MiB limits\n- read `Granola Safe Storage` / `Granola Key` through `/usr/bin/security` with a 30-second timeout\n- unwrap Chromium `v10` safeStorage data and AES-GCM payloads in memory; clear sensitive byte buffers where practical\n- discard raw Keychain stderr and return redacted denial/decryption errors\n- never persist decrypted Granola JSON, tokens, refresh tokens, or DEKs\n\n## Verification\n\n- `make check`\n- `GOWORK=off go test -race -count=1 ./...`\n- exact CI parity: gofmt, `go mod verify`, `deadcode -test ./...`, and `govulncheck ./...` (zero called vulnerabilities)\n- `make smoke`\n- `make release-snapshot`\n- structured autoreview: clean, no accepted/actionable findings\n- live E2E with signed Granola 7.309.0 and a fresh encrypted profile: exact build commit `0ca3cf5`, binary SHA-256 `906146c544dc6f863d1bb6bcb52de791a30bd6f97fc1985d79832d746abb1d0e`\n- independent Granola API comparison: 6 source documents, 6 imported notes, exact ID hash `a00784ddc701035fc68eb286c2c655fc42201fe2c85742b32a912ead377aa421`, exact payload-pair hash `10de35db88cb74db132003345549d1071e973a1830aa429aac80a16252ae76d7`\n- encrypted cache freshness selected over the older plaintext cache; restored and resynced profiles remained byte-identical before/after; zero Granola processes/open handles, secret-bearing output files, note-content output files, or decrypted source files\n- denied Keychain access and tampered ciphertext are covered by redacted-error regression tests\n\nIssue: https://github.com/openclaw/graincrawl/issues/22\n\nCloses #22\n",
+        "branch": "feat/encrypted-json-unlock",
+        "head_sha": "0ca3cf5ac11f0a2392ac705c705f9ffe2bc19154",
+        "author": "steipete",
         "labels": [
+          "feat",
           "P2",
-          "proof: sufficient",
-          "status: 👀 ready for maintainer look",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability"
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 auth-provider",
+          "rating: 🌊 off-meta tidepool"
         ],
         "files": [
           {
-            "path": "Sources/CodexBarCore/Generated/CodexParserHash.generated.swift",
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "README.md",
+            "additions": 10,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "SPEC.md",
+            "additions": 37,
+            "deletions": 40,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/security.md",
+            "additions": 15,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cachev6/read.go",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/app.go",
+            "additions": 15,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/app_test.go",
+            "additions": 104,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/completion.go",
+            "additions": 7,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/help.go",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/parse.go",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/security.go",
+            "additions": 86,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/doctor/doctor_test.go",
             "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "Sources/CodexBarCore/Vendored/CostUsage/CostUsageScanner+CodexPriority.swift",
-            "additions": 199,
-            "deletions": 25,
+            "path": "internal/encryptedjson/encryptedjson.go",
+            "additions": 298,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/encryptedjson/encryptedjson_test.go",
+            "additions": 138,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/granola/files.go",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "Tests/CodexBarTests/CostUsageScannerCodexPriorityTests.swift",
-            "additions": 208,
+            "path": "internal/granola/token.go",
+            "additions": 6,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/security/report.go",
+            "additions": 19,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/security/report_test.go",
+            "additions": 32,
             "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/syncer/desktop_cache.go",
+            "additions": 17,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/syncer/private_api.go",
+            "additions": 16,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/syncer/private_api_test.go",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/syncer/syncer.go",
+            "additions": 83,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/syncer/syncer_test.go",
+            "additions": 173,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/syncer/types.go",
+            "additions": 12,
+            "deletions": 7,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1404",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1404.md",
+        "automerge_cluster_id": "automerge-openclaw-graincrawl-23",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-graincrawl-23.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 4,
+          "total": 10,
           "counts": {
-            "IN_PROGRESS": 3,
-            "SUCCESS": 1
+            "SUCCESS": 9,
+            "SKIPPED": 1
           },
-          "blockers": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "pending": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": []
         }
       },
@@ -129,281 +246,17 @@
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
     },
     {
-      "idempotency_key": "comment-router:steipete/CodexBar:1404:4677191934:2026-06-11T04:31:06Z:re_review",
-      "comment_id": "4677191934",
-      "comment_version_key": "4677191934:2026-06-11T04:31:06Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1404#issuecomment-4677191934",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1404,
-      "author": "ProspectOre",
-      "author_id": 54486432,
+      "idempotency_key": "comment-router:openclaw/graincrawl:23:4677221369:2026-06-11T04:37:47Z:re_review",
+      "comment_id": "4677221369",
+      "comment_version_key": "4677221369:2026-06-11T04:37:47Z",
+      "comment_url": "https://github.com/openclaw/graincrawl/pull/23#issuecomment-4677221369",
+      "repo": "openclaw/graincrawl",
+      "issue_number": 23,
+      "author": "steipete",
+      "author_id": 58493,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-11T04:31:06Z",
-      "comment_updated_at": "2026-06-11T04:31:06Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:steipete/CodexBar:1404:4677130326:2026-06-11T04:16:39Z:re_review",
-      "comment_id": "4677130326",
-      "comment_version_key": "4677130326:2026-06-11T04:16:39Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1404#issuecomment-4677130326",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1404,
-      "author": "ProspectOre",
-      "author_id": 54486432,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-11T04:16:39Z",
-      "comment_updated_at": "2026-06-11T04:16:39Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:steipete/CodexBar:1404:4677097032:2026-06-11T04:09:26Z:re_review",
-      "comment_id": "4677097032",
-      "comment_version_key": "4677097032:2026-06-11T04:09:26Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1404#issuecomment-4677097032",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1404,
-      "author": "ProspectOre",
-      "author_id": 54486432,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-11T04:09:26Z",
-      "comment_updated_at": "2026-06-11T04:09:26Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Resolve codex priority turns incrementally per refresh",
-        "body": "## Summary\nResolve codex priority-turn metadata incrementally per refresh: accumulate the trace-database query result in process memory and only examine rows appended since the last call, instead of re-running the full-table double-`LIKE` scan on every refresh past the scan interval.\n\n## Context\nThis is the dominant residual warm-refresh cost identified in #1392's follow-up measurements. `makeCodexRefreshPlan → codexPriorityTurns` runs\n\n```sql\nselect ts, feedback_log_body from logs\nwhere ts >= ? and ts < ?\n  and (feedback_log_body like '%websocket request:%' or feedback_log_body like '%response.completed%')\n```\n\nagainst the codex CLI's `logs_2.sqlite` on every refresh once `refreshMinIntervalSeconds` has elapsed. The leading-`%` `LIKE`s force examining every row body in the window, so the cost grows with the database forever. On this machine the database is 762 MB / 322k rows and the query costs tens of seconds per tick; #1392's reporter measured 26–51 s per CLI refresh on a larger archive — `sample` puts essentially all of that time inside `codexPriorityTurns → sqlite3_step`.\n\n## Change\n- The `logs` table is append-only with `INTEGER PRIMARY KEY AUTOINCREMENT`, so rowids are monotonic and never reused. A per-database in-process memo keeps the accumulated turns plus a rowid cursor; each refresh runs the same filters with `rowid > ?` (satisfied by the integer PK, so it touches only new rows).\n- Full rescan triggers: database file identity change (inode), `max(rowid)` shrinking (prune/replace), or the requested window expanding earlier than the accumulated coverage.\n- Windows that end before today keep the original bounded one-shot query, so historical lookups never pay an open-ended scan and never populate the memo.\n- The memo is process-local only — no cache schema change. The scanner source hash regeneration is included (one-time cache rebuild on update, which runs serialized off the cooperative pool after #1402).\n\n## Validation\n- `swift test --filter CostUsageScannerCodexPriorityTests` — 11 tests (3 new: incremental append pickup incl. late completed-model upgrade, window-expansion rescan, database-replacement rescan).\n- `swift test --filter CostUsage` — 184 tests in 17 suites pass, suite wall time unchanged (the bounded historical path exists precisely because an open-ended first scan regressed a real-database test path 150× during development; that regression is fixed and the suite runs in ~4 s).\n- `make check` — 0 violations; `git diff --check` clean.\n\n## Runtime Proof\nTiming harness (3 consecutive calls for the live 30-day window against the real 762 MB / 322k-row `logs_2.sqlite`, debug build, warm page cache; harness below, not committed). Result counts were identical in every run on both branches:\n\n```text\n# current main (cde92cfb): every call pays the full scan\nTIMING_RESULT runs=[34.83 s, 22.38 s, 24.60 s] counts=[5, 5, 5]\n\n# this branch: one full scan per process, then the rowid cursor\nTIMING_RESULT runs=[8.51 s, 0.0015 s, 0.0006 s] counts=[5, 5, 5]\n```\n\nSteady-state per-tick cost drops from tens of seconds to ~1 ms, with byte-identical query filters and equal results. (Absolute first-call times vary with page cache state; a cold-cache first call measured 79 s, equally one-time.)\n\n<details>\n<summary>Timing harness (drop into Tests/CodexBarTests to reproduce)</summary>\n\n```swift\nimport Foundation\nimport Testing\n@testable import CodexBarCore\n\nstruct PriorityTurnsTimingHarness {\n    @Test\n    func `priority turns timing harness real db`() throws {\n        let db = FileManager.default.homeDirectoryForCurrentUser\n            .appendingPathComponent(\".codex/logs_2.sqlite\")\n        try #require(FileManager.default.fileExists(atPath: db.path))\n        let now = Date()\n        let today = CostUsageScanner.CostUsageDayRange.dayKey(from: now)\n        let since = CostUsageScanner.CostUsageDayRange.dayKey(\n            from: Calendar.current.date(byAdding: .day, value: -29, to: now)!)\n        let clock = ContinuousClock()\n        var counts: [Int] = []\n        var durations: [Duration] = []\n        for _ in 0..<3 {\n            let duration = clock.measure {\n                counts.append(CostUsageScanner.codexPriorityTurns(\n                    databaseURL: db,\n                    sinceDayKey: since,\n                    untilDayKey: today).count)\n            }\n            durations.append(duration)\n        }\n        print(\"TIMING_RESULT runs=\\(durations) counts=\\(counts)\")\n        #expect(counts[0] == counts[1])\n        #expect(counts[1] == counts[2])\n    }\n}\n```\n\n</details>\n\n## Honesty / scope notes\n- The memo accumulates rows from the coverage start without an upper `ts` bound, so completed-model upgrades arriving after a turn's request row are applied even across ticks — marginally more complete attribution than the per-call query, identical for the standard advancing window.\n- The first scan per process (app launch / each CLI invocation) still pays the full query; the CLI therefore does not benefit. Persisting the memo would need a cache schema change and is left out deliberately.\n- The memo grows with the number of priority turns in the coverage window (small in practice; entries are turn-metadata only, no log bodies).\n\n\n<!-- proof-revision: 2026-06-10 r2 -->\n",
-        "branch": "perf/codex-priority-turns-memo",
-        "head_sha": "0da7277a3c5132902ca1be2b67388601b3af33f1",
-        "author": "prospectore",
-        "labels": [
-          "P2",
-          "proof: sufficient",
-          "status: 👀 ready for maintainer look",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability"
-        ],
-        "files": [
-          {
-            "path": "Sources/CodexBarCore/Generated/CodexParserHash.generated.swift",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarCore/Vendored/CostUsage/CostUsageScanner+CodexPriority.swift",
-            "additions": 199,
-            "deletions": 25,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/CostUsageScannerCodexPriorityTests.swift",
-            "additions": 208,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1404",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1404.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 4,
-          "counts": {
-            "IN_PROGRESS": 3,
-            "SUCCESS": 1
-          },
-          "blockers": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "pending": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:steipete/CodexBar:1404:4674950416:2026-06-10T21:52:37Z:re_review",
-      "comment_id": "4674950416",
-      "comment_version_key": "4674950416:2026-06-10T21:52:37Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1404#issuecomment-4674950416",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1404,
-      "author": "ProspectOre",
-      "author_id": 54486432,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-10T21:52:37Z",
-      "comment_updated_at": "2026-06-10T21:52:37Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-run",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Resolve codex priority turns incrementally per refresh",
-        "body": "## Summary\nResolve codex priority-turn metadata incrementally per refresh: accumulate the trace-database query result in process memory and only examine rows appended since the last call, instead of re-running the full-table double-`LIKE` scan on every refresh past the scan interval.\n\n## Context\nThis is the dominant residual warm-refresh cost identified in #1392's follow-up measurements. `makeCodexRefreshPlan → codexPriorityTurns` runs\n\n```sql\nselect ts, feedback_log_body from logs\nwhere ts >= ? and ts < ?\n  and (feedback_log_body like '%websocket request:%' or feedback_log_body like '%response.completed%')\n```\n\nagainst the codex CLI's `logs_2.sqlite` on every refresh once `refreshMinIntervalSeconds` has elapsed. The leading-`%` `LIKE`s force examining every row body in the window, so the cost grows with the database forever. On this machine the database is 762 MB / 322k rows and the query costs tens of seconds per tick; #1392's reporter measured 26–51 s per CLI refresh on a larger archive — `sample` puts essentially all of that time inside `codexPriorityTurns → sqlite3_step`.\n\n## Change\n- The `logs` table is append-only with `INTEGER PRIMARY KEY AUTOINCREMENT`, so rowids are monotonic and never reused. A per-database in-process memo keeps the accumulated turns plus a rowid cursor; each refresh runs the same filters with `rowid > ?` (satisfied by the integer PK, so it touches only new rows).\n- Full rescan triggers: database file identity change (inode), `max(rowid)` shrinking (prune/replace), or the requested window expanding earlier than the accumulated coverage.\n- Windows that end before today keep the original bounded one-shot query, so historical lookups never pay an open-ended scan and never populate the memo.\n- The memo is process-local only — no cache schema change. The scanner source hash regeneration is included (one-time cache rebuild on update, which runs serialized off the cooperative pool after #1402).\n\n## Validation\n- `swift test --filter CostUsageScannerCodexPriorityTests` — 11 tests (3 new: incremental append pickup incl. late completed-model upgrade, window-expansion rescan, database-replacement rescan).\n- `swift test --filter CostUsage` — 184 tests in 17 suites pass, suite wall time unchanged (the bounded historical path exists precisely because an open-ended first scan regressed a real-database test path 150× during development; that regression is fixed and the suite runs in ~4 s).\n- `make check` — 0 violations; `git diff --check` clean.\n\n## Runtime Proof\nTiming harness (3 consecutive calls for the live 30-day window against the real 762 MB / 322k-row `logs_2.sqlite`, debug build, warm page cache; harness below, not committed). Result counts were identical in every run on both branches:\n\n```text\n# current main (cde92cfb): every call pays the full scan\nTIMING_RESULT runs=[34.83 s, 22.38 s, 24.60 s] counts=[5, 5, 5]\n\n# this branch: one full scan per process, then the rowid cursor\nTIMING_RESULT runs=[8.51 s, 0.0015 s, 0.0006 s] counts=[5, 5, 5]\n```\n\nSteady-state per-tick cost drops from tens of seconds to ~1 ms, with byte-identical query filters and equal results. (Absolute first-call times vary with page cache state; a cold-cache first call measured 79 s, equally one-time.)\n\n<details>\n<summary>Timing harness (drop into Tests/CodexBarTests to reproduce)</summary>\n\n```swift\nimport Foundation\nimport Testing\n@testable import CodexBarCore\n\nstruct PriorityTurnsTimingHarness {\n    @Test\n    func `priority turns timing harness real db`() throws {\n        let db = FileManager.default.homeDirectoryForCurrentUser\n            .appendingPathComponent(\".codex/logs_2.sqlite\")\n        try #require(FileManager.default.fileExists(atPath: db.path))\n        let now = Date()\n        let today = CostUsageScanner.CostUsageDayRange.dayKey(from: now)\n        let since = CostUsageScanner.CostUsageDayRange.dayKey(\n            from: Calendar.current.date(byAdding: .day, value: -29, to: now)!)\n        let clock = ContinuousClock()\n        var counts: [Int] = []\n        var durations: [Duration] = []\n        for _ in 0..<3 {\n            let duration = clock.measure {\n                counts.append(CostUsageScanner.codexPriorityTurns(\n                    databaseURL: db,\n                    sinceDayKey: since,\n                    untilDayKey: today).count)\n            }\n            durations.append(duration)\n        }\n        print(\"TIMING_RESULT runs=\\(durations) counts=\\(counts)\")\n        #expect(counts[0] == counts[1])\n        #expect(counts[1] == counts[2])\n    }\n}\n```\n\n</details>\n\n## Honesty / scope notes\n- The memo accumulates rows from the coverage start without an upper `ts` bound, so completed-model upgrades arriving after a turn's request row are applied even across ticks — marginally more complete attribution than the per-call query, identical for the standard advancing window.\n- The first scan per process (app launch / each CLI invocation) still pays the full query; the CLI therefore does not benefit. Persisting the memo would need a cache schema change and is left out deliberately.\n- The memo grows with the number of priority turns in the coverage window (small in practice; entries are turn-metadata only, no log bodies).\n\n\n<!-- proof-revision: 2026-06-10 r2 -->\n",
-        "branch": "perf/codex-priority-turns-memo",
-        "head_sha": "0da7277a3c5132902ca1be2b67388601b3af33f1",
-        "author": "prospectore",
-        "labels": [
-          "P2",
-          "proof: sufficient",
-          "status: 👀 ready for maintainer look",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability"
-        ],
-        "files": [
-          {
-            "path": "Sources/CodexBarCore/Generated/CodexParserHash.generated.swift",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarCore/Vendored/CostUsage/CostUsageScanner+CodexPriority.swift",
-            "additions": 199,
-            "deletions": 25,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/CostUsageScannerCodexPriorityTests.swift",
-            "additions": 208,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1404",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1404.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 4,
-          "counts": {
-            "IN_PROGRESS": 3,
-            "SUCCESS": 1
-          },
-          "blockers": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "pending": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:steipete/CodexBar:1404:4674601880:2026-06-10T21:16:13Z:re_review",
-      "comment_id": "4674601880",
-      "comment_version_key": "4674601880:2026-06-10T21:16:13Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1404#issuecomment-4674601880",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1404,
-      "author": "ProspectOre",
-      "author_id": 54486432,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-10T21:16:13Z",
-      "comment_updated_at": "2026-06-10T21:16:13Z",
+      "comment_created_at": "2026-06-11T04:37:47Z",
+      "comment_updated_at": "2026-06-11T04:37:47Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -428,27 +281,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3821,
+    "total_ms": 2030,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 251
+        "ms": 291
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 824
+        "ms": 773
       },
       {
         "name": "classify_commands",
         "ms": 2
       },
       {
-        "name": "classify_commands",
-        "ms": 0
-      },
-      {
         "name": "execute_commands",
-        "ms": 2716
+        "ms": 937
       },
       {
         "name": "append_ledger",
