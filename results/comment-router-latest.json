@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T05:17:15.156Z",
+  "generated_at": "2026-06-11T05:17:16.034Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T02:17:12.995Z",
+  "since": "2026-06-11T02:17:15.641Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92092
+    92093
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,132 +29,18 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92092:4677400161:2026-06-11T05:17:08Z:clawsweeper_needs_human",
-      "comment_id": "4677400161",
-      "comment_version_key": "4677400161:2026-06-11T05:17:08Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92092#issuecomment-4677400161",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92092,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-11T05:14:52Z",
-      "comment_updated_at": "2026-06-11T05:17:08Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] No code repair is currently identified; the contributor must add real after-fix behavior proof before maintainers consider merging the otherwise correct patch.; Cleared: The diff only changes local text-routing logic and focused tests; it adds no dependency, credential, permission, artifact-download, or supply-chain surface. (sha=d1c1a41be82ff25c58c7f80738d1bdccbf3afba1)",
-      "review_summary": "The PR enables Claude CLI commentary classification only when an item-event consumer is active and falls back to normal assistant deltas if classified narration has no commentary consumer.\n\nPR surface: Source +9, Tests +53. Total +62 across 5 files.\n\nReproducibility: yes. at source level. Current main deterministically enables classification without a delivery consumer when commentaryProgressEnabled is defined but false, and the parser then drops pending narration.",
-      "review_followup": "- [P1] No code repair is currently identified; the contributor must add real after-fix behavior proof before maintainers consider merging the otherwise correct patch.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "d1c1a41be82ff25c58c7f80738d1bdccbf3afba1",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(auto-reply): stop dropping claude-cli narration when commentary lane is off",
-        "body": "## Problem\n\nAfter #91976, claude-cli (CLI backend) users lose assistant text whenever the verbose commentary lane is configured but **off**:\n\n1. No interleaved narration between tool calls (with or without `/verbose on`)\n2. The regular-text reasoning preamble that used to appear before the final answer is gone\n\nRepro: claude-cli backend + a channel that defines `commentaryProgressEnabled` (e.g. Discord) + verbose off.\n\n## Root cause\n\n#91976 added commentary classification to the claude-cli JSONL parser. When classification is active, assistant text deltas are buffered, and text preceding a `tool_use` block is flushed via `flushPendingClaudeCommentaryText()`, which calls the **optional** `onCommentaryText` callback. With no consumer wired, the text is silently discarded.\n\nThe two gates disagree (`src/auto-reply/reply/agent-runner-execution.ts`, same pattern in `followup-runner.ts`):\n\n- classification on: `classifyCommentaryText: params.opts?.commentaryProgressEnabled !== undefined`\n- delivery wired: `commentaryProgressEnabled === true && opts.onItemEvent`\n\nSo `commentaryProgressEnabled: false` (defined, verbose off — exactly what `dispatch-from-config.ts` produces via `deliverStandaloneCommentaryProgress || params.replyOptions?.commentaryProgressEnabled`) engages classification with no consumer. In Claude's stream the narration text block usually shares an assistant message with the following `tool_use`, so nearly all inter-tool narration and the pre-final preamble text is reclassified as commentary and dropped.\n\nStandalone repro against `origin/main` (classification on, no consumer, text→tool→text→tool stream):\n\n```\nassistant deltas received: []\nRESULT: narration DROPPED (bug)\n```\n\nSame script on this branch:\n\n```\nassistant deltas received: [\"Let me check the config first.\",\" Now I'll grep for the handler.\"]\nRESULT: narration preserved (fixed)\n```\n\n## Fix (two layers)\n\n1. **Align the gates** — both CLI dispatch sites now only enable `classifyCommentaryText` when the delivery condition holds (`commentaryProgressEnabled === true` and `onItemEvent` wired).\n2. **Defense in depth** — `flushPendingClaudeCommentaryText()` falls back to the assistant text lane when no `onCommentaryText` consumer exists, so any future gate mismatch degrades to the pre-#91976 behavior (text in the normal stream) instead of silently eating model output.\n\nNo change to the verbose-on path: when commentary delivery is wired, behavior is identical to current main.\n\n## Tests\n\n- `src/agents/cli-output.test.ts`: the \"drops Claude commentary text when classification is enabled without delivery\" test now asserts the fallback (text emitted as assistant delta) instead of locking in the drop. 32/32 pass.\n- `src/auto-reply/reply/agent-runner-execution.test.ts`: new regression test \"does not classify CLI commentary when commentary progress is explicitly disabled\" covering the exact reported shape (`commentaryProgressEnabled: false`). 189/189 pass.\n- `src/auto-reply/reply/followup-runner.test.ts`: 73/73 pass.\n- `src/auto-reply/reply/dispatch-from-config.test.ts`: 200/200 pass.\n- `src/auto-reply/reply/agent-runner-cli-dispatch.test.ts`: 7/7 pass.\n- `pnpm tsgo:core` and `pnpm tsgo:test:src` clean; oxlint clean on touched files.\n\n## Not in scope\n\nThe reporter also mentioned `message.content.thinking` never displaying. Thinking-block bridging to the reasoning stream is a separate path (untouched by #91976 and by this PR); if it persists after this fix it should be filed separately.\n",
-        "branch": "fix/cli-commentary-text-drop",
-        "head_sha": "d1c1a41be82ff25c58c7f80738d1bdccbf3afba1",
-        "author": "ragesaq",
-        "labels": [
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/cli-output.test.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-output.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
-            "additions": 51,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92092",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92092.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 163,
-          "counts": {
-            "FAILURE": 3,
-            "CANCELLED": 1,
-            "SKIPPED": 30,
-            "SUCCESS": 128,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-agentic-agents-core-models:FAILURE",
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-agentic-agents-core-models:FAILURE",
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2452,
+    "total_ms": 702,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 359
+        "ms": 381
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1789
+        "ms": 0
       },
       {
         "name": "classify_commands",
@@ -162,11 +48,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 278
+        "ms": 310
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
