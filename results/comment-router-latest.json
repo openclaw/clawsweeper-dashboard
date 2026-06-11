@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T03:57:46.320Z",
-  "repo": "steipete/CodexBar",
+  "generated_at": "2026-06-11T03:57:45.893Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T00:57:44.937Z",
+  "since": "2026-06-11T00:57:42.760Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    1402
+    92084
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4677043040
+  ],
+  "status_comment_id": 4677043202,
   "max_autoclose_targets": 8,
-  "scanned_comments": 8,
-  "commands_seen": 3,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,160 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:1402:4677000699:2026-06-11T03:57:42Z:clawsweeper_needs_human",
-      "comment_id": "4677000699",
-      "comment_version_key": "4677000699:2026-06-11T03:57:42Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1402#issuecomment-4677000699",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1402,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-11T03:47:31Z",
-      "comment_updated_at": "2026-06-11T03:57:42Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] The code appears correct and proof is sufficient; the next action is maintainer acceptance or refinement of the disclosed timeout compatibility behavior, not an automated repair.; Cleared: The internal scheduling patch adds no dependencies, downloads, workflow permissions, credential handling, package-resolution changes, or other concrete security or supply-chain concerns. (sha=e7aa65290b6950ce4f4bf5888d96dae768fe1b8f)",
-      "review_summary": "The PR moves synchronous cost-usage corpus scans, provider fallback/merge work, and persisted-cache decoding onto a dedicated serial utility queue with task-cancellation bridging and focused macOS/Linux tests.\n\nReproducibility: yes. The PR documents a concrete cache-clear, relaunch, and process-sampling path on a real 2.5 GB corpus, with before/after stack placement demonstrating the current-main starvation mechanism and its removal.",
-      "review_followup": "- [P2] The code appears correct and proof is sufficient; the next action is maintainer acceptance or refinement of the disclosed timeout compatibility behavior, not an automated repair.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "e7aa65290b6950ce4f4bf5888d96dae768fe1b8f",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "Run cost-usage corpus scans off the Swift cooperative thread pool",
-        "body": "## Summary\nRun cost-usage corpus scans and persisted-cache decoding on a dedicated serial utility queue (`CostUsageScanExecutor`) instead of inline on Swift's cooperative thread pool, with task cancellation bridged into the scanner-level cancellation checks.\n\n## Context\nThis targets the systemic freeze mechanism behind the #1387 reports (and the environment of #1392). `CostUsageScanner` / `PiSessionCostScanner` scans are synchronous and can run for minutes on large session archives. `CostUsageFetcher.loadTokenSnapshot` executed them inline inside cooperative-pool tasks, which violates the pool's forward-progress contract: while a scan runs, it owns a pool thread for minutes, and overlapping provider scans (startup force-refresh racing the hourly token timer) own several. Every other async continuation in the process — menu rebuild tasks, refresh completions — queues behind them, so the UI freezes while the main thread itself samples idle.\n\nTwo amplifiers make this a release-day event for heavy users:\n- Cache schema bumps (e.g. the claude artifact moving v2 → v4 in 0.32.6-dev) invalidate the whole per-file scan cache, so the first launch after such a release rescans the full corpus.\n- The reporter machine for this PR holds a 2.5 GB corpus (903 MB `~/.claude/projects`, 1.6 GB / 316 files `~/.codex/sessions`); the post-bump rescan ran 7+ minutes at full tilt.\n\nField sample of that storm (v0.32.6-dev pre-fix, 1 ms interval, 5 s window, redacted to frame counts): 2,437 samples in the claude scan and 1,807 in the codex scan **concurrently on two cooperative-pool threads**, sustained across every capture window for ~3 minutes, while menu opens visibly froze — with the main thread parked in `mach_msg` the whole time.\n\n## Change\n- New `CostUsageScanExecutor`: one serial `DispatchQueue` (`com.steipete.codexbar.cost-usage-scan`, utility QoS). `run` bridges Swift task cancellation into a `@Sendable` check handed to the scanners, and work cancelled while still queued resumes immediately with `CancellationError` instead of waiting behind an in-flight scan.\n- `CostUsageFetcher.loadTokenSnapshot` moves the scan + vertex-fallback + pi-merge block onto the executor; `loadCachedCodexTokenSnapshot` moves its multi-megabyte cache JSON decode there too (it previously ran on the pool via `Task.detached`).\n- Serialization also removes concurrent provider scans hammering the same disk.\n\n## Validation\n- `swift test --filter CostUsageScanExecutorTests` — 5 new tests: labeled-queue execution, error propagation, overlap serialization, in-flight cancellation through the bridged check, queued-work cancellation.\n- `swift test --filter CostUsageScanExecutorLinuxTests` — 2 Linux-compatible executor tests pass.\n- `swift test --filter CostUsage` — 183 tests in 18 suites pass.\n- `make check` — 0 violations; `git diff --check` clean.\n- Structured autoreview — no accepted/actionable findings.\n\n## Runtime Proof\nA/B on the same machine, same protocol per phase: quit app → delete `~/Library/Caches/CodexBar/cost-usage` → relaunch → `sample CodexBar 5 1` at T+30s during the full-corpus rescan. Thread placement of the scan frames:\n\n```text\n# BEFORE (current main scan code)\n3515 Thread_1092763   DispatchQueue_12: com.apple.root.utility-qos.cooperative  (concurrent)\n     ... CostUsageScanner.loadClaudeDaily / CostUsageJsonl.scan ...\n\n# AFTER (this branch)\n3191 Thread_1094843   DispatchQueue_267: com.steipete.codexbar.cost-usage-scan  (serial)\n     ... CostUsageScanner.loadClaudeDaily / CostUsageJsonl.scan ...\n# zero scan frames on cooperative-pool threads\n```\n\nThe scan can no longer occupy cooperative-pool threads at all, so async-runtime starvation by scans is structurally impossible rather than merely less likely. The post-fix full rescan completed and rewrote the per-provider caches normally (cost data intact).\n\n## Honesty / scope notes\n- This makes the app responsive *during* scans; it does not make scans cheaper. Steady-state ticks stay incremental via the existing per-file mtime/size cache; the full-rescan-after-schema-bump cost itself is #1392's refresh-policy territory.\n- Serializing providers can lengthen total storm wall-time on multi-provider setups (scans no longer overlap), and the 10-minute per-provider timeout now includes time queued behind another provider's scan. On very large corpora that could surface as a timeout that previously squeaked through; the next tick resumes against the warm per-file cache.\n- The 1.6s AX click-roundtrip measured in both phases is automation overhead, not app latency; the responsiveness claim rests on the structural thread-placement proof plus the documented forward-progress contract of the cooperative pool.\n\n\n<!-- proof-revision: 2026-06-10 r2 -->\n",
-        "branch": "perf/cost-scan-off-cooperative-pool",
-        "head_sha": "e7aa65290b6950ce4f4bf5888d96dae768fe1b8f",
-        "author": "prospectore",
-        "labels": [
-          "P2",
-          "merge-risk: 🚨 compatibility",
-          "proof: sufficient",
-          "status: 👀 ready for maintainer look",
-          "rating: 🐚 platinum hermit"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarCore/CostUsageFetcher.swift",
-            "additions": 49,
-            "deletions": 39,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarCore/CostUsageScanExecutor.swift",
-            "additions": 130,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "Tests/CodexBarTests/CostUsageScanExecutorTests.swift",
-            "additions": 156,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "TestsLinux/CostUsageScanExecutorLinuxTests.swift",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1402",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1402.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 4,
-          "counts": {
-            "IN_PROGRESS": 3,
-            "SUCCESS": 1
-          },
-          "blockers": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "pending": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:steipete/CodexBar:1402:4674950291:2026-06-10T21:52:36Z:re_review",
-      "comment_id": "4674950291",
-      "comment_version_key": "4674950291:2026-06-10T21:52:36Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1402#issuecomment-4674950291",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1402,
-      "author": "ProspectOre",
-      "author_id": 54486432,
+      "idempotency_key": "comment-router:openclaw/openclaw:92084:4677043040:2026-06-11T03:56:56Z:re_review",
+      "comment_id": "4677043040",
+      "comment_version_key": "4677043040:2026-06-11T03:56:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92084#issuecomment-4677043040",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92084,
+      "author": "steipete",
+      "author_id": 58493,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-10T21:52:36Z",
-      "comment_updated_at": "2026-06-10T21:52:36Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-run",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:steipete/CodexBar:1402:4674601750:2026-06-10T21:16:12Z:re_review",
-      "comment_id": "4674601750",
-      "comment_version_key": "4674601750:2026-06-10T21:16:12Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1402#issuecomment-4674601750",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1402,
-      "author": "ProspectOre",
-      "author_id": 54486432,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-10T21:16:12Z",
-      "comment_updated_at": "2026-06-10T21:16:12Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-11T03:56:56Z",
+      "comment_updated_at": "2026-06-11T03:56:56Z",
+      "status_comment_id": 4677043202,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -201,22 +61,40 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-11T03:57:46.899Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 92084
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-11T03:57:47.990Z",
+          "response_comment_id": "4677043202",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "admin",
       "target": {
         "kind": "pull_request",
-        "title": "Run cost-usage corpus scans off the Swift cooperative thread pool",
-        "body": "## Summary\nRun cost-usage corpus scans and persisted-cache decoding on a dedicated serial utility queue (`CostUsageScanExecutor`) instead of inline on Swift's cooperative thread pool, with task cancellation bridged into the scanner-level cancellation checks.\n\n## Context\nThis targets the systemic freeze mechanism behind the #1387 reports (and the environment of #1392). `CostUsageScanner` / `PiSessionCostScanner` scans are synchronous and can run for minutes on large session archives. `CostUsageFetcher.loadTokenSnapshot` executed them inline inside cooperative-pool tasks, which violates the pool's forward-progress contract: while a scan runs, it owns a pool thread for minutes, and overlapping provider scans (startup force-refresh racing the hourly token timer) own several. Every other async continuation in the process — menu rebuild tasks, refresh completions — queues behind them, so the UI freezes while the main thread itself samples idle.\n\nTwo amplifiers make this a release-day event for heavy users:\n- Cache schema bumps (e.g. the claude artifact moving v2 → v4 in 0.32.6-dev) invalidate the whole per-file scan cache, so the first launch after such a release rescans the full corpus.\n- The reporter machine for this PR holds a 2.5 GB corpus (903 MB `~/.claude/projects`, 1.6 GB / 316 files `~/.codex/sessions`); the post-bump rescan ran 7+ minutes at full tilt.\n\nField sample of that storm (v0.32.6-dev pre-fix, 1 ms interval, 5 s window, redacted to frame counts): 2,437 samples in the claude scan and 1,807 in the codex scan **concurrently on two cooperative-pool threads**, sustained across every capture window for ~3 minutes, while menu opens visibly froze — with the main thread parked in `mach_msg` the whole time.\n\n## Change\n- New `CostUsageScanExecutor`: one serial `DispatchQueue` (`com.steipete.codexbar.cost-usage-scan`, utility QoS). `run` bridges Swift task cancellation into a `@Sendable` check handed to the scanners, and work cancelled while still queued resumes immediately with `CancellationError` instead of waiting behind an in-flight scan.\n- `CostUsageFetcher.loadTokenSnapshot` moves the scan + vertex-fallback + pi-merge block onto the executor; `loadCachedCodexTokenSnapshot` moves its multi-megabyte cache JSON decode there too (it previously ran on the pool via `Task.detached`).\n- Serialization also removes concurrent provider scans hammering the same disk.\n\n## Validation\n- `swift test --filter CostUsageScanExecutorTests` — 5 new tests: labeled-queue execution, error propagation, overlap serialization, in-flight cancellation through the bridged check, queued-work cancellation.\n- `swift test --filter CostUsageScanExecutorLinuxTests` — 2 Linux-compatible executor tests pass.\n- `swift test --filter CostUsage` — 183 tests in 18 suites pass.\n- `make check` — 0 violations; `git diff --check` clean.\n- Structured autoreview — no accepted/actionable findings.\n\n## Runtime Proof\nA/B on the same machine, same protocol per phase: quit app → delete `~/Library/Caches/CodexBar/cost-usage` → relaunch → `sample CodexBar 5 1` at T+30s during the full-corpus rescan. Thread placement of the scan frames:\n\n```text\n# BEFORE (current main scan code)\n3515 Thread_1092763   DispatchQueue_12: com.apple.root.utility-qos.cooperative  (concurrent)\n     ... CostUsageScanner.loadClaudeDaily / CostUsageJsonl.scan ...\n\n# AFTER (this branch)\n3191 Thread_1094843   DispatchQueue_267: com.steipete.codexbar.cost-usage-scan  (serial)\n     ... CostUsageScanner.loadClaudeDaily / CostUsageJsonl.scan ...\n# zero scan frames on cooperative-pool threads\n```\n\nThe scan can no longer occupy cooperative-pool threads at all, so async-runtime starvation by scans is structurally impossible rather than merely less likely. The post-fix full rescan completed and rewrote the per-provider caches normally (cost data intact).\n\n## Honesty / scope notes\n- This makes the app responsive *during* scans; it does not make scans cheaper. Steady-state ticks stay incremental via the existing per-file mtime/size cache; the full-rescan-after-schema-bump cost itself is #1392's refresh-policy territory.\n- Serializing providers can lengthen total storm wall-time on multi-provider setups (scans no longer overlap), and the 10-minute per-provider timeout now includes time queued behind another provider's scan. On very large corpora that could surface as a timeout that previously squeaked through; the next tick resumes against the warm per-file cache.\n- The 1.6s AX click-roundtrip measured in both phases is automation overhead, not app latency; the responsiveness claim rests on the structural thread-placement proof plus the documented forward-progress contract of the cooperative pool.\n\n\n<!-- proof-revision: 2026-06-10 r2 -->\n",
-        "branch": "perf/cost-scan-off-cooperative-pool",
-        "head_sha": "e7aa65290b6950ce4f4bf5888d96dae768fe1b8f",
-        "author": "prospectore",
+        "title": "fix(clickclack): allow explicit enable through plugin allowlist",
+        "body": "## Summary\n\n- Fix ClickClack enablement when `plugins.allow` is already a non-empty restrictive list.\n- Root cause: explicit CLI/setup/onboarding selections used the generic fail-closed enable helper, which rejected ClickClack before the selection could be recorded as trust.\n- Add a narrow explicit-selection path that appends only canonical `clickclack` after an allowlist rejection. Global plugin disablement, `plugins.deny`, and all unrelated plugin IDs remain authoritative.\n- Wire that path into `plugins enable`, guided channel setup, and onboarding installation. Normal direct plugin-install policy is unchanged.\n- Out of scope: ClickClack's GitHub organization login gate and any broad change to OpenClaw plugin allowlist policy.\n\n## Linked context\n\nRelated: https://github.com/openclaw/clickclack/issues/16\n\nRequested and behavior-authorized by the owner.\n\n## Real behavior proof\n\n- Behavior or issue addressed: `openclaw plugins enable clickclack` no longer reports `blocked by allowlist` solely because another plugin already occupies `plugins.allow`.\n- Real environment tested: built OpenClaw CLI from final commit `a5a821360a278f54d40726c3cd9af2df86e792a9`, using isolated disposable `HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_PATH` values.\n- Exact commands run after this patch: `pnpm build`; then built CLI invocations for `plugins enable clickclack`, `plugins enable telegram`, denylisted `plugins enable clickclack`, and `plugins install clickclack` against four separate configs.\n- Evidence after fix:\n  - ClickClack enable: `Enabled plugin \"clickclack\".`; config became `allow: [\"memory-core\", \"clickclack\"]` with the ClickClack entry enabled.\n  - Unrelated Telegram enable: `blocked by allowlist`; config stayed `allow: [\"memory-core\"]`.\n  - Denylisted ClickClack enable: `blocked by denylist`; allowlist and denylist stayed unchanged.\n  - Bundled ClickClack install: install completed and recorded ClickClack in the existing allowlist.\n- Observed result after fix: explicit ClickClack trust is materialized without weakening policy for other plugin IDs or overriding deny/global-disable checks.\n- What was not tested: a live ClickClack bot connection; this change owns config mutation before channel runtime startup and needs no service token or network call.\n- Proof limitations or environment constraints: none for the affected OpenClaw config boundary.\n\n## Tests and validation\n\n- `pnpm test src/plugins/enable.test.ts src/flows/channel-setup.test.ts src/cli/plugins-cli.policy.test.ts src/commands/onboarding-plugin-install.test.ts` (65 tests passed on the final commit)\n- `pnpm build` (passed on the final commit)\n- Autoreview: clean twice; no accepted/actionable findings.\n- Blacksmith Testbox through Crabbox `tbx_01kttbpjd3gshqf74a93hskew7`: changed-file formatting, `pnpm check --include-test-types`, and `pnpm check:docs` passed. Run: https://github.com/openclaw/openclaw/actions/runs/27321882027\n- The same run executed all 88 full-test shards. 87 shards passed; the untouched `agents-core` shard has two current-main failures that reproduce locally in `src/agents/anthropic-transport-stream.test.ts` and `src/agents/simple-completion-runtime.test.ts`.\n- Repository-wide `pnpm format:check` also reports 24 pre-existing files outside this patch; all 10 changed files pass formatting. Baseline run: https://github.com/openclaw/openclaw/actions/runs/27321833711\n\nRegression coverage verifies ClickClack append-and-enable behavior, unrelated-plugin rejection, denylist preservation, and the guided channel setup path.\n\n## Risk checklist\n\nDid user-visible behavior change? `Yes`\n\nDid config, environment, or migration behavior change? `Yes`, only explicit ClickClack selection can append its ID to an existing restrictive allowlist.\n\nDid security, auth, secrets, network, or tool execution behavior change? `Yes`, at the plugin trust-policy boundary.\n\nHighest-risk area: accidentally broadening allowlist bypass behavior.\n\nMitigation: the retry is limited to canonical `clickclack` and only after the generic helper returns `blocked by allowlist`; global disablement and denylist checks run first, and unrelated-ID regression coverage remains fail-closed.\n\n## Current review state\n\nReady for Peter's review. Do not merge until owner review is complete. No known patch-specific blocker remains; the full-suite and repository-wide formatting failures listed above are reproducible untouched-main baseline failures.\n",
+        "branch": "fix/clickclack-allowlist-enable",
+        "head_sha": "a5a821360a278f54d40726c3cd9af2df86e792a9",
+        "author": "steipete",
         "labels": [
-          "P2",
-          "merge-risk: 🚨 compatibility",
-          "proof: sufficient",
-          "status: 👀 ready for maintainer look",
-          "rating: 🐚 platinum hermit"
+          "docs",
+          "cli",
+          "commands",
+          "maintainer",
+          "size: S",
+          "rating: 🌊 off-meta tidepool"
         ],
         "files": [
           {
@@ -226,82 +104,111 @@
             "changeType": "MODIFIED"
           },
           {
-            "path": "Sources/CodexBarCore/CostUsageFetcher.swift",
-            "additions": 49,
-            "deletions": 39,
+            "path": "docs/channels/clickclack.md",
+            "additions": 8,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "Sources/CodexBarCore/CostUsageScanExecutor.swift",
-            "additions": 130,
+            "path": "src/cli/plugins-cli-test-helpers.ts",
+            "additions": 12,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "Tests/CodexBarTests/CostUsageScanExecutorTests.swift",
-            "additions": 156,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "src/cli/plugins-cli.runtime.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "TestsLinux/CostUsageScanExecutorLinuxTests.swift",
-            "additions": 29,
+            "path": "src/commands/onboarding-plugin-install.test.ts",
+            "additions": 1,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/onboarding-plugin-install.ts",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/channel-setup.test.ts",
+            "additions": 78,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/channel-setup.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/enable.test.ts",
+            "additions": 54,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/enable.ts",
+            "additions": 28,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1402",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1402.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92084",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92084.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 4,
+          "total": 166,
           "counts": {
-            "IN_PROGRESS": 3,
-            "SUCCESS": 1
+            "SUCCESS": 132,
+            "SKIPPED": 31,
+            "FAILURE": 2,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
+            "checks-node-agentic-agents-core-models:FAILURE",
+            "checks-node-agentic-agents-core-runtime:FAILURE"
           ],
-          "pending": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "terminalBlockers": []
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents-core-models:FAILURE",
+            "checks-node-agentic-agents-core-runtime:FAILURE"
+          ]
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2799,
+    "total_ms": 5933,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 389
+        "ms": 621
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 979
+        "ms": 2501
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 1404
+        "ms": 2789
       },
       {
         "name": "append_ledger",
