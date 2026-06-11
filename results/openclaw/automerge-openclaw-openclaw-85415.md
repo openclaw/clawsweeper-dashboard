@@ -2,17 +2,17 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-85415"
 mode: "autonomous"
-run_id: "26502711339"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26502711339"
-head_sha: "e48915a6b06c528cbb2e637276902264853c4af4"
-workflow_conclusion: "success"
+run_id: "27331551944"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27331551944"
+head_sha: "7d62fff82fb140502414977eda36ab960df00754"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-05-27T09:49:42.591Z"
+published_at: "2026-06-11T09:10:10.707Z"
 canonical: "#85415"
 canonical_issue: null
 canonical_pr: "#85415"
 actions_total: 1
-fix_executed: 1
+fix_executed: 0
 fix_failed: 1
 fix_blocked: 1
 apply_executed: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26502711339](https://github.com/openclaw/clawsweeper/actions/runs/26502711339)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27331551944](https://github.com/openclaw/clawsweeper/actions/runs/27331551944)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
@@ -42,7 +42,7 @@ Make PR #85415 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 | Metric | Count |
 | --- | ---: |
 | Worker actions | 1 |
-| Fix executed | 1 |
+| Fix executed | 0 |
 | Fix failed | 1 |
 | Fix blocked | 1 |
 | Applied executions | 0 |
@@ -54,9 +54,9 @@ Make PR #85415 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | Codex fix worker timed out after 1200000ms |
-| execute_fix | blocked |  |  | Codex fix worker timed out after 1200000ms |
-| automerge_repair_outcome_comment | executed | #85415 |  |  |
+| repair_contributor_branch | failed |  |  | Codex fix worker failed: stream disconnected before completion: Rate limit reached for kindle-alpha (for limit alpha-test) in organization org-uV7eiQ9Go91bzhgJ7xfsJBZj on tokens per min (TPM): Limit 5000000, Used 5000000, Requested 35664. Please try again in 427ms. Visit https://platform.openai.com/account/rate-limits to learn more. |
+| execute_fix | blocked |  |  | Codex fix worker failed: stream disconnected before completion: Rate limit reached for kindle-alpha (for limit alpha-test) in organization org-uV7eiQ9Go91bzhgJ7xfsJBZj on tokens per min (TPM): Limit 5000000, Used 5000000, Requested 35664. Please try again in 427ms. Visit https://platform.openai.com/account/rate-limits to learn more. |
+| automerge_repair_outcome_comment | updated | #85415 |  |  |
 
 ## Apply Actions
 
