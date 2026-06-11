@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T16:14:08.820Z",
+  "generated_at": "2026-06-11T16:14:40.626Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T13:14:05.776Z",
+  "since": "2026-06-11T13:14:36.527Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     92180
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4682586575
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -40,12 +42,12 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-11T13:29:52Z",
-      "comment_updated_at": "2026-06-11T16:14:00Z",
+      "comment_created_at": "2026-06-11T16:12:40Z",
+      "comment_updated_at": "2026-06-11T16:12:40Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,120 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "#92169: Embedded runtime: don't terminate turn after interstitial message sends",
-        "body": "## Summary\n\nRemove `terminate: true` from the message-tool-only afterToolCall hook so that the embedded agent runtime does not erroneously end the turn after every successful interstitial/progress message send. The model can now continue planned tool work after sending a visible progress update (e.g. \"checking the codebase, one moment\") instead of terminating the turn prematurely.\n\n## Root Cause\n\nIn `message_tool_only` delivery mode, `installMessageToolOnlyTerminalHook` in `src/agents/embedded-agent-runner/run/message-tool-terminal.ts` returned `terminate: true` after every successful implicit-route `message.send`. This caused `shouldTerminateToolBatch` to stop the agent loop immediately, preventing the model from re-engaging after the tool result to perform the promised work.\n\nThe agent's `stopReason` was `toolUse` (the model expected tool results and planned to continue), but the hook's `terminate: true` skipped the re-invoke step entirely. A 45-day audit across 3 agents showed the follow-through-failure rate doubled on 2026.6.1: 73.3% of promised turns failed to deliver vs 36.2% pre-6.1.\n\n## Real behavior proof\n\n**Behavior addressed:** Remove `terminate: true` from the message-tool-only afterToolCall hook return value while keeping the `onDeliveredSourceReply` delivery tracking callback intact.\n\n**Real environment tested:** Debian GNU/Linux 12 (bookworm), kernel 6.12 x86_64. Standalone Node.js script that simulates the agent loop to demonstrate the before/after behavior difference.\n\n**Exact steps or command run after this patch:**\n```console\nnode /tmp/repro-92169.mjs\n```\n\n**Evidence:**\n```\n======================================================================\nIssue #92169 — Before vs After Fix Comparison\n======================================================================\n\n【BEFORE FIX】: terminate: true after message.send\n\n  Turns executed: 1\n  Tools executed: 1\n  Tool #1: terminate=true | text=\"Message sent successfully\"\n\n  ✗ BUG: After message.send(\"checking the codebase...\"), turn ended.\n  ✗ Model never got to call \"read\" or deliver the actual answer.\n\n\n【AFTER FIX】: no terminate after message.send (model continues naturally)\n\n  Turns executed: 4\n  Tools executed: 3\n  Tool #1: terminate=false | text=\"Message sent successfully\"\n  Tool #2: terminate=undefined | text=\"read result data\"\n  Tool #3: terminate=false | text=\"Message sent successfully\"\n\n  ✓ Model sent progress message → continue working → delivered final answer\n  ✓ All 3 tools executed in sequence as intended\n```\n\n**Observed result after fix:** The agent loop continues after a message.send in `message_tool_only` mode. With the fix, the model sees \"Message sent successfully\" and continues to subsequent tool calls (read, search) for actual work. The model's natural `stopReason` (end_turn/stop) determines when the turn ends, so progress-update messages do not erroneously terminate the agent loop. In the simulation, 3 tools now execute in sequence (message send → read → message send) across 4 turns, with the model naturally stopping at end_turn.\n\n```diff\ndiff --git a/src/agents/embedded-agent-runner/run/message-tool-terminal.ts b/src/agents/embedded-agent-runner/run/message-tool-terminal.ts\nindex 2deaf33d3b..1384f99b89 100644\n--- a/src/agents/embedded-agent-runner/run/message-tool-terminal.ts\n+++ b/src/agents/embedded-agent-runner/run/message-tool-terminal.ts\n@@ -191,7 +191,16 @@ export function shouldTerminateAfterMessageToolOnlySend(params: {\n   return true;\n }\n \n-/** Installs an after-tool hook that terminates the turn after a qualifying message send. */\n+/** Installs an after-tool hook that records delivery but does not terminate the turn.\n+ *\n+ * Previously the hook returned `terminate: true` after a qualifying message send,\n+ * which caused the agent loop to end immediately. This prevented the model from\n+ * continuing planned work after sending an interstitial/progress update message\n+ * (e.g. \"checking the codebase, one moment\"). The model's natural stopReason\n+ * (end_turn/stop) determines when the turn ends — re-invoking the model after\n+ * the tool result lets it continue if it was a progress message, or naturally\n+ * end with stopReason: stop if it was the final answer. (#92169)\n+ */\n export function installMessageToolOnlyTerminalHook(params: {\n   agent: Agent;\n   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;\n@@ -211,7 +220,6 @@ export function installMessageToolOnlyTerminalHook(params: {\n       })\n     ) {\n       params.onDeliveredSourceReply?.();\n-      return { ...hookResult, terminate: true };\n     }\n     return hookResult;\n   };\n```\n\n**What was not tested:** Full integration test with actual Anthropic API / Slack channel agent. The change is purely a logic fix in the agent runtime hook — no external dependency changes.\n\n## Regression Test Plan\n\n- [x] `pnpm test -- --run src/agents/embedded-agent-runner/run/message-tool-terminal.test.ts` passes (updated test expectations)\n- [ ] Change is minimal and targeted — only the `installMessageToolOnlyTerminalHook` function is modified; the `shouldTerminateAfterMessageToolOnlySend` predicate is kept for delivery detection but no longer used for termination.\n\n---\n\n*AI-assisted: built with Claude Code*",
-        "branch": "fix/issue-92169--bug---embedded-runtime--agent-ends-turn-",
-        "head_sha": "e222f2f480bf2f4038904e57fb3487777619c5e7",
-        "author": "mmyzwl",
-        "labels": [
-          "agents",
-          "size: XS",
-          "proof: supplied",
-          "P1",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 message-delivery"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run/message-tool-terminal.test.ts",
-            "additions": 1,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/message-tool-terminal.ts",
-            "additions": 15,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92180",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92180.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "SUCCESS": 133,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:92180:4682548524:2026-06-11T16:08:21Z:re_review",
-      "comment_id": "4682548524",
-      "comment_version_key": "4682548524:2026-06-11T16:08:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92180#issuecomment-4682548524",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92180,
-      "author": "mmyzwl",
-      "author_id": 30864295,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-11T16:08:21Z",
-      "comment_updated_at": "2026-06-11T16:08:21Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=1f3e8011967a34008db148af1034b22274c454ee)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +486, Tests +777. Total +1263 across 30 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "1f3e8011967a34008db148af1034b22274c454ee",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
       "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4151,
+    "total_ms": 5928,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 350
+        "ms": 4087
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2679
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1094
+        "ms": 1829
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
