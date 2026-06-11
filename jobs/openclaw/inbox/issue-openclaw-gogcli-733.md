@@ -61,7 +61,7 @@ Implementation complexity: small
 
 Implementation boundary:
 
-- verify the issue is coherent, useful, and still applicable on latest main
+- verify the issue is coherent, useful, and still applicable on the latest default branch
 - keep one small focused PR
 - stop for nonsense, security-sensitive work, product decisions, or broad scope
 - follow the repository's AGENTS.md and contribution rules
