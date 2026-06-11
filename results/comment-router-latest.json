@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T15:33:54.284Z",
+  "generated_at": "2026-06-11T15:35:02.642Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T12:33:53.171Z",
+  "since": "2026-06-11T12:35:01.792Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4682242713
   ],
-  "status_comment_id": 4682243289,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "NONE",
       "comment_created_at": "2026-06-11T15:33:00Z",
       "comment_updated_at": "2026-06-11T15:33:00Z",
-      "status_comment_id": 4682243289,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,72 +61,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-11T15:33:55.014Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 92057
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-11T15:33:56.060Z",
-          "response_comment_id": "4682243289",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "issue",
-        "state": "open",
-        "locked": false,
-        "title": "Gateway becomes slow or times out under multi-session / multi-agent load",
-        "body": "## Summary\n\nOn a local OpenClaw installation, the gateway becomes very slow and can appear stuck when the system has many sessions and multiple agents running. The symptoms are most visible during multi-session / multi-agent execution: inbound messages are delayed, gateway RPCs time out, and some Codex/OpenClaw dynamic tool calls can hang or time out.\n\nThis has reproduced more than once on the same machine. A previous local audit on 2026-06-07 pointed to gateway event-loop stalls caused or amplified by heavy log/history/session IO. The issue is currently observable again.\n\n## Current observed behavior\n\nAs of 2026-06-11 08:xx CST on the affected machine:\n\n- `openclaw gateway status --json` took about 11.09s.\n- The gateway process is running and listening on `127.0.0.1:18789`, but RPC probing fails:\n  - `rpc.ok: false`\n  - `error: \"timeout\"`\n  - `url: \"ws://127.0.0.1:18789\"`\n- `openclaw gateway stability --json` fails with:\n  - `GatewayTransportError: gateway timeout after 10000ms`\n- Process snapshot showed the gateway process consuming close to a full CPU core:\n  - `/opt/homebrew/opt/node@22/bin/node /opt/homebrew/lib/node_modules/openclaw/dist/index.js gateway --port 18789`\n  - uptime around 1h20m+\n  - CPU around 97% at the time of capture\n- `openclaw sessions list --json` still returns, but the environment has a large session store.\n\n## Local environment\n\n- OpenClaw CLI: `2026.6.5`\n- Gateway command: `openclaw/dist/index.js gateway --port 18789`\n- Node: `v22.22.0`\n- npm: `10.9.4`\n- macOS: `26.5.1` / Darwin `25.5.0` / arm64\n- OpenClaw Codex package: `@openclaw/codex 2026.5.27`\n- Weixin gateway plugin: `@tencent-weixin/openclaw-weixin 2.4.3`\n- Gateway bind mode: loopback, port `18789`\n\n## Session / data scale on the affected machine\n\nThe affected installation uses multiple agents and a large local session history:\n\n- `~/.openclaw/agents/*/sessions`: about `4820` jsonl files.\n- Main agent sessions directory: about `881MB`.\n- Other agent sessions directories include examples around `198MB`, `136MB`, `108MB`, `88MB`, `57MB`.\n- Largest archived trajectory/checkpoint jsonl files observed: roughly `10MB` to `26MB` each.\n\nThis looks like the kind of workload that can accumulate naturally when OpenClaw is used as a long-running multi-agent coordinator.\n\n## Earlier local audit evidence from 2026-06-07\n\nA previous investigation of a similar gateway hang on the same machine found:\n\n- `logs.tail` latency up to `42946ms`.\n- `eventLoopDelayP99Ms=11467.2`.\n- `eventLoopUtilization=1`.\n- WebSocket handshakes closing with code `1006` during or after stalls.\n- `codex dynamic tool call timed out` after `120000ms`.\n- Persistent logs had grown large before rotation:\n  - `~/.openclaw/logs/gateway.log`: `32M`, `532900` lines.\n  - `~/.openclaw/logs/gateway.err.log`: `11M`, `104560` lines.\n\nRotating the oversized gateway logs improved `logs.tail` and general gateway responsiveness at that time, but the broader multi-session / multi-agent degradation appears to recur with large session/history state.\n\n## Expected behavior\n\nThe gateway should remain responsive under a large but realistic local multi-agent workload. Expensive operations such as log tailing, session listing, history reads, or transcript scans should not block the event loop long enough to cause WebSocket/RPC timeouts or message delivery delays.\n\n## Actual behavior\n\nUnder the described workload, the gateway can become slow enough that:\n\n- `gateway status` reports a running process but RPC timeout.\n- `gateway stability` times out.\n- Message delivery and multi-agent execution feel delayed or stuck.\n- Gateway CPU can sit near a full core while the local client observes timeouts.\n\n## Suspected contributing factors\n\nBased on local evidence, possible contributors include:\n\n- Synchronous or unbounded file IO in gateway request paths, especially around log tail/history/session operations.\n- Full-file scans for log tailing or session history where bounded reverse reads or indexed summaries would be safer.\n- Large session/trajectory/checkpoint stores increasing the cost of session enumeration or history lookups.\n- Long-running model/tool calls amplifying gateway backpressure when the event loop is already delayed.\n\n## Suggested hardening\n\nPossible fixes or mitigations:\n\n- Ensure `logs.tail` uses bounded reverse-tail reads and never scans full large logs on the gateway event loop.\n- Move expensive session/history/log IO off the main gateway event loop or make it streaming/backpressure-aware.\n- Add explicit latency metrics for gateway handlers such as `sessions.list`, `chat.history`, `logs.tail`, dynamic tool dispatch, and WebSocket handshake.\n- Add guardrails for large local session stores, for example indexed metadata, pagination by default, and cleanup recommendations when thresholds are exceeded.\n- Consider a built-in maintenance command or background compaction/rotation policy for long-running multi-agent installs.\n\n## Privacy note\n\nI am not attaching raw local logs because they may contain private conversation/session data. The figures above are sanitized operational metrics and command results from the affected machine.",
-        "author": "xiaopings",
-        "labels": [
-          "P1",
-          "clawsweeper:no-new-fix-pr",
-          "clawsweeper:needs-maintainer-review",
-          "clawsweeper:needs-live-repro",
-          "impact:message-loss",
-          "impact:crash-loop",
-          "issue-rating: 🐚 platinum hermit"
-        ],
-        "cluster_id": null,
-        "job_path": null,
-        "open_prs": [],
-        "issue_implementation_cluster_id": "issue-openclaw-openclaw-92057",
-        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-92057.md",
-        "mode": "autonomous"
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3369,
+    "total_ms": 3154,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 511
+        "ms": 839
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 314
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 276
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2245
+        "ms": 2304
       },
       {
         "name": "append_ledger",
