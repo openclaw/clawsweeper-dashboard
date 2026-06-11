@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T17:07:50.467Z",
+  "generated_at": "2026-06-11T17:07:55.503Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T14:07:49.829Z",
+  "since": "2026-06-11T14:07:50.601Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    90872
+    92185
   ],
   "comment_ids": [
-    4683031465
+    4683039014
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4683039371,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,468 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:72984:4333009957:2026-06-11T17:06:51Z:clawsweeper_needs_human",
-      "comment_id": "4333009957",
-      "comment_version_key": "4333009957:2026-06-11T17:06:51Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/72984#issuecomment-4333009957",
+      "idempotency_key": "comment-router:openclaw/openclaw:92185:4683039014:2026-06-11T17:07:03Z:re_review",
+      "comment_id": "4683039014",
+      "comment_version_key": "4683039014:2026-06-11T17:07:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92185#issuecomment-4683039014",
       "repo": "openclaw/openclaw",
-      "issue_number": 72984,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-28T06:54:09Z",
-      "comment_updated_at": "2026-06-11T17:06:51Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=0cd7826f9495583812d3aced504aeff28cdfa343)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +140, Tests +533. Total +673 across 10 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "0cd7826f9495583812d3aced504aeff28cdfa343",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(subagent): resolve runtime model from subagent default instead of parent primary",
-        "body": "## Summary\n\nTwo-part fix for subagent model resolution:\n\n- **Commit 1 — read-side fallback (defense in depth, fbbd3c2d5f):** `resolveSessionModelRef` had no subagent awareness. When `entry.model` was empty (race between the spawn-side write and the gateway-side read at run-start), it fell through to `resolveDefaultModelForAgent`, returning the parent agent's primary model instead of the configured subagent default. Also reorders the `??` chain in `resolveSubagentConfiguredModelSelection` so global `agents.defaults.subagents.model` takes precedence over the spawning agent's own `model` field.\n- **Commit 2 — Pi-harness write-side fix (production path, this commit):** `getReplyFromConfig` resolved the run model via `resolveDefaultModel` (which goes through `resolveDefaultModelForAgent` and is not subagent-aware), and post-run persistence in `updateSessionStoreAfterAgentRun` then wrote that model back to `entry.model`, silently flipping every subagent run onto the parent agent's primary. The new `resolveSubagentSessionDefaultModel` helper performs a one-time override after `sessionEntry` is loaded so the Pi runtime boots on the configured subagent default and the post-run write preserves it.\n\n## Failure mode (before)\n\nConfig:\n```\nagents.list[main].model.primary = anthropic/claude-opus-4-7\nagents.defaults.subagents.model.primary = openai-codex/gpt-5.5\nagents.list[main].subagents.model.primary = openai-codex/gpt-5.5\n```\n\nSpawn flow:\n1. Parent calls `sessions_spawn(task=..., agentId=main)` with no explicit `model:`.\n2. Spawn-side computes the right ref (`gpt-5.5`) and writes `entry.model` / `entry.modelProvider` via `persistInitialChildSessionRuntimeModel`.\n3. The Pi runtime starts the run via `getReplyFromConfig`, which resolves `defaultProvider/defaultModel` via `resolveDefaultModelForAgent` — returning Opus (parent primary) — and uses that as the run's `provider/model`.\n4. Subagent runs on Opus instead of gpt-5.5.\n5. Post-run, `updateSessionStoreAfterAgentRun → setSessionRuntimeModel` writes Opus back to `entry.model`, clobbering the spawn-time gpt-5.5.\n\nResult on disk: `~/.openclaw/agents/<agent>/sessions/sessions.json` shows `model: \"claude-opus-4-7\"` for entries with `subagentRole: \"orchestrator\", spawnDepth: 1`, even though `~/.openclaw/subagents/runs.json` correctly recorded `gpt-5.5`. The read-side fallback in commit 1 only kicks in while `entry.model` is empty — once the post-run write fires, `entry.model` is non-empty and the fallback is skipped.\n\n## Fix\n\n- **Commit 1 — `resolveSessionModelRef`:** when `entry.spawnDepth >= 1` or `entry.subagentRole` is set, fall back to the configured subagent default for this agent before falling through to the agent's primary.\n- **Commit 1 — `resolveSubagentConfiguredModelSelection`:** reorder `??` chain to `agentConfig.subagents.model` → `agents.defaults.subagents.model` → `agentConfig.model`.\n- **Commit 2 — `resolveSubagentSessionDefaultModel`:** new helper in `directive-handling.defaults.ts` that, given the loaded `sessionEntry`, checks the same subagent shape (`subagentRole` set or `spawnDepth >= 1`) and resolves the configured subagent default. `getReplyFromConfig` invokes it once after `sessionEntry` is loaded and overrides `defaultProvider/defaultModel/provider/model` so the Pi runtime boots and post-run-persists on the right model.\n\n## Tests\n\n- Read-side fallback tests in `src/gateway/session-utils.test.ts` cover the runtime subagent fallback (with and without `entry.spawnDepth`).\n- Spawn-side chain-order tests cover the case where `agentConfig.subagents.model` is unset, `agents.defaults.subagents.model` is set, and `agentConfig.model` is set — we now return the global default instead of the agent's own primary.\n- New tests in `src/auto-reply/reply/directive-handling.defaults.subagent.test.ts` cover the Pi-harness write-side helper: subagent sessions resolve to the configured subagent default; non-subagent sessions return null so the parent's primary is preserved.\n- Existing get-reply test mocks updated to expose the new export.\n\n## Scope\n\nCommit 1: `src/gateway/session-utils.ts`, `src/agents/model-selection.ts`, and their tests.\nCommit 2: `src/auto-reply/reply/directive-handling.defaults.ts`, `src/auto-reply/reply/get-reply.ts`, and one new test plus two existing test-mock updates.\nNo drive-by changes.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Spawned subagent runs persisted the parent agent's primary model (e.g. `anthropic/claude-opus-4-7`) into `~/.openclaw/agents/<agent>/sessions/sessions.json` even though the configured subagent default was `openai-codex/gpt-5.5` and the spawn-side resolver had already written the correct ref. Subsequent turns then ran on the wrong model.\n- **Real environment tested**: Local OpenClaw install on macOS, Node 22, single-agent config with `agents.list[main].model.primary = anthropic/claude-opus-4-7`, `agents.defaults.subagents.model.primary = openai-codex/gpt-5.5`, and `agents.list[main].subagents.model.primary = openai-codex/gpt-5.5`. Subagent spawned via `sessions_spawn(task=..., agentId=main)` from a parent Telegram chat with no explicit `model:` argument.\n- **Exact steps or command run after this patch**:\n  1. `pnpm openclaw doctor` to confirm config parses cleanly.\n  2. Start gateway: `pnpm openclaw gateway start`.\n  3. From the active chat, ask the agent to spawn a subagent with no model override.\n  4. While the subagent is running and again after it completes, inspect `~/.openclaw/agents/main/sessions/sessions.json` and `~/.openclaw/subagents/runs.json`.\n- **Evidence after fix**: Inspected `~/.openclaw/agents/main/sessions/sessions.json` directly with `jq` — entries with `subagentRole: \"orchestrator\"` and `spawnDepth: 1` now persist `model: \"gpt-5.5\"` and `modelProvider: \"openai-codex\"` instead of `claude-opus-4-7`. `~/.openclaw/subagents/runs.json` continues to record `gpt-5.5` as before, and the gateway run trace prints the `openai-codex/gpt-5.5` provider/model pair when the run starts. Before the fix the same inspection printed `model: \"claude-opus-4-7\"` for those subagent entries even though the runs file recorded `gpt-5.5`.\n- **Observed result after fix**: Subagent runs boot on `openai-codex/gpt-5.5` (visible in CLI run output and provider request logs), and the post-run write preserves that model in `sessions.json`, so subsequent turns of the same subagent session keep using `gpt-5.5`. Parent (non-subagent) sessions still resolve to `anthropic/claude-opus-4-7` as expected.\n- **What was not tested**: Cross-agent configurations where the agent has no `subagents.model` and only `agents.defaults.subagents.model` is set were exercised only via the new unit tests, not on a live install. None of the alias-resolution paths were exercised against a real OpenRouter alias index live.\n\n### Post-rebase verification (2026-05-12)\n\nRebase merged `upstream/main` (`e7e3e903bf`) into the branch and addressed the clawsweeper P2 finding on `src/auto-reply/reply/get-reply.ts:404-416`. Specifically: a spawned subagent child entry with no own `providerOverride`/`modelOverride` could still inherit the parent session's persisted `/model` override via `resolveStoredModelOverride` (parent-inheritance branch), silently flipping the run back to the parent's model. `resolveStoredModelOverride` now skips the parent-inheritance branch when the child entry is a subagent session (`subagentRole` set or `spawnDepth >= 1`). Direct child overrides and non-subagent (topic/thread) child sessions are unaffected. New regression coverage in `src/auto-reply/reply/stored-model-override.test.ts`.\n\nCommands run:\n\n- `pnpm tsgo` (core typecheck) -> exit 0, no diagnostics\n- `pnpm test src/auto-reply/reply/stored-model-override.test.ts src/auto-reply/reply/directive-handling.defaults.subagent.test.ts src/agents/model-selection.test.ts src/gateway/session-utils.test.ts src/cron/isolated-agent.model-formatting.test.ts` -> 4 vitest shards passed (236 tests)\n- `pnpm test src/auto-reply/reply.block-streaming.test.ts` -> passed (1 test)\n- `pnpm format:check` on touched files -> all clean after one auto-fix on `stored-model-override.ts`\n- `node scripts/run-oxlint.mjs` on touched files -> 0 warnings, 0 errors\n\n",
-        "branch": "fix/subagent-model-resolution",
-        "head_sha": "0cd7826f9495583812d3aced504aeff28cdfa343",
-        "author": "joeykrug",
-        "labels": [
-          "gateway",
-          "agents",
-          "size: L",
-          "proof: supplied",
-          "P2",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 message-delivery"
-        ],
-        "files": [
-          {
-            "path": "src/agents/model-selection.test.ts",
-            "additions": 31,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply.block-streaming.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/directive-handling.defaults.subagent.test.ts",
-            "additions": 259,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/directive-handling.defaults.ts",
-            "additions": 47,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/get-reply.test-mocks.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/get-reply.ts",
-            "additions": 32,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/stored-model-override.test.ts",
-            "additions": 108,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/stored-model-override.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.test.ts",
-            "additions": 135,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.ts",
-            "additions": 48,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-72984",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-72984.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "SUCCESS": 133,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:46303:4322676718:2026-06-11T17:06:40Z:clawsweeper_needs_human",
-      "comment_id": "4322676718",
-      "comment_version_key": "4322676718:2026-06-11T17:06:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/46303#issuecomment-4322676718",
-      "repo": "openclaw/openclaw",
-      "issue_number": 46303,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-26T18:14:41Z",
-      "comment_updated_at": "2026-06-11T17:06:40Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=1f3e8011967a34008db148af1034b22274c454ee)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +486, Tests +777. Total +1263 across 30 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "1f3e8011967a34008db148af1034b22274c454ee",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: drain inbound debounce buffer and followup queues before SIGUSR1 reload",
-        "body": "## Problem\n\nWhen `config.patch` triggers a SIGUSR1 restart, two in-memory message buffers are silently wiped, causing inbound messages to be permanently lost:\n\n1. **Inbound debounce buffers** — per-channel debounce timers (`createInboundDebouncer` closure-local `Map` + `setTimeout`) that batch messages over a ~2500ms window. On restart, the `setTimeout` callbacks never fire and buffered messages are garbage collected.\n\n2. **Followup queues** — the `FOLLOWUP_QUEUES` global `Map` that collects messages for sessions with active agent turns. Items enqueued but not yet drained are lost when the server reinitializes.\n\n### Reproduction\nSend a message on Signal → within 2.5s, trigger a config change (e.g. `config.patch`) → the message is silently dropped.\n\n## Fix\n\n### 1. Global debouncer registry (`src/auto-reply/inbound-debounce.ts`)\n- Each `createInboundDebouncer()` now auto-registers in a shared `Symbol.for('openclaw.inboundDebouncers')` global map\n- New `flushAll()` method on each debouncer instance that immediately processes all buffered items (clears timeouts, calls `onFlush` callbacks)\n- New exported `flushAllInboundDebouncers()` that iterates the registry, flushes all debouncers, and deregisters them\n\n### 2. Followup queue drain waiter (`src/auto-reply/reply/queue/drain-all.ts`)\n- New `waitForFollowupQueueDrain(timeoutMs)` that polls `FOLLOWUP_QUEUES` until all queues finish processing (or timeout)\n- Counts `draining: true` queues as having pending work even if `items.length` is momentarily 0\n\n### 3. SIGUSR1 restart integration (`src/cli/gateway-cli/run-loop.ts`)\nBefore `markGatewayDraining()`, the restart flow now:\n1. `await flushAllInboundDebouncers()` — pushes buffered messages into followup queues\n2. `await waitForFollowupQueueDrain(5000)` — gives the drain loops 5s to process newly flushed items\n3. Then proceeds with the existing `markGatewayDraining()` → task drain → server close flow\n\nThe ordering is critical: flush debouncers first (triggers `onFlush` callbacks that enqueue into followup queues), then wait for followup drain, then mark draining.\n\n## Tests\n\n- **`src/auto-reply/inbound.test.ts`**: `flushAllInboundDebouncers` flushes multiple registered debouncers, returns count, deregisters after flush; `createInboundDebouncer.flushAll` flushes all buffered keys\n- **`src/auto-reply/reply/queue/drain-all.test.ts`**: immediate return when empty, waits for drain completion, returns not-drained on timeout, counts actively draining queues as pending\n- **`src/cli/gateway-cli/run-loop.test.ts`**: SIGUSR1 restart calls flush before `markGatewayDraining`, skips followup wait when no debouncers had buffered messages, logs warning on followup drain timeout\n\nAll 118 tests pass across the 4 affected test files. No type errors introduced.\n\n## Files Changed\n- `src/auto-reply/inbound-debounce.ts` — global registry + `flushAll` + `flushAllInboundDebouncers()`\n- `src/auto-reply/reply/queue/drain-all.ts` — new `waitForFollowupQueueDrain()`\n- `src/auto-reply/reply/queue.ts` — barrel export\n- `src/cli/gateway-cli/run-loop.ts` — hook into restart flow\n- Test files for all of the above\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: When a SIGUSR1 restart fires within the inbound debounce window (~2.5s) or while a followup queue is mid-drain, buffered messages are silently dropped because the in-process `setTimeout` callbacks never fire and the closure-local `Map` is garbage collected. After this fix, `flushAllInboundDebouncers()` immediately flushes every registered debouncer into followup queues and `waitForFollowupQueueDrain()` blocks the SIGUSR1 path until those queues drain or a 5s ceiling is hit.\n- **Real environment tested**: Local OpenClaw checkout at HEAD `5d1e6592d02782361b871581c10a6b3c0329105f` of branch `fix/drain-queue-before-sigusr1`. Linux 6.12.67, Node v24.15.0, pnpm-driven monorepo. Patched modules loaded directly with `tsx` from the working tree (no rebuild step), and the built CLI (`pnpm openclaw --version`) reports `OpenClaw 2026.5.4 (5d1e659)` confirming the binary is built from the patched commit.\n- **Exact steps or command run after this patch**:\n  1. `pnpm openclaw --version` to confirm the live CLI is built from the patched HEAD.\n  2. `node_modules/.bin/tsx proof-pr46303.mts` — small driver that registers two `createInboundDebouncer` instances with a 2500ms debounce, enqueues five items across three keys, then calls `flushAllInboundDebouncers({ timeoutMs: 5000 })` and prints the timing and what each `onFlush` actually received.\n  3. `node_modules/.bin/tsx proof-pr46303-drain.mts` — driver that exercises `waitForFollowupQueueDrain` directly against the live `FOLLOWUP_QUEUES` `Map` for three cases: empty registry, busy queue that drains at ~120ms, and a queue that stays busy past the timeout.\n  4. `pnpm test src/auto-reply/inbound.test.ts src/auto-reply/reply/queue/drain-all.test.ts src/cli/gateway-cli/run-loop.test.ts` — full targeted suites for all three changed files.\n- **Evidence after fix**: Terminal capture from running the patched modules in this worktree.\n\n  Live CLI build proves the binary contains the patched code:\n\n  ```\n  $ pnpm openclaw --version\n  OpenClaw 2026.5.4 (5d1e659)\n  ```\n\n  `flushAllInboundDebouncers` console output — 5 enqueued items across 2 debouncers and 3 keys, flushed in 1ms instead of waiting 2500ms:\n\n  ```\n  [before flush] A delivered=0, B delivered=0 (still buffered)\n  [flushAllInboundDebouncers] flushedCount=3 elapsed=1ms (vs 2500ms debounce)\n  [after flush] A delivered groups=[[\"alice:hello\",\"alice:there\"],[\"bob:howdy\"]]\n  [after flush] B delivered groups=[[\"ping-1\",\"ping-2\"]]\n  ```\n\n  `waitForFollowupQueueDrain` console output — three live cases against the real `FOLLOWUP_QUEUES` map, including the timeout path that returns `drained:false` with the right `remaining` count:\n\n  ```\n  [empty]         {\"drained\":true,\"remaining\":0} elapsed=0ms\n  [busy->drained] {\"drained\":true,\"remaining\":0} elapsed=151ms\n  [timeout]       {\"drained\":false,\"remaining\":2} elapsed=200ms\n  ```\n\n  Real test runner output for the changed files (vitest reports the actual function counts; pnpm `test-projects.mjs` shards by project):\n\n  ```\n  [test] starting test/vitest/vitest.cli.config.ts\n   Test Files  1 passed (1)\n        Tests  24 passed (24)\n     Duration  2.21s\n  [test] starting test/vitest/vitest.auto-reply.config.ts\n   Test Files  2 passed (2)\n        Tests  71 passed (71)\n     Duration  4.05s\n  [test] passed 2 Vitest shards in 11.96s\n  ```\n\n- **Observed result after fix**: `flushAllInboundDebouncers` deterministically drains buffered Signal-style messages in 1 ms while the natural debounce window is 2500 ms, and reports the right buffer count (`flushedCount=3` for two keys in one debouncer plus one in another). `waitForFollowupQueueDrain` returns immediately when the registry is empty, observes the queue clearing in real time during the busy case (151 ms — one poll interval past the 120 ms cleanup), and correctly returns `drained:false` with `remaining=2` when the timeout fires before drain. The CLI banner reports `(5d1e659)` confirming the built binary contains the patched commit. With the SIGUSR1 hook in `src/cli/gateway-cli/run-loop.ts` calling these helpers in the right order before `markGatewayDraining()`, late inbound messages are pushed into followup queues and given up to 5 s to drain instead of being silently dropped.\n- **What was not tested**: An end-to-end real-Signal SIGUSR1 reproduction was not executed on this machine (no signal-cli account paired here); the production restart path is exercised through `src/cli/gateway-cli/run-loop.test.ts`, but a live Signal → `config.patch` → restart roundtrip on real `signal-cli` was not run. Behavior under simultaneous restart-while-flushing on a hung `onFlush` (the registered handle is intentionally retained on flush failure for a future sweep) was not exercised live; that path is covered only by the unit tests in `src/auto-reply/inbound.test.ts`.\n",
-        "branch": "fix/drain-queue-before-sigusr1",
-        "head_sha": "1f3e8011967a34008db148af1034b22274c454ee",
-        "author": "joeykrug",
-        "labels": [
-          "channel: bluebubbles",
-          "channel: discord",
-          "channel: msteams",
-          "channel: slack",
-          "cli",
-          "agents",
-          "channel: feishu",
-          "size: XL",
-          "triage: dirty-candidate",
-          "proof: supplied",
-          "P1",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery"
-        ],
-        "files": [
-          {
-            "path": "extensions/discord/src/monitor/message-handler.ts",
-            "additions": 17,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-run-queue.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/monitor.reaction.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/test-support/lifecycle-test-support.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/monitor-handler.feedback-authz.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/monitor-handler.file-consent.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/message-handler.app-mention-race.test.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 9,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/params.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/sandbox-skills.ts",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/workspace-mounts.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/inbound-debounce.ts",
-            "additions": 202,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/inbound.test.ts",
-            "additions": 473,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/abort.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/drain-all.test.ts",
-            "additions": 96,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/drain-all.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/drain.ts",
-            "additions": 46,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/enqueue.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/lifecycle.runtime.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.test.ts",
-            "additions": 136,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-lifecycle.core.ts",
-            "additions": 100,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-lifecycle.queue.test.ts",
-            "additions": 39,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.test.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.ts",
-            "additions": 26,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.types.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/exec.ts",
-            "additions": 1,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-46303",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-46303.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "SUCCESS": 117,
-            "SKIPPED": 24,
-            "QUEUED": 22,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-commands-doctor-device:QUEUED",
-            "checks-node-agentic-commands-doctor-gateway:QUEUED",
-            "checks-node-agentic-commands-doctor-plugins-tools:QUEUED",
-            "checks-node-agentic-commands-doctor-sessions-cron:QUEUED",
-            "checks-node-agentic-commands-doctor-shared:QUEUED",
-            "checks-node-agentic-commands-doctor-workspace:QUEUED",
-            "checks-node-agentic-commands-models:QUEUED",
-            "checks-node-agentic-commands-onboard-config:QUEUED",
-            "checks-node-agentic-commands-status-tools:QUEUED",
-            "checks-node-agentic-agents-core-models:QUEUED",
-            "checks-node-agentic-agents-core-tools:QUEUED",
-            "checks-node-agentic-agents-core-subagents:QUEUED",
-            "checks-node-agentic-agents-core-runner:QUEUED",
-            "checks-node-agentic-agents-embedded:QUEUED",
-            "checks-node-agentic-agents-support:QUEUED",
-            "checks-node-agentic-agents-tools:QUEUED",
-            "checks-node-agentic-plugin-sdk:QUEUED",
-            "checks-node-auto-reply-reply-agent-runner:QUEUED",
-            "checks-node-auto-reply-reply-commands:QUEUED",
-            "checks-node-auto-reply-reply-dispatch:QUEUED",
-            "checks-node-auto-reply-reply-session:QUEUED",
-            "checks-node-auto-reply-reply-state-routing:QUEUED"
-          ],
-          "pending": [
-            "checks-node-agentic-commands-doctor-device:QUEUED",
-            "checks-node-agentic-commands-doctor-gateway:QUEUED",
-            "checks-node-agentic-commands-doctor-plugins-tools:QUEUED",
-            "checks-node-agentic-commands-doctor-sessions-cron:QUEUED",
-            "checks-node-agentic-commands-doctor-shared:QUEUED",
-            "checks-node-agentic-commands-doctor-workspace:QUEUED",
-            "checks-node-agentic-commands-models:QUEUED",
-            "checks-node-agentic-commands-onboard-config:QUEUED",
-            "checks-node-agentic-commands-status-tools:QUEUED",
-            "checks-node-agentic-agents-core-models:QUEUED",
-            "checks-node-agentic-agents-core-tools:QUEUED",
-            "checks-node-agentic-agents-core-subagents:QUEUED",
-            "checks-node-agentic-agents-core-runner:QUEUED",
-            "checks-node-agentic-agents-embedded:QUEUED",
-            "checks-node-agentic-agents-support:QUEUED",
-            "checks-node-agentic-agents-tools:QUEUED",
-            "checks-node-agentic-plugin-sdk:QUEUED",
-            "checks-node-auto-reply-reply-agent-runner:QUEUED",
-            "checks-node-auto-reply-reply-commands:QUEUED",
-            "checks-node-auto-reply-reply-dispatch:QUEUED",
-            "checks-node-auto-reply-reply-session:QUEUED",
-            "checks-node-auto-reply-reply-state-routing:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90872:4683031465:2026-06-11T17:06:10Z:re_review",
-      "comment_id": "4683031465",
-      "comment_version_key": "4683031465:2026-06-11T17:06:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90872#issuecomment-4683031465",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90872,
-      "author": "fuller-stack-dev",
-      "author_id": 263060202,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-11T17:06:10Z",
-      "comment_updated_at": "2026-06-11T17:06:10Z",
-      "status_comment_id": null,
+      "issue_number": 92185,
+      "author": "llljjjwww333",
+      "author_id": 176109082,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-11T17:07:03Z",
+      "comment_updated_at": "2026-06-11T17:07:03Z",
+      "status_comment_id": 4683039371,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -511,22 +61,264 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-11T17:07:56.207Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 92185
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-11T17:07:58.654Z",
+          "response_comment_id": "4682972164",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(exec): preserve approved gateway output",
+        "body": "## Summary\n\n- Preserves multiline output for approved async gateway exec follow-ups instead of tailing it to the compact background-notification limit.\n- Keeps ordinary background `notifyOnExit` summaries on the existing compact formatter, so this does not expand normal background channel notifications.\n- Carries the exec capture `truncated` state into approval follow-up formatting and adds an explicit truncation notice only when the capture cap was actually hit.\n- Adds regression coverage for a Discord-routed async approval follow-up with more than 400 characters of multiline output.\n\n## Linked context\n\nCloses #41152\n\nRelated #41170\n\nWas this requested by a maintainer or owner?\n\nNo direct maintainer request. This follows the source-level diagnosis and patch boundary described in #41152.\n\n## Real behavior proof\n\n- Behavior or issue addressed: async approved gateway exec follow-ups were using the compact background notification formatter, which tailed output to the last 400 characters and normalized whitespace before resuming the agent.\n- Real environment tested: local OpenClaw checkout on Windows, executed outside Vitest/CI with `node node_modules/tsx/dist/cli.mjs -e <proof script>`.\n- Exact steps or command run after this patch: imported OpenClaw's real `runExecProcess` from `src/agents/bash-tools.exec-runtime.ts`, ran a real child process through that exec runtime with a command emitting 60 newline-separated output lines, built the same approval-completion follow-up shape used by this PR, and compared the result with the old 400-character tail plus whitespace-normalization behavior.\n- Evidence after fix: console output from the manual proof run:\n\n```json\n{\n  \"status\": \"completed\",\n  \"exitCode\": 0,\n  \"truncated\": false,\n  \"outputLength\": 1439,\n  \"lineCount\": 60,\n  \"firstLinePresent\": true,\n  \"lastLinePresent\": true,\n  \"newlinePreserved\": true,\n  \"oldCompactWouldDropFirstLine\": true,\n  \"oldCompactWouldStripNewlines\": true,\n  \"followupPreview\": \"Exec finished (gateway id=proof-approval, session=amber-falcon, code 0)\\napproval-output-line-00\\napproval-output-line-01\\napproval-output-line-02\\napproval-output-line-03\\napproval-output-line-04\",\n  \"followupTail\": \"approval-output-line-56\\napproval-output-line-57\\napproval-output-line-58\\napproval-output-line-59\"\n}\n```\n\n- Observed result after fix: the patched path preserved the first line, final line, and newline boundary for 60 lines / 1439 characters of approved exec output. The old compact formatter would have dropped `approval-output-line-00` and stripped newline boundaries, matching the issue report.\n- What was not tested: a live Discord approval round trip with a real Discord account.\n\n## Tests and validation\n\nWhich commands did you run?\n\n```bash\ngit diff --check\nnode node_modules/oxfmt/bin/oxfmt --check src/agents/bash-tools.exec-host-gateway.ts src/agents/bash-tools.exec-runtime.ts src/agents/bash-tools.exec-types.ts src/agents/bash-tools.exec.approval-id.test.ts\nnode node_modules/oxlint/bin/oxlint src/agents/bash-tools.exec-host-gateway.ts src/agents/bash-tools.exec-runtime.ts src/agents/bash-tools.exec-types.ts src/agents/bash-tools.exec.approval-id.test.ts\nnode scripts/run-vitest.mjs src/agents/bash-tools.exec.approval-id.test.ts\n```\n\nWhat regression coverage was added or updated?\n\nAdded an async gateway exec approval follow-up test that emits multiline output longer than 400 characters and asserts that the resumed agent message preserves both the beginning of the output and newline separators.\n\nWhat failed before this fix, if known?\n\nThe affected path used the compact notification formatter intended for background notifications: `tail(..., DEFAULT_NOTIFY_TAIL_CHARS)` plus `normalizeNotifyOutput(...)`. That drops the beginning of long output and collapses newlines.\n\nIf no test was added, why not?\n\nA regression test was added.\n\nNote: I could not run `pnpm check:changed` because `pnpm` is not installed in this local environment.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo.\n\nWhat is the highest-risk area?\n\nApproved async gateway exec follow-up messages can now include more captured output than before, up to the existing exec capture cap.\n\nHow is that risk mitigated?\n\nThe change is scoped to approval-completion follow-ups that resume the agent. Existing compact background `notifyOnExit` notifications keep their current tailing and whitespace-normalization behavior, and true capture-cap truncation is explicitly marked.\n\n## Current review state\n\nWhat is the next action?\n\nReady for ClawSweeper re-review and maintainer review.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\nClawSweeper re-review, CI, and maintainer review.\n\nWhich bot or reviewer comments were addressed?\n\nAddressed ClawSweeper's `needs real behavior proof before merge` and the required proof fields by using the exact field names from `scripts/github/real-behavior-proof-policy.mjs`.",
+        "branch": "fix-exec-approval-output-preserve",
+        "head_sha": "5a31cb1237190c26bc3b519b3833486d3a9b820c",
+        "author": "llljjjwww333",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🌊 off-meta tidepool",
+          "status: 🔁 re-review loop"
+        ],
+        "files": [
+          {
+            "path": "src/agents/bash-tools.exec-host-gateway.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-runtime.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec.approval-id.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92185",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92185.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 165,
+          "counts": {
+            "SUCCESS": 57,
+            "SKIPPED": 30,
+            "QUEUED": 58,
+            "IN_PROGRESS": 19,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-fast:QUEUED",
+            "checks-node-core-src-security:QUEUED",
+            "checks-node-core-ui:QUEUED",
+            "checks-node-core-support:QUEUED",
+            "checks-node-core-tooling:QUEUED",
+            "checks-node-core-tooling-docker:QUEUED",
+            "checks-node-core-runtime-infra-gateway-lock-argv:IN_PROGRESS",
+            "checks-node-core-runtime-infra-gateway-processes:IN_PROGRESS",
+            "checks-node-core-runtime-infra-misc-dedupe-disk:IN_PROGRESS",
+            "checks-node-core-runtime-infra-misc-values:IN_PROGRESS",
+            "checks-node-core-runtime-infra-provider-push:QUEUED",
+            "checks-node-core-runtime-infra-repo-tooling:IN_PROGRESS",
+            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
+            "checks-node-core-runtime-secrets:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:QUEUED",
+            "checks-node-core-runtime-shared:QUEUED",
+            "checks-node-core-runtime-cron-core:QUEUED",
+            "checks-node-core-runtime-cron-isolated-agent:QUEUED",
+            "checks-node-core-runtime-cron-service:QUEUED",
+            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
+            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-config:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-cron:QUEUED",
+            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-network:QUEUED",
+            "checks-node-agentic-control-plane-runtime-server:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-shared-token:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-state:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-ui-tools:QUEUED",
+            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-health-runtime:QUEUED",
+            "checks-node-agentic-control-plane-startup-restart-close:IN_PROGRESS",
+            "checks-node-agentic-cli:QUEUED",
+            "checks-node-agentic-command-support:QUEUED",
+            "checks-node-agentic-commands-agent-channel:QUEUED",
+            "checks-node-agentic-commands-doctor:QUEUED",
+            "checks-node-agentic-commands-doctor-auth:QUEUED",
+            "checks-node-agentic-commands-doctor-config-state:QUEUED",
+            "checks-node-agentic-commands-doctor-device:QUEUED",
+            "checks-node-agentic-commands-doctor-gateway:QUEUED",
+            "checks-node-agentic-commands-doctor-platform:QUEUED",
+            "checks-node-agentic-commands-doctor-plugins-tools:QUEUED",
+            "checks-node-agentic-commands-doctor-sessions-cron:QUEUED",
+            "checks-node-agentic-commands-doctor-shared:QUEUED",
+            "checks-node-agentic-commands-doctor-whatsapp:QUEUED",
+            "checks-node-agentic-commands-doctor-workspace:QUEUED",
+            "checks-node-agentic-commands-models:QUEUED",
+            "checks-node-agentic-commands-onboard-config:QUEUED",
+            "checks-node-agentic-commands-status-tools:QUEUED",
+            "checks-node-agentic-agents-core-auth:QUEUED",
+            "checks-node-agentic-agents-core-models:QUEUED",
+            "checks-node-agentic-agents-core-tools:QUEUED",
+            "checks-node-agentic-agents-core-subagents:QUEUED",
+            "checks-node-agentic-agents-core-runner:QUEUED",
+            "checks-node-agentic-agents-core-runtime:QUEUED",
+            "checks-node-agentic-agents-embedded:QUEUED",
+            "checks-node-agentic-agents-support:QUEUED",
+            "checks-node-agentic-agents-tools:QUEUED",
+            "checks-node-agentic-gateway-core:QUEUED",
+            "checks-node-agentic-gateway-methods:QUEUED",
+            "checks-node-agentic-plugin-sdk:QUEUED",
+            "checks-node-auto-reply-core-top-level:QUEUED",
+            "checks-node-auto-reply-reply-agent-runner:QUEUED",
+            "checks-node-auto-reply-reply-commands:QUEUED",
+            "checks-node-auto-reply-reply-dispatch:QUEUED",
+            "checks-node-auto-reply-reply-session:QUEUED",
+            "checks-node-auto-reply-reply-state-routing:QUEUED",
+            "check-dependencies:QUEUED",
+            "check-additional-boundaries-a:QUEUED",
+            "check-additional-boundaries-bcd:QUEUED",
+            "check-additional-extension-channels:QUEUED",
+            "check-additional-extension-bundled:QUEUED",
+            "check-additional-extension-package-boundary:QUEUED",
+            "check-additional-runtime-topology-architecture:QUEUED"
+          ],
+          "pending": [
+            "checks-node-core-fast:QUEUED",
+            "checks-node-core-src-security:QUEUED",
+            "checks-node-core-ui:QUEUED",
+            "checks-node-core-support:QUEUED",
+            "checks-node-core-tooling:QUEUED",
+            "checks-node-core-tooling-docker:QUEUED",
+            "checks-node-core-runtime-infra-gateway-lock-argv:IN_PROGRESS",
+            "checks-node-core-runtime-infra-gateway-processes:IN_PROGRESS",
+            "checks-node-core-runtime-infra-misc-dedupe-disk:IN_PROGRESS",
+            "checks-node-core-runtime-infra-misc-values:IN_PROGRESS",
+            "checks-node-core-runtime-infra-provider-push:QUEUED",
+            "checks-node-core-runtime-infra-repo-tooling:IN_PROGRESS",
+            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
+            "checks-node-core-runtime-secrets:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:QUEUED",
+            "checks-node-core-runtime-shared:QUEUED",
+            "checks-node-core-runtime-cron-core:QUEUED",
+            "checks-node-core-runtime-cron-isolated-agent:QUEUED",
+            "checks-node-core-runtime-cron-service:QUEUED",
+            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
+            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-config:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-cron:QUEUED",
+            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-network:QUEUED",
+            "checks-node-agentic-control-plane-runtime-server:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-shared-token:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-state:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-ui-tools:QUEUED",
+            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-health-runtime:QUEUED",
+            "checks-node-agentic-control-plane-startup-restart-close:IN_PROGRESS",
+            "checks-node-agentic-cli:QUEUED",
+            "checks-node-agentic-command-support:QUEUED",
+            "checks-node-agentic-commands-agent-channel:QUEUED",
+            "checks-node-agentic-commands-doctor:QUEUED",
+            "checks-node-agentic-commands-doctor-auth:QUEUED",
+            "checks-node-agentic-commands-doctor-config-state:QUEUED",
+            "checks-node-agentic-commands-doctor-device:QUEUED",
+            "checks-node-agentic-commands-doctor-gateway:QUEUED",
+            "checks-node-agentic-commands-doctor-platform:QUEUED",
+            "checks-node-agentic-commands-doctor-plugins-tools:QUEUED",
+            "checks-node-agentic-commands-doctor-sessions-cron:QUEUED",
+            "checks-node-agentic-commands-doctor-shared:QUEUED",
+            "checks-node-agentic-commands-doctor-whatsapp:QUEUED",
+            "checks-node-agentic-commands-doctor-workspace:QUEUED",
+            "checks-node-agentic-commands-models:QUEUED",
+            "checks-node-agentic-commands-onboard-config:QUEUED",
+            "checks-node-agentic-commands-status-tools:QUEUED",
+            "checks-node-agentic-agents-core-auth:QUEUED",
+            "checks-node-agentic-agents-core-models:QUEUED",
+            "checks-node-agentic-agents-core-tools:QUEUED",
+            "checks-node-agentic-agents-core-subagents:QUEUED",
+            "checks-node-agentic-agents-core-runner:QUEUED",
+            "checks-node-agentic-agents-core-runtime:QUEUED",
+            "checks-node-agentic-agents-embedded:QUEUED",
+            "checks-node-agentic-agents-support:QUEUED",
+            "checks-node-agentic-agents-tools:QUEUED",
+            "checks-node-agentic-gateway-core:QUEUED",
+            "checks-node-agentic-gateway-methods:QUEUED",
+            "checks-node-agentic-plugin-sdk:QUEUED",
+            "checks-node-auto-reply-core-top-level:QUEUED",
+            "checks-node-auto-reply-reply-agent-runner:QUEUED",
+            "checks-node-auto-reply-reply-commands:QUEUED",
+            "checks-node-auto-reply-reply-dispatch:QUEUED",
+            "checks-node-auto-reply-reply-session:QUEUED",
+            "checks-node-auto-reply-reply-state-routing:QUEUED",
+            "check-dependencies:QUEUED",
+            "check-additional-boundaries-a:QUEUED",
+            "check-additional-boundaries-bcd:QUEUED",
+            "check-additional-extension-channels:QUEUED",
+            "check-additional-extension-bundled:QUEUED",
+            "check-additional-extension-package-boundary:QUEUED",
+            "check-additional-runtime-topology-architecture:QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2420,
+    "total_ms": 8581,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 627
+        "ms": 2413
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2475
       },
       {
         "name": "classify_commands",
@@ -534,7 +326,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1782
+        "ms": 3667
       },
       {
         "name": "append_ledger",
