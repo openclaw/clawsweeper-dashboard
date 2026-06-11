@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T15:53:49.508Z",
+  "generated_at": "2026-06-11T15:54:10.038Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T12:53:49.226Z",
+  "since": "2026-06-11T12:54:06.284Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92205
+    90706
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4682421020
+  ],
+  "status_comment_id": 4682421505,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +31,136 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90706:4682421020:2026-06-11T15:53:11Z:re_review",
+      "comment_id": "4682421020",
+      "comment_version_key": "4682421020:2026-06-11T15:53:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90706#issuecomment-4682421020",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90706,
+      "author": "hannesrudolph",
+      "author_id": 49103247,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-06-11T15:53:11Z",
+      "comment_updated_at": "2026-06-11T15:53:11Z",
+      "status_comment_id": 4682421505,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(OpenAI Responses): disable item id replay for storeless providers",
+        "body": "## Summary\n\nFixes #89728.\nSupersedes duplicate PR #89729.\nRefs #90657 as the narrow storeless Responses replay lane from the Actions-backed tracking matrix.\n\nCustom OpenAI Responses-compatible providers can have effective Responses `store` support stripped (`compat.supportsStore=false`). In that storeless mode, replaying prior Responses item ids is unsafe because the provider cannot resolve server-stored items from prior turns.\n\nThis PR was refreshed from latest `openclaw/openclaw:main` and now consolidates the useful coverage from both open duplicate PRs:\n\n- #90706 direct Responses builder fix/test.\n- #89729 OpenAI Responses context-management wrapper fix/test.\n\n## Latest main check\n\nLatest `main` checked: `66b91d78feb3`.\n\nCurrent `main` is still incomplete for this bug class:\n\n- Direct builder still computes replay eligibility with only `payloadPolicy.explicitStore !== false`.\n- Context-management wrapper still passes through an undefined `replayResponsesItemIds` value when `policy.shouldStripStore === true`.\n- For custom `openai-responses` models with `compat.supportsStore=false`, payload policy resolves to:\n\n```text\nexplicitStore === undefined\nshouldStripStore === true\n```\n\nThat means current `main` can still replay prior Responses item ids on a route where store support was stripped.\n\n## Root cause\n\nThe previous guard only checked whether `store` had been explicitly disabled:\n\n```ts\npayloadPolicy.explicitStore !== false\n```\n\nFor custom providers that strip store support via compatibility policy, `explicitStore` remains `undefined`, so the old guard treats replay as safe even though the effective payload is storeless.\n\nThe same issue existed in the provider-owned context-management wrapper: it preserved an undefined replay option instead of forcing replay off when `policy.shouldStripStore` was true.\n\n## Changes\n\n- Disable Responses item-id replay when the resolved payload policy strips `store`.\n- Apply the same storeless replay gate in the OpenAI Responses context-management wrapper.\n- Add a stream-level regression test for a custom `openai-responses` model with `compat.supportsStore=false`.\n- Add a wrapper regression test proving custom store-stripped Responses routes pass `replayResponsesItemIds: false` to the underlying stream.\n- Preserve existing store-enabled OpenAI Responses replay behavior.\n\n## Compatibility contract\n\nThis PR treats `compat.supportsStore=false` as a storeless Responses route. For that route OpenClaw must not replay server-side Responses item ids (`reasoning.id`, assistant `message.id`, or `function_call.id`) because the backend cannot resolve prior stored response items. Stateless tool linking remains valid through `call_id` and `function_call_output.call_id`.\n\nStore-enabled direct OpenAI Responses behavior is unchanged. Provider-owned wrappers can still explicitly opt back in for known exceptions that support storeless encrypted reasoning replay, such as the existing Microsoft Foundry override.\n\nRollback: revert the two replay-gate changes in `src/agents/openai-transport-stream.ts` and `src/llm/providers/stream-wrappers/openai.ts`; tests added in this PR document the expected storeless contract.\n\n## Compatibility regression matrix\n\nThis patch now has explicit regression coverage that the storeless fix does not break previously valid official or third-party routes:\n\n- Official OpenAI Responses store-enabled route: context wrapper still sets `replayResponsesItemIds: true`.\n- Azure OpenAI Responses store-enabled route: context wrapper still sets `replayResponsesItemIds: true`.\n- Store-capable third-party Responses route with explicit opt-in: replay item ids are preserved.\n- Storeless custom Responses route with `compat.supportsStore=false`: replay item ids are disabled.\n- Microsoft Foundry provider-owned override: existing extension test still confirms Foundry encrypted reasoning continuations keep `replayResponsesItemIds: true` despite `supportsStore=false`.\n\nFocused validation added after the compatibility matrix:\n\n```text\nnode scripts/run-vitest.mjs run src/agents/embedded-agent-runner-extraparams.test.ts\n# 139 tests passed\n\nnode scripts/run-vitest.mjs run src/agents/openai-transport-stream.test.ts\n# 243 tests passed\n\nnode scripts/run-vitest.mjs run extensions/microsoft-foundry/index.test.ts\n# 43 tests passed\n\npnpm exec oxlint src/agents/openai-transport-stream.test.ts src/agents/embedded-agent-runner-extraparams.test.ts extensions/microsoft-foundry/index.test.ts\n# 0 warnings, 0 errors\n```\n\n## Real behavior proof\n\nBehavior addressed: Storeless custom `openai-responses` providers must not receive replayed prior Responses item ids. The user-visible failure class is provider-side continuation/tool-turn failure when a custom-compatible provider cannot resolve prior item ids that were never stored server-side.\n\nReal environment tested: Latest local OpenClaw checkout on Linux, reset to `openclaw/openclaw:main` at `66b91d78feb3`, then patched from new branch head `bfea37e66676`. The before/after proof uses the production `createOpenAIResponsesTransportStreamFn()` path against a local HTTP Responses-compatible endpoint that rejects replayed server item ids but accepts stateless `call_id` pairing.\n\nExact steps or command run after this patch: reverse only the two production replay-gate hunks, run `node --import tsx ../live-storeless-before-after-proof.mjs BEFORE`, restore the patch, then run `node --import tsx ../live-storeless-before-after-proof.mjs AFTER`. Supplemental checks: `node scripts/run-vitest.mjs run src/agents/openai-responses.reasoning-replay.test.ts src/agents/embedded-agent-runner-extraparams.test.ts` and `pnpm exec oxlint src/agents/openai-transport-stream.ts src/llm/providers/stream-wrappers/openai.ts src/agents/openai-responses.reasoning-replay.test.ts src/agents/embedded-agent-runner-extraparams.test.ts`.\n\nEvidence after fix: The real before/after stream invocation captured the following outbound requests/results from the production transport path:\n\n```text\n=== BEFORE current-main-equivalent without storeless replay gate ===\nBEFORE_CAPTURE request_path=/responses\nBEFORE_CAPTURE store_present=false\nBEFORE_CAPTURE replay_items=[{\"type\":\"message\",\"role\":\"system\"},{\"type\":\"message\",\"role\":\"user\"},{\"type\":\"reasoning\",\"id\":\"rs_prior\"},{\"type\":\"message\",\"id\":\"msg_prior\",\"role\":\"assistant\"},{\"type\":\"function_call\",\"id\":\"fc_prior\",\"call_id\":\"call_live\"},{\"type\":\"message\",\"role\":\"user\"}]\nBEFORE_CAPTURE tool_output_call_id=\"call_live\"\nBEFORE_RESULT unsafe_replayed_ids=3\nBEFORE_RESULT call_id_preserved=true\nBEFORE_BACKEND accepts_payload=false\n[openai-transport] [responses] error provider=openai api=openai-responses model=gpt-5.5 name=Error status=400 code=undefined type=undefined causeName=undefined causeCode=undefined message=400 storeless backend rejected replayed Responses item ids\nBEFORE_STREAM stop_reason=error\nBEFORE_STREAM text=\"\"\nBEFORE_SUMMARY rejected_before_or_accepted_after=true\n=== AFTER patched head bfea37e66676 with storeless replay gate ===\nAFTER_CAPTURE request_path=/responses\nAFTER_CAPTURE store_present=false\nAFTER_CAPTURE replay_items=[{\"type\":\"message\",\"role\":\"system\"},{\"type\":\"message\",\"role\":\"user\"},{\"type\":\"reasoning\"},{\"type\":\"message\",\"role\":\"assistant\"},{\"type\":\"function_call\",\"call_id\":\"call_live\"},{\"type\":\"message\",\"role\":\"user\"}]\nAFTER_CAPTURE tool_output_call_id=\"call_live\"\nAFTER_RESULT unsafe_replayed_ids=0\nAFTER_RESULT call_id_preserved=true\nAFTER_BACKEND accepts_payload=true\nAFTER_STREAM stop_reason=stop\nAFTER_STREAM text=\"ok\"\nAFTER_SUMMARY rejected_before_or_accepted_after=true\n```\n\nSupplemental focused Vitest passed 2 shards: `openai-responses.reasoning-replay.test.ts` passed 10 tests, including the storeless custom provider replay regression; `embedded-agent-runner-extraparams.test.ts` passed 137 tests, including the context-management wrapper regression. `oxlint` reported 0 warnings and 0 errors on touched source/test files.\n\nObserved result after fix: The current-main-equivalent path sent three unsafe replayed item ids (`rs_prior`, `msg_prior`, `fc_prior`) and the storeless backend rejected the payload with HTTP 400. The patched head sent zero unsafe replayed ids, preserved `call_id` pairing, and the same backend accepted the payload and completed the stream with text `ok`.\n\nWhat was not tested: No external third-party custom Responses provider was called; the live proof used a local Responses-compatible endpoint to capture the actual OpenClaw outbound request without exposing credentials or relying on a vendor account. Repository-wide GitHub Actions CI is green for the refreshed branch, and the latest `Real behavior proof` check is passing.\n\n## Duplicate PR handling\n\nPR #89729 covers the same issue but was based on an older branch and is now superseded. This PR is the canonical refreshed branch from latest `main` and includes both the direct builder and wrapper fixes.\n\n\n\n\n",
+        "branch": "fix/openai-responses-storeless-replay",
+        "head_sha": "bfea37e66676933b22ebdb8a3f18dfd1a0e81206",
+        "author": "snowzlm",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner-extraparams.test.ts",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-responses.reasoning-replay.test.ts",
+            "additions": 94,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 98,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/stream-wrappers/openai.ts",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90706",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90706.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "SKIPPED": 30,
+            "SUCCESS": 133,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "author association MEMBER and repository permission read are not allowed"
+    }
+  ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 492,
+    "total_ms": 4094,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 272
+        "ms": 766
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2974
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 210
+        "ms": 340
       },
       {
         "name": "append_ledger",
