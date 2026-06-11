@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T13:28:59.614Z",
+  "generated_at": "2026-06-11T13:29:19.703Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T10:28:56.359Z",
+  "since": "2026-06-11T10:29:19.085Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     90946
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4681050830
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
@@ -36,16 +38,16 @@
       "comment_version_key": "4639349608:2026-06-11T13:28:51Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/90946#issuecomment-4639349608",
       "repo": "openclaw/openclaw",
-      "issue_number": 90946,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-06T15:05:57Z",
-      "comment_updated_at": "2026-06-11T13:28:51Z",
+      "issue_number": 89514,
+      "author": "whiteyzy",
+      "author_id": 120006171,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-11T13:26:24Z",
+      "comment_updated_at": "2026-06-11T13:26:24Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,99 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(infra): preserve inherited gateway PID across reparent during cleanup",
-        "body": "## Summary\n\nResubmit of #90802 (which was closed because the source branch carried unrelated WIP commits). This PR is now a single commit on top of `main` touching exactly 3 files.\n\n`cleanStaleGatewayProcessesSync` already excludes the caller and its ancestor chain from kill candidates (#68451). That protection breaks when the caller has been reparented to the supervisor (PID 1 / launchd) before the cleanup runs: the ancestor walk stops at the supervisor, the running launchd-managed gateway becomes an unrelated sibling on the port, and the cleanup SIGKILLs it.\n\nThe fix captures `OPENCLAW_GATEWAY_SERVICE_PID` from inherited env before the gateway-cli overwrites it with its own PID, then threads the captured value into the exclusion set so the launchd-managed parent is kept out of the kill list even across a reparent boundary.\n\nThe protection is opt-in per call site. `openclaw update`, `openclaw doctor`, and the daemon restart helpers do not pass the inherited PID, so they retain their ability to intentionally terminate a running gateway.\n\n## Real-world reproduction\n\nA user `~/.zshrc` containing this legacy pre-launchd auto-start block:\n\n```bash\nif ! pgrep -x \"openclaw-gateway\" > /dev/null; then\n  (openclaw gateway >/dev/null 2>&1 &)\nfi\n```\n\ncombined with codex 0.135.0 spawning `/bin/zsh -c \"set -e; . shell_snapshot\"` per turn (codex uses zsh shell snapshots to capture user environment for tool execution context). Each turn:\n\n1. Gateway A receives a chat request, spawns codex.\n2. Codex spawns the per-turn shell snapshot. zsh sources `~/.zshrc`, hits the legacy block, the `pgrep -x openclaw-gateway` does not match A's process title in time, and the subshell starts a new `openclaw gateway` B in background.\n3. The subshell exits; B is reparented to launchd.\n4. B enters `runGatewayCommand`. `process.env[OPENCLAW_GATEWAY_SERVICE_PID]` still holds A's PID (inherited from gateway A through codex through zsh), but is immediately overwritten with B's own PID.\n5. B calls `cleanStaleGatewayProcessesSync`. Ancestor walk sees `process.ppid === 1` (launchd) and stops there. A appears on lsof for the port as an unrelated PID. B SIGKILLs A.\n6. launchd `KeepAlive: { Crashed: true }` respawns A. Cycle repeats on the next chat request.\n\nA forensic launchd unified-log tracker on the affected host captured 33 such kill events between 2026-05-30 and 2026-06-05, each `gateway [PID] exited due to SIGKILL | sent by node[PID]` with the killer always being a new openclaw gateway instance whose env carried `OPENCLAW_GATEWAY_SERVICE_PID` matching the victim. Symptom on the user side: every chat request returned `HTTP 000` in 2-3 seconds.\n\nThe host-side fix was deleting the legacy zshrc block. After deletion, gateway PID stayed stable across 15+ hours of continuous use with zero kill events. The openclaw cleanup primitive should not be reachable into a suicide-kill state via that path in the first place — that is what this PR addresses.\n\n## Verification\n\n```\n$ node scripts/run-vitest.mjs src/infra/restart-stale-pids.test.ts\n Test Files  1 passed (1)\n      Tests  52 passed | 2 skipped (54)\n\n$ node scripts/run-vitest.mjs src/cli/gateway-cli/run.option-collisions.test.ts src/cli/update-cli.test.ts\n Test Files  2 passed (2)\n      Tests  150 passed (150)\n\n$ pnpm tsgo --noEmit -p tsconfig.json\n(clean)\n```\n\nThe two new tests in `src/infra/restart-stale-pids.test.ts`:\n\n- `excludes the inherited gateway service PID when the caller has been reparented to launchd` stubs `process.ppid` to 1 so the ancestor walk cannot reach the running gateway, and asserts the inherited PID is omitted from the kill list while an unrelated stale PID is still returned.\n- `ignores a non-positive inherited gateway PID rather than poisoning the kill list` documents the undefined/0/negative input contract so a future refactor cannot silently start excluding pid 0.\n\nExisting #68451 ancestor-exclusion tests still pass and continue to cover the non-reparent path.\n\n## Out of scope\n\n- The legacy auto-start block in user `~/.zshrc` is host config; not addressed here.\n- No `openclaw update` / `openclaw doctor` behavior changes. Those call sites still pass no inherited PID, so a maintainer-initiated `openclaw update` continues to terminate the running gateway as expected.\n- Windows code path also accepts the new parameter but the suicide-kill scenario this fixes is shell-driven and Unix-only; the Windows path keeps API symmetry but the behavioral change is dormant there.\n\n\n## Real behavior proof\n\nBehavior addressed: `cleanStaleGatewayProcessesSync` no longer SIGKILLs the launchd-managed gateway when a reparented child gateway runs cleanup with the parent's PID in its inherited `OPENCLAW_GATEWAY_SERVICE_PID` env.\n\nReal environment tested: rh-bot.lan, Mac mini M2 running macOS 26.5.1 (darwin 25.5.0), `openclaw-gateway` managed by launchd label `ai.openclaw.gateway`, codex 0.135.0 over Telegram channel, gateway head of this branch.\n\nExact steps or command run after this patch:\n```\n1. Install branch on rh-bot, restart the launchd-managed gateway, capture starting PID.\n2. Send 5 Telegram chat requests over ~3 minutes (each request triggers codex -> zsh shell snapshot -> ~/.zshrc -> legacy auto-start block).\n3. After each request, capture: HTTP status, current gateway PID, kill-tracker log file.\n4. Confirm gateway PID unchanged across all 5 requests.\n```\n\nEvidence after fix:\n- All 5 chat requests returned HTTP 200 (vs 5/5 HTTP 000 on `main` reproduction).\n- Gateway PID 48816 (recorded immediately after restart) remained unchanged across all 5 requests.\n- `~/.openclaw/kill-trace.log` shows no SIGKILL events on the supervised gateway PID during the 30+ minute test window.\n- Pre-fix forensic baseline: kill-tracker logged 33 SIGKILL events on the supervised gateway PID over 2026-05-30 through 2026-06-05; same reproduction triggered HTTP 000 within 2-3 seconds on each attempt.\n\nObserved result after fix: rh-bot gateway has been stable 3+ days post-deploy (after the zshrc legacy block was also removed as a defense-in-depth; this patch protects future users who hit the same primitive). Previously stable mac-mini gateway is unaffected because its env never carries an inherited `OPENCLAW_GATEWAY_SERVICE_PID` (no legacy zshrc block).\n\nWhat was not tested: Windows code path (the suicide-kill scenario is shell-driven and Unix-only; the parameter is plumbed on Windows for API symmetry but the behavioral change is dormant there). The reproduction depends on a specific user-controlled host config (legacy zshrc auto-start); a maintainer without that block on their host would not see the regression on `main` and therefore cannot directly reproduce the fix evidence -- the kill-tracker logs from rh-bot are the closest substitute for live reproduction on a maintainer host.\n",
-        "branch": "fix/stale-pid-cleanup-reparent-protection",
-        "head_sha": "1bf457a4d5863e07c12bdec3e379ce705519587d",
-        "author": "amittell",
-        "labels": [
-          "cli",
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run.parse-inherited-pid.test.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run.ts",
-            "additions": 39,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart-stale-pids.test.ts",
-            "additions": 62,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart-stale-pids.ts",
-            "additions": 73,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90946",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90946.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 163,
-          "counts": {
-            "SUCCESS": 132,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3578,
+    "total_ms": 2398,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 438
+        "ms": 605
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2805
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 314
+        "ms": 1781
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
