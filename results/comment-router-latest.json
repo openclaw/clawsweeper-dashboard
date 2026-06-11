@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T23:50:48.039Z",
+  "generated_at": "2026-06-11T23:51:41.103Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T20:50:44.564Z",
+  "since": "2026-06-11T20:51:40.461Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,7 +14,7 @@
   "comment_ids": [
     4686076451
   ],
-  "status_comment_id": 4686076688,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-11T23:50:01Z",
       "comment_updated_at": "2026-06-11T23:50:01Z",
-      "status_comment_id": 4686076688,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,94 +61,22 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-11T23:50:48.891Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 91267
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-11T23:50:50.988Z",
-          "response_comment_id": "4686060443",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(memory-core): skip session archive artifacts during dreaming corpus collection (fixes #90313)",
-        "body": "## Summary\n\nFix Defect 1 of #90313: dreaming session-corpus ingestion no longer re-ingests archived (`.deleted.*` / `.reset.*`) transcript copies. When a session is rotated or deleted, `listSessionFilesForAgent` previously included archive variants — causing the same conversation to be double-counted in the dreaming corpus and drowning out real user content.\n\n**Changes**: 1 file, +8 lines\n- `extensions/memory-core/src/dreaming-phases.ts` — skip session archive artifacts during dreaming corpus file collection\n\nAddresses Defect 1 of #90313 (Defect 2 — cron parentage classification — remains tracked in the issue)\n\n## Root Cause\n\n**Invariant violated**: Dreaming corpus ingestion should only include primary session transcripts. Each conversation should contribute to the corpus once. Archive variants (`.jsonl.deleted.*`, `.jsonl.reset.*`) are rotated copies of the same conversation — re-ingesting them double-counts the content.\n\n**Code path**: `dreaming-phases.ts:collectSessionIngestionBatches` → `listSessionFilesForAgent(agentId)` (`session-files.ts:303`) → filters files with `isUsageCountedSessionTranscriptFileName(name)` (`session-files.ts:310`). That predicate is correct for usage/billing telemetry (you always want to count messages even after rotation), but is wrong for dreaming corpus ingestion. The fix adds an archive artifact check in the dreaming-phases file collection loop, using the already-available `isSessionArchiveArtifactName` helper (exported from `engine-qmd`).\n\n**Sibling Surface Audit**:\n- `memory/manager-sync-ops.ts:1188` — also calls `listSessionFilesForAgent`, but for **memory_search indexing** where archive content MUST remain searchable. Not modified.\n- `memory/qmd-manager.ts:2383` — same, for memory_search. Not modified.\n- `session-files.ts:shouldSkipTranscriptFileForDreaming` — already skips non-usage-counted archives but deliberately keeps usage-counted ones for memory_search. The `buildSessionEntry` caller already classifies archives correctly; the leak is in `listSessionFilesForAgent` itself.\n\n**Scope**:\n- **In scope**: Skip session archive artifact files during dreaming corpus file collection (Defect 1)\n- **Out of scope**: Defect 2 (cron classification parentage following) — requires deeper session-store schema changes and is tracked separately in #90313\n\n**Why this is a root-cause fix**: The fix targets the exact predicate mismatch — `isUsageCountedSessionTranscriptFileName` includes archives, the dreaming corpus should only use primary transcripts. Adding the archive filter at the file collection point prevents the double-counting at its source.\n\n## Verification\n\n```bash\npnpm build && pnpm test extensions/memory-core/src/dreaming-phases.test.ts packages/memory-host-sdk/src/host/session-files.test.ts\n```\n\n- `pnpm build`: ✅ passed\n- `extensions/memory-core/src/dreaming-phases.test.ts`: ✅ 45 tests passed\n- `packages/memory-host-sdk/src/host/session-files.test.ts`: ✅ 12 tests passed\n- Total: **2 files, 57 tests passed**\n- `pnpm exec oxlint` on changed file: ✅ clean\n\n## Real Behavior Proof\n\n**Behavior or issue addressed**: Dreaming session-corpus file collection in `collectSessionIngestionBatches` now skips session archive artifacts (`.jsonl.deleted.*` / `.jsonl.reset.*`) during agent file listing. Previously, `listSessionFilesForAgent` returned both primary and archived transcripts because `isUsageCountedSessionTranscriptFileName` includes archive variants (intentionally — they are needed for usage/billing and memory_search). The dreaming corpus ingestion loop now adds an `isSessionArchiveArtifactName` guard alongside the existing `isCheckpointSessionTranscriptPath` guard, so only primary session transcripts feed the corpus.\n\n**Real environment tested**: Linux x86_64, Node v22.22.0, pnpm 10.25.0, OpenClaw main @ `2a21de63223963d4a36792a75d69df958bc4e2a5`\n\n**Exact steps or command run after this patch**:\n```bash\npnpm build\npnpm test extensions/memory-core/src/dreaming-phases.test.ts packages/memory-host-sdk/src/host/session-files.test.ts\npnpm exec oxlint extensions/memory-core/src/dreaming-phases.ts\n```\n\n**Evidence after fix**:\n1. **57 tests pass** across 2 test files (CI-level `pnpm test`)\n2. **dreaming-phases.test.ts**: 45 tests pass — includes existing corpus ingestion tests that continue to work correctly with the new archive filter\n3. **session-files.test.ts**: 12 tests pass — session file listing and archive classification unchanged; the fix is at the calling site, not in the shared utility\n4. **Source evidence**: `isSessionArchiveArtifactName` is the same predicate used by `shouldSkipTranscriptFileForDreaming` in `session-files.ts:82` and `buildSessionEntry` in `session-files.ts:288` — the fix follows the same pattern\n5. **oxlint**: clean on changed file\n\n```json\n{\n  \"behaviorAddressed\": \"Dreaming corpus file collection skips session archive artifacts, preventing double-counting of rotated/reset session transcripts\",\n  \"assertions\": [\n    { \"path\": \"extensions/memory-core/src/dreaming-phases.test.ts\", \"behavior\": \"45 tests verify dreaming phase behaviors including session file collection, corpus ingestion, and file filtering\" },\n    { \"path\": \"packages/memory-host-sdk/src/host/session-files.test.ts\", \"behavior\": \"12 tests verify session file listing, archive classification, and usage-counted file name predicates\" }\n  ],\n  \"observedResult\": \"pnpm test exited 0 for both test files (57 tests total)\",\n  \"testSummary\": \"2 test files, 57 tests passed\"\n}\n```\n\n**Observed result after fix**: `collectSessionIngestionBatches` now skips files matching `isSessionArchiveArtifactName` (`.jsonl.deleted.*`, `.jsonl.reset.*`) alongside existing checkpoint transcript checks. Primary transcripts continue to be collected normally. The `listSessionFilesForAgent` function and its `isUsageCountedSessionTranscriptFileName` predicate are unchanged — the archive filter is applied only at the dreaming corpus ingestion call site.\n\n**What was not tested**: End-to-end verification with a real workspace that has a large number of archived/reset session transcripts (requires a production-like session store with many rotations). The archive file filtering logic follows the same predicate patterns already tested in `session-files.test.ts`, and the existing dreaming-phases tests confirm the ingestion pipeline continues to work correctly.\n\n## Review Findings Addressed\n\nNo automated review findings yet — this is the initial PR.\n\n## Regression Test Plan\n\n```bash\npnpm test extensions/memory-core/src/dreaming-phases.test.ts\npnpm test packages/memory-host-sdk/src/host/session-files.test.ts\n```\n\nTo verify in a live environment with actual session archives:\n```bash\n# Before fix: count archived files in dreaming corpus\ngrep -cE \"\\.jsonl\\.(deleted|reset)\" memory/.dreams/session-corpus/*.txt\n\n# After fix: archived files should no longer appear in corpus\ngrep -cE \"\\.jsonl\\.(deleted|reset)\" memory/.dreams/session-corpus/*.txt\n```\n\n## Merge Risk\n\n**Risk**: Low. The change is purely additive — a single `continue` guard alongside an existing checkpoint filter of the same shape. `isSessionArchiveArtifactName` is already well-tested (used in `session-files.ts:shouldSkipTranscriptFileForDreaming` and `buildSessionEntry`). The `listSessionFilesForAgent` shared utility is unchanged, so memory_search indexing and usage/billing telemetry continue to include archive content as intended. No API surface or configuration changes.\n",
-        "branch": "fix/issue-90313-dreaming-archive-filter",
-        "head_sha": "28612595e76c2a7225ebea482b6508d0aa3d6c5b",
-        "author": "zenglingbiao",
-        "labels": [
-          "extensions: memory-core",
-          "size: XS",
-          "proof: supplied",
-          "P2",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 automation"
-        ],
-        "files": [
-          {
-            "path": "extensions/memory-core/src/dreaming-phases.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91267",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91267.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 156,
-          "counts": {
-            "SUCCESS": 123,
-            "SKIPPED": 31,
-            "FAILURE": 2
-          },
-          "blockers": [
-            "checks-node-agentic-agents-core-models:FAILURE",
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-agents-core-models:FAILURE",
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 7043,
+    "total_ms": 2688,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 526
+        "ms": 629
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2936
+        "ms": 0
       },
       {
         "name": "classify_commands",
@@ -156,7 +84,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3558
+        "ms": 2047
       },
       {
         "name": "append_ledger",
