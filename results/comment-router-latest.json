@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T23:48:32.050Z",
+  "generated_at": "2026-06-11T23:48:33.240Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T20:48:31.370Z",
+  "since": "2026-06-11T20:48:31.070Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    91267
+    92264
   ],
   "comment_ids": [
-    4686060181
+    4686065355
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:91267:4686060181:2026-06-11T23:46:49Z:re_review",
-      "comment_id": "4686060181",
-      "comment_version_key": "4686060181:2026-06-11T23:46:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91267#issuecomment-4686060181",
+      "idempotency_key": "comment-router:openclaw/openclaw:92264:4686065355:2026-06-11T23:47:46Z:re_review",
+      "comment_id": "4686065355",
+      "comment_version_key": "4686065355:2026-06-11T23:47:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92264#issuecomment-4686065355",
       "repo": "openclaw/openclaw",
-      "issue_number": 91267,
+      "issue_number": 92264,
       "author": "zenglingbiao",
       "author_id": 290951975,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-11T23:46:49Z",
-      "comment_updated_at": "2026-06-11T23:46:49Z",
+      "comment_created_at": "2026-06-11T23:47:46Z",
+      "comment_updated_at": "2026-06-11T23:47:46Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -61,34 +61,44 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-11T23:48:33.941Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 92264
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-11T23:48:34.750Z",
+          "response_comment_id": null,
+          "response_comment_mode": "created"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): set active marker for startup catch-up runs (fixes #91695)",
-        "body": "### Summary\n\n- **Problem**: Startup catch-up cron runs never call `markCronJobActive`, so `isCronJobActive(jobId)` returns `false` for the duration of the catch-up run. The task-registry reconcile checks this marker and misclassifies long catch-up jobs (>5 min) as `lost`, emitting spurious `Background task lost` system messages while the job is still running.\n- **Root Cause**: `markCronJobActive` was wired into the tick paths (`runDueJob` at line 888, `executeJob` at line 1672) but was missed in `runStartupCatchupCandidate`. The clear side (`clearCronJobActive`) is already symmetric via `applyOutcomeToStoredJob` for all paths, so this is a missing-mark-symmetric-clear asymmetry.\n- **Fix**: Add `markCronJobActive(candidate.job.id)` in `runStartupCatchupCandidate` before `tryCreateCronTaskRun`, matching the tick-path pattern.\n- **What changed**:\n  - `src/cron/service/timer.ts` — added `markCronJobActive(candidate.job.id)` call in `runStartupCatchupCandidate` (+1 line)\n  - `src/cron/service.restart-catchup.test.ts` — added focused test asserting `markCronJobActive` is called during startup catch-up and the symmetric `clearCronJobActive` call completes (+72 lines)\n- **What did NOT change (scope boundary)**:\n  - `clearCronJobActive` — already correctly invoked by `applyOutcomeToStoredJob` for all run paths (tick, manual, catch-up)\n  - `deferAgentTurnJobs` path — agentTurn jobs deferred to tick are already covered by the tick-path `markCronJobActive` call\n  - The reconcile logic in `task-registry.maintenance.ts` — the `isCronJobActive` check is correct; the bug is purely on the producer side\n\n### Reproduction\n\n1. Configure a command-kind cron job with a schedule that will be missed during Gateway downtime\n2. Stop the Gateway, wait for the job's next run time to pass\n3. Restart the Gateway — startup catch-up replays the missed job via `runStartupCatchupCandidate`\n4. Wait >5 minutes while the job is still running\n5. Observe: the task registry reconcile emits `Background task lost` for the still-running job because `isCronJobActive(jobId)` returns `false`\n6. **Before this PR**: `markCronJobActive` is never called → `isCronJobActive` returns `false` → reconcile misclassifies as `lost`\n7. **After this PR**: `markCronJobActive` is called at startup catch-up → `isCronJobActive` returns `true` → no false `lost` reconciliation\n\n### Real behavior proof\n\n**Behavior or issue addressed (91695)**: The startup catch-up path for missed cron jobs fails to register the job in the active-job set, causing the task registry to reconcile long-running catch-up jobs as `lost` after `TASK_RECONCILE_GRACE_MS` (5 min), emitting spurious `Background task lost` system messages.\n\n**Real environment tested**: Linux, Node 22 — the cron service test harness with real timers and the project CI test runner exercising the restart-catchup test suite.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/cron/service.restart-catchup.test.ts src/cron/active-jobs-manual-run.test.ts`\n\n**Evidence after fix**:\n```text\n$ node scripts/run-vitest.mjs src/cron/service.restart-catchup.test.ts\n\n RUN  v4.1.7 /home/0668001395/openclawProject1\n\n Test Files  1 passed (1)\n      Tests  15 passed (15)  ← includes new \"marks the job active during startup catch-up execution\"\n   Start at  12:45:57\n   Duration  4.44s\n\n$ node scripts/run-vitest.mjs src/cron/active-jobs-manual-run.test.ts\n\n RUN  v4.1.7 /home/0668001395/openclawProject1\n\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n   Start at  12:46:10\n   Duration  3.10s\n```\n\nFull cron test suite: 103 test files, 1033 tests — all passing (15 restart-catchup + 2 active-jobs-manual-run + 1016 other cron tests).\n\n**Observed result after fix**: The `markCronJobActive` call is now placed symmetrically across all three cron execution paths (tick, manual, catch-up). The new focused test verifies that `markCronJobActive` is called with the correct job ID during startup catch-up, that the \"started\" event is emitted after marking, and that `clearCronJobActive` is called symmetrically after the run completes — confirming the mark/clear pair is balanced on the catch-up path.\n\n**What was not tested**: A live Gateway restart cycle with an actual command-kind cron job running >5 minutes was not driven. The fix is a one-line symmetric call; the focused unit test verifies the producer-side invariant directly via `vi.spyOn` on `markCronJobActive`/`clearCronJobActive`, and the existing restart-catchup suite confirms the broader catch-up machinery is intact.\n\n**Repro confirmation**: The added focused test (`marks the job active during startup catch-up execution`) fails on origin/main before the fix because `markCronJobActive` is never called. After the fix, `markCronJobActive` is called with the correct job ID, and the symmetric `clearCronJobActive` is also verified, confirming no active-marker leak.\n\n### Risk / Mitigation\n\n- **Risk**: Adding a `markCronJobActive` call without a corresponding `clearCronJobActive` would leak active markers and permanently suppress reconcile for affected job IDs.\n  **Mitigation**: `clearCronJobActive` is already called by `applyOutcomeToStoredJob` (timer.ts line 705) which runs for ALL outcomes — tick, manual, and catch-up. The mark/clear pair is now symmetric; there is no leak path. The new test explicitly verifies both `markCronJobActive` and `clearCronJobActive` are called.\n\n- **Risk**: An uncaught exception after `markCronJobActive` but before `applyOutcomeToStoredJob` could leave a stale active marker.\n  **Mitigation**: This risk exists equally for all three paths (tick, manual, catch-up). The existing paths have been in production for months without issue. The try/catch in `runStartupCatchupCandidate` ensures `applyOutcomeToStoredJob` runs on both success and error paths.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] cron\n- [x] tests\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/cron/service.restart-catchup.test.ts` — 15 tests including the new active-marker assertion\n- `node scripts/run-vitest.mjs src/cron/active-jobs-manual-run.test.ts` — 2 tests covering manual-run mark/clear\n- `node scripts/run-vitest.mjs src/cron/` — full suite: 103 files, 1033 tests\n\n### Review Findings Addressed\n\n- **[P1] Add a focused test asserting startup catch-up marker visibility and cleanup** → Added `marks the job active during startup catch-up execution` test in `src/cron/service.restart-catchup.test.ts`. Uses `vi.spyOn` on `markCronJobActive` and `clearCronJobActive` to verify both the mark and clear calls occur on the startup catch-up path with the correct job ID.\n- **[P1] Needs real behavior proof from a real Gateway restart** → A live Gateway restart with a catch-up job exceeding 5 minutes cannot be driven in this environment. The focused unit test provides direct producer-side invariant verification; the existing restart-catchup integration suite covers the broader catch-up machinery. The risk is low: the change is a one-line symmetric call matching the two existing execution paths.\n\n### Linked Issue/PR\n\nFixes #91695\n",
-        "branch": "fix/issue-91695-cron-catchup-active-marker",
-        "head_sha": "6788c125c1441af3668ea5abf464bbbf7963e3b4",
+        "title": "fix(btw): resolve agentRuntime alias models in /btw side questions (fixes #92168)",
+        "body": "### Summary\n\n- **Problem**: `/btw` throws `Unknown model: anthropic/claude-opus-4-7` when the agent primary model is configured as a canonical alias routed via `agentRuntime.id: \"claude-cli\"`. The same model works for the main turn because the harness selection routes through the configured runtime, but the `/btw` model resolution path only consults the standard model registry where agentRuntime-aliased models are absent.\n- **Root Cause**: `resolveRuntimeModel` in `btw.ts` calls `resolveModelWithRegistry` which looks up models in the disk-based `models.json` registry. Models configured with `agentRuntime.id` (e.g. `claude-cli`) don't appear in this registry — they're resolved at harness-selection time in the main agent path, but `/btw` never reaches that path when the registry lookup returns undefined.\n- **Fix**: When `resolveModelWithRegistry` returns undefined, check if the model is configured with an `agentRuntime` entry in `agents.defaults.models`. If so, synthesize a minimal model object (`{ id, provider }`) so the downstream harness selection (`selectAgentHarness`) can route through the configured runtime.\n- **What changed**: `src/agents/btw.ts` — `resolveRuntimeModel`: add agentRuntime fallback before throwing Unknown model error\n- **What did NOT change**: The model registry (`resolveModelWithRegistry`) is unchanged — this fix is scoped to the `/btw` side-question path only, matching the issue's reproduction scope\n\n### Reproduction\n\n1. Configure `agents.defaults.models` with an agentRuntime alias:\n   ```json\n   \"anthropic/claude-opus-4-7\": { \"agentRuntime\": { \"id\": \"claude-cli\" } }\n   ```\n2. Ensure the agent's `models.json` does not contain an `anthropic` provider entry\n3. Send a normal turn — works correctly\n4. Send `/btw <any question>`\n5. **Before**: `Unknown model: anthropic/claude-opus-4-7`\n6. **After**: `/btw` resolves the model through the configured agentRuntime and answers the side question\n\n### Real behavior proof\n\n**Behavior or issue addressed (92168)**: `/btw` side questions failing with Unknown model when the primary model is configured as a canonical alias with agentRuntime routing, despite the main turn using the same model successfully.\n\n**Real environment tested**: Linux, Node 22 — OpenClaw test harness exercising the btw side-question model resolution path\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/agents/btw.test.ts`\n\n**Evidence after fix**:\n```text\n RUN  v4.1.7 /home/0668001395/openclawProject1\n\n src/agents/btw.test.ts (33 tests) 28.13s\n\n Test Files  1 passed (1)\n      Tests  33 passed (33)\n```\n\n**Observed result after fix**: The btw test suite covering side-question model resolution, transcript handling, session routing, and harness selection continues to pass. The new agentRuntime fallback path integrates transparently — when the model is not in the standard registry but has an agentRuntime config entry, a minimal model is synthesized for downstream harness routing.\n\n**What was not tested**: A live `/btw` invocation against a configured agentRuntime-aliased model (requires a Claude CLI installation and Anthropic API credentials) was not driven.\n\n**Repro confirmation**: The existing btw tests exercise the `resolveRuntimeModel` path. The fix adds a fallback check between the registry lookup and the error throw, preserving the error for genuinely unknown models while letting agentRuntime-aliased models pass through.\n\n### Risk / Mitigation\n\n- **Risk**: The synthesized minimal model `{ id, provider }` has fewer fields than a full registry model entry.\n  **Mitigation**: The downstream `selectAgentHarness` function only needs `provider` and model id to select the correct harness; it does not depend on full model metadata. The main agent turn already follows this same minimal path for agentRuntime models.\n- **Risk**: The fallback could mask genuinely misconfigured models.\n  **Mitigation**: The fallback only activates when `agentRuntime` is explicitly configured in `agents.defaults.models` — a deliberate config choice. Models without this config entry still throw Unknown model.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Agents / btw side questions\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/agents/btw.test.ts`\n\n### Review Findings Addressed\n\nN/A (initial submission)\n\n### Linked Issue/PR\n\nFixes #92168\n",
+        "branch": "fix/issue-92168-btw-agent-runtime-alias",
+        "head_sha": "b48fd1b5605451186caeb55d8d0f7cf93bc9a471",
         "author": "zenglingbiao",
         "labels": [
-          "size: S",
+          "agents",
+          "size: XS",
           "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
+          "rating: 🌊 off-meta tidepool"
         ],
         "files": [
           {
-            "path": "src/cron/service.restart-catchup.test.ts",
-            "additions": 72,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 1,
-            "deletions": 0,
+            "path": "src/agents/btw.ts",
+            "additions": 13,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
@@ -97,48 +107,57 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92090",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92090.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92264",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92264.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 163,
+          "total": 164,
           "counts": {
-            "SUCCESS": 129,
+            "SUCCESS": 125,
             "SKIPPED": 31,
-            "FAILURE": 2,
+            "FAILURE": 7,
             "NEUTRAL": 1
           },
           "blockers": [
-            "checks-node-agentic-agents-core-models:FAILURE",
-            "checks-node-agentic-agents-core-runtime:FAILURE"
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "checks-node-agentic-agents-core-models:FAILURE",
-            "checks-node-agentic-agents-core-runtime:FAILURE"
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2763,
+    "total_ms": 4171,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 668
+        "ms": 505
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2298
+        "ms": 1652
       },
       {
         "name": "classify_commands",
@@ -146,11 +165,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2083
+        "ms": 1991
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
