@@ -2,19 +2,19 @@
 repo: "openclaw/gogcli"
 cluster_id: "issue-openclaw-gogcli-733"
 mode: "autonomous"
-run_id: "27274254863"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27274254863"
-head_sha: "eb2f304346618b374d9319908edbededaf6e759b"
-workflow_conclusion: "failure"
-result_status: "blocked"
-published_at: "2026-06-10T11:59:57.751Z"
+run_id: "27316438626"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27316438626"
+head_sha: "55339c688b6c8b7816833f7975dbc6415785f84a"
+workflow_conclusion: "success"
+result_status: "planned"
+published_at: "2026-06-11T01:01:57.803Z"
 canonical: "https://github.com/openclaw/gogcli/issues/733"
 canonical_issue: "https://github.com/openclaw/gogcli/issues/733"
 canonical_pr: null
 actions_total: 2
 fix_executed: 0
 fix_failed: 0
-fix_blocked: 0
+fix_blocked: 1
 apply_executed: 0
 apply_blocked: 0
 apply_skipped: 0
@@ -25,17 +25,17 @@ needs_human_count: 0
 
 Repo: openclaw/gogcli
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27274254863](https://github.com/openclaw/clawsweeper/actions/runs/27274254863)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27316438626](https://github.com/openclaw/clawsweeper/actions/runs/27316438626)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
-Worker result: blocked
+Worker result: planned
 
 Canonical: https://github.com/openclaw/gogcli/issues/733
 
 ## Summary
 
-Issue #733 is a coherent, current-main bug at SHA 31fb2e53b1ccb790b5399eddf11112d1d5084941. The narrow fix belongs in docs cell-update and its focused tests, but this worker cannot create or validate the branch because the supplied checkout is read-only; even focused Go tests cannot create the module cache.
+Issue #733 is a focused, non-security current-main bug. The Markdown cell-update path removes the terminal paragraph boundary before clamping formatting ranges, which can discard list formatting while still reporting updated=true. Plan a narrow new fix PR with focused request-level and httptest regression coverage.
 
 ## Impact
 
@@ -44,7 +44,7 @@ Issue #733 is a coherent, current-main bug at SHA 31fb2e53b1ccb790b5399eddf11112
 | Worker actions | 2 |
 | Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
 | Apply blocked | 0 |
 | Apply skipped | 0 |
@@ -54,7 +54,8 @@ Issue #733 is a coherent, current-main bug at SHA 31fb2e53b1ccb790b5399eddf11112
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| execute_fix | blocked |  |  | validation_dependency_prepare_failed: bwrap: execvp /home/runner/.clawsweeper-repair/codex/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex: No such file or directory |
+| issue_implementation_status_comment | skipped | #733 |  | no existing ClawSweeper issue implementation status comment |
 
 ## Apply Actions
 
@@ -66,8 +67,8 @@ Issue #733 is a coherent, current-main bug at SHA 31fb2e53b1ccb790b5399eddf11112
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #733 | fix_needed | planned | canonical | A narrow implementation PR is needed to preserve list paragraph boundaries inside the selected table cell and reject nonempty Markdown that produces no effective update. |
-| cluster:issue-openclaw-gogcli-733 | build_fix_artifact | blocked |  | The fix plan is complete, but implementation and local validation require a writable checkout and writable Go caches. |
+| #733 | fix_needed | planned | canonical | The reported false-success behavior remains applicable on the pinned main SHA and has a small, direct implementation boundary. |
+| cluster:issue-openclaw-gogcli-733 | build_fix_artifact | planned |  | A narrow executor-ready fix PR is appropriate; the planning checkout is intentionally read-only. |
 
 ## Needs Human
 
