@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T04:35:14.114Z",
+  "generated_at": "2026-06-12T04:40:48.171Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T01:35:12.067Z",
+  "since": "2026-06-12T01:40:47.791Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91332
+    92344
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,119 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91332:4645680458:2026-06-12T04:35:07Z:clawsweeper_needs_human",
-      "comment_id": "4645680458",
-      "comment_version_key": "4645680458:2026-06-12T04:35:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91332#issuecomment-4645680458",
-      "repo": "openclaw/openclaw",
-      "issue_number": 91332,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-08T05:18:43Z",
-      "comment_updated_at": "2026-06-12T04:35:07Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=9851714a9b6aada30da0e6b3877de4d03c37eb90)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +17. Total +17 across 1 file.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "9851714a9b6aada30da0e6b3877de4d03c37eb90",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(session): add fallback lock file cleanup on session write-lock release",
-        "body": "## Problem\n\nWhen `sidecar-lock`'s `removeLockIfUnchanged` fails because the lock file snapshot doesn't match (content/inode changed between acquisition and release), the session write-lock file persists on disk permanently. This blocks all subsequent messages to that session with `SessionWriteLockTimeoutError` until the gateway is restarted.\n\nObserved in production (OpenClaw 2026.6.1):\n```\n04:35:55 chat.abort ✓ 87ms\n04:35:55 embedded abort settle timed out (timeoutMs=2000)\n04:35:55 lock file created: pid=<gateway> maxHoldMs=1020000\n04:37:14 SessionWriteLockTimeoutError ageMs=79210  (×2 lanes)\n04:38:25 SessionWriteLockTimeoutError ageMs=149601 (×2 lanes)\n```\n\nSee https://github.com/openclaw/openclaw/issues/91327 for full root cause analysis.\n\n## Fix\n\nAdd a **fallback cleanup** in `acquireSessionWriteLock` in `session-write-lock.ts`: after the inner sidecar-lock `release()` completes, check if the `.lock` file still exists on disk and no reentrant holder remains. If both conditions hold and the file's `pid` field matches the current process, force-remove it.\n\n```typescript\nconst innerRelease = lock.release;\nconst release = async () => {\n    await innerRelease();\n    // Fallback cleanup: if sidecar-lock's removeLockIfUnchanged failed\n    // due to snapshot mismatch, force-remove the lock file if no\n    // reentrant holder remains and the file still matches our pid.\n    try {\n        if (!sessionLockHeldByThisProcess(normalizedSessionFile)) {\n            const payload = await readLockPayload(lockPath);\n            if (payload?.pid === process.pid) {\n                await fs.rm(lockPath, { force: true });\n            }\n        }\n    } catch {\n        // Best-effort fallback on filesystem errors.\n    }\n};\nreturn { release };\n```\n\n## Why this is safe\n\n1. **Reentrancy guard**: `sessionLockHeldByThisProcess()` prevents removing the lock file while other reentrant holders still expect it to exist.\n2. **pid check**: Only force-removes if the lock file's pid matches `process.pid`. If another process replaced the lock file, it won't match → we don't touch it.  \n3. **Best-effort**: Falls back silently on filesystem errors.\n4. **Non-breaking**: The inner `release()` still runs as before. This is purely additive cleanup.\n\n## Files changed\n\n- `src/agents/session-write-lock.ts`: +18 lines, 1 changed\n\n## Real behavior proof\n\n**Setup:**\n- OS: Oracle Linux 9.7 (aarch64)\n- Node.js: v22.22.3\n- Fork rebased onto `openclaw/main` tip — previously was 4,466 commits behind, now cleanly atop current upstream\n\n**Verified before push:**\n\n1. **Rebase integrity:** clean rebase, zero conflicts\n2. **Diff confirms only intended change:**\n```\n$ git diff upstream/main --stat\n src/agents/session-write-lock.ts | 19 ++++++++++++++++++-\n 1 file changed, 18 insertions(+), 1 deletion(-)\n```\n\n3. **Reentrancy fix (v2):** First iteration broke `expectLockRemovedOnlyAfterFinalRelease` — the fallback removed the lock file during the first release in a reentrant pair. Added `sessionLockHeldByThisProcess()` guard so the fallback only triggers when all holders have released.\n\n4. **Scope check** — `readLockPayload`, `lockPath`, `fs`, `process.pid`, `normalizedSessionFile`, and `sessionLockHeldByThisProcess` are all in scope at the fix site.\n\n**CI:** Full test suite running.\n\n**Not tested (requires production environment):**\n- Reproduction of the exact sidecar-lock snapshot mismatch race condition\n- Multi-process lock contention with the fallback path triggered\n- Long-running gateway with stale lock accumulation",
-        "branch": "main",
-        "head_sha": "9851714a9b6aada30da0e6b3877de4d03c37eb90",
-        "author": "immortal-autumn",
-        "labels": [
-          "commands",
-          "agents",
-          "size: XS",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 session-state"
-        ],
-        "files": [
-          {
-            "path": "src/agents/session-write-lock.ts",
-            "additions": 18,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91332",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91332.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 158,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 133,
-            "SKIPPED": 23,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2246,
+    "total_ms": 706,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 311
+        "ms": 371
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1722
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 188
+        "ms": 327
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
