@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T19:27:23.547Z",
+  "generated_at": "2026-06-12T19:28:06.957Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T16:27:20.969Z",
+  "since": "2026-06-12T16:28:06.241Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     92518
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4694515987
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,117 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "googlechat: deliver media as a text link when attachment upload is unauthorized (app auth)",
-        "body": "## Summary\n\nWhen the Google Chat channel is configured with **app authentication** (service account, `chat.bot` scope — the default for most Chat apps), any agent reply that includes media (`MEDIA:<url>`, a markdown image, or the message tool's media param) fails to deliver. The plugin downloads the media and calls the Chat **media upload** API, which returns:\n\n```\n403 PERMISSION_DENIED — \"Request had insufficient authentication scopes.\"\n```\n\nThis is **not a misconfiguration**: per Google's docs, [uploading a file attachment](https://developers.google.com/workspace/chat/upload-media-attachments) is **not supported with app authentication** — it requires *user* auth (domain-wide delegation impersonating a user). App-auth Chat apps simply cannot upload attachments.\n\nToday that 403 fails the whole outbound message. This PR makes both media send paths **fall back to delivering the media URL as a text link** when (a) the upload is rejected for auth/scope reasons and (b) the source is a remote `http(s)` URL — so the user still receives the artifact instead of nothing. Upload behavior is unchanged where it works (user auth / DWD).\n\n## Impact (before this change)\n\n- Any agent/skill that returns media under app auth (e.g. a browser-automation skill returning a screenshot or a downloaded PDF) fails to deliver.\n- **Sub-agent completion announces** are hit hardest: the announce errors with `Google Chat upload 403`, retries, then `announce give up (retry-limit)` — and the user gets **no response at all**.\n- The artifact is often already a public/temporary URL (e.g. a GCS signed URL) that can simply be shared as a link.\n\n## Repro\n\n1. Google Chat channel with app auth (service account, `chat.bot`).\n2. Have an agent reply with `MEDIA:https://<some-public-url>` to a DM.\n3. Observe `403 insufficient authentication scopes` on the attachment upload and the message failing to deliver.\n\n## Change\n\n- **`api.ts`** — add `isGoogleChatAttachmentUploadUnauthorized(err)`, which recognizes the 403/scope error (`403` / `PERMISSION_DENIED` / `insufficient authentication scopes`). `uploadGoogleChatAttachment` surfaces these via the shared error path as `Google Chat upload 403: <body>`, so the detector matches the real upload failure.\n- **`monitor-reply-delivery.ts`** (`deliverGoogleChatReply`) — the normal channel reply delivery path. Wrap the upload; on an unauthorized error with a remote URL, send the caption + URL as text instead of failing.\n- **`channel.adapters.ts`** (outbound adapter `sendMedia`) — the path used by **sub-agent completion announce**. Same fallback, returning a normal text send receipt.\n- **`channel.runtime.ts`** — export the new helper so both paths can use it.\n\n```ts\ntry {\n  upload = await uploadGoogleChatAttachment({ account, space, ... });\n} catch (err) {\n  // App auth (chat.bot) cannot upload attachments (403). For remote URLs,\n  // deliver as a text link so the message still reaches the user.\n  if (isGoogleChatAttachmentUploadUnauthorized(err) && /^https?:\\/\\//i.test(mediaUrl)) {\n    const linkText = [text, mediaUrl].map((p) => p?.trim()).filter(Boolean).join(\"\\n\");\n    return await sendGoogleChatMessage({ account, space, text: linkText, thread });\n  }\n  throw err;\n}\n```\n\n## Behavior preserved\n\n- **User auth / DWD** deployments still upload native attachments — the fallback only triggers on an auth/scope error.\n- **Local-file** media is unaffected (the fallback requires a remote `http(s)` URL).\n- **Non-auth** upload errors are re-thrown exactly as before.\n\n## Tests\n\n- `channel.test.ts` → *\"falls back to a text link when the attachment upload is unauthorized\"* (adapter / announce path).\n- `monitor.reply-delivery.test.ts` → *\"delivers media as a text link when the attachment upload is unauthorized\"* (channel reply path).\n- Both assert that no attachment is sent and the caption + URL are delivered as text.\n\nValidated against a **production app-auth Chat app**: an agent reply containing media (`MEDIA:<public-url>`) now reaches the user as a clickable link instead of failing with 403 / no delivery.\n\n## Alternatives considered (open to maintainer preference)\n\n- A config flag `channels.googlechat.mediaDelivery: \"upload\" | \"link\"` (explicit, skips the upload roundtrip when link delivery is known).\n- For images specifically, render a `cardsV2` image widget with `imageUrl` (inline preview, no upload) instead of a bare link — could be a follow-up.\n",
-        "branch": "fix/googlechat-media-link-403-fallback",
-        "head_sha": "56ae572022829a6e211c2ff28f3e38b52a355d19",
-        "author": "jailbirt",
-        "labels": [
-          "channel: googlechat",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/googlechat/src/api.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/googlechat/src/channel.adapters.ts",
-            "additions": 42,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/googlechat/src/channel.runtime.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/googlechat/src/channel.test.ts",
-            "additions": 43,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/googlechat/src/monitor-reply-delivery.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/googlechat/src/monitor.reply-delivery.test.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92518",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92518.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 160,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 127,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2796,
+    "total_ms": 1489,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 300
+        "ms": 706
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2264
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 205
+        "ms": 774
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
