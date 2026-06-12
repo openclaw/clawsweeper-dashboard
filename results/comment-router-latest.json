@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T09:57:11.984Z",
-  "repo": "steipete/CodexBar",
+  "generated_at": "2026-06-12T09:57:15.153Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T06:57:11.784Z",
+  "since": "2026-06-12T06:57:13.088Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    1464
+    92420
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +29,112 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92420:4689890450:2026-06-12T09:57:09Z:clawsweeper_needs_human",
+      "comment_id": "4689890450",
+      "comment_version_key": "4689890450:2026-06-12T09:57:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92420#issuecomment-4689890450",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92420,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T09:55:25Z",
+      "comment_updated_at": "2026-06-12T09:57:09Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=63e12fa3ae5e491ab779426e61458186e3ce4044)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +8, Tests +90. Total +98 across 2 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "63e12fa3ae5e491ab779426e61458186e3ce4044",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(telegram): record sent messages in the source-delivery path",
+        "body": "## Summary\n\n- The Telegram source-delivery path (`deliverReplies` in `extensions/telegram/src/bot/delivery.replies.ts`) sends via `sendTelegramText` / raw media APIs and emits the `message_sent` hook, but never appends to the sent-message ledger.\n- The canonical `sendMessageTelegram` (`extensions/telegram/src/send.ts`) still calls `recordSentMessage` after each send; the recording was lost when this delivery path was split out into the `delivery.*` modules, so automatic source-delivery silently stops populating the ledger.\n- Impact: `wasSentByBot` returns false for the bot's own replies, reaction filters mis-fire, and reply-to routing that depends on the ledger misses legitimate sends.\n- Outcome: append the delivered message to the ledger in lockstep with the `message_sent` hook (same success gate and message id), keeping hook and ledger in sync.\n- Out of scope: per-chunk recording of multi-chunk replies — the `message_sent` hook itself reports only the first delivered id per reply, and this change matches that granularity.\n- Reviewers: confirm the recording belongs co-located with the `message_sent` emission (vs inside each low-level send helper), and that the success gate matches.\n\n## Linked context\n\nCloses #92242\n\nRelated: `extensions/telegram/src/send.ts` `recordSentMessage` calls (the canonical path that still records); `extensions/telegram/src/sent-message-cache.ts` (`recordSentMessage` / `wasSentByBot`).\n\nRequested by a maintainer or owner? No — filed against open issue #92242.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: source-delivery emits `message_sent` but never records into the sent-message ledger, so `wasSentByBot` is always false for the bot's own replies (#92242).\n- Real environment tested: Linux, Node 24, this repo checkout. Ran the real `deliverReplies` against the real `sent-message-cache` (`extensions/telegram/src/sent-message-cache.ts`) with a stub Telegram Bot whose `api.sendMessage` returns a `message_id`.\n- Exact steps or command run after this patch: `node node_modules/tsx/dist/cli.mjs proof-92242.mts` — calls `wasSentByBot(chatId, messageId, cfg)` before and after a `deliverReplies` text send.\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output): copied live console output (stdout) from the real delivery + ledger:\n\n```\nledger wasSentByBot BEFORE delivery -> false\ndeliverReplies result -> {\"delivered\":true}\nledger wasSentByBot AFTER  delivery -> true\n```\n\n- Observed result after fix: the ledger is empty before delivery, the send reports `delivered: true`, and `wasSentByBot` returns true afterward — the bot's own message is now recognized as self-sent.\n- What was not tested: a full live gateway → Telegram round trip against the Telegram Bot API.\n- Proof limitations or environment constraints: this checkout has no live Telegram bot token / chat, so the send target is a stub `bot.api.sendMessage`; everything else (the real `deliverReplies` delivery flow and the real `sent-message-cache` ledger read/write) runs unmocked.\n- Before evidence: the `BEFORE` line above shows the ledger empty prior to delivery; on `main` it stays empty after delivery too (no `recordSentMessage` call exists in the delivery path).\n\n## Tests and validation\n\n- `node scripts/run-vitest.mjs run extensions/telegram/src/bot/delivery.records-sent-message.test.ts` → 2 passed (new file: records on success, skips when nothing delivered).\n- `node scripts/run-vitest.mjs run extensions/telegram/src/bot/delivery.test.ts extensions/telegram/src/send.test.ts extensions/telegram/src/bot/delivery.resolve-media-retry.test.ts` → 195 passed (regression).\n- `oxfmt --check` clean on both changed files.\n- What failed before: with the pre-fix delivery path, `recordSentMessage` was never called (the new test fails red against `main`).\n\n## Risk checklist\n\n- Did user-visible behavior change? Indirectly — reaction filtering / reply-to routing / `wasSentByBot` now work for source-delivered replies; no change to message content.\n- Did config, environment, or migration behavior change? No.\n- Did security, auth, secrets, network, or tool execution behavior change? No.\n- Highest-risk area: double-recording or recording on failure.\n- Mitigation: the call is gated on the same `progress.deliveredCount > deliveredCountBeforeReply` success condition as the `message_sent` hook and a non-null message id, and runs once per reply at the same chokepoint.\n\n## Current review state\n\n- Next action: maintainer review.\n- Waiting on: review; no known author blockers.\n- Bot/reviewer comments addressed: none yet.\n",
+        "branch": "fix/telegram-record-sent-message",
+        "head_sha": "63e12fa3ae5e491ab779426e61458186e3ce4044",
+        "author": "tangtaizong666",
+        "labels": [
+          "channel: telegram",
+          "size: S",
+          "proof: supplied",
+          "rating: 🌊 off-meta tidepool"
+        ],
+        "files": [
+          {
+            "path": "extensions/telegram/src/bot/delivery.records-sent-message.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/telegram/src/bot/delivery.replies.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92420",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92420.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 159,
+          "counts": {
+            "SUCCESS": 126,
+            "SKIPPED": 30,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-tooling:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS"
+          ],
+          "pending": [
+            "checks-node-core-tooling:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 324,
+    "total_ms": 2299,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 189
+        "ms": 263
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1788
       },
       {
         "name": "classify_commands",
@@ -48,7 +142,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 124
+        "ms": 224
       },
       {
         "name": "append_ledger",
