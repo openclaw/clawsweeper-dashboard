@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T04:28:59.744Z",
+  "generated_at": "2026-06-12T04:29:37.322Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T01:28:57.697Z",
+  "since": "2026-06-12T01:29:35.517Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91332
+    90110
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 10,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91332:4645680458:2026-06-12T04:28:54Z:clawsweeper_needs_human",
-      "comment_id": "4645680458",
-      "comment_version_key": "4645680458:2026-06-12T04:28:54Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91332#issuecomment-4645680458",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90110:4618313539:2026-06-12T04:29:32Z:clawsweeper_needs_human",
+      "comment_id": "4618313539",
+      "comment_version_key": "4618313539:2026-06-12T04:29:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90110#issuecomment-4618313539",
       "repo": "openclaw/openclaw",
-      "issue_number": 91332,
+      "issue_number": 90110,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-08T05:18:43Z",
-      "comment_updated_at": "2026-06-12T04:28:54Z",
+      "comment_created_at": "2026-06-04T02:01:53Z",
+      "comment_updated_at": "2026-06-12T04:29:32Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,35 +52,92 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=39cb85134b75de958887ad59a55bd8288cf1efaa)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +15. Total +15 across 1 file.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=81fa3128d70f9513e37c97b4c2f185a0a79ad2f7)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +37, Tests +146. Total +183 across 10 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
       "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "39cb85134b75de958887ad59a55bd8288cf1efaa",
+      "expected_head_sha": "81fa3128d70f9513e37c97b4c2f185a0a79ad2f7",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(session): add fallback lock file cleanup on session write-lock release",
-        "body": "## Problem\n\nWhen `sidecar-lock`'s `removeLockIfUnchanged` fails because the lock file snapshot doesn't match (content/inode changed between acquisition and release), the session write-lock file persists on disk permanently. This blocks all subsequent messages to that session with `SessionWriteLockTimeoutError` until the gateway is restarted.\n\nObserved in production (OpenClaw 2026.6.1):\n```\n04:35:55 chat.abort ✓ 87ms\n04:35:55 embedded abort settle timed out (timeoutMs=2000)\n04:35:55 lock file created: pid=<gateway> maxHoldMs=1020000\n04:37:14 SessionWriteLockTimeoutError ageMs=79210  (×2 lanes)\n04:38:25 SessionWriteLockTimeoutError ageMs=149601 (×2 lanes)\n```\n\nSee https://github.com/openclaw/openclaw/issues/91327 for full root cause analysis.\n\n## Fix\n\nAdd a **fallback cleanup** in `acquireSessionWriteLock` in `session-write-lock.ts`: after the inner sidecar-lock `release()` completes, check if the `.lock` file still exists on disk. If it does and its `pid` field matches the current process, force-remove it.\n\n```typescript\nconst innerRelease = lock.release;\nconst release = async () => {\n    await innerRelease();\n    // Fallback cleanup: if sidecar-lock's removeLockIfUnchanged failed due to\n    // snapshot mismatch, force-remove the lock file if we still own it.\n    try {\n        const payload = await readLockPayload(lockPath);\n        if (payload?.pid === process.pid) {\n            await fs.rm(lockPath, { force: true });\n        }\n    } catch {\n        // Best-effort. Filesystem errors are swallowed.\n    }\n};\nreturn { release };\n```\n\n## Why this is safe\n\n1. **pid check**: Only force-removes if the lock file's pid matches `process.pid`. If another process replaced the lock file, it won't match → we don't touch it.\n2. **Best-effort**: Falls back silently on filesystem errors.\n3. **Non-breaking**: The inner `release()` still runs as before. This is purely additive cleanup.\n\n## Files changed\n\n- `src/agents/session-write-lock.ts`: +16 lines, 1 changed\n\n## Real behavior proof\n\n**Setup:**\n- OS: Oracle Linux 9.7 (aarch64)\n- Node.js: v22.22.3\n- Fork rebased onto `openclaw/main` tip (`3b78d41a9e`) — previously was 4,466 commits behind, now cleanly atop current upstream\n- Rebase: 1 commit, zero conflicts ✅\n\n**Verified before push:**\n\n1. **Rebase integrity:**\n```\n$ git rebase upstream/main\nRebasing (1/1)\nSuccessfully rebased and updated refs/heads/main.\n```\n\n2. **Diff confirms only intended change:**\n```\n$ git diff upstream/main --stat\n src/agents/session-write-lock.ts | 17 ++++++++++++++++-\n 1 file changed, 16 insertions(+), 1 deletion(-)\n```\n\n3. **Scope check** — `readLockPayload`, `lockPath`, `fs`, and `process.pid` are all in scope at the fix site (the function already uses all of them):\n```typescript\n// Line 417: readLockPayload defined in same module\nasync function readLockPayload(lockPath: string): Promise<LockFilePayload | null>\n// Line 906: lockPath computed just above\nconst lockPath = `${normalizedSessionFile}.lock`;\n// Line 1: fs imported from fs/promises\n```\n\n4. **Code logic review:** The fallback only triggers when `innerRelease()` succeeds but leaves a stale lock file on disk. The pid guard prevents cross-process interference.\n\n**CI:** Full test suite will run on the PR check.\n\n**Not tested (requires production environment):**\n- Reproduction of the exact sidecar-lock snapshot mismatch race condition\n- Multi-process lock contention with the fallback path triggered\n- Long-running gateway with stale lock accumulation",
-        "branch": "main",
-        "head_sha": "39cb85134b75de958887ad59a55bd8288cf1efaa",
-        "author": "immortal-autumn",
+        "title": "fix(anthropic): resolve Claude Haiku 4.5 static catalog refs",
+        "body": "## Summary\n\nFixes #90088.\n\n- Adds the missing native Anthropic API-key static catalog entry for Claude Haiku 4.5.\n- Maps rolling/dotted Haiku 4.5 refs to Anthropic's dated API id, `claude-haiku-4-5-20251001`.\n- Keeps this scoped to the `anthropic` API-key provider; `claude-cli` parity is intentionally out of scope.\n- Preserves manifest `maxTokens` and `mediaInput` metadata through the agent catalog boundary, closing a pre-existing metadata propagation gap exposed by this model row.\n\nReviewers should focus on static catalog resolution, Anthropic alias normalization, pricing-cache lookup for the dated Haiku id, and cron/session model override canonicalization.\n\n## Linked context\n\nCloses #90088.\n\nRelated PRs checked:\n- #87719 changes Haiku fallback/migration behavior, but does not add the missing native Anthropic catalog row.\n- #88587 improves prefixed Anthropic normalization context, but does not add `claude-haiku-4-5-20251001` to the native Anthropic static catalog.\n\nDirect collision check:\n- #90106 adds dated catalog rows, but does not resolve the rolling `claude-haiku-4-5` alias and has no focused regression proof.\n- #90116 adds rolling and dated manifest rows, but does not cover dotted aliases, canonical pricing, runtime catalog tests, or proof.\n- This PR keeps one canonical dated Anthropic row, uses the existing Opus/Sonnet alias-to-canonical-id pattern, and verifies dated, rolling, dotted, provider-qualified, pricing, cron/session, and catalog metadata paths.\n\n## Canonicalization choice\n\nRolling and dotted user refs (`claude-haiku-4-5`, `claude-haiku-4.5`) canonicalize to Anthropic's dated API id, `claude-haiku-4-5-20251001`, matching the existing Anthropic Opus/Sonnet alias normalization pattern. This avoids duplicate catalog rows for one vendor model and keeps runtime/pricing ids unambiguous.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: `anthropic/claude-haiku-4-5`, `anthropic/claude-haiku-4.5`, and the dated API id now resolve to the bundled native Anthropic static catalog row instead of falling through as an unknown model.\n- Real environment tested: Local OpenClaw source checkout on macOS, branch `codex/issue-90088-anthropic-haiku-catalog`, after `pnpm build` completed `runtime-postbuild: bundled plugin metadata`.\n- Exact steps or command run after this patch: Ran a local OpenClaw source-runtime resolution probe with `node --import tsx` against `resolveBundledStaticCatalogModel`, plus the focused regression suites listed below.\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output): Console output from the after-patch source-runtime probe:\n\n```text\nclaude-haiku-4-5 -> anthropic/claude-haiku-4-5-20251001 input=text,image context=200000 max=64000\nclaude-haiku-4-5-20251001 -> anthropic/claude-haiku-4-5-20251001 input=text,image context=200000 max=64000\nanthropic/claude-haiku-4-5 -> anthropic/claude-haiku-4-5-20251001 input=text,image context=200000 max=64000\n```\n\n- Observed result after fix: Each tested Haiku 4.5 ref resolved to `anthropic/claude-haiku-4-5-20251001` with text/image input, 200k context, and 64k max output from the bundled Anthropic manifest metadata.\n- What was not tested: Live Anthropic completion was not tested because no `ANTHROPIC_API_KEY` was present locally. `claude-cli` catalog parity was not changed or tested because #90088 is scoped to the native Anthropic API-key provider.\n- Proof limitations or environment constraints: The real behavior proof is local source-runtime resolution, not a paid Anthropic API request. Pricing behavior is covered by the gateway pricing-cache regression using OpenRouter-style catalog data.\n- Before evidence (optional but encouraged): The issue/review identified that the native Anthropic static catalog lacked the Haiku 4.5 dated row, so rolling Haiku 4.5 refs could not resolve to a bundled native Anthropic row.\n\n## Tests and validation\n\nFocused tests run:\n\n- `node scripts/run-vitest.mjs packages/model-catalog-core/src/provider-model-id-normalization.test.ts src/agents/model-ref-shared.test.ts src/agents/embedded-agent-runner/model.static-catalog.test.ts src/agents/embedded-agent-runner/model.test.ts src/agents/model-catalog.test.ts`\n- `node scripts/run-vitest.mjs src/gateway/model-pricing-cache.test.ts`\n- `node scripts/run-vitest.mjs src/cron/isolated-agent/run.cron-model-override.test.ts`\n- `node scripts/run-vitest.mjs packages/model-catalog-core/src/provider-model-id-normalization.test.ts src/agents/model-ref-shared.test.ts src/agents/embedded-agent-runner/model.static-catalog.test.ts src/agents/embedded-agent-runner/model.test.ts src/agents/model-catalog.test.ts src/gateway/model-pricing-cache.test.ts src/cron/isolated-agent/run.cron-model-override.test.ts`\n\nSupplemental gates run:\n\n- `pnpm tsgo`\n- `pnpm exec oxfmt --check --threads=1 packages/model-catalog-core/src/provider-model-id-normalization.ts src/agents/embedded-agent-runner/model.static-catalog.test.ts src/agents/embedded-agent-runner/model.test.ts src/agents/model-catalog.ts src/agents/model-ref-shared.test.ts src/gateway/model-pricing-cache.test.ts src/gateway/model-pricing-cache.ts`\n- `pnpm exec oxfmt --check --threads=1 src/cron/isolated-agent/run.cron-model-override.test.ts`\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json packages/model-catalog-core/src/provider-model-id-normalization.ts src/agents/embedded-agent-runner/model.static-catalog.test.ts src/agents/embedded-agent-runner/model.test.ts src/agents/model-catalog.ts src/agents/model-ref-shared.test.ts src/gateway/model-pricing-cache.test.ts src/gateway/model-pricing-cache.ts`\n- `pnpm build`\n- `OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm check:changed --staged`\n\nRegression coverage added/updated:\n\n- Static catalog resolution for dated, rolling, dotted, and provider-qualified Haiku 4.5 refs.\n- Agent model-ref fallback expectations now use the dated canonical id.\n- Cron isolated-agent session override expectation now uses the dated canonical id.\n- Manifest catalog loading asserts Haiku metadata, including image input, reasoning, 200k context, and 64k max output.\n- Gateway pricing cache now proves dated Haiku 4.5 resolves to non-zero pricing via the `version-dots` transform.\n\nKnown unrelated local gate failures:\n\n- `pnpm format:check` fails repo-wide on pre-existing unrelated files.\n- `pnpm lint:all` fails repo-wide on unrelated generated/app/test files, mostly `apps/shared/OpenClawKit/.../CanvasA2UI/a2ui.bundle.js`.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes. Native Anthropic Haiku 4.5 refs now resolve from the bundled static catalog.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo.\n\nWhat is the highest-risk area?\n\nModel id canonicalization and pricing lookup for Anthropic Haiku 4.5.\n\nHow is that risk mitigated?\n\nThe change follows the existing Anthropic opus/sonnet alias pattern, adds focused normalization/static-catalog/model-resolution tests, and adds pricing-cache coverage for the dated Haiku id.\n\n## Current review state\n\nNext action: maintainer/reviewer review.\n\nLive Anthropic API proof is not included because no `ANTHROPIC_API_KEY` was available locally; the included proof exercises the source-runtime static catalog path that caused #90088.\n\nAddressed review items:\n\n- Updated stale `model-ref-shared`, embedded runner model, and cron isolated-agent expectations.\n- Expanded static catalog alias coverage.\n- Proved non-zero pricing-cache lookup for dated Haiku 4.5.\n- Added comments justifying all-provider `maxTokens`/`mediaInput` propagation and core alias duplication.\n- Ran the changed-lane gate locally in child mode after default delegated runner sanity checks failed locally.",
+        "branch": "codex/issue-90088-anthropic-haiku-catalog",
+        "head_sha": "81fa3128d70f9513e37c97b4c2f185a0a79ad2f7",
+        "author": "harjothkhara",
         "labels": [
+          "gateway",
           "agents",
-          "size: XS",
-          "triage: needs-real-behavior-proof",
-          "P1",
+          "size: S",
+          "extensions: anthropic",
+          "proof: supplied",
+          "P2",
           "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 session-state"
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider"
         ],
         "files": [
           {
-            "path": "src/agents/session-write-lock.ts",
-            "additions": 16,
+            "path": "extensions/anthropic/openclaw.plugin.json",
+            "additions": 24,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/model-catalog-core/src/provider-model-id-normalization.test.ts",
+            "additions": 11,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/model-catalog-core/src/provider-model-id-normalization.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/model.static-catalog.test.ts",
+            "additions": 49,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-catalog.test.ts",
+            "additions": 48,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-catalog.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-catalog.types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-ref-shared.test.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/model-pricing-cache.test.ts",
+            "additions": 36,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/model-pricing-cache.ts",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
@@ -89,61 +146,148 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91332",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91332.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90110",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90110.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 161,
+          "total": 164,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 128,
-            "FAILURE": 1,
-            "IN_PROGRESS": 1,
+            "SUCCESS": 133,
+            "SKIPPED": 30,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-agents-core-runner:FAILURE",
-            "check-additional-boundaries-a:IN_PROGRESS"
-          ],
-          "pending": [
-            "check-additional-boundaries-a:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-agents-core-runner:FAILURE"
-          ],
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90110:4676756942:2026-06-11T02:54:15Z:re_review",
+      "comment_id": "4676756942",
+      "comment_version_key": "4676756942:2026-06-11T02:54:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90110#issuecomment-4676756942",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90110,
+      "author": "harjothkhara",
+      "author_id": 48686985,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T02:54:15Z",
+      "comment_updated_at": "2026-06-11T02:54:15Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review please",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "please.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90110:4676689885:2026-06-11T02:39:53Z:re_review",
+      "comment_id": "4676689885",
+      "comment_version_key": "4676689885:2026-06-11T02:39:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90110#issuecomment-4676689885",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90110,
+      "author": "harjothkhara",
+      "author_id": 48686985,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T02:39:53Z",
+      "comment_updated_at": "2026-06-11T02:39:53Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review please",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "please.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90110:4641115667:2026-06-07T02:06:35Z:re_review",
+      "comment_id": "4641115667",
+      "comment_version_key": "4641115667:2026-06-07T02:06:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90110#issuecomment-4641115667",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90110,
+      "author": "harjothkhara",
+      "author_id": 48686985,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-07T02:06:35Z",
+      "comment_updated_at": "2026-06-07T02:06:35Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review please. green on all checks (including socket security) since june 5 with no review pass yet — could you take a look so it's queueable? scope: resolves the claude haiku 4.5 static catalog references",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "please. Green on all checks (including Socket Security) since June 5 with no review pass yet — could you take a look so it's queueable? Scope: resolves the Claude Haiku 4.5 static catalog references.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2288,
+    "total_ms": 4283,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 241
+        "ms": 217
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1793
+        "ms": 1570
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 230
+        "ms": 2466
       },
       {
         "name": "append_ledger",
