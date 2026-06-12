@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T13:19:20.821Z",
+  "generated_at": "2026-06-12T13:19:22.247Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T10:19:18.450Z",
+  "since": "2026-06-12T10:19:19.322Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89985
+    92382
   ],
-  "comment_ids": [
-    4691618527
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 6,
+  "commands_seen": 5,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,17 +31,105 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89985:4691618527:2026-06-12T13:17:42Z:re_review",
-      "comment_id": "4691618527",
-      "comment_version_key": "4691618527:2026-06-12T13:17:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89985#issuecomment-4691618527",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92382:4688667314:2026-06-12T13:19:15Z:clawsweeper_needs_human",
+      "comment_id": "4688667314",
+      "comment_version_key": "4688667314:2026-06-12T13:19:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92382#issuecomment-4688667314",
       "repo": "openclaw/openclaw",
-      "issue_number": 89985,
-      "author": "fuller-stack-dev",
-      "author_id": 263060202,
+      "issue_number": 92382,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-12T13:17:42Z",
-      "comment_updated_at": "2026-06-12T13:17:42Z",
+      "comment_created_at": "2026-06-12T07:34:16Z",
+      "comment_updated_at": "2026-06-12T13:19:15Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=cad22e56ff7b5dc6bfd5d4bec9faee2e61cb7ec5)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +3, Tests +7. Total +10 across 2 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "cad22e56ff7b5dc6bfd5d4bec9faee2e61cb7ec5",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: don't defer text delta streaming for before_agent_finalize hooks",
+        "body": "## Summary\n\nAny plugin registering a `before_agent_finalize` hook silently disables all text streaming in webchat. The user sees \"in progress\" → \"done\" with no visible output, then a wall of text appears all at once after a long pause.\n\nThe root cause: `emitAssistantStreamData` defers ALL assistant output (gateway SSE + channel partial replies) when `onBeforeTerminalDelivery` is set. Gateway SSE events are ephemeral text deltas for webchat streaming — they should emit immediately. Only channel partial replies (Telegram/Discord live preview) need to be gated for hook inspection.\n\n**Fix (split approach):** `emitAssistantStreamData` always emits gateway SSE events (`emitAgentEvent` / `onAgentEvent`) immediately. Only channel partial replies (`onPartialReply`) are deferred until the `before_agent_finalize` terminal gate resolves. `flushDeferredAssistantEvents` only replays partial replies (gateway events were already emitted). Removed dead `emitAssistantStreamDataSafely` (no callers after the split).\n\n## Linked context\n\nNo linked issue — discovered during local debugging of a user config where `hook-logger` (which registers `before_agent_finalize`) was installed.\n\n## Root cause analysis\n\nThe call chain:\n\n1. **`attempt.ts:3165`** — `hookRunner?.hasHooks(\"before_agent_finalize\")` → `onBeforeTerminalDelivery` is created\n2. **`embedded-agent-subscribe.ts:194`** — `deferBlockReplyDelivery = true`\n3. **`embedded-agent-subscribe.ts:286-288`** (original code) — `emitAssistantStreamData` checks `deferBlockReplyDelivery` and pushes everything into `deferredAssistantEvents`\n4. All events are flushed in a single burst at `deliverTerminal()` line 259\n5. Result: 469 text delta events emitted in ~200ms instead of streaming over 35s\n\nPR #87703 (which introduced the guard) was correct to gate block replies and partial replies for hooks, but it over-applied deferral to gateway SSE events that don't need it.\n\n## Fix\n\n`src/agents/embedded-agent-subscribe.ts` — Split `emitAssistantStreamData`:\n\n- Gateway SSE (`emitAgentEvent` / `onAgentEvent`): always emitted immediately\n- Channel partial replies (`onPartialReply`): deferred when `deferBlockReplyDelivery` is set, flushed when the terminal gate resolves\n- `flushDeferredAssistantEvents`: only replays partial replies, doesn't re-emit gateway events\n- `emitAssistantStreamDataSafely`: removed (no callers)\n\n## Real behavior proof\n\n- Behavior or issue addressed: Webchat text streaming disabled when any plugin registers `before_agent_finalize` hook\n- Real environment tested: macOS 15.5, Node 24, source-built gateway on port 18789 using `~/.openclaw` config with `hook-logger` plugin (installed from npm `@scotthuang/hook-logger`) that registers `before_agent_finalize`\n- Exact steps or command run after this patch:\n  1. `pnpm build` — clean build of the fixed code\n  2. `bash ~/.codebuddy/skills/openclaw-source-dev/scripts/oc-dev.sh restartStable` — restart gateway with `.openclaw` config\n  3. Open webchat in browser at `http://127.0.0.1:18789/` and send a message using model `deepseek/deepseek-v4-flash`\n- Evidence after fix (terminal output from before-terminal-delivery tests showing all scenarios pass, plus manual webchat verification):\n\n```\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > suppresses deferred block replies when the terminal gate requests a revision\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > waits for async terminal gate decisions before draining\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > defers channel partial replies but streams gateway SSE until the terminal gate continues\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > does not send final-only assistant events through partial replies\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > finalizes normally when the terminal gate rejects\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > flushes deferred block replies when the terminal gate continues\n Test Files  1 passed (1)\n      Tests  6 passed (6)\n```\n\n  Manual webchat test: text appears incrementally in the chat UI — each word streams as the model generates it, instead of a blank \"in progress\" state followed by a wall of text at the end.\n\n- Observed result after fix: Webchat streaming works correctly with `hook-logger` enabled. Text appears character by character as the model generates, matching the streaming behavior when no `before_agent_finalize` hook is registered.\n- Before evidence: Before the fix, user observed webchat stuck on \"in progress\" for the full generation duration, then all 469 text-delta events flushed in a single burst within ~200ms at termination. Gateway log confirmed all assistant events were queued in `deferredAssistantEvents` instead of being emitted immediately.\n- What was not tested: Other plugins that register `before_agent_finalize` (e.g. Codex native hook relay). The code path is identical for all hook registrations.\n- Proof limitations or environment constraints: Video recording and screenshots of streaming behavior require browser interaction; terminal output from the structured test suite and manual webchat observation provide equivalent proof. A maintainer can apply `proof: override` if further visual evidence is required.\n\n## Tests and validation\n\n- `pnpm test src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts` — 6 passed\n- `pnpm test src/agents/embedded-agent-subscribe.handlers.messages.test.ts` — 38 passed\n- `pnpm build` — clean\n- CI `checks-node-agentic-agents-core-subagents` — passed\n- Manual webchat smoke test with `hook-logger` enabled/disabled — streaming works in both cases\n\n## Risk checklist\n\n- User-visible behavior change? `Yes` — webchat streams text incrementally when `before_agent_finalize` hooks are registered, instead of showing all text at once at the end\n- Config, environment, or migration behavior change? `No`\n- Security, auth, secrets, network, or tool execution behavior change? `No`\n- Highest-risk area: A hook that returns `suppressTerminalDelivery` on revision may briefly show streamed text that gets replaced in the final reply\n- How is that risk mitigated? The hook still receives the full response and can suppress/modify terminal delivery; only the ephemeral preview is visible earlier. Channel partial replies remain fully gated.\n\n## Current review state\n\n- Next action: Awaiting review",
+        "branch": "fix/streaming-defer-text-deltas",
+        "head_sha": "cad22e56ff7b5dc6bfd5d4bec9faee2e61cb7ec5",
+        "author": "scotthuang",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🌊 off-meta tidepool",
+          "merge-risk: 🚨 message-delivery"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts",
+            "additions": 12,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.ts",
+            "additions": 20,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92382",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92382.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "SUCCESS": 132,
+            "SKIPPED": 31,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92382:4691598163:2026-06-12T13:14:58Z:re_review",
+      "comment_id": "4691598163",
+      "comment_version_key": "4691598163:2026-06-12T13:14:58Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92382#issuecomment-4691598163",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92382,
+      "author": "scotthuang",
+      "author_id": 1670837,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T13:14:58Z",
+      "comment_updated_at": "2026-06-12T13:14:58Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -63,225 +149,127 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(update): preserve local package overrides",
-        "body": "## Summary\n\n- Preserves local package overrides during package update flows, including standalone added `dist` files, and reports the recovery bundle when overrides are not reapplied.\n- Keeps content-inventory validation strict for new tarballs while allowing already-published `2026.6.5` / `2026.6.5-beta.6` packages that predate `dist/postinstall-content-inventory.json`.\n- Repairs the `main` merge conflict on `src/cli/update-cli.ts` and `src/infra/update-runner.ts`, then refreshes the branch to current `upstream/main`.\n- Adds the missing zh-CN glossary entries needed for the docs check after the latest main merge.\n\n## Verification\n\n- `pnpm install --frozen-lockfile`\n- `pnpm docs:list`\n- `PATH=/Users/jason/.nvm/versions/node/v24.14.0/bin:$PATH pnpm check:docs`\n- `git diff --check upstream/main...HEAD && git diff --check`\n- `PATH=/Users/jason/.nvm/versions/node/v24.14.0/bin:$PATH ./node_modules/.bin/oxfmt --check --threads=1 src/infra/package-local-overrides.ts src/infra/package-update-steps.test.ts src/infra/update-runner.test.ts docs/.i18n/glossary.zh-CN.json`\n- `PATH=/Users/jason/.nvm/versions/node/v24.14.0/bin:$PATH TMPDIR=/tmp node scripts/run-vitest.mjs test/scripts/check-openclaw-package-tarball.test.ts test/scripts/postinstall-bundled-plugins.test.ts test/scripts/openclaw-cross-os-release-checks.test.ts src/infra/package-dist-inventory.test.ts src/infra/package-update-steps.test.ts src/infra/update-runner.test.ts src/cli/update-cli/progress.test.ts src/cli/update-cli.option-collisions.test.ts`\n- `PATH=/Users/jason/.nvm/versions/node/v24.14.0/bin:$PATH TMPDIR=/tmp node --import tsx --input-type=module` current-head local package override smoke\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base upstream/main --codex-bin /Users/jason/.codex/openclaw-pr-autopilot/bin/codex-persist-sessions --model codex=gpt-5.5 --thinking codex=high` clean after the accepted standalone-added-file finding was fixed.\n\n## Real behavior proof\n\nBehavior addressed: Package self-update preserves locally modified installed package files by default, captures standalone added `dist` files in the recovery bundle, reapplies trusted overrides only when requested, reports conflict file paths in human output when upstream changed the same file, and still exposes the preserved recovery bundle when package verification fails after a partial install mutation. This refresh also hardens local override path validation, rollback error reporting, package content-inventory enforcement, package-root tarball inventory validation, and release candidate symlink checks so they apply to files npm would actually package.\n\nReal environment tested: Local macOS source checkout on current PR head `2ae1833519adf9b211a84454461fad2d7a9647da`, Node `v24.14.0`. The current-head smoke used real filesystem temp package roots and the real `runGlobalPackageUpdateSteps` / `writePackageDistInventory` implementation through `node --import tsx`; it was not a Vitest/mock assertion path. Focused Vitest coverage also exercised the tarball checker, cross-OS release inventory generation, update progress rendering, package inventory verification, package update runner, and update CLI behavior.\n\nExact steps or command run after this patch: Ran a current-head terminal smoke with `node --import tsx --input-type=module`, creating temporary installed package roots, writing real package dist inventories, mutating installed `dist/index.js` as a local override, applying update contents, invoking `runGlobalPackageUpdateSteps`, and rendering `printResult` for a conflict result. Then ran focused tests, formatter check, oxlint, `git diff --check`, and nested autoreview on the same head.\n\nEvidence after fix:\n\n```text\nOPENCLAW_UPDATE_CURRENT_HEAD_SMOKE default-preserve {\"failedStep\":null,\"failedTail\":null,\"status\":\"preserved\",\"conflicts\":[],\"installed\":\"export const updated = true;\\n\",\"recovery\":\"export const local = true;\\n\",\"steps\":[\"global update\"]}\nOPENCLAW_UPDATE_CURRENT_HEAD_SMOKE missing-content-inventory-reject {\"failedStep\":\"global install verify\",\"failedTail\":\"Invalid package dist content inventory at dist/postinstall-content-inventory.json: expected packaged file hashes to match current dist files.\",\"status\":\"preserved\",\"conflicts\":[],\"installed\":\"export const updated_without_inventory = true;\\n\",\"recovery\":\"export const local = true;\\n\",\"steps\":[\"global update\"]}\n\nUpdate Result: OK\n  Local changes: conflict (0 added, 1 modified, 0 deleted)\n  Local recovery: /tmp/openclaw-local-overrides-proof\n  Local conflict: dist/index.js (target-changed)\n\nTotal time: 1ms\nOPENCLAW_UPDATE_CURRENT_HEAD_SMOKE conflict-output-printed\n```\n\nSupplemental current-head proof:\n\n```text\nTest Files  3 passed (3)\nTests  157 passed (157)\n\nTest Files  3 passed (3)\nTests  109 passed (109)\n\nTest Files  3 passed (3)\nTests  153 passed (153)\n```\n\n```text\nAll matched files use the correct format.\nnode scripts/run-oxlint.mjs ... passed.\ngit diff --check upstream/main...HEAD && git diff --check passed.\n```\n\n```text\nautoreview clean: no accepted/actionable findings reported\noverall: patch is correct (0.78)\n```\n\nObserved result after fix: Default update preserved the local override, left the updated installed file in place, and stored the original local file in the recovery bundle. Package verification rejected the partially mutated package when content inventory no longer matched the installed `dist` contents, while still preserving the local override recovery bundle. Human non-JSON update output now includes the conflict path and reason: `dist/index.js (target-changed)`. The focused tests additionally proved top-level tarball files cannot satisfy package-scoped content inventory requirements, npm-omitted symlinks no longer block release candidate inventory generation, and the optional-dependency fallback fixture writes a valid post-update package inventory before verification.\n\nWhat was not tested: A full `pnpm check` / full repository Vitest run was not rerun after the latest autoreview fixes because the touched surface was covered by the focused update, tarball, postinstall, cross-OS release, inventory, runner, CLI option/progress tests, formatter, oxlint, diff check, current-head real filesystem smoke, and nested autoreview. A fresh remote Crabbox run was not repeated after this local fix; the current-head real smoke above is the after-fix behavior proof for this branch.\n",
-        "branch": "codex/update-local-overrides",
-        "head_sha": "2ae1833519adf9b211a84454461fad2d7a9647da",
-        "author": "fuller-stack-dev",
-        "labels": [
-          "docs",
-          "cli",
-          "scripts",
-          "size: XL",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "docs/.i18n/glossary.zh-CN.json",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/cli/update.md",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/check-openclaw-package-tarball.mjs",
-            "additions": 266,
-            "deletions": 32,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/openclaw-cross-os-release-checks.ts",
-            "additions": 69,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/postinstall-bundled-plugins.mjs",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/update-cli.test.ts",
-            "additions": 34,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/update-cli.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/update-cli/progress.test.ts",
-            "additions": 43,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/update-cli/progress.ts",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/update-cli/shared.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/update-cli/update-command.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/package-dist-inventory.test.ts",
-            "additions": 103,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/package-dist-inventory.ts",
-            "additions": 149,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/package-local-overrides.ts",
-            "additions": 505,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/package-update-steps.test.ts",
-            "additions": 1435,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/package-update-steps.ts",
-            "additions": 162,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/update-runner.test.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/update-runner.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/check-openclaw-package-tarball.test.ts",
-            "additions": 477,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/openclaw-cross-os-release-checks.test.ts",
-            "additions": 115,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/postinstall-bundled-plugins.test.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89985",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89985.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 30,
-          "counts": {
-            "SUCCESS": 7,
-            "QUEUED": 10,
-            "SKIPPED": 13
-          },
-          "blockers": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92382:4690407366:2026-06-12T10:46:30Z:re_review",
+      "comment_id": "4690407366",
+      "comment_version_key": "4690407366:2026-06-12T10:46:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92382#issuecomment-4690407366",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92382,
+      "author": "scotthuang",
+      "author_id": 1670837,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T10:46:30Z",
+      "comment_updated_at": "2026-06-12T10:46:30Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92382:4689924850:2026-06-12T09:58:56Z:re_review",
+      "comment_id": "4689924850",
+      "comment_version_key": "4689924850:2026-06-12T09:58:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92382#issuecomment-4689924850",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92382,
+      "author": "scotthuang",
+      "author_id": 1670837,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T09:58:56Z",
+      "comment_updated_at": "2026-06-12T09:58:56Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92382:4689221299:2026-06-12T08:42:21Z:re_review",
+      "comment_id": "4689221299",
+      "comment_version_key": "4689221299:2026-06-12T08:42:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92382#issuecomment-4689221299",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92382,
+      "author": "scotthuang",
+      "author_id": 1670837,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T08:42:21Z",
+      "comment_updated_at": "2026-06-12T08:42:21Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2720,
+    "total_ms": 6307,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 665
+        "ms": 409
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1691
+        "ms": 2503
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 350
+        "ms": 3370
       },
       {
         "name": "append_ledger",
