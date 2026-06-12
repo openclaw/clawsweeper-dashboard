@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T08:20:03.972Z",
+  "generated_at": "2026-06-12T08:21:05.620Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T05:20:03.581Z",
+  "since": "2026-06-12T05:21:03.031Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92389
+    92388
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,119 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92388:4689034665:2026-06-12T08:20:59Z:clawsweeper_auto_repair",
+      "comment_id": "4689034665",
+      "comment_version_key": "4689034665:2026-06-12T08:20:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92388#issuecomment-4689034665",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92388,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T08:15:03Z",
+      "comment_updated_at": "2026-06-12T08:20:59Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=a3f4cd9fde5130c2fe7815540b83d89620e55ee9)",
+      "review_summary": "Adds a call to refresh the session model from the registry before `checkCompaction` reads its `contextWindow`.\n\nPR surface: Source +6. Total +6 across 1 file.\n\nReproducibility: yes. Source inspection gives a high-confidence path: Telegram persists a different provider/model while the running session can retain its old model object, and compaction reads that live snapshot.",
+      "review_followup": "- [P1] The blocking defect is concrete and mechanically repairable by using the selected identity at the shared live-switch boundary plus focused regression coverage.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "a3f4cd9fde5130c2fe7815540b83d89620e55ee9",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "#92379: fix(session): refresh stale model before reading contextWindow in checkCompaction",
+        "body": "## Summary\n\nFix auto-compaction using stale `contextWindow` after model switch via Telegram `/model` picker. The in-memory `agent.state.model` now gets refreshed from the registry before `checkCompaction` reads the compaction threshold.\n\n## Root Cause\n\nWhen the Telegram `/model` inline picker switches the active model, it writes to the session store but never calls `setModel()`. As a result, `this.model` (`agent.state.model`) keeps pointing to the previous model object. `checkCompaction` reads `this.model?.contextWindow` to determine the auto-compaction threshold, so it uses the stale model's window (e.g. 200k) instead of the new model's window (e.g. 1M), triggering premature compaction.\n\nThe per-attempt model resolution path (`resolveModelAsync` in `compact.ts`) correctly resolves the new model from the registry for the actual LLM request. Only the session-internal `checkCompaction` snapshot was stale.\n\n## Real behavior proof\n\n### behavior\nCall `refreshCurrentModelFromRegistry()` before reading `this.model?.contextWindow` in `checkCompaction`. This method already exists in `AgentSession` (line 2247) and is used by `registerProvider`/`unregisterProvider` handlers — it re-resolves the model from `sessionModelRegistry` by provider+id and only reassigns when the object reference actually changed, making it a cheap no-op in the common case.\n\n### environment\n- OS: Windows 10 Enterprise LTSC\n- Runtime: Node.js v24.14.0\n- Setup: OpenClaw main branch (d4819948f37d), fix branch on top\n\n### steps\n1. `checkCompaction` is invoked after each assistant message\n2. Before fix: `this.model?.contextWindow` reads from potentially stale snapshot\n3. After fix: `this.refreshCurrentModelFromRegistry()` syncs the snapshot before the read\n4. If model was switched (e.g. 200k → 1M), registry returns the new model object\n\n### observedResult\n\n**Code change:**\n```diff\n+    // Refresh stale in-memory model snapshot before reading contextWindow.\n+    // The session's this.model may lag behind the registry when a model switch\n+    // (e.g. Telegram /model picker) updates the session store without calling\n+    // setModel(), causing auto-compaction to use the wrong threshold.\n+    this.refreshCurrentModelFromRegistry();\n+\n     const contextWindow = this.model?.contextWindow ?? 0;\n```\n\n**Existing safety in refreshCurrentModelFromRegistry (line 2247-2258):**\n```typescript\nprivate refreshCurrentModelFromRegistry(): void {\n    const currentModel = this.model;\n    if (!currentModel) return;\n\n    const refreshedModel = this.sessionModelRegistry.find(\n      currentModel.provider, currentModel.id);\n    if (!refreshedModel || refreshedModel === currentModel) return;\n    // ↑ No-op when model hasn't changed — cheap in the common case\n\n    this.agent.state.model = refreshedModel;\n}\n```\n\n**Fix semantics:**\n- Model unchanged → `refreshedModel === currentModel` → early return (no-op)\n- Model switched (Telegram /model) → registry has new object → `agent.state.model` updated → `contextWindow` now correct\n- No hot-path regression: registry `find()` is O(n) on provider catalog (typically < 100 entries)\n\n## Regression Test Plan\n\n- [ ] `pnpm test -- --run src/agents/sessions/model-registry.test.ts` passes\n- [ ] Model switch via Telegram /model picker → compaction uses new model's contextWindow\n- [ ] No-op when model unchanged (identical object reference check)\n- [ ] Change is minimal (6 lines, 1 method call)\n\n---\n\n*AI-assisted: built with Claude Code*",
+        "branch": "fix/issue-92379-stale-model-context-window",
+        "head_sha": "a3f4cd9fde5130c2fe7815540b83d89620e55ee9",
+        "author": "sheyanmin",
+        "labels": [
+          "agents",
+          "size: XS",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/sessions/agent-session.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92388",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92388.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 30,
+            "SUCCESS": 131,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 910,
+    "total_ms": 2817,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 380
+        "ms": 290
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2286
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 519
+        "ms": 214
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
