@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T04:42:18.324Z",
+  "generated_at": "2026-06-12T04:42:20.212Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T01:42:15.259Z",
+  "since": "2026-06-12T01:42:17.388Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92328
+    92229
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4687529356
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -31,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92328:4687042340:2026-06-12T04:42:11Z:clawsweeper_needs_human",
-      "comment_id": "4687042340",
-      "comment_version_key": "4687042340:2026-06-12T04:42:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92328#issuecomment-4687042340",
+      "idempotency_key": "comment-router:openclaw/openclaw:92229:4687529356:2026-06-12T04:40:44Z:re_review",
+      "comment_id": "4687529356",
+      "comment_version_key": "4687529356:2026-06-12T04:40:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92229#issuecomment-4687529356",
       "repo": "openclaw/openclaw",
-      "issue_number": 92328,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 92229,
+      "author": "joshavant",
+      "author_id": 830519,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-12T03:26:14Z",
-      "comment_updated_at": "2026-06-12T04:42:11Z",
+      "comment_created_at": "2026-06-12T04:40:44Z",
+      "comment_updated_at": "2026-06-12T04:40:44Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,43 +63,80 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "Fix dashboard history projection and approval followups",
-        "body": "Fixes dashboard history projection so toolCall-only assistant messages do not hide recent user context, and suppresses prompt persistence for exec approval follow-up resumes.\n\nThis is a clean replacement for #92312 with only the intended minimal diff.\n\nTests:\n- pnpm exec vitest run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/server-methods.test.ts src/gateway/session-history-state.test.ts\n- pnpm exec vitest run --config test/vitest/vitest.agents.config.ts src/agents/bash-tools.exec-approval-followup.test.ts\n- ./node_modules/.bin/oxfmt --check --threads=1 src/gateway/chat-display-projection.ts src/gateway/server-methods/server-methods.test.ts src/agents/bash-tools.exec-approval-followup.ts src/agents/bash-tools.exec-approval-followup.test.ts\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Two operator-dashboard regressions. (1) The most recent user prompt vanished from chat history when the last assistant turn was a toolCall-only message (a read/exec tool call with no visible text): the recency window kept the toolCall-only assistant turn and dropped the user prompt. (2) After an async exec approval completed, the synthetic resume prompt (\"An async command the user already approved has completed...\") was persisted as a `role: \"user\"` message, polluting the visible transcript and model context with a fake user turn.\n\n**Real environment tested:** A real OpenClaw gateway runtime started from this branch's worktree on macOS (Darwin, Apple Silicon), exercising the genuine gateway server, session store, exec approval manager, and chat-history projection. The model backend is a deterministic local stub HTTP server (no real LLM) so the exec tool call and the approval follow-up fire reproducibly; every other layer is the real runtime path.\n\n**Exact steps or command run after this patch:** For fix 1, against a normally-started gateway over the operator socket, `node openclaw.mjs gateway call agent` seeds a turn, then `node openclaw.mjs gateway call chat.history` with `limit: 1` reads it back. At that point the transcript holds exactly two turns (seq 1 user \"RUN_PROOF_EXEC now\", seq 2 assistant toolCall-only exec), and `limit: 1` is the worst case for the bug. For fix 2, a real in-process gateway with an operator client runs `client.request(\"agent\", ...)`, then `client.request(\"exec.approval.resolve\", { id, decision: \"allow-once\" })`, then the on-disk session transcript JSONL is read and its roles counted.\n\n**Evidence after fix:** Fix 1 live `chat.history` runtime output with `limit: 1` returns the user prompt, not the toolCall-only assistant turn:\n```\n{\n  \"sessionKey\": \"agent:main:main\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": [ { \"type\": \"text\", \"text\": \"RUN_PROOF_EXEC now\" } ],\n      \"timestamp\": 1781237219317,\n      \"__openclaw\": { \"id\": \"3cd9ea06\", \"seq\": 1 }\n    }\n  ]\n}\n```\nFix 2 live gateway runtime log of the approval cycle, plus the resulting on-disk transcript role breakdown and per-record dump (the exec result reaches the agent as a toolResult and the turn continues, with no second user turn synthesized):\n```\n[proof] pending approval: 72b31326-6ffb-4210-bdc1-311f8abb9a1a command: printf 'PROOF_ASYNC_EXEC_OUTPUT\\n'\n[ws] res ok exec.approval.waitDecision 282ms\n[proof] resolved approval: {\"ok\":true}\n[proof] transcript role counts: {\"user\":1,\"assistant\":2,\"toolResult\":1}\n[proof] follow-up completion persisted as role=user message? false\n[proof] chat.history user-role follow-up messages: 0\n\n4 role=user        text:RUN_PROOF_EXEC now\n5 role=assistant    toolCall:exec\n6 role=toolResult   text:PROOF_ASYNC_EXEC_OUTPUT\n7 role=assistant    text:Standing by.\n```\n\n**Observed result after fix:** For fix 1, with a `limit: 1` recency window the live gateway returns the seq 1 user prompt; before this patch the same query returned only the seq 2 toolCall-only assistant turn and the user prompt disappeared. For fix 2, the async approval completion is delivered to the agent through the toolResult channel (record 6) and the assistant continues the turn (record 7), while the transcript retains a single `role: \"user\"` turn (the original prompt) and the \"already approved has completed\" resume is not written as a user message. The completion payload still reaches model context; only the spurious user-turn persistence is suppressed.\n\n**What was not tested:** A real third-party LLM was not used (the backend was a deterministic local stub so the tool call and follow-up are reproducible); the projection and persistence code under test is provider-independent. Multi-session and cross-channel delivery variants were covered only by the existing unit suites, not this live run.\n",
-        "branch": "hide/fix/dashboard-history-followup-clean-20260612",
-        "head_sha": "1c411dc6cc49d1d756b76f32eeb79279fa9255bd",
-        "author": "hidetsugu55",
+        "title": "Fix doctor preview channel SecretRef resolution",
+        "body": "## Summary\n\n- Fix doctor preview to resolve configured channel SecretRefs before channel doctor checks so file/env-backed channel credentials do not abort read-only doctor runs.\n- Preserve unresolved SecretRefs in doctor preview and handle typed unresolved SecretRef reads from channel doctor adapters as non-fatal degraded preview warnings.\n- Keep default doctor exec safety intact by skipping gateway `secrets.resolve` when gateway credentials would require exec-backed SecretRefs without `--allow-exec`.\n\nFixes #91939.\n\n## Verification\n\n- `git diff --check`\n- `node scripts/run-vitest.mjs src/cli/command-secret-gateway.test.ts src/config/types.secrets.resolution.test.ts src/commands/doctor/shared/channel-doctor.test.ts src/commands/doctor/shared/preview-warnings.test.ts`\n- `.agents/skills/autoreview/scripts/autoreview --mode local` (clean; no accepted/actionable findings)\n- Crabbox AWS proof: `run_55cc85e094c9`, lease `cbx_30402b8de8bc`, slug `pearl-prawn`\n  - File-backed Nextcloud Talk `botSecret` SecretRef: `doctor --non-interactive` exited 0, no unresolved SecretRef abort, no missing bot secret warning.\n  - Exec-backed channel SecretRef plus exec-backed gateway auth without `--allow-exec`: `doctor --non-interactive` exited 0, exec provider did not run, gateway/local exec skip diagnostics present, unresolved channel preview handled non-fatally.\n",
+        "branch": "fix/doctor-channel-secretref-preview",
+        "head_sha": "074a639f47b8c406532411889cc5abf3b91a06ec",
+        "author": "joshavant",
         "labels": [
-          "gateway",
-          "agents",
-          "size: S",
-          "proof: supplied",
+          "cli",
+          "commands",
+          "maintainer",
+          "size: L",
           "rating: 🌊 off-meta tidepool"
         ],
         "files": [
           {
-            "path": "src/agents/bash-tools.exec-approval-followup.test.ts",
-            "additions": 15,
+            "path": "src/cli/command-config-resolution.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/command-secret-gateway.test.ts",
+            "additions": 189,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/bash-tools.exec-approval-followup.ts",
+            "path": "src/cli/command-secret-gateway.ts",
+            "additions": 122,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-config-flow.ts",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/chat-display-projection.ts",
-            "additions": 44,
-            "deletions": 4,
+            "path": "src/commands/doctor/shared/channel-doctor.test.ts",
+            "additions": 24,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/server-methods.test.ts",
-            "additions": 33,
+            "path": "src/commands/doctor/shared/channel-doctor.ts",
+            "additions": 15,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/preview-warnings.test.ts",
+            "additions": 95,
             "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/preview-warnings.ts",
+            "additions": 34,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.secrets.resolution.test.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.secrets.ts",
+            "additions": 21,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
@@ -106,8 +145,8 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92328",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92328.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92229",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92229.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
@@ -116,7 +155,7 @@
           "total": 164,
           "counts": {
             "SUCCESS": 133,
-            "SKIPPED": 30,
+            "SKIPPED": 31,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -125,22 +164,22 @@
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
+      "maintainer_authorized": true,
       "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3419,
+    "total_ms": 3094,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 475
+        "ms": 711
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2577
+        "ms": 2099
       },
       {
         "name": "classify_commands",
@@ -148,11 +187,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 344
+        "ms": 269
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
