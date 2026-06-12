@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T13:42:54.665Z",
+  "generated_at": "2026-06-12T13:42:55.540Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T10:42:49.051Z",
+  "since": "2026-06-12T10:42:52.075Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    92269
+    92305
   ],
   "comment_ids": [
-    4691802808
+    4691803251
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92269:4691802808:2026-06-12T13:41:12Z:re_review",
-      "comment_id": "4691802808",
-      "comment_version_key": "4691802808:2026-06-12T13:41:12Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92269#issuecomment-4691802808",
+      "idempotency_key": "comment-router:openclaw/openclaw:92305:4691803251:2026-06-12T13:41:16Z:re_review",
+      "comment_id": "4691803251",
+      "comment_version_key": "4691803251:2026-06-12T13:41:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92305#issuecomment-4691803251",
       "repo": "openclaw/openclaw",
-      "issue_number": 92269,
+      "issue_number": 92305,
       "author": "fsdwen",
       "author_id": 1214772,
       "author_association": "NONE",
-      "comment_created_at": "2026-06-12T13:41:12Z",
-      "comment_updated_at": "2026-06-12T13:41:12Z",
+      "comment_created_at": "2026-06-12T13:41:16Z",
+      "comment_updated_at": "2026-06-12T13:41:16Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -66,29 +66,49 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(auto-reply): scope foreground reply fence per inbound message",
-        "body": "## Summary\n\nWhen two users concurrently @mention the agent in a group chat with `messages.groupChat.visibleReplies: \"automatic\"`, both agent runs complete successfully — but only the reply to the latest message is delivered. The reply to the first user is silently cancelled by the foreground reply fence because the fence key was scoped per session target rather than per inbound message.\n\n## Fix\n\nIn `src/auto-reply/dispatch.ts`, `resolveForegroundReplyFenceKey` now includes the inbound `MessageSid` in the fence composite key. When available, different inbound messages get independent fences and cannot cancel each other. Falls back to per-target scoping when no inbound message id is present.\n\n**Before:**\n```ts\nreturn JSON.stringify([\n  \"foreground\", channel, accountId, sessionKey, chatType, target\n]);\n```\n\n**After:**\n```ts\nconst inboundMsgId = finalized.MessageSid ?? finalized.MessageSidFirst;\nreturn JSON.stringify([\n  \"foreground\", channel, accountId, sessionKey, chatType, target,\n  ...(inboundMsgId ? [inboundMsgId] : [])\n]);\n```\n\nThis means User A's reply (fence key includes MessageSid-A) and User B's reply (fence key includes MessageSid-B) are in separate fences — neither can suppress the other.\n\n## Files changed\n\n- `src/auto-reply/dispatch.ts`: +7 lines\n\n## Related\n\nFixes #92186\n\n### Real behavior proof\n- **Behavior addressed**: Concurrent group @mentions in `automatic` reply mode silently drop all replies except the newest one, because the foreground reply fence scopes per-session-target instead of per-inbound-message\n- **Real environment tested**: Linux Node 24\n- **Exact steps or command run after this patch**:\n  ```bash\n  cd /path/to/openclaw\n  node ./node_modules/vitest/vitest.mjs run src/auto-reply/dispatch.test.ts\n  ```\n- **Evidence after fix**:\n  ```console\n  $ node ./node_modules/vitest/vitest.mjs run src/auto-reply/dispatch.test.ts\n  ✓ dispatch > ... (existing dispatch tests pass)\n  ```\n  The fence key now includes the inbound MessageSid. Two concurrent dispatches from different inbound messages produce different fence keys, so neither delivery is suppressed by the other. When MessageSid is unavailable (e.g., cron/system events), the fence falls back to per-target scoping.\n- **Observed result after fix**: Replies to distinct inbound messages in the same group chat are no longer suppressed by each other. Each inbound message gets its own independent fence.\n- **What was not tested**: Real multi-user WhatsApp group with concurrent @mentions (requires live WhatsApp deployment); automated regression for group-chat fence behavior\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/reply-fence-per-message",
-        "head_sha": "7f704e087efcf45b275105a99883650f90ba33d6",
+        "title": "fix(cron): skip startup catch-up slots that predate schedule updates",
+        "body": "## Summary\n\nWhen `cron.update` changes a cron job's schedule (e.g., monthly day 10 → day 11), a subsequent gateway restart can incorrectly classify the newly-computed \"previous\" slot as missed — triggering the job at the wrong time.\n\n**Root cause:** The restart catch-up logic in `isRunnableJob()` computes `previousRunAtMs` from the current cron expression and compares it against `lastRunAtMs`. After a schedule change, the new expression's previous slot may fall between the last real run and the update time — a slot that was never intended to execute. Without a timestamp anchor, the catch-up logic cannot distinguish genuine missed slots from schedule-change artifacts.\n\n## Fix\n\nRecord `scheduleUpdatedAtMs` on `CronJobState` when `cron.update` changes the schedule or enabled state. During restart catch-up, skip any candidate slot whose `previousRunAtMs` falls before `scheduleUpdatedAtMs` — the slot predates the update and is not truly missed.\n\n**Two guard points** (both must be protected):\n1. `isRunnableJob()` — the primary missed-slot classifier (startup catch-up)\n2. `deferPendingBackoffMissedCronSlots()` — the error-backoff deferral path\n\n## Files changed\n\n- `src/cron/types.ts`: +5 (new `scheduleUpdatedAtMs` field on `CronJobState`)\n- `src/cron/service/ops.ts`: +1 (record timestamp on schedule/enabled change)\n- `src/cron/service/timer.ts`: +25/-1 (guard in both catch-up paths)\n- `src/cron/service/timer.issue-91944-cron-update-catchup.test.ts`: +310 (5 regression test cases)\n- `scripts/proof-91944-cron-catchup.mjs`: +50 (standalone proof script)\n\n## Related\n\nFixes #91944\n\nPrevious attempts: #92250, #92277 (same fix direction, closed due to ClawSweeper transport failures — not code rejection)\n\n### Root cause analysis\n\n```\ncron.update (ops.ts)\n  → updates schedule expr (day 10 → day 11)\n  → recomputes nextRunAtMs correctly (June 11)\n  → [BUG: no timestamp recorded for the change]\n\ngateway restart\n  → planStartupCatchup()\n    → collectRunnableJobs(allowCronMissedRunByLastRun: true)\n      → isRunnableJob()\n        → nowMs < nextRunAtMs (correct, in future) → skip line 1049\n        → allowCronMissedRunByLastRun=true → enter missed-slot check\n        → computeJobPreviousRunAtMs(new expr) = May 11 15:18\n        → previousRunAtMs (May 11) > lastRunAtMs (May 10) → MISFIRED!\n```\n\nThe fix adds a timestamp anchor that gates both missed-slot inference paths:\n- `previousRunAtMs < scheduleUpdatedAtMs` → skip (slot predates update)\n- `previousRunAtMs >= scheduleUpdatedAtMs` → normal catch-up (genuine missed slot)\n\n### Comparison with sibling implementations\n\nThe fix follows the same pattern as `updatedAtMs` on the job record — a single timestamp set at the mutation point and consulted at decision points. Both catch-up paths (`isRunnableJob` and `deferPendingBackoffMissedCronSlots`) are protected symmetrically, matching the existing pattern where both paths already share the `computeJobPreviousRunAtMs` / `lastRunAtMs` comparison.\n\n### Real behavior proof\n\n- **Behavior addressed**: Cron job with updated schedule incorrectly fires on gateway restart when a pre-update computed slot is misclassified as \"missed\"\n- **Real environment tested**: Linux Node 24 (local reproduction of the exact reporter timeline from issue #91944)\n- **Exact steps or command run after this patch**:\n  ```bash\n  $ node --import tsx scripts/proof-91944-cron-catchup.mjs\n  ```\n- **Evidence after fix**:\n  ```console\n  $ node --import tsx scripts/proof-91944-cron-catchup.mjs\n  ============================================================\n  Proof: #91944 cron update catch-up guard\n  ============================================================\n\n  Reporter timeline (from issue #91944):\n    1. Old schedule:  18 15 10 * * (monthly day 10)\n    2. Last run:      2026-05-10T15:18:00Z\n    3. API update:    day 10 → day 11  (2026-06-09T22:30:00Z)\n    4. Restart:       2026-06-10T12:33:00Z (double restart)\n\n  Without fix:\n    computeJobPreviousRunAtMs(new expr) = 2026-05-11T15:18:00Z\n    previousRunAtMs (May 11) > lastRunAtMs (May 10)\n    → BUG: slot classified as missed → job fires incorrectly\n\n  With fix (scheduleUpdatedAtMs guard):\n    scheduleUpdatedAtMs = 2026-06-09T22:30:00Z (update time)\n    previousRunAtMs (May 11) < scheduleUpdatedAtMs (June 9)\n    → SKIP: slot predates the schedule update\n\n  Fix surface:\n    src/cron/types.ts        +5  (scheduleUpdatedAtMs field)\n    src/cron/service/ops.ts  +1  (record on schedule/enabled change)\n    src/cron/service/timer.ts +24 (guard in both catch-up paths)\n\n  5 behavior scenarios verified:\n    1. Slot predating schedule update → correctly skipped\n    2. Genuine missed slot (no update) → still fires\n    3. Backoff slot predating update → correctly skipped\n    4. Legacy jobs (no scheduleUpdatedAtMs) → unchanged\n    5. Slot postdating update → still fires\n\n  80 existing cron scenarios all green, zero regressions.\n  ============================================================\n  ```\n- **Observed result after fix**: Jobs with `scheduleUpdatedAtMs` set skip pre-update slots during restart catch-up. Jobs without the field (legacy) retain existing behavior. Genuinely missed slots after the update still fire correctly. The exact reporter timeline (monthly day-10 → day-11, double restart at day 10) is reproduced and verified.\n- **What was not tested**: Full gateway launchd double-restart upgrade cycle with live Telegram delivery (requires a production OpenClaw gateway); the in-process restart simulation covers the same code paths exercised by the cron service timer.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/91944-cron-schedule-update-catchup",
+        "head_sha": "35d3839e65bd671bc6404e58324a971e62901e3a",
         "author": "fsdwen",
         "labels": [
-          "size: S",
+          "scripts",
+          "size: M",
           "proof: supplied",
           "P1",
           "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 message-delivery",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/auto-reply/dispatch.freshness.test.ts",
-            "additions": 54,
-            "deletions": 25,
+            "path": "scripts/proof-91944-cron-catchup.mjs",
+            "additions": 44,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/service/ops.ts",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/dispatch.ts",
-            "additions": 7,
+            "path": "src/cron/service/timer.issue-91944-cron-update-catchup.test.ts",
+            "additions": 265,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 24,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/types.ts",
+            "additions": 5,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -98,27 +118,22 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92269",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92269.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92305",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92305.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 158,
+          "total": 164,
           "counts": {
-            "SUCCESS": 133,
-            "SKIPPED": 23,
-            "FAILURE": 1,
+            "SUCCESS": 132,
+            "SKIPPED": 31,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "checks-node-core-tooling-docker:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "checks-node-core-tooling-docker:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -129,15 +144,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 5924,
+    "total_ms": 3833,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 3489
+        "ms": 661
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2112
+        "ms": 2790
       },
       {
         "name": "classify_commands",
@@ -145,7 +160,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 310
+        "ms": 369
       },
       {
         "name": "append_ledger",
