@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T09:16:11.713Z",
+  "generated_at": "2026-06-12T09:16:15.996Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T06:16:11.430Z",
+  "since": "2026-06-12T06:16:12.570Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92402
+    92397
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +29,102 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92397:4689334226:2026-06-12T09:15:55Z:clawsweeper_needs_human",
+      "comment_id": "4689334226",
+      "comment_version_key": "4689334226:2026-06-12T09:15:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92397#issuecomment-4689334226",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92397,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T08:58:24Z",
+      "comment_updated_at": "2026-06-12T09:15:55Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=2f9085526bef0c10d3bc4a8a5020bafef752cb72)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "2f9085526bef0c10d3bc4a8a5020bafef752cb72",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(auto-reply): clear pendingFinalDelivery before abort check to prevent stuck sessions (#89115)",
+        "body": "## Summary\n\nFix a race condition in `dispatch-from-config.ts` where `throwIfDispatchOperationAborted()` is called **before** `clearPendingFinalDeliveryAfterSuccess()`. When `recoverStuckDiagnosticSession` aborts the embedded run between `sendFinalPayload` succeeding and the clear call running, the message is delivered to the user but `pendingFinalDelivery` is never cleared.\n\n**Result:** the session stays in `pendingFinalDelivery: true` indefinitely. New inbound messages are blocked by the get-reply redelivery short-circuit — the agent \"goes silent\" after a successful reply.\n\n**Fix:** reorder the two calls so `clearPendingFinalDeliveryAfterSuccess()` runs first. The message was already delivered successfully (guarded by `attemptedFinalDelivery && !finalDeliveryFailed`), so clearing the flag is correct regardless of whether the abort fires afterwards.\n\n## Verification\n\n- 201 existing dispatch-from-config tests pass (all green)\n- Live proof script exercises the exact production `updateSessionStoreEntry` module with a real session store, demonstrating the clear-before-abort ordering\n- The change is a pure reorder — zero new logic, zero new branches\n\n## Real behavior proof\n\n**Behavior addressed:** Race condition in dispatch-from-config where `throwIfDispatchOperationAborted()` before `clearPendingFinalDeliveryAfterSuccess()` leaves `pendingFinalDelivery` stuck after a successful delivery is followed by an abort.\n\n**Real environment tested:** Node v22.19.0, Linux x64, commit 2f9085526b. Production session-store modules imported via tsx.\n\n**Exact steps or command run after this patch:**\n\n$ ./node_modules/.bin/tsx scripts/proof-89115-pending-delivery-race.mts\n\n**Evidence after fix (terminal capture):**\n\n=== PR #92397 live-proof: pending final delivery race fix (#89115) ===\nTemp dir: /tmp/openclaw-proof-89115-SskHwB\nStep 1: Bootstrapped session store with initial entry.\n\n--- Step 2: Write pendingFinalDelivery flags (pre-clear state) ---\nFlags written.\n\n--- Step 3: Verify flags BEFORE clear ---\n$ pendingFinalDelivery: true\n$ pendingFinalDeliveryText: simulated pending reply text\n$ pendingFinalDeliveryAttemptCount: 1\nPASS: Flags are set.\n\n--- Step 4: Clear flags (simulating fixed code path) ---\nClear completed.\n\n--- Step 5: Verify flags AFTER clear ---\n$ pendingFinalDelivery: undefined\n$ pendingFinalDeliveryText: undefined\nPASS: Flags cleared.\n\n--- Step 6: Race simulation — clear survives simulated abort ---\nFlags reset for race simulation.\nA: clearPendingFinalDeliveryAfterSuccess() done (fixed order: clear first).\nB: throwIfDispatchOperationAborted() threw (simulated abort).\n\n$ pendingFinalDelivery after abort: undefined\n$ pendingFinalDeliveryText after abort: undefined\nPASS: Flags remain cleared even after abort throws — fixed code path works.\n\n=== Summary ===\nIssue #89115: Race in dispatch-from-config\nOld: throwIfDispatchOperationAborted() BEFORE clear → stuck flag → silent agent\nNew: clearPendingFinalDeliveryAfterSuccess() FIRST → clean state → resilient to abort\nPR: https://github.com/openclaw/openclaw/pull/92397\n\n=== All scenarios passed ===\nCleaned up: /tmp/openclaw-proof-89115-SskHwB\n\n**Observed result after fix:** The proof script imports the real production `updateSessionStoreEntry` from `src/config/sessions/store.js` and exercises the exact same clearing logic as `clearPendingFinalDeliveryAfterSuccess`. Step 6 simulates the race: it resets flags, runs the clear FIRST (fixed order), then throws a simulated abort, and verifies the flags remain cleared. With the old order (abort before clear), the clear would never execute and the flags would stay stuck.\n\n**What was not tested:** The timing-dependent race itself cannot be reliably triggered in a deterministic script. The proof validates the semantic correctness of the reorder by exercising the production session-store module with the exact clearing logic, and demonstrating that the fixed order (clear → abort) preserves clean state even when abort throws. Live production verification would require sustained load with `stuckSessionAbortMs` configured.\n\n---\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/89115-pending-final-delivery-race-upstream",
+        "head_sha": "2f9085526bef0c10d3bc4a8a5020bafef752cb72",
+        "author": "chengzhichao-xydt",
+        "labels": [
+          "size: XS",
+          "proof: supplied",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/dispatch-from-config.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92397",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92397.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "SUCCESS": 133,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 517,
+    "total_ms": 3912,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 272
+        "ms": 420
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2992
       },
       {
         "name": "classify_commands",
@@ -48,7 +132,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 233
+        "ms": 473
       },
       {
         "name": "append_ledger",
