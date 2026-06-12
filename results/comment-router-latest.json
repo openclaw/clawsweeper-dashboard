@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T03:53:36.587Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-12T03:53:42.445Z",
+  "repo": "steipete/summarize",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T00:53:34.191Z",
+  "since": "2026-06-12T00:53:42.004Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92151
+    271
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,246 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92151:4679734522:2026-06-12T03:53:30Z:clawsweeper_needs_human",
-      "comment_id": "4679734522",
-      "comment_version_key": "4679734522:2026-06-12T03:53:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92151#issuecomment-4679734522",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92151,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-11T10:46:43Z",
-      "comment_updated_at": "2026-06-12T03:53:30Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=6a36b3a5bf9868b2d6b64c9797faf2a760d05efb)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +13, Tests +63. Total +76 across 4 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "6a36b3a5bf9868b2d6b64c9797faf2a760d05efb",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): rethrow dispatch errors so spooled updates are not silently deleted",
-        "body": "## Summary\n\nFix Telegram spooled update message loss by propagating dispatch errors through the handler chain and debouncer, so `bot.handleUpdate()` rejects when the message processor fails and the spooled update consumer releases the claim for retry instead of deleting it.\n\n## Root cause\n\nWhen `dispatchTelegramMessage` throws inside `processMessage`, the error was caught and swallowed at two levels:\n\n1. **`processMessage`** (`extensions/telegram/src/bot-message.ts`): The catch block sent a user-visible fallback but did not rethrow, so the caller saw success.\n2. **`createInboundDebouncer`** (`src/auto-reply/inbound-debounce.ts`): Even when the handler does throw, `runFlush` catches all `onFlush` errors and routes them to `onError` without rethrowing, so `bot.handleUpdate()` always resolves — causing `#handleClaimedSpooledUpdate` to delete the claimed update instead of releasing it for retry.\n\n## Fix\n\n### 1. Rethrow in `processMessage`\n\nAfter sending the user-visible fallback message, rethrow the dispatch error so callers can distinguish success from failure.\n\n### 2. Add `rethrowOnFlushError` to the inbound debouncer\n\nAdd an opt-in `rethrowOnFlushError` option to `createInboundDebouncer`. When enabled, `runFlush` rethrows the error after calling `onError`, propagating the failure through `enqueue()` → middleware → `bot.handleUpdate()` → spooled update consumer.\n\nEnabled this option in the Telegram handler debouncer.\n\n**Other debouncer users are unaffected** — the option defaults to `false`.\n\n## Tests and validation\n\n### Unit tests for `processMessage` error rethrow\n\nAll 3 dispatch-failure tests now assert rejection instead of resolution:\n\n- `\"sends user-visible fallback and rethrows when dispatch throws\"` — `processMessage` rejects after fallback\n- `\"omits message_thread_id for General-topic fallback replies\"` — thread param omitted for General topic\n- `\"rethrows after sending fallback even when fallback delivery fails\"` — rethrow wins even if fallback send also fails\n\n### Test output\n\n```text\nnode scripts/run-vitest.mjs extensions/telegram/src/bot-message.test.ts\n# 10 passed — 3 dispatch-failure tests now assert rejection\n\nnode scripts/run-vitest.mjs src/auto-reply/inbound.test.ts\n# 61 passed — debouncer unchanged for existing users\n```\n\n## Real behavior proof\n\n- Behavior addressed: Spooled Telegram updates are silently deleted on dispatch failure instead of being released for retry.\n- Real environment tested: Linux (RHEL), Node.js 22.x, local checkout on branch `fix/issue-92129-telegram-spooled-message-loss`.\n- Exact steps or command run after this patch:\n```bash\nnode scripts/run-vitest.mjs extensions/telegram/src/bot-message.test.ts\nnode scripts/run-vitest.mjs src/auto-reply/inbound.test.ts\n```\n- Evidence after fix: Both test suites pass. The `processMessage` tests prove that dispatch errors now propagate as rejections, and the debouncer tests prove existing behavior is unchanged.\n- What was not tested: Live Telegram dispatch with a real bot. The error propagation is deterministic and fully covered by unit tests across both the handler and debouncer boundaries.\n\n## Risk\n\nLow. The `throw err` in `processMessage` is an additive change on an existing error path — the fallback is still sent. The `rethrowOnFlushError` option defaults to `false` and is only enabled for Telegram. Other debouncer users (Discord, WhatsApp, Feishu, MS Teams, Mattermost) are unaffected.\n\n## Verification\n\n- `pnpm test:changed` — all changed files pass\n- Unit tests confirm:\n  - Dispatch failure → processMessage rejects instead of resolving\n  - Fallback message is still sent before rethrow\n  - Fallback delivery failure does not prevent rethrow\n  - Debouncer with `rethrowOnFlushError: false` (default) still swallows errors (backward compat)\n",
-        "branch": "fix/issue-92129-telegram-spooled-message-loss",
-        "head_sha": "6a36b3a5bf9868b2d6b64c9797faf2a760d05efb",
-        "author": "xialonglee",
-        "labels": [
-          "channel: telegram",
-          "size: S",
-          "extensions: openai",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 message-delivery"
-        ],
-        "files": [
-          {
-            "path": "extensions/openai/embedding-provider.test.ts",
-            "additions": 68,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/embedding-provider.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message.test.ts",
-            "additions": 5,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92151.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 158,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 125,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:92151:4680243517:2026-06-11T11:54:52Z:re_review",
-      "comment_id": "4680243517",
-      "comment_version_key": "4680243517:2026-06-11T11:54:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92151#issuecomment-4680243517",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92151,
-      "author": "xialonglee",
-      "author_id": 22994703,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-11T11:54:52Z",
-      "comment_updated_at": "2026-06-11T11:54:52Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): rethrow dispatch errors so spooled updates are not silently deleted",
-        "body": "## Summary\n\nFix Telegram spooled update message loss by propagating dispatch errors through the handler chain and debouncer, so `bot.handleUpdate()` rejects when the message processor fails and the spooled update consumer releases the claim for retry instead of deleting it.\n\n## Root cause\n\nWhen `dispatchTelegramMessage` throws inside `processMessage`, the error was caught and swallowed at two levels:\n\n1. **`processMessage`** (`extensions/telegram/src/bot-message.ts`): The catch block sent a user-visible fallback but did not rethrow, so the caller saw success.\n2. **`createInboundDebouncer`** (`src/auto-reply/inbound-debounce.ts`): Even when the handler does throw, `runFlush` catches all `onFlush` errors and routes them to `onError` without rethrowing, so `bot.handleUpdate()` always resolves — causing `#handleClaimedSpooledUpdate` to delete the claimed update instead of releasing it for retry.\n\n## Fix\n\n### 1. Rethrow in `processMessage`\n\nAfter sending the user-visible fallback message, rethrow the dispatch error so callers can distinguish success from failure.\n\n### 2. Add `rethrowOnFlushError` to the inbound debouncer\n\nAdd an opt-in `rethrowOnFlushError` option to `createInboundDebouncer`. When enabled, `runFlush` rethrows the error after calling `onError`, propagating the failure through `enqueue()` → middleware → `bot.handleUpdate()` → spooled update consumer.\n\nEnabled this option in the Telegram handler debouncer.\n\n**Other debouncer users are unaffected** — the option defaults to `false`.\n\n## Tests and validation\n\n### Unit tests for `processMessage` error rethrow\n\nAll 3 dispatch-failure tests now assert rejection instead of resolution:\n\n- `\"sends user-visible fallback and rethrows when dispatch throws\"` — `processMessage` rejects after fallback\n- `\"omits message_thread_id for General-topic fallback replies\"` — thread param omitted for General topic\n- `\"rethrows after sending fallback even when fallback delivery fails\"` — rethrow wins even if fallback send also fails\n\n### Test output\n\n```text\nnode scripts/run-vitest.mjs extensions/telegram/src/bot-message.test.ts\n# 10 passed — 3 dispatch-failure tests now assert rejection\n\nnode scripts/run-vitest.mjs src/auto-reply/inbound.test.ts\n# 61 passed — debouncer unchanged for existing users\n```\n\n## Real behavior proof\n\n- Behavior addressed: Spooled Telegram updates are silently deleted on dispatch failure instead of being released for retry.\n- Real environment tested: Linux (RHEL), Node.js 22.x, local checkout on branch `fix/issue-92129-telegram-spooled-message-loss`.\n- Exact steps or command run after this patch:\n```bash\nnode scripts/run-vitest.mjs extensions/telegram/src/bot-message.test.ts\nnode scripts/run-vitest.mjs src/auto-reply/inbound.test.ts\n```\n- Evidence after fix: Both test suites pass. The `processMessage` tests prove that dispatch errors now propagate as rejections, and the debouncer tests prove existing behavior is unchanged.\n- What was not tested: Live Telegram dispatch with a real bot. The error propagation is deterministic and fully covered by unit tests across both the handler and debouncer boundaries.\n\n## Risk\n\nLow. The `throw err` in `processMessage` is an additive change on an existing error path — the fallback is still sent. The `rethrowOnFlushError` option defaults to `false` and is only enabled for Telegram. Other debouncer users (Discord, WhatsApp, Feishu, MS Teams, Mattermost) are unaffected.\n\n## Verification\n\n- `pnpm test:changed` — all changed files pass\n- Unit tests confirm:\n  - Dispatch failure → processMessage rejects instead of resolving\n  - Fallback message is still sent before rethrow\n  - Fallback delivery failure does not prevent rethrow\n  - Debouncer with `rethrowOnFlushError: false` (default) still swallows errors (backward compat)\n",
-        "branch": "fix/issue-92129-telegram-spooled-message-loss",
-        "head_sha": "6a36b3a5bf9868b2d6b64c9797faf2a760d05efb",
-        "author": "xialonglee",
-        "labels": [
-          "channel: telegram",
-          "size: S",
-          "extensions: openai",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 message-delivery"
-        ],
-        "files": [
-          {
-            "path": "extensions/openai/embedding-provider.test.ts",
-            "additions": 68,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/embedding-provider.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message.test.ts",
-            "additions": 5,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92151.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 158,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 125,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2602,
+    "total_ms": 788,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 280
+        "ms": 431
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2099
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 193
+        "ms": 347
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
