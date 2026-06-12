@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T08:23:51.494Z",
+  "generated_at": "2026-06-12T08:23:49.914Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T05:23:49.406Z",
+  "since": "2026-06-12T05:23:46.623Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92382
+    92387
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,108 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92382:4688667314:2026-06-12T08:23:45Z:clawsweeper_auto_repair",
-      "comment_id": "4688667314",
-      "comment_version_key": "4688667314:2026-06-12T08:23:45Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92382#issuecomment-4688667314",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92387:4688955121:2026-06-12T08:23:42Z:clawsweeper_needs_human",
+      "comment_id": "4688955121",
+      "comment_version_key": "4688955121:2026-06-12T08:23:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92387#issuecomment-4688955121",
       "repo": "openclaw/openclaw",
-      "issue_number": 92382,
+      "issue_number": 92387,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-12T07:34:16Z",
-      "comment_updated_at": "2026-06-12T08:23:45Z",
+      "comment_created_at": "2026-06-12T08:03:26Z",
+      "comment_updated_at": "2026-06-12T08:23:42Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No automated repair is needed; maintainers should review and land the clean fix so the linked production issue can close with it.; Cleared: The patch removes a local payload mutation wrapper and updates tests without changing dependencies, permissions, secrets, installation, build, release, or supply-chain paths. (sha=6ef19602bfb48a819e096b23b66ece94a8072ed4)",
+      "review_summary": "The PR removes Anthropic Vertex’s post-transport cache-control policy pass, forwards payload hooks unchanged, and adds regression coverage for already-budgeted four-marker payloads.\n\nPR surface: Source -35, Tests -11. Total -46 across 2 files.\n\nReproducibility: yes. at source level. Shared transport finishes payload budgeting before the current Vertex hook reapplies cache policy, providing a high-confidence path to the reported fifth marker; this review did not execute a live Vertex request.",
+      "review_followup": "- No automated repair is needed; maintainers should review and land the clean fix so the linked production issue can close with it.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "6ef19602bfb48a819e096b23b66ece94a8072ed4",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(anthropic-vertex): stop re-marking cache_control on transport-budgeted payloads",
+        "body": "### Summary\n\n- **Problem**: Issue #91982 reports that `anthropic-vertex` requests are intermittently rejected with `FailoverError: LLM request rejected: A maximum of 4 blocks with cache_control may be provided. Found 5.` In the reporter's production deployment the rejection fires whenever active-memory recall injects context into the turn, forcing a model fallback on every hit; the only workaround is disabling active-memory.\n- **Root cause**: the request passes through two cache-control writers. The shared anthropic-messages transport (`src/llm/providers/anthropic.ts`) builds the payload with full marker budgeting: it splits the system prompt at the cache boundary into a stable prefix (with `cache_control`) and an intentionally uncached dynamic suffix, marks the tool array, and gives the message pass only the remaining budget (`4 - system - tools`), so legitimate payloads can carry exactly four markers. The vertex plugin then ran `applyAnthropicPayloadPolicyToParams` again on that finished payload inside its `onPayload` hook (`createAnthropicVertexOnPayload` in `extensions/anthropic-vertex/stream-runtime.ts`). That helper is written for raw payloads (the agents-side `anthropic-transport-stream.ts` builds its system blocks with no markers and boundary text intact): any system text block with no boundary marker and no `cache_control` gets a marker added unconditionally. Post-transport, the dynamic suffix is exactly such a block, so the shim adds a fifth marker and Anthropic rejects the request. Turns that don't fill the budget stay at four and pass, which is why the failure tracks active-memory hits rather than every request.\n- **Provenance**: the shim was added in `1a13c34f5b` (\"close cache boundary transport gaps\"), when the then-external transport did not understand the OpenClaw cache boundary and the plugin-level policy pass was the only splitter. `eef24d452f` (\"preserve provider prompt cache boundaries\", shipped in v2026.6.2-beta.1) moved boundary splitting and marker budgeting natively into the shared transport, which turned the shim from a gap-closer into a double-application. The reporter's first failures on 2026.6.5 line up with that release.\n- **Fix**: delete the shim and forward the caller's `onPayload` hook unchanged. The shared transport is the single owner of cache-control budgeting for this API family, which is already how the plain `anthropic` provider behaves (its wrapper applies the payload policy only for `service_tier`, without `enableCacheControl`).\n- **What changed**: `extensions/anthropic-vertex/stream-runtime.ts` removes `createAnthropicVertexOnPayload` and its policy imports and passes `options?.onPayload` straight through (net −35 lines); the stale tests that encoded the pre-split payload shape are replaced with regression tests for the budgeted-payload invariant.\n- **What did NOT change (scope boundary)**: config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`). Plugin surface unchanged (no exported signature, manifest, `api.ts`, or SDK changes; `createAnthropicVertexStreamFn` keeps its signature). The shared transport, the agents-side anthropic transport (which builds raw payloads and correctly applies the policy once), and the `anthropic` plugin's service-tier wrapper are untouched.\n\n### Reproduction\n\n1. Configure `anthropic-vertex` as the primary provider with prompt caching at its defaults, and enable active-memory for the agent.\n2. Drive a turn whose payload legitimately uses the full marker budget — an agentic turn where the transport marks the stable system prefix, the tool array, the last user text block, and the trailing `tool_result` fallback (the reporter hits this whenever a memory recall injects context).\n3. The system prompt contains the cache boundary, so the transport emits a cached stable prefix plus an uncached dynamic suffix.\n4. **Before this PR**: the vertex `onPayload` shim re-runs the payload policy on the finished payload, adds `cache_control` to the dynamic suffix, and Vertex `StreamRawPredict` returns 400 `A maximum of 4 blocks with cache_control may be provided. Found 5.`, triggering a model fallback.\n5. **After this PR**: the payload reaches the wire exactly as the transport budgeted it (at most four markers, dynamic suffix uncached) and the request is accepted.\n\n### Real behavior proof\n\n**Behavior addressed (#91982)**: an `anthropic-vertex` payload that already carries the transport's full cache-control budget is no longer re-marked on its way out, so requests that previously breached Anthropic's four-marker cap with `Found 5` now keep exactly the budgeted markers and the dynamic system suffix stays uncached.\n\n**Real environment tested (Linux x64, Node v22.22.3 — Vitest against the production vertex stream runtime)**: `createAnthropicVertexStreamFn` from the shipped plugin module, exercised through its injectable transport seam; the regression payload mirrors the shared transport's real output shape (split system prefix/suffix, marked tools, marked user text, marked trailing tool_result).\n\n**Exact steps or command run after this patch**: `pnpm test extensions/anthropic-vertex/stream-runtime.test.ts`; `pnpm tsgo:extensions && pnpm tsgo:extensions:test`; `node scripts/run-oxlint.mjs` and format check on the changed files; `.agents/skills/autoreview/scripts/autoreview --engine claude --thinking claude=max`.\n\n**Evidence after fix (Vitest output for the touched test file)**:\n\n```text\n Test Files  1 passed (1)\n      Tests  25 passed (25)\n```\n\n**Observed result after fix**: the transport options forward the caller's payload hook unchanged; a payload carrying the transport's four budgeted markers keeps exactly four after the hook path runs, with the dynamic suffix block still uncached; when the caller supplies no hook, the transport sets none.\n\n**What was not tested**: a live Vertex AI `StreamRawPredict` round-trip against GCP (no Vertex credentials in this environment). The reporter's GCP Cloud Logging captures in #91982 document the live failure mode this removes.\n\n**Repro confirmation**: both new tests fail on the unpatched tree — the marker count comes back as `expected 5 to be 4`, the same five-marker breach the reporter logged, and a transport-injected hook appears where none was supplied — and pass with the fix, so the tests cover the production change.\n\n### Risk / Mitigation\n\n- **Risk**: vertex payloads could lose prompt caching if nothing re-applied markers. **Mitigation**: the shared anthropic-messages transport applies cache-control budgeting for every request on this API family before `onPayload` runs, and the vertex stream function routes all requests through it — the same single-owner arrangement the plain `anthropic` provider already ships with.\n- **Risk**: a downstream `onPayload` consumer relied on the shim re-shaping its returned payload. **Mitigation**: every runtime supplier was audited (anthropic payload logging, command delivery logging, diagnostics byte accounting, and the `before_provider_request` plugin hook); all of them inspect or patch the finished payload and none construct boundary-marked system arrays, and the plain anthropic path likewise sends hook results without re-policing.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Integrations\n\n### Linked Issue/PR\n\nFixes #91982\n",
+        "branch": "fix/91982-vertex-cache-control-double-apply",
+        "head_sha": "6ef19602bfb48a819e096b23b66ece94a8072ed4",
+        "author": "openperf",
+        "labels": [
+          "size: S",
+          "extensions: anthropic-vertex",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/anthropic-vertex/stream-runtime.test.ts",
+            "additions": 56,
+            "deletions": 67,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/anthropic-vertex/stream-runtime.ts",
+            "additions": 5,
+            "deletions": 40,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92387",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92387.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 157,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 124
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92387:4689052924:2026-06-12T08:17:48Z:re_review",
+      "comment_id": "4689052924",
+      "comment_version_key": "4689052924:2026-06-12T08:17:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92387#issuecomment-4689052924",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92387,
+      "author": "openperf",
+      "author_id": 80630709,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-06-12T08:17:48Z",
+      "comment_updated_at": "2026-06-12T08:17:48Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -61,33 +152,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix: don't defer text delta streaming for before_agent_finalize hooks",
-        "body": "## Summary\n\nAny plugin registering a `before_agent_finalize` hook silently disables all text streaming in webchat. The user sees \"in progress\" → \"done\" with no visible output, then a wall of text appears all at once after a long pause.\n\nThe root cause: `emitAssistantStreamData` defers ALL assistant output (gateway SSE + channel partial replies) when `onBeforeTerminalDelivery` is set. Gateway SSE events are ephemeral text deltas for webchat streaming — they should emit immediately. Only channel partial replies (Telegram/Discord live preview) need to be gated for hook inspection.\n\n**Fix (split approach):** `emitAssistantStreamData` always emits gateway SSE events (`emitAgentEvent` / `onAgentEvent`) immediately. Only channel partial replies (`onPartialReply`) are deferred until the `before_agent_finalize` terminal gate resolves. `flushDeferredAssistantEvents` only replays partial replies (gateway events were already emitted). Removed dead `emitAssistantStreamDataSafely` (no callers after the split).\n\n## Linked context\n\nNo linked issue — discovered during local debugging of a user config where `hook-logger` (which registers `before_agent_finalize`) was installed.\n\n## Root cause analysis\n\nThe call chain:\n\n1. **`attempt.ts:3165`** — `hookRunner?.hasHooks(\"before_agent_finalize\")` → `onBeforeTerminalDelivery` is created\n2. **`embedded-agent-subscribe.ts:194`** — `deferBlockReplyDelivery = true`\n3. **`embedded-agent-subscribe.ts:286-288`** (original code) — `emitAssistantStreamData` checks `deferBlockReplyDelivery` and pushes everything into `deferredAssistantEvents`\n4. All events are flushed in a single burst at `deliverTerminal()` line 259\n5. Result: 469 text delta events emitted in ~200ms instead of streaming over 35s\n\nPR #87703 (which introduced the guard) was correct to gate block replies and partial replies for hooks, but it over-applied deferral to gateway SSE events that don't need it.\n\n## Fix\n\n`src/agents/embedded-agent-subscribe.ts` — Split `emitAssistantStreamData`:\n\n- Gateway SSE (`emitAgentEvent` / `onAgentEvent`): always emitted immediately\n- Channel partial replies (`onPartialReply`): deferred when `deferBlockReplyDelivery` is set, flushed when the terminal gate resolves\n- `flushDeferredAssistantEvents`: only replays partial replies, doesn't re-emit gateway events\n- `emitAssistantStreamDataSafely`: removed (no callers)\n\n## Real behavior proof\n\n- Behavior or issue addressed: Webchat text streaming disabled when any plugin registers `before_agent_finalize` hook\n- Real environment tested: macOS, Node 24, source-built gateway on port 18789 with `hook-logger` plugin enabled\n- Exact steps or command run after this patch:\n  1. `pnpm build`\n  2. Restart gateway with `hook-logger` enabled\n  3. Send a message in the control UI webchat\n- Evidence after fix: Text streams incrementally in webchat with `hook-logger` enabled — same behavior as without the plugin. 6/6 before-terminal-delivery tests pass.\n- Observed result after fix: Streaming works; no more frozen \"in progress\" with delayed text burst\n- Before evidence: Debug logs showed 469 consecutive deferred text events flushed in a single burst at termination\n- What was not tested: Other plugins registering `before_agent_finalize` (e.g. Codex native hook relay); code path is identical\n- Proof limitations or environment constraints: None\n\n## Tests and validation\n\n- `pnpm test src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts` — 6 passed\n- `pnpm test src/agents/embedded-agent-subscribe.handlers.messages.test.ts` — 38 passed\n- `pnpm build` — clean\n- CI `checks-node-agentic-agents-core-subagents` — passed\n- Manual webchat smoke test with `hook-logger` enabled/disabled — streaming works in both cases\n\n## Risk checklist\n\n- User-visible behavior change? `Yes` — webchat streams text incrementally when `before_agent_finalize` hooks are registered, instead of showing all text at once at the end\n- Config, environment, or migration behavior change? `No`\n- Security, auth, secrets, network, or tool execution behavior change? `No`\n- Highest-risk area: A hook that returns `suppressTerminalDelivery` on revision may briefly show streamed text that gets replaced in the final reply\n- How is that risk mitigated? The hook still receives the full response and can suppress/modify terminal delivery; only the ephemeral preview is visible earlier. Channel partial replies remain fully gated.\n\n## Current review state\n\n- Next action: Awaiting review",
-        "branch": "fix/streaming-defer-text-deltas",
-        "head_sha": "cad22e56ff7b5dc6bfd5d4bec9faee2e61cb7ec5",
-        "author": "scotthuang",
+        "title": "fix(anthropic-vertex): stop re-marking cache_control on transport-budgeted payloads",
+        "body": "### Summary\n\n- **Problem**: Issue #91982 reports that `anthropic-vertex` requests are intermittently rejected with `FailoverError: LLM request rejected: A maximum of 4 blocks with cache_control may be provided. Found 5.` In the reporter's production deployment the rejection fires whenever active-memory recall injects context into the turn, forcing a model fallback on every hit; the only workaround is disabling active-memory.\n- **Root cause**: the request passes through two cache-control writers. The shared anthropic-messages transport (`src/llm/providers/anthropic.ts`) builds the payload with full marker budgeting: it splits the system prompt at the cache boundary into a stable prefix (with `cache_control`) and an intentionally uncached dynamic suffix, marks the tool array, and gives the message pass only the remaining budget (`4 - system - tools`), so legitimate payloads can carry exactly four markers. The vertex plugin then ran `applyAnthropicPayloadPolicyToParams` again on that finished payload inside its `onPayload` hook (`createAnthropicVertexOnPayload` in `extensions/anthropic-vertex/stream-runtime.ts`). That helper is written for raw payloads (the agents-side `anthropic-transport-stream.ts` builds its system blocks with no markers and boundary text intact): any system text block with no boundary marker and no `cache_control` gets a marker added unconditionally. Post-transport, the dynamic suffix is exactly such a block, so the shim adds a fifth marker and Anthropic rejects the request. Turns that don't fill the budget stay at four and pass, which is why the failure tracks active-memory hits rather than every request.\n- **Provenance**: the shim was added in `1a13c34f5b` (\"close cache boundary transport gaps\"), when the then-external transport did not understand the OpenClaw cache boundary and the plugin-level policy pass was the only splitter. `eef24d452f` (\"preserve provider prompt cache boundaries\", shipped in v2026.6.2-beta.1) moved boundary splitting and marker budgeting natively into the shared transport, which turned the shim from a gap-closer into a double-application. The reporter's first failures on 2026.6.5 line up with that release.\n- **Fix**: delete the shim and forward the caller's `onPayload` hook unchanged. The shared transport is the single owner of cache-control budgeting for this API family, which is already how the plain `anthropic` provider behaves (its wrapper applies the payload policy only for `service_tier`, without `enableCacheControl`).\n- **What changed**: `extensions/anthropic-vertex/stream-runtime.ts` removes `createAnthropicVertexOnPayload` and its policy imports and passes `options?.onPayload` straight through (net −35 lines); the stale tests that encoded the pre-split payload shape are replaced with regression tests for the budgeted-payload invariant.\n- **What did NOT change (scope boundary)**: config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`). Plugin surface unchanged (no exported signature, manifest, `api.ts`, or SDK changes; `createAnthropicVertexStreamFn` keeps its signature). The shared transport, the agents-side anthropic transport (which builds raw payloads and correctly applies the policy once), and the `anthropic` plugin's service-tier wrapper are untouched.\n\n### Reproduction\n\n1. Configure `anthropic-vertex` as the primary provider with prompt caching at its defaults, and enable active-memory for the agent.\n2. Drive a turn whose payload legitimately uses the full marker budget — an agentic turn where the transport marks the stable system prefix, the tool array, the last user text block, and the trailing `tool_result` fallback (the reporter hits this whenever a memory recall injects context).\n3. The system prompt contains the cache boundary, so the transport emits a cached stable prefix plus an uncached dynamic suffix.\n4. **Before this PR**: the vertex `onPayload` shim re-runs the payload policy on the finished payload, adds `cache_control` to the dynamic suffix, and Vertex `StreamRawPredict` returns 400 `A maximum of 4 blocks with cache_control may be provided. Found 5.`, triggering a model fallback.\n5. **After this PR**: the payload reaches the wire exactly as the transport budgeted it (at most four markers, dynamic suffix uncached) and the request is accepted.\n\n### Real behavior proof\n\n**Behavior addressed (#91982)**: an `anthropic-vertex` payload that already carries the transport's full cache-control budget is no longer re-marked on its way out, so requests that previously breached Anthropic's four-marker cap with `Found 5` now keep exactly the budgeted markers and the dynamic system suffix stays uncached.\n\n**Real environment tested (Linux x64, Node v22.22.3 — Vitest against the production vertex stream runtime)**: `createAnthropicVertexStreamFn` from the shipped plugin module, exercised through its injectable transport seam; the regression payload mirrors the shared transport's real output shape (split system prefix/suffix, marked tools, marked user text, marked trailing tool_result).\n\n**Exact steps or command run after this patch**: `pnpm test extensions/anthropic-vertex/stream-runtime.test.ts`; `pnpm tsgo:extensions && pnpm tsgo:extensions:test`; `node scripts/run-oxlint.mjs` and format check on the changed files; `.agents/skills/autoreview/scripts/autoreview --engine claude --thinking claude=max`.\n\n**Evidence after fix (Vitest output for the touched test file)**:\n\n```text\n Test Files  1 passed (1)\n      Tests  25 passed (25)\n```\n\n**Observed result after fix**: the transport options forward the caller's payload hook unchanged; a payload carrying the transport's four budgeted markers keeps exactly four after the hook path runs, with the dynamic suffix block still uncached; when the caller supplies no hook, the transport sets none.\n\n**What was not tested**: a live Vertex AI `StreamRawPredict` round-trip against GCP (no Vertex credentials in this environment). The reporter's GCP Cloud Logging captures in #91982 document the live failure mode this removes.\n\n**Repro confirmation**: both new tests fail on the unpatched tree — the marker count comes back as `expected 5 to be 4`, the same five-marker breach the reporter logged, and a transport-injected hook appears where none was supplied — and pass with the fix, so the tests cover the production change.\n\n### Risk / Mitigation\n\n- **Risk**: vertex payloads could lose prompt caching if nothing re-applied markers. **Mitigation**: the shared anthropic-messages transport applies cache-control budgeting for every request on this API family before `onPayload` runs, and the vertex stream function routes all requests through it — the same single-owner arrangement the plain `anthropic` provider already ships with.\n- **Risk**: a downstream `onPayload` consumer relied on the shim re-shaping its returned payload. **Mitigation**: every runtime supplier was audited (anthropic payload logging, command delivery logging, diagnostics byte accounting, and the `before_provider_request` plugin hook); all of them inspect or patch the finished payload and none construct boundary-marked system arrays, and the plain anthropic path likewise sends hook results without re-policing.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Integrations\n\n### Linked Issue/PR\n\nFixes #91982\n",
+        "branch": "fix/91982-vertex-cache-control-double-apply",
+        "head_sha": "6ef19602bfb48a819e096b23b66ece94a8072ed4",
+        "author": "openperf",
         "labels": [
-          "agents",
           "size: S",
-          "triage: mock-only-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "extensions: anthropic-vertex",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts",
-            "additions": 12,
-            "deletions": 5,
+            "path": "extensions/anthropic-vertex/stream-runtime.test.ts",
+            "additions": 56,
+            "deletions": 67,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-subscribe.ts",
-            "additions": 20,
-            "deletions": 17,
+            "path": "extensions/anthropic-vertex/stream-runtime.ts",
+            "additions": 5,
+            "deletions": 40,
             "changeType": "MODIFIED"
           }
         ],
@@ -96,47 +186,45 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92382",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92382.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92387",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92387.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 164,
+          "total": 157,
           "counts": {
-            "FAILURE": 1,
-            "CANCELLED": 1,
+            "CANCELLED": 2,
             "SKIPPED": 31,
-            "SUCCESS": 130,
-            "NEUTRAL": 1
+            "SUCCESS": 124
           },
           "blockers": [
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:CANCELLED"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:CANCELLED"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2282,
+    "total_ms": 3655,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 364
+        "ms": 419
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1710
+        "ms": 2855
       },
       {
         "name": "classify_commands",
@@ -144,11 +232,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 182
+        "ms": 352
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
