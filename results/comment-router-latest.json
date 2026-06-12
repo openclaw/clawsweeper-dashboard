@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T02:44:52.569Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-12T02:45:29.637Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T23:44:50.511Z",
+  "since": "2026-06-11T23:45:29.244Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92318
+    272
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,133 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92318:4686839559:2026-06-12T02:44:47Z:clawsweeper_needs_human",
-      "comment_id": "4686839559",
-      "comment_version_key": "4686839559:2026-06-12T02:44:47Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92318#issuecomment-4686839559",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92318,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-12T02:41:02Z",
-      "comment_updated_at": "2026-06-12T02:44:47Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=e27461aa7cef8368a0e701729b2218f981c2405a)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +4, Tests +44. Total +48 across 4 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "e27461aa7cef8368a0e701729b2218f981c2405a",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): require explicit message target proof",
-        "body": "## Summary\n\nFix isolated cron delivery accounting so a message-tool send without explicit target metadata cannot satisfy a cron announce target.\n\nCron announce/no-deliver plans now require concrete message-tool target evidence before marking the source delivery as verified. If an agent uses the message tool but OpenClaw cannot prove the send matched the cron target, cron keeps the normal direct announce fallback path instead of recording `delivered=true` from a synthesized default target.\n\n## Evidence / Root Cause\n\nObserved on a live Telegram cron digest job targeting `telegram/-5278454993`:\n\n| Run seq | Time (local) | Recorded delivery | Trace detail | Observed issue |\n| --- | --- | --- | --- | --- |\n| 56 | 2026-06-10 14:36:02 | `delivered`, `fallbackUsed=1` | `messageToolSentTo=null` | Direct Telegram fallback path delivered the digest. |\n| 57 | 2026-06-11 07:19:04 | `delivered`, `fallbackUsed=0` | `messageToolSentTo=[{\"channel\":\"telegram\",\"to\":\"-5278454993\"}]` | The group did not receive the digest body even though cron marked delivery successful. |\n| 58 | 2026-06-12 07:19:14 | `delivered`, `fallbackUsed=0` | `messageToolSentTo=[{\"channel\":\"telegram\",\"to\":\"-5278454993\"}]` | Same false-success shape. |\n| 59 | 2026-06-12 09:56:02 | `delivered`, `fallbackUsed=0` | `messageToolSentTo=[{\"channel\":\"telegram\",\"to\":\"-5278454993\"}]` | Manual rerun produced the same false-success shape. |\n| 60 | 2026-06-12 10:16:33 | `delivered`, `fallbackUsed=1` | `messageToolSentTo=null` | After forcing direct fallback, the digest body was sent through Telegram. |\n\nThe failing run trajectory showed the model used `sessions_send`, but the embedded run result had `didSendViaMessagingTool=true` with `messagingToolSentTargets=[]`. `resolveSourceDeliveryOutcome()` treated that as a verified send by synthesizing the cron plan's default target. That made `satisfiesSourceDelivery=true`, so `dispatchCronDelivery()` skipped direct Telegram fallback and cron persisted `delivered=true` even though no concrete channel ack existed for the digest body.\n\nThe old test named `skips cron fallback delivery when the message tool sends to the bound target` encoded the bad case with `sentTargets: []`.\n\n## Fix\n\n- Keep legacy implicit-target behavior available for existing message-tool-owned flows.\n- Add `requireExplicitMessageTarget: true` to cron `announce` and `none` source-delivery plans.\n- Make `resolveSourceDeliveryOutcome()` honor that flag before synthesizing an implicit/default target.\n- Replace the old empty-target cron fallback test with a regression test proving cron uses announce fallback when message-tool target metadata is absent.\n\n## Real behavior proof\n\nBehavior addressed: Cron no longer records an unverified message-tool send as delivery to the configured channel target.\n\nReal environment tested: Live `openclaw2` cron run history for the Telegram digest job showed false-success runs with `fallbackUsed=0` and synthesized `messageToolSentTo`, followed by a direct-fallback successful run with `fallbackUsed=1`.\n\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/infra/outbound/source-delivery-plan.test.ts src/cron/isolated-agent/run.message-tool-policy.test.ts`\n\nEvidence after fix: Focused tests now cover empty `messageToolSentTargets` with `requireExplicitMessageTarget: true`; the outcome remains unverified and cron fallback is used.\n\nObserved result after fix: `sourceDeliveryOutcome` for empty message-tool targets has `verifiedMessageToolDelivery=false` and `satisfiesSourceDelivery=false`, and the cron regression expects `fallbackUsed=true`.\n\nWhat was not tested: I did not rerun the full digest job from this PR branch to avoid posting another digest into the Telegram group; the live host was separately hot-patched for operator validation.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/infra/outbound/source-delivery-plan.test.ts src/cron/isolated-agent/run.message-tool-policy.test.ts`\n- `git diff --check`\n- `.agents/skills/autoreview/scripts/autoreview --mode local` -> `autoreview clean: no accepted/actionable findings reported`\n",
-        "branch": "codex/fix-cron-delivery-target-proof",
-        "head_sha": "e27461aa7cef8368a0e701729b2218f981c2405a",
-        "author": "hxy91819",
-        "labels": [
-          "maintainer",
-          "size: S",
-          "rating: 🌊 off-meta tidepool"
-        ],
-        "files": [
-          {
-            "path": "src/cron/isolated-agent/run.message-tool-policy.test.ts",
-            "additions": 26,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/source-delivery-plan.test.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/source-delivery-plan.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92318",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92318.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 165,
-          "counts": {
-            "SUCCESS": 132,
-            "SKIPPED": 31,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-core-tooling-docker:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-core-tooling-docker:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2384,
+    "total_ms": 682,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 415
+        "ms": 382
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1631
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 314
+        "ms": 289
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
