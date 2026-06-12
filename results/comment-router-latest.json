@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T23:21:38.696Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-12T23:21:45.929Z",
+  "repo": "openclaw/clawhub",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T20:21:35.967Z",
+  "since": "2026-06-12T20:21:44.311Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92509
+    2619
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
+  "scanned_comments": 2,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92509:4694123377:2026-06-12T23:21:30Z:clawsweeper_needs_human",
-      "comment_id": "4694123377",
-      "comment_version_key": "4694123377:2026-06-12T23:21:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92509#issuecomment-4694123377",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92509,
+      "idempotency_key": "clawsweeper-repair:openclaw/clawhub:2619:4696356767:2026-06-12T23:21:39Z:clawsweeper_needs_human",
+      "comment_id": "4696356767",
+      "comment_version_key": "4696356767:2026-06-12T23:21:39Z",
+      "comment_url": "https://github.com/openclaw/clawhub/pull/2619#issuecomment-4696356767",
+      "repo": "openclaw/clawhub",
+      "issue_number": 2619,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-12T18:28:14Z",
-      "comment_updated_at": "2026-06-12T23:21:30Z",
+      "comment_created_at": "2026-06-12T23:16:38Z",
+      "comment_updated_at": "2026-06-12T23:21:39Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,43 +52,46 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=3ad5774d4314a49bcf8333675293633e718eccd5)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +10, Tests +165. Total +175 across 2 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=3a8b75a7c13bf8a674c20c7b958e886e4532b69b)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "3ad5774d4314a49bcf8333675293633e718eccd5",
+      "expected_head_sha": "3a8b75a7c13bf8a674c20c7b958e886e4532b69b",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(memory-core): WAL checkpoint after writeMeta + stale index file cleanup",
-        "body": "## Summary\n\nOne focused fix: `writeMeta()` now runs `PRAGMA wal_checkpoint(TRUNCATE)` after writing the `memory_index_meta_v1` row, ensuring it survives process crashes.\n\n## Problem\n\nWhen the gateway process is killed between `writeMeta()` and `closeMemoryDatabase()`, the meta row exists only in the SQLite WAL file. On next startup, the manager reads no meta and declares the index \"missing\" — even though chunks are still present in the DB.\n\nThis puts the system into a permanent degraded state: `memory_search` returns `\"index metadata is missing\"`, normal syncs cannot self-heal (depending on provider availability), and the only recovery is `openclaw memory index --force`.\n\n## Real behavior proof\n\nMinimal reproduction using Node v24.16.0 native SQLite in WAL mode on Windows 11, with child processes killed via `taskkill /F` (SIGKILL equivalent):\n\n```\n=== WAL Meta Durability Reproduction ===\n\nPhase 1: Normal close (baseline)\n  WAL size after writes: 0 bytes\n  Meta in main file: PRESENT\n\nPhase 2: Hard kill WITHOUT fix\n  WAL size: 0 bytes\n  Meta in main file: MISSING (no meta table — data was WAL-only)\n\nPhase 3: Hard kill WITH wal_checkpoint fix\n  WAL size: 0 bytes\n  Meta in main file: PRESENT\n```\n\n**Method:** Each phase creates a fresh WAL-mode SQLite DB, creates schema, inserts a chunk, and writes `memory_index_meta_v1`. After each phase, the main `.sqlite` file is **copied** to an isolated directory (no `-wal` or `-shm` sidecar) and opened read-only — this ensures we read the checkpointed main file, not replayed WAL.\n\n**Phase 2 proves the bug:** after a hard kill without checkpoint, the main DB file has NO `meta` table — the entire schema was WAL-only. On next startup, the manager sees an empty DB, auto-creates it, and declares `\"index metadata is missing\"`.\n\n**Phase 3 proves the fix:** with `PRAGMA wal_checkpoint(TRUNCATE)` after `writeMeta`, the meta row is in the main file and survives the kill.\n\nThis corresponds to the production failure path: gateway process killed (OOM, Ctrl-C, power loss) between `writeMeta()` and `closeMemoryDatabase()` → meta lost → `memory_search` returns `\"index metadata is missing\"` permanently.\n\n## Fix\n\nAfter writing the meta row, immediately run `PRAGMA wal_checkpoint(TRUNCATE)`. This forces all WAL data to be flushed to the main database file, so the meta row survives even if the process is killed before `closeMemoryDatabase()`.\n\n## What this PR does NOT do\n\n- ❌ No stale file cleanup (belongs in `manager-atomic-reindex.ts` lifecycle — filed as follow-up)\n- ❌ No changes to the atomic reindex swap protocol\n- ❌ No new dependencies or schema migrations\n\n## Related issues\n\n- #90361 — Canonical bug: intermittent \"index metadata is missing\"\n- #90650 — CLI works but agent tool fails\n- #91497 — Meta not written during --force reindex\n- #92187 — OOM during rebuild leaves empty DB\n\nThe `needsMissingIdentityReindex` auto-recovery path (already on main) can eventually heal this when the provider is available. This checkpoint fix prevents the meta loss in the first place, avoiding unnecessary full reindex cycles after crashes.\n\n## Testing\n\n- **Spy test**: verifies `writeMeta` calls `wal_checkpoint(TRUNCATE)` independently of `closeMemoryDatabase` — this test fails on current main\n- **Integration test**: verifies meta durability across manager close/reopen cycles",
-        "branch": "fix/memory-meta-recovery",
-        "head_sha": "3ad5774d4314a49bcf8333675293633e718eccd5",
-        "author": "dazlarus",
+        "title": "build(deps): bump @openclaw/plugin-inspector from 0.3.12 to 0.3.15 in the plugin-inspector group",
+        "body": "Bumps the plugin-inspector group with 1 update: [@openclaw/plugin-inspector](https://github.com/openclaw/plugin-inspector).\n\nUpdates `@openclaw/plugin-inspector` from 0.3.12 to 0.3.15\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a href=\"https://github.com/openclaw/plugin-inspector/releases\">@​openclaw/plugin-inspector's releases</a>.</em></p>\n<blockquote>\n<h2>plugin-inspector v0.3.15</h2>\n<h3>Fixed</h3>\n<ul>\n<li>Detect deprecated <code>loadSessionStore(...)</code> usage when plugin code calls it through a runtime session API alias.</li>\n</ul>\n<h2>plugin-inspector v0.3.14</h2>\n<h3>Changed</h3>\n<ul>\n<li>Flag deprecated <code>loadSessionStore(...)</code> whole-store session helper usage as an author-facing deprecation warning while keeping speculative transcript-identity migration rules out of default inspection. Thanks <a href=\"https://github.com/jalehman\"><code>@​jalehman</code></a>.</li>\n</ul>\n<h2>plugin-inspector v0.3.13</h2>\n<h3>Changed</h3>\n<ul>\n<li>Add <code>authorRemediation.summary</code> and <code>authorRemediation.docsUrl</code> guidance to author-facing compatibility issues and Markdown reports.</li>\n<li>Add <code>--author-facing</code> for <code>check</code>, <code>ci</code>, and <code>batch</code> reports while keeping default output complete for internal coverage findings.</li>\n<li>Replace the recent <code>--include-inspector-gaps</code> option with a clear error pointing to <code>--author-facing</code>.</li>\n</ul>\n</blockquote>\n</details>\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a href=\"https://github.com/openclaw/plugin-inspector/blob/main/CHANGELOG.md\">@​openclaw/plugin-inspector's changelog</a>.</em></p>\n<blockquote>\n<h2>0.3.15 - 2026-06-12</h2>\n<h3>Fixed</h3>\n<ul>\n<li>Detect deprecated <code>loadSessionStore(...)</code> usage when plugin code calls it through a runtime session API alias.</li>\n</ul>\n<h2>0.3.14 - 2026-06-11</h2>\n<h3>Changed</h3>\n<ul>\n<li>Flag deprecated <code>loadSessionStore(...)</code> whole-store session helper usage as an author-facing deprecation warning while keeping speculative transcript-identity migration rules out of default inspection. Thanks <a href=\"https://github.com/jalehman\"><code>@​jalehman</code></a>.</li>\n</ul>\n<h2>0.3.13 - 2026-06-09</h2>\n<h3>Changed</h3>\n<ul>\n<li>Add <code>authorRemediation.summary</code> and <code>authorRemediation.docsUrl</code> guidance to author-facing compatibility issues and Markdown reports.</li>\n<li>Add <code>--author-facing</code> for <code>check</code>, <code>ci</code>, and <code>batch</code> reports while keeping default output complete for internal coverage findings.</li>\n<li>Replace the recent <code>--include-inspector-gaps</code> option with a clear error pointing to <code>--author-facing</code>.</li>\n</ul>\n</blockquote>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a href=\"https://github.com/openclaw/plugin-inspector/commit/cf7c2c1064ce5f6264d56bb318d63927d189d26e\"><code>cf7c2c1</code></a> fix: detect session store alias deprecations (<a href=\"https://redirect.github.com/openclaw/plugin-inspector/issues/37\">#37</a>)</li>\n<li><a href=\"https://github.com/openclaw/plugin-inspector/commit/02bc6739b361bd571b6355bfc57ae5410213261d\"><code>02bc673</code></a> chore: start 0.3.15</li>\n<li><a href=\"https://github.com/openclaw/plugin-inspector/commit/d7db36b0a1f53e6cfe9a80b02cfa317902d68925\"><code>d7db36b</code></a> chore(release): 0.3.14</li>\n<li><a href=\"https://github.com/openclaw/plugin-inspector/commit/52a71c55c3f3e06cc064e73d97711071a5825169\"><code>52a71c5</code></a> fix: harden session helper call detection</li>\n<li><a href=\"https://github.com/openclaw/plugin-inspector/commit/64e6485a74bc6563dcb5c957d065129721f4982a\"><code>64e6485</code></a> fix: flag deprecated loadSessionStore usage</li>\n<li><a href=\"https://github.com/openclaw/plugin-inspector/commit/ea1100dfffd3aeab6470715c03c06679c34b4dbe\"><code>ea1100d</code></a> feat: add author remediation filtering</li>\n<li><a href=\"https://github.com/openclaw/plugin-inspector/commit/a9daea6dd63ddc30299b0b43a399aae8f847621c\"><code>a9daea6</code></a> feat: add plugin corpus batch analysis (<a href=\"https://redirect.github.com/openclaw/plugin-inspector/issues/34\">#34</a>)</li>\n<li>See full diff in <a href=\"https://github.com/openclaw/plugin-inspector/compare/v0.3.12...v0.3.15\">compare view</a></li>\n</ul>\n</details>\n<br />\n\n\n[![Dependabot compatibility score](https://dependabot-badges.githubapp.com/badges/compatibility_score?dependency-name=@openclaw/plugin-inspector&package-manager=bun&previous-version=0.3.12&new-version=0.3.15)](https://docs.github.com/en/github/managing-security-vulnerabilities/about-dependabot-security-updates#about-compatibility-scores)\n\nDependabot will resolve any conflicts with this PR as long as you don't alter it yourself. You can also trigger a rebase manually by commenting `@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits that have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all of the ignore conditions of the specified dependency\n- `@dependabot ignore <dependency name> major version` will close this group update PR and stop Dependabot creating any more for the specific dependency's major version (unless you unignore this specific dependency's major version or upgrade to it yourself)\n- `@dependabot ignore <dependency name> minor version` will close this group update PR and stop Dependabot creating any more for the specific dependency's minor version (unless you unignore this specific dependency's minor version or upgrade to it yourself)\n- `@dependabot ignore <dependency name>` will close this group update PR and stop Dependabot creating any more for the specific dependency (unless you unignore this specific dependency or upgrade to it yourself)\n- `@dependabot unignore <dependency name>` will remove all of the ignore conditions of the specified dependency\n- `@dependabot unignore <dependency name> <ignore condition>` will remove the ignore condition of the specified dependency and ignore conditions\n\n\n</details>",
+        "branch": "dependabot/bun/plugin-inspector-4d59baa917",
+        "head_sha": "3a8b75a7c13bf8a674c20c7b958e886e4532b69b",
+        "author": "app/dependabot",
         "labels": [
-          "extensions: memory-core",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
+          "dependencies",
+          "javascript",
           "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability"
+          "needs-cli-release"
         ],
         "files": [
           {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
-            "additions": 10,
-            "deletions": 0,
+            "path": "bun.lock",
+            "additions": 3,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/memory-core/src/memory/manager.wal-checkpoint.test.ts",
-            "additions": 165,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "package.json",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/clawhub/package.json",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
@@ -96,32 +99,25 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92509",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92509.md",
+        "automerge_cluster_id": "automerge-openclaw-clawhub-2619",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawhub-2619.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 157,
+          "total": 18,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 121,
-            "FAILURE": 3
+            "FAILURE": 1,
+            "SUCCESS": 16,
+            "SKIPPED": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-tooling:FAILURE",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
+            "static:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-tooling:FAILURE",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
+            "static:FAILURE"
           ],
           "externalBlockers": []
         }
@@ -133,23 +129,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3037,
+    "total_ms": 1985,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 420
+        "ms": 443
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2295
+        "ms": 1161
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 294
+        "ms": 355
       },
       {
         "name": "append_ledger",
