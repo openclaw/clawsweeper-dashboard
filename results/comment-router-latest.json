@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T14:07:55.496Z",
+  "generated_at": "2026-06-12T14:08:11.157Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T11:07:52.290Z",
+  "since": "2026-06-12T11:08:08.113Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    92086
+    92454
   ],
-  "comment_ids": [
-    4692012798
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 4,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,17 +31,110 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92086:4692012798:2026-06-12T14:06:13Z:re_review",
-      "comment_id": "4692012798",
-      "comment_version_key": "4692012798:2026-06-12T14:06:13Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92086#issuecomment-4692012798",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92454:4691692307:2026-06-12T14:08:03Z:clawsweeper_auto_repair",
+      "comment_id": "4691692307",
+      "comment_version_key": "4691692307:2026-06-12T14:08:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92454#issuecomment-4691692307",
       "repo": "openclaw/openclaw",
-      "issue_number": 92086,
-      "author": "jason-allen-oneal",
-      "author_id": 8335428,
+      "issue_number": 92454,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-12T14:06:13Z",
-      "comment_updated_at": "2026-06-12T14:06:13Z",
+      "comment_created_at": "2026-06-12T13:27:28Z",
+      "comment_updated_at": "2026-06-12T14:08:03Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=7a5a4457efd8656b20f64d06e68306d9bf565916)",
+      "review_summary": "The PR adds maintenance-time reconciliation that copies a terminal CLI task’s outcome to a stale running subagent in the same run and owner scope, with regression coverage for terminal outcomes and mismatched tasks.\n\nPR surface: Source +62, Tests +150. Total +212 across 2 files.\n\nReproducibility: yes. at source level: current maintenance leaves the reported childless subagent path running after the related CLI task is terminal, and the focused harness exercises that state. The intermittent real process-loss trigger and full gateway path were not reproduced live.",
+      "review_followup": "- [P1] The blocking metadata defect has a narrow mechanical source-and-test repair; real behavior proof must still be supplied from a real setup before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "7a5a4457efd8656b20f64d06e68306d9bf565916",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tasks): reconcile stale subagent tasks when backing CLI child is terminal (fixes #92285)",
+        "body": "### Summary\n\n- **Problem**: When a backing CLI child task becomes `lost`, the parent subagent task (runtime: `subagent`, no `childSessionKey`) remains `running`, and the linked `task_mirrored` TaskFlow also stays `running` — even after gateway restart. Task maintenance flags the parent as `stale_running` in diagnostics but never auto-reconciles it.\n- **Root Cause**: `hasBackingSession()` falls through to `!isChildlessCodexNativeSubagentTask(task)` when a subagent task has no `childSessionKey`. Since `isChildlessCodexNativeSubagentTask` only matches `runtime: \"codex-native\"`, the guard unconditionally returns `true` for `runtime: \"subagent\"`. This prevents `shouldMarkLost` from ever reconciling the stale parent task.\n- **Fix**: Pre-compute a `Set<string>` of terminal `runId`s during the maintenance sweep, then add a reconciliation block after the existing `shouldMarkLost` path that marks subagent tasks as `lost` when a terminal task sharing the same `runId` exists. The downstream `markTaskLost` → `updateTask` → `syncFlowFromTaskAfterTaskMutation` call chain automatically terminalizes the linked `task_mirrored` TaskFlow.\n- **What changed**:\n  - `src/tasks/task-registry.maintenance.ts` — add terminal-runId pre-computation (6 lines) and subagent reconciliation block (25 lines) inside `runTaskRegistryMaintenance()`\n  - `src/tasks/task-registry.maintenance.issue-60299.test.ts` — add regression test for the stale-subagent-with-terminal-child scenario (36 lines)\n- **What did NOT change (scope boundary)**:\n  - `hasBackingSession()` — intentionally left unchanged to avoid broadening the scope of an existing predicate that other callers rely on\n  - TaskFlow maintenance (`task-flow-registry.maintenance.ts`) — not touched; the existing `syncFlowFromTaskAfterTaskMutation` hook inside `updateTask` already handles flow terminalization when task status changes\n  - Live task propagation — not touched; only the maintenance sweep path is addressed\n\n### Reproduction\n\n1. Start a full-agent child task through an orchestrator using `sessions_spawn`\n2. Allow the child to perform a longer-running task until its backing session disappears\n3. Observe the child CLI task becomes `lost` with `backing session missing`\n4. Observe the parent subagent task remains `running` and the `task_mirrored` TaskFlow remains `running`\n5. Run `openclaw tasks audit --json` — parent task and TaskFlow reported as `stale_running`\n6. Restart the gateway — records remain inconsistent\n7. **Before this PR**: `openclaw tasks maintenance --apply` does not reconcile the parent subagent or the TaskFlow\n8. **After this PR**: `runTaskRegistryMaintenance` detects the terminal backing child via the shared `runId`, marks the parent subagent as `lost`, and the TaskFlow is automatically terminalized\n\n### Real behavior proof\n\n**Behavior or issue addressed (92285)**: Task maintenance fails to reconcile stale subagent parent tasks whose backing CLI children are already terminal. The parent stays `running`, and the `task_mirrored` TaskFlow stays `running`, despite the backing session being missing. After this fix, the maintenance sweep detects the terminal backing child (matched by shared `runId`) and marks the parent subagent as `lost`, which triggers automatic TaskFlow terminalization via the existing `syncFlowFromTaskAfterTaskMutation` hook.\n\n**Real environment tested**: Linux, Node 22 — Vitest with `runTaskRegistryMaintenance` against the task-registry maintenance harness (real in-memory task store, real maintenance loop, real session lookup context)\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/tasks/task-registry.maintenance.issue-60299.test.ts src/tasks/task-flow-registry.maintenance.test.ts`\n\n**Evidence after fix**:\n```text\n[test] starting test/vitest/vitest.unit-fast.config.ts\n RUN  v4.1.7 /home/0668001395/openclawProject1\n Test Files  1 passed (1)\n      Tests  5 passed (5)\n\n[test] starting test/vitest/vitest.tasks.config.ts\n RUN  v4.1.7 /home/0668001395/openclawProject1\n Test Files  1 passed (1)\n      Tests  20 passed (20)\n\n[test] passed 2 Vitest shards in 22.01s\n```\n\n**Observed result after fix**: The new test case \"reconciles stale subagent tasks whose backing CLI child is already terminal (regresses #92285)\" creates a `lost` CLI child and a `running` subagent parent sharing the same `runId`, then runs maintenance. The parent subagent task transitions from `running` to `lost` with error `\"backing session missing\"`, and the maintenance summary reports 1 reconciled task. All 19 existing tests in the same file continue to pass — no regression in cron recovery, ACP reclamation, subagent recovery wedged detection, or task pruning behavior. The TaskFlow maintenance tests (5 tests) also pass unchanged, confirming the existing flow-terminalization path is preserved.\n\n**What was not tested**: A live Gateway round-trip with a real full-agent subagent orchestration spawning a CLI child that becomes lost was not driven. The maintenance harness uses a real in-memory task store and the real maintenance loop, but the backing-session-lookup context is synthetic. The intermittent child-loss trigger itself (which depends on real process termination) was not reproduced.\n\n**Repro confirmation**: The new test case fails without the fix — the subagent parent task stays `running` after maintenance because `hasBackingSession` returns `true` for the childless subagent. With the fix, the parent is reconciled to `lost`, and the linked `task_mirrored` flow is terminalized by the existing `syncFlowFromTaskAfterTaskMutation` hook.\n\n### Risk / Mitigation\n\n- **Risk**: Expanding the maintenance sweep iteration by one additional `Set` pre-computation pass could increase sweep latency.\n  **Mitigation**: The pre-computation is a single O(n) pass over the same `tasks` array already held in memory — no additional disk I/O or store reads. On a typical task ledger of a few hundred entries, this adds negligible overhead (< 1ms).\n- **Risk**: The `terminalRunIds.has(current.runId)` check could false-positive if a different task type shares the same `runId` by coincidence.\n  **Mitigation**: The check is gated on `current.runtime === \"subagent\"`, `current.status === \"running\"`, no `childSessionKey`, and `hasLostGraceExpired`. subagent tasks share `runId` with their backing CLI child by design (the orchestrator assigns matching runIds). A coincidental runId collision across unrelated tasks would require an identical UUID — effectively impossible.\n- **Risk**: A subagent task whose backing CLI child was terminalized for a different reason (e.g., manual cancellation) could be incorrectly marked `lost` instead of `cancelled`.\n  **Mitigation**: `markTaskLost` preserves the original task's error field. The backing child's terminal error (`\"backing session missing\"`) is propagated. If the child was cancelled, its status would be `cancelled` not `lost`, and its runId would be in `terminalRunIds` regardless — but the resulting parent status of `lost` with a descriptive error is a safe terminal state that unblocks the orchestrator. Future refinement could propagate the child's exact terminal status.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] tasks (task registry maintenance)\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/tasks/task-registry.maintenance.issue-60299.test.ts`\n- `node scripts/run-vitest.mjs src/tasks/task-flow-registry.maintenance.test.ts`\n\n### Review Findings Addressed\n\nN/A (initial submission)\n\n### Linked Issue/PR\n\nFixes #92285\n",
+        "branch": "fix/issue-92285-stale-taskflow-reconcile",
+        "head_sha": "7a5a4457efd8656b20f64d06e68306d9bf565916",
+        "author": "zenglingbiao",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/tasks/task-registry.maintenance.issue-60299.test.ts",
+            "additions": 150,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tasks/task-registry.maintenance.ts",
+            "additions": 62,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92454",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92454.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 130,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92454:4691968177:2026-06-12T14:00:36Z:re_review",
+      "comment_id": "4691968177",
+      "comment_version_key": "4691968177:2026-06-12T14:00:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92454#issuecomment-4691968177",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92454,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T14:00:36Z",
+      "comment_updated_at": "2026-06-12T14:00:36Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -63,159 +154,61 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "security: add Security Matrix runtime-fact audit model",
-        "body": "## Summary\n\n- Adds a Security Matrix runtime-fact evaluator.\n- Models actor, influence source, tool capability, approval state, and operator policy as separate inputs.\n- Adds default policy data, a deterministic evaluator, tool capability resolution, an audit-event object builder, tests, and documentation.\n- Adds a small before-tool-call fact adapter so future runtime wiring can build the same audit event shape from explicit boundary facts without changing execution behavior.\n- Hardens custom policy parsing so malformed decisions cannot weaken the default policy.\n\n## Scope\n\nThis PR remains non-enforcing and observe-only.\n\nIt does not block tool calls, require confirmation at runtime, emit runtime diagnostic events, change UI, change plugin behavior, or alter runtime tool execution. The before-tool-call adapter only builds an audit event object and exposes an explicit opt-in config predicate for future wiring.\n\n## Validation\n\nValidated locally at PR head `d192028ab6cd7f962a7007f0f94c77d6b8b8e4aa`.\n\nCommands run:\n\n```bash\npnpm test src/security/security-matrix/evaluate.test.ts src/agents/security-matrix-before-call.test.ts\npnpm changed:lanes --base upstream/main --json\npnpm exec oxlint src/security/security-matrix/ src/agents/security-matrix-before-call.test.ts\nnode scripts/format-docs.mjs --check docs/security/security-matrix.md\ngit diff --check upstream/main...HEAD\n```\n\nResults:\n\n- Focused tests passed: `src/security/security-matrix/evaluate.test.ts` and `src/agents/security-matrix-before-call.test.ts`\n- `Test Files 2 passed (2)`\n- `Tests 28 passed (28)`\n- changed-lanes reported `core=true`, `coreTests=true`, `docs=true`, `tooling=true`\n- changed-lanes reported `extensions=false`, `extensionTests=false`, `apps=false`, `liveDockerTooling=false`, `releaseMetadata=false`, `all=false`\n- oxlint completed with no reported errors\n- docs formatting reported `Docs formatting clean (663 files).`\n- `git diff --check upstream/main...HEAD` reported no whitespace errors\n\n## Real behavior proof\n\n- Behavior or issue addressed: Security Matrix runtime-fact evaluation now produces deterministic audit decisions from actor, influence source, capability, approval state, and operator policy. The before-tool-call adapter builds the same audit-event shape from explicit boundary facts without emitting, blocking, or mutating execution. Malformed custom policy decisions are ignored instead of being treated as policy output.\n- Real environment tested: Local Linux checkout at `~/projects/openclaw`, branch `security/matrix-audit-model`, PR head `d192028ab6cd7f962a7007f0f94c77d6b8b8e4aa`, Node v24.15.0 via the repository pnpm environment.\n- Exact steps or command run after this patch:\n  1. Ran focused tests through the repository `pnpm test` wrapper.\n  2. Ran changed-lane detection, targeted oxlint, docs formatting, and whitespace checks.\n  3. Added regression coverage for malformed custom policy decisions shaped as both an object and a string.\n- Evidence after fix:\n\n```text\nTest Files  2 passed (2)\nTests  28 passed (28)\nDocs formatting clean (663 files).\n```\n\n- Observed result after fix: The evaluator keeps the default `web_fetch` + `exec` block decision when custom policy data contains invalid decision values such as `permit`, even when `allowPolicyWeakening` is enabled. Valid policy decisions still resolve through the existing deterministic rule path.\n- What was not tested: Runtime hook emission, runtime enforcement, strict config schema adoption, CLI display, plugin UI, and live tool execution are intentionally not changed by this PR.",
-        "branch": "security/matrix-audit-model",
-        "head_sha": "08e9ecbdc6310fa0a28a46e55606bdd673c66eec",
-        "author": "jason-allen-oneal",
-        "labels": [
-          "docs",
-          "scripts",
-          "agents",
-          "size: XL",
-          "proof: supplied",
-          "P2",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary"
-        ],
-        "files": [
-          {
-            "path": "config/knip.config.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/.i18n/glossary.zh-CN.json",
-            "additions": 36,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/docs.json",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/security/security-matrix.md",
-            "additions": 128,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scripts/deadcode-unused-files.allowlist.mjs",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/security-matrix-before-call.test.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/security/security-matrix/before-tool-call.ts",
-            "additions": 53,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/security/security-matrix/default-policy.ts",
-            "additions": 105,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/security/security-matrix/evaluate.test.ts",
-            "additions": 338,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/security/security-matrix/evaluate.ts",
-            "additions": 250,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/security/security-matrix/facts.ts",
-            "additions": 73,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/security/security-matrix/tool-capability.ts",
-            "additions": 85,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/security/security-matrix/types.ts",
-            "additions": 101,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/vitest/vitest.unit-fast-paths.mjs",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92086",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92086.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 158,
-          "counts": {
-            "SUCCESS": 135,
-            "SKIPPED": 22,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92454:4691875318:2026-06-12T13:49:35Z:re_review",
+      "comment_id": "4691875318",
+      "comment_version_key": "4691875318:2026-06-12T13:49:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92454#issuecomment-4691875318",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92454,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T13:49:35Z",
+      "comment_updated_at": "2026-06-12T13:49:35Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 3592,
+    "total_ms": 6155,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 900
+        "ms": 466
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2292
+        "ms": 2563
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 385
+        "ms": 3098
       },
       {
         "name": "append_ledger",
