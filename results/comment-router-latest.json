@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T16:51:39.320Z",
+  "generated_at": "2026-06-12T16:51:51.989Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T13:51:36.467Z",
+  "since": "2026-06-12T13:51:51.365Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -12,9 +12,9 @@
     92382
   ],
   "comment_ids": [
-    4693345724
+    4693251319
   ],
-  "status_comment_id": 4693346036,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -61,290 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-12T16:51:40.144Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 92382
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-12T16:51:41.293Z",
-          "response_comment_id": "4693346036",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: don't defer text delta streaming for before_agent_finalize hooks",
-        "body": "## Summary\n\nAny plugin registering a `before_agent_finalize` hook silently disables all text streaming in webchat. The user sees \"in progress\" → \"done\" with no visible output, then a wall of text appears all at once after a long pause.\n\nThe root cause: `emitAssistantStreamData` defers ALL assistant output (gateway SSE + channel partial replies) when `onBeforeTerminalDelivery` is set. Gateway SSE events are ephemeral text deltas for webchat streaming — they should emit immediately. Only channel partial replies (Telegram/Discord live preview) need to be gated for hook inspection.\n\n**Fix (split approach):** `emitAssistantStreamData` always emits gateway SSE events (`emitAgentEvent` / `onAgentEvent`) immediately. Only channel partial replies (`onPartialReply`) are deferred until the `before_agent_finalize` terminal gate resolves. `flushDeferredAssistantEvents` only replays partial replies (gateway events were already emitted). Removed dead `emitAssistantStreamDataSafely` (no callers after the split).\n\n**Revision fix:** When `before_agent_finalize` returns `suppressTerminalDelivery: true`, the first attempt's SSE text was already streamed to the gateway projector. `suppressTerminalDelivery` now emits a `replace: true` assistant event directly. The gateway detects this signal and (1) sends a client-visible replace-only chat delta (`deltaText: \"\"`, `replace: true`) to clear the Control UI's visible text, then (2) clears server-side throttle state. The second attempt streams into a fresh buffer.\n\n## Linked context\n\nNo linked issue — discovered during local debugging of a user config where `hook-logger` (which registers `before_agent_finalize`) was installed.\n\n## Root cause analysis\n\nThe call chain:\n\n1. **`attempt.ts:3165`** — `hookRunner?.hasHooks(\"before_agent_finalize\")` → `onBeforeTerminalDelivery` is created\n2. **`embedded-agent-subscribe.ts:194`** — `deferBlockReplyDelivery = true`\n3. **`embedded-agent-subscribe.ts:286-288`** (original code) — `emitAssistantStreamData` checks `deferBlockReplyDelivery` and pushes everything into `deferredAssistantEvents`\n4. All events are flushed in a single burst at `deliverTerminal()` line 259\n5. Result: 469 text delta events emitted in ~200ms instead of streaming over 35s\n\nPR #87703 (which introduced the guard) was correct to gate block replies and partial replies for hooks, but it over-applied deferral to gateway SSE events that don't need it.\n\n## Fix\n\n`src/agents/embedded-agent-subscribe.ts` — Split `emitAssistantStreamData`:\n\n- Gateway SSE (`emitAgentEvent` / `onAgentEvent`): always emitted immediately\n- Channel partial replies (`onPartialReply`): deferred when `deferBlockReplyDelivery` is set, flushed when the terminal gate resolves\n- `flushDeferredAssistantEvents`: only replays partial replies, doesn't re-emit gateway events\n- `emitAssistantStreamDataSafely`: removed (no callers)\n\n## Real behavior proof\n\n- Behavior or issue addressed: Webchat text streaming disabled when any plugin registers `before_agent_finalize` hook\n- Real environment tested: macOS 15.5, Node 24, source-built gateway on port 18789 using `~/.openclaw` config with `hook-logger` plugin (installed from npm `@scotthuang/hook-logger`) that registers `before_agent_finalize`\n- Exact steps or command run after this patch:\n  1. `pnpm build` — clean build of the fixed code\n  2. `bash ~/.codebuddy/skills/openclaw-source-dev/scripts/oc-dev.sh restartStable` — restart gateway with `.openclaw` config\n  3. Open webchat in browser at `http://127.0.0.1:18789/` and send a message using model `deepseek/deepseek-v4-flash`\n- Evidence after fix:\n\n```\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > suppresses deferred block replies when the terminal gate requests a revision\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > waits for async terminal gate decisions before draining\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > defers channel partial replies but streams gateway SSE until the terminal gate continues\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > does not send final-only assistant events through partial replies\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > finalizes normally when the terminal gate rejects\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > flushes deferred block replies when the terminal gate continues\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > emits a replace signal when the terminal gate suppresses delivery for revision\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\n```\n ✓ |gateway-server| agent event handler > broadcasts a replace-only chat delta to clear the Control UI on before_agent_finalize revision\n ✓ |gateway-server| agent event handler > marks non-prefix replacement deltas explicitly\n Test Files  1 passed (1)\n      Tests  86 passed (86)\n```\n\n```\n ✓ |ui| chat controller > clears the stream on a replace delta then streams a second attempt\n ✓ |ui| chat controller > replaces the stream when gateway deltaText marks a replacement\n Test Files  1 passed (1)\n      Tests  118 passed (118)\n```\n\n  Manual webchat test: text appears incrementally in the chat UI — each word streams as the model generates it, instead of a blank \"in progress\" state followed by a wall of text at the end. Hook-requested revision correctly clears the visible draft and streams the revised answer.\n\n- Observed result after fix: Webchat streaming works correctly with `hook-logger` enabled. Text appears character by character as the model generates, matching the streaming behavior when no `before_agent_finalize` hook is registered. When a hook requests revision, the rejected draft is cleared from the UI before the second attempt streams.\n- Before evidence: Before the fix, user observed webchat stuck on \"in progress\" for the full generation duration, then all 469 text-delta events flushed in a single burst within ~200ms at termination. Gateway log confirmed all assistant events were queued in `deferredAssistantEvents` instead of being emitted immediately. Revision path left stale text visible in webchat.\n- What was not tested: Other plugins that register `before_agent_finalize` (e.g. Codex native hook relay). The code path is identical for all hook registrations. Live webchat recording is not attached; terminal output from the structured test suite provides equivalent proof.\n\n## Tests and validation\n\n- `pnpm test src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts` — 7 passed (stream split + replace signal)\n- `pnpm test src/gateway/server-chat.agent-events.test.ts` — 86 passed (gateway replace delta broadcast)\n- `pnpm test ui/src/ui/controllers/chat.test.ts` — 118 passed (Control UI two-attempt replace flow)\n- `pnpm tsgo:core` — clean\n- `pnpm build` — clean\n- `npx oxfmt --check` on all changed files — clean\n- Manual webchat smoke test with `hook-logger` enabled/disabled — streaming works in both cases\n\n## Risk checklist\n\n- User-visible behavior change? `Yes` — webchat streams text incrementally when `before_agent_finalize` hooks are registered, instead of showing all text at once at the end\n- Config, environment, or migration behavior change? `No`\n- Security, auth, secrets, network, or tool execution behavior change? `No`\n- Highest-risk area: A hook that returns `suppressTerminalDelivery` on revision may briefly show streamed text that gets replaced in the final reply\n- How is that risk mitigated? The hook still receives the full response and can suppress/modify terminal delivery; only the ephemeral preview is visible earlier. Channel partial replies remain fully gated.\n\n## Current review state\n\n- Next action: `@clawsweeper re-review` — PR body updated with real behavior proof (211+ tests across gateway, Control UI, and agent subscribe surfaces) and gateway chat-delta replace evidence",
-        "branch": "fix/streaming-defer-text-deltas",
-        "head_sha": "aacc9b055be01a77a12bd4fa99b012225e8d7146",
-        "author": "scotthuang",
-        "labels": [
-          "app: web-ui",
-          "gateway",
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts",
-            "additions": 65,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.ts",
-            "additions": 20,
-            "deletions": 17,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-chat.agent-events.test.ts",
-            "additions": 45,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-chat.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/controllers/chat.test.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92382",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92382.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 163,
-          "counts": {
-            "SUCCESS": 56,
-            "SKIPPED": 30,
-            "QUEUED": 75,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:QUEUED",
-            "checks-node-core-fast:QUEUED",
-            "checks-node-core-src-security:QUEUED",
-            "checks-node-core-ui:QUEUED",
-            "checks-node-core-support:QUEUED",
-            "checks-node-core-tooling:QUEUED",
-            "checks-node-core-tooling-docker:QUEUED",
-            "checks-node-core-runtime-infra-misc-values:QUEUED",
-            "checks-node-core-runtime-infra-net-install:QUEUED",
-            "checks-node-core-runtime-infra-network-node:QUEUED",
-            "checks-node-core-runtime-infra-network-platform:QUEUED",
-            "checks-node-core-runtime-infra-outbound-core:QUEUED",
-            "checks-node-core-runtime-infra-provider-push:QUEUED",
-            "checks-node-core-runtime-infra-repo-tooling:QUEUED",
-            "checks-node-core-runtime-infra-storage-state:QUEUED",
-            "checks-node-core-runtime-infra-process:QUEUED",
-            "checks-node-core-runtime-media-ui:QUEUED",
-            "checks-node-core-runtime-shared:QUEUED",
-            "checks-node-core-runtime-cron-core:QUEUED",
-            "checks-node-core-runtime-cron-isolated-agent:QUEUED",
-            "checks-node-core-runtime-cron-service:QUEUED",
-            "checks-node-agentic-control-plane-agent-chat:QUEUED",
-            "checks-node-agentic-control-plane-auth-node:QUEUED",
-            "checks-node-agentic-control-plane-http-models:QUEUED",
-            "checks-node-agentic-control-plane-http-plugin-ws:QUEUED",
-            "checks-node-agentic-control-plane-runtime-cron:QUEUED",
-            "checks-node-agentic-control-plane-runtime-events:QUEUED",
-            "checks-node-agentic-control-plane-runtime-shared-token:QUEUED",
-            "checks-node-agentic-control-plane-runtime-state:QUEUED",
-            "checks-node-agentic-control-plane-runtime-ui-tools:QUEUED",
-            "checks-node-agentic-control-plane-startup-core:QUEUED",
-            "checks-node-agentic-control-plane-startup-health-runtime:QUEUED",
-            "checks-node-agentic-control-plane-startup-restart-close:QUEUED",
-            "checks-node-agentic-cli:QUEUED",
-            "checks-node-agentic-command-support:QUEUED",
-            "checks-node-agentic-commands-agent-channel:QUEUED",
-            "checks-node-agentic-commands-doctor:QUEUED",
-            "checks-node-agentic-commands-doctor-auth:QUEUED",
-            "checks-node-agentic-commands-doctor-config-state:QUEUED",
-            "checks-node-agentic-commands-doctor-device:QUEUED",
-            "checks-node-agentic-commands-doctor-gateway:QUEUED",
-            "checks-node-agentic-commands-doctor-platform:QUEUED",
-            "checks-node-agentic-commands-doctor-plugins-tools:QUEUED",
-            "checks-node-agentic-commands-doctor-sessions-cron:QUEUED",
-            "checks-node-agentic-commands-doctor-shared:QUEUED",
-            "checks-node-agentic-commands-doctor-whatsapp:QUEUED",
-            "checks-node-agentic-commands-doctor-workspace:QUEUED",
-            "checks-node-agentic-commands-models:QUEUED",
-            "checks-node-agentic-commands-onboard-config:QUEUED",
-            "checks-node-agentic-commands-status-tools:QUEUED",
-            "checks-node-agentic-agents-core-auth:QUEUED",
-            "checks-node-agentic-agents-core-models:QUEUED",
-            "checks-node-agentic-agents-core-tools:QUEUED",
-            "checks-node-agentic-agents-core-subagents:QUEUED",
-            "checks-node-agentic-agents-core-runner:QUEUED",
-            "checks-node-agentic-agents-core-runtime:QUEUED",
-            "checks-node-agentic-agents-embedded:QUEUED",
-            "checks-node-agentic-agents-support:QUEUED",
-            "checks-node-agentic-agents-tools:QUEUED",
-            "checks-node-agentic-gateway-core:QUEUED",
-            "checks-node-agentic-gateway-methods:QUEUED",
-            "checks-node-agentic-plugin-sdk:QUEUED",
-            "checks-node-auto-reply-core-top-level:QUEUED",
-            "checks-node-auto-reply-reply-agent-runner:QUEUED",
-            "checks-node-auto-reply-reply-commands:QUEUED",
-            "checks-node-auto-reply-reply-dispatch:QUEUED",
-            "checks-node-auto-reply-reply-session:QUEUED",
-            "checks-node-auto-reply-reply-state-routing:QUEUED",
-            "check-lint:FAILURE",
-            "check-dependencies:QUEUED",
-            "check-additional-boundaries-a:QUEUED",
-            "check-additional-boundaries-bcd:QUEUED",
-            "check-additional-extension-channels:QUEUED",
-            "check-additional-extension-bundled:QUEUED",
-            "check-additional-extension-package-boundary:QUEUED",
-            "check-additional-runtime-topology-architecture:QUEUED"
-          ],
-          "pending": [
-            "build-artifacts:QUEUED",
-            "checks-node-core-fast:QUEUED",
-            "checks-node-core-src-security:QUEUED",
-            "checks-node-core-ui:QUEUED",
-            "checks-node-core-support:QUEUED",
-            "checks-node-core-tooling:QUEUED",
-            "checks-node-core-tooling-docker:QUEUED",
-            "checks-node-core-runtime-infra-misc-values:QUEUED",
-            "checks-node-core-runtime-infra-net-install:QUEUED",
-            "checks-node-core-runtime-infra-network-node:QUEUED",
-            "checks-node-core-runtime-infra-network-platform:QUEUED",
-            "checks-node-core-runtime-infra-outbound-core:QUEUED",
-            "checks-node-core-runtime-infra-provider-push:QUEUED",
-            "checks-node-core-runtime-infra-repo-tooling:QUEUED",
-            "checks-node-core-runtime-infra-storage-state:QUEUED",
-            "checks-node-core-runtime-infra-process:QUEUED",
-            "checks-node-core-runtime-media-ui:QUEUED",
-            "checks-node-core-runtime-shared:QUEUED",
-            "checks-node-core-runtime-cron-core:QUEUED",
-            "checks-node-core-runtime-cron-isolated-agent:QUEUED",
-            "checks-node-core-runtime-cron-service:QUEUED",
-            "checks-node-agentic-control-plane-agent-chat:QUEUED",
-            "checks-node-agentic-control-plane-auth-node:QUEUED",
-            "checks-node-agentic-control-plane-http-models:QUEUED",
-            "checks-node-agentic-control-plane-http-plugin-ws:QUEUED",
-            "checks-node-agentic-control-plane-runtime-cron:QUEUED",
-            "checks-node-agentic-control-plane-runtime-events:QUEUED",
-            "checks-node-agentic-control-plane-runtime-shared-token:QUEUED",
-            "checks-node-agentic-control-plane-runtime-state:QUEUED",
-            "checks-node-agentic-control-plane-runtime-ui-tools:QUEUED",
-            "checks-node-agentic-control-plane-startup-core:QUEUED",
-            "checks-node-agentic-control-plane-startup-health-runtime:QUEUED",
-            "checks-node-agentic-control-plane-startup-restart-close:QUEUED",
-            "checks-node-agentic-cli:QUEUED",
-            "checks-node-agentic-command-support:QUEUED",
-            "checks-node-agentic-commands-agent-channel:QUEUED",
-            "checks-node-agentic-commands-doctor:QUEUED",
-            "checks-node-agentic-commands-doctor-auth:QUEUED",
-            "checks-node-agentic-commands-doctor-config-state:QUEUED",
-            "checks-node-agentic-commands-doctor-device:QUEUED",
-            "checks-node-agentic-commands-doctor-gateway:QUEUED",
-            "checks-node-agentic-commands-doctor-platform:QUEUED",
-            "checks-node-agentic-commands-doctor-plugins-tools:QUEUED",
-            "checks-node-agentic-commands-doctor-sessions-cron:QUEUED",
-            "checks-node-agentic-commands-doctor-shared:QUEUED",
-            "checks-node-agentic-commands-doctor-whatsapp:QUEUED",
-            "checks-node-agentic-commands-doctor-workspace:QUEUED",
-            "checks-node-agentic-commands-models:QUEUED",
-            "checks-node-agentic-commands-onboard-config:QUEUED",
-            "checks-node-agentic-commands-status-tools:QUEUED",
-            "checks-node-agentic-agents-core-auth:QUEUED",
-            "checks-node-agentic-agents-core-models:QUEUED",
-            "checks-node-agentic-agents-core-tools:QUEUED",
-            "checks-node-agentic-agents-core-subagents:QUEUED",
-            "checks-node-agentic-agents-core-runner:QUEUED",
-            "checks-node-agentic-agents-core-runtime:QUEUED",
-            "checks-node-agentic-agents-embedded:QUEUED",
-            "checks-node-agentic-agents-support:QUEUED",
-            "checks-node-agentic-agents-tools:QUEUED",
-            "checks-node-agentic-gateway-core:QUEUED",
-            "checks-node-agentic-gateway-methods:QUEUED",
-            "checks-node-agentic-plugin-sdk:QUEUED",
-            "checks-node-auto-reply-core-top-level:QUEUED",
-            "checks-node-auto-reply-reply-agent-runner:QUEUED",
-            "checks-node-auto-reply-reply-commands:QUEUED",
-            "checks-node-auto-reply-reply-dispatch:QUEUED",
-            "checks-node-auto-reply-reply-session:QUEUED",
-            "checks-node-auto-reply-reply-state-routing:QUEUED",
-            "check-dependencies:QUEUED",
-            "check-additional-boundaries-a:QUEUED",
-            "check-additional-boundaries-bcd:QUEUED",
-            "check-additional-extension-channels:QUEUED",
-            "check-additional-extension-bundled:QUEUED",
-            "check-additional-extension-package-boundary:QUEUED",
-            "check-additional-runtime-topology-architecture:QUEUED"
-          ],
-          "terminalBlockers": [
-            "check-lint:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5417,
+    "total_ms": 1108,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 642
+        "ms": 613
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2198
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2549
+        "ms": 485
       },
       {
         "name": "append_ledger",
-        "ms": 4
+        "ms": 0
       }
     ]
   }
