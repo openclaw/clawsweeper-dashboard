@@ -2,21 +2,21 @@
 repo: "openclaw/clawhub"
 cluster_id: "automerge-openclaw-clawhub-2613"
 mode: "autonomous"
-run_id: "27420039344"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27420039344"
-head_sha: "2e4282b3acfc829ecf0c8f0c6855a00a7b2b9794"
-workflow_conclusion: "failure"
+run_id: "27425568965"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27425568965"
+head_sha: "be65dd0db8a3df454ee9bdbb62caaa6282804760"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-06-12T13:57:54.831Z"
+published_at: "2026-06-12T15:48:27.450Z"
 canonical: "#2613"
 canonical_issue: null
 canonical_pr: "#2613"
 actions_total: 1
 fix_executed: 0
-fix_failed: 1
-fix_blocked: 1
+fix_failed: 0
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/clawhub
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27420039344](https://github.com/openclaw/clawsweeper/actions/runs/27420039344)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27425568965](https://github.com/openclaw/clawsweeper/actions/runs/27425568965)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -43,10 +43,10 @@ Make PR #2613 merge-ready for ClawSweeper automerge. Rebase onto latest main, ad
 | --- | ---: |
 | Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 1 |
-| Fix blocked | 1 |
+| Fix failed | 0 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,15 +54,13 @@ Make PR #2613 merge-ready for ClawSweeper automerge. Rebase onto latest main, ad
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | Codex fix worker failed: stream disconnected before completion: Rate limit reached for kindle-alpha (for limit alpha-test) in organization org-uV7eiQ9Go91bzhgJ7xfsJBZj on tokens per min (TPM): Limit 5000000, Used 4968476, Requested 45179. Please try again in 163ms. Visit https://platform.openai.com/account/rate-limits to learn more. |
-| execute_fix | blocked |  |  | Codex fix worker failed: stream disconnected before completion: Rate limit reached for kindle-alpha (for limit alpha-test) in organization org-uV7eiQ9Go91bzhgJ7xfsJBZj on tokens per min (TPM): Limit 5000000, Used 4968476, Requested 45179. Please try again in 163ms. Visit https://platform.openai.com/account/rate-limits to learn more. |
-| automerge_repair_outcome_comment | updated | #2613 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/clawhub/pull/2613 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #2613 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
