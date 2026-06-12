@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T00:35:24.240Z",
-  "repo": "openclaw/clawhub",
+  "generated_at": "2026-06-12T00:40:01.278Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T21:35:23.747Z",
+  "since": "2026-06-11T21:39:59.561Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    2603
+    92111
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 4,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,253 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92111:4678242969:2026-06-12T00:39:56Z:clawsweeper_needs_human",
+      "comment_id": "4678242969",
+      "comment_version_key": "4678242969:2026-06-12T00:39:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92111#issuecomment-4678242969",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92111,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T07:34:31Z",
+      "comment_updated_at": "2026-06-12T00:39:56Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No automated repair is needed; maintainers should complete normal merge checks and explicitly decide whether the remaining macOS and Windows native-proof gap is acceptable.; Cleared: The patch adds no dependencies, downloaded code, workflow permissions, secret handling, package-resolution changes, or new privileged execution surface. (sha=36ec65d6383ad0fbdaf73f39012dec7b024e1d72)",
+      "review_summary": "The PR makes the detached managed-update handoff start the prior systemd, launchd, or Windows gateway service after command failure and adds focused recovery regression tests.\n\nPR surface: Source +93, Tests +160. Total +253 across 2 files.\n\nReproducibility: yes. The supplied real systemd scenario reproduces the current-main outage after an exit-127 update handoff and demonstrates service and HTTP recovery with this branch.",
+      "review_followup": "- No automated repair is needed; maintainers should complete normal merge checks and explicitly decide whether the remaining macOS and Windows native-proof gap is acceptable.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "36ec65d6383ad0fbdaf73f39012dec7b024e1d72",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(update): restart managed gateway when update handoff fails after stop",
+        "body": "## Summary\n\nFixes #92088. When a managed-service update handoff fails after the update command has already stopped `openclaw-gateway.service`, nothing restarted the gateway, leaving the host with no live gateway until manual recovery (`loaded inactive dead`, reported on Ubuntu systemd user services).\n\nThe detached handoff helper is the only process that survives the update command, so it now performs a best-effort gateway service start whenever the managed update command fails to spawn, exits nonzero, or dies on a signal (covers OOM kills and `exit 127` style wrapper failures that bypass the CLI's own restore path):\n\n- systemd: `systemctl --user start <unit>` (a no-op when the unit is already active, so failures that happen before the stop, or after the CLI already restored the gateway, do not bounce a healthy gateway)\n- launchd: `launchctl kickstart`, falling back to `enable` plus `bootstrap` with the agent plist (the CLI stop path uses `bootout`)\n- Windows: `schtasks /Run` on the gateway task\n\nThe service identity (unit/label/task name) is resolved at handoff start from the same env vars and `daemon/constants.js` resolvers the rest of the daemon code uses, and passed to the helper via its params file as a `serviceRecovery` descriptor.\n\nAlso closes the one CLI failure path that exited without restoring a gateway it had stopped: the plugin post-update sync error branch in `src/cli/update-cli/update-command.ts` now calls `maybeRestartServiceAfterFailedMutableUpdate` like the sibling error/skipped branches.\n\nThe issue's stale `update-restart-pending` sentinel note is already handled on main: the helper marks the pending sentinel as `error` via `markUpdateSentinelFailureIfPending` on the same failure paths.\n\n## Real behavior proof\n\nBehavior addressed: a failed managed update handoff left `openclaw-gateway.service` stopped (`loaded inactive dead`, gateway HTTP unreachable) with no automatic recovery.\n\nReal environment tested: Ubuntu Linux (kernel 6.8), systemd user manager, real `openclaw-gateway.service` installed by `openclaw gateway install` from this checkout's dist build, gateway serving HTTP 200 on port 18789. The real generated `handoff.cjs` ran inside a real `systemd-run --user --scope` transient unit via `startManagedServiceUpdateHandoff`, with the managed update command replaced by a stub that reproduces the reported timeline: stop `openclaw-gateway.service`, then exit 127.\n\nExact steps or command run after this patch: `systemctl --user start openclaw-gateway.service`, confirm `active` and HTTP 200, then run a driver that calls `startManagedServiceUpdateHandoff({ supervisor: \"systemd\", env: { ...process.env, OPENCLAW_SYSTEMD_UNIT: \"openclaw-gateway.service\" }, ... })` against the patched module with the failing update stub, wait for the handoff to finish, then check `systemctl --user is-active openclaw-gateway.service`, the unit list, HTTP on 18789, and the handoff log.\n\nEvidence after fix:\n\n```text\n=== AFTER fix, after failed update:\nunit: active\n  openclaw-gateway.service loaded active running OpenClaw Gateway (v2026.6.2)\nHTTP: 200\n=== handoff.log:\n[2026-06-11T07:28:36.078Z] starting managed update command: openclaw update --yes\n[2026-06-11T07:28:36.086Z] managed update command pid=46776\n[2026-06-11T07:28:36.132Z] Stopping openclaw-gateway...\n[2026-06-11T07:28:37.081Z] Running openclaw update...\n[2026-06-11T07:28:37.086Z] managed update command exited code=127 signal=null\n[2026-06-11T07:28:37.108Z] gateway service recovery succeeded target=openclaw-gateway.service\n```\n\nSame scenario on unpatched main (418d7e1e83c) for contrast:\n\n```text\n=== BEFORE fix, after failed update:\nunit: inactive\n  openclaw-gateway.service loaded inactive dead OpenClaw Gateway (v2026.6.2)\nHTTP: 000\n=== handoff.log:\n[2026-06-11T07:27:53.379Z] starting managed update command: openclaw update --yes\n[2026-06-11T07:27:53.385Z] managed update command pid=46685\n[2026-06-11T07:27:53.434Z] Stopping openclaw-gateway...\n[2026-06-11T07:27:57.154Z] Running openclaw update...\n[2026-06-11T07:27:57.161Z] managed update command exited code=127 signal=null\n```\n\nNo-bounce check on the patched build: an update command that fails with exit 1 before stopping the gateway leaves the running gateway untouched, `MainPID before=46787 after=46787 unit=active`, and the helper logs `gateway service recovery succeeded` from the idempotent `systemctl --user start`.\n\nObserved result after fix: the gateway service is automatically started again within about 20 ms of the failed update command exiting; the host keeps a live gateway instead of a full outage, and successful updates and pre-stop failures see no extra restart.\n\nWhat was not tested: launchd and schtasks recovery commands were not executed against real macOS/Windows service managers (covered by unit tests asserting the descriptor and the command wiring; the command sequences mirror `src/cli/update-cli/restart-helper.ts`); the plugin post-update sync error branch in `update-command.ts` has no existing test harness and was verified by code reading against the sibling error/skipped branches.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/infra/update-managed-service-handoff.test.ts` passes (8 tests); the 3 new regression tests fail on unpatched main and pass with this change\n- `pnpm tsgo:core` and `pnpm tsgo:core:test` clean\n- `node scripts/run-oxlint.mjs` and `oxfmt --check` clean on the touched files\n- Live systemd before/after repro above\n\nReported by @ofan.\n",
+        "branch": "fix/update-handoff-gateway-recovery",
+        "head_sha": "36ec65d6383ad0fbdaf73f39012dec7b024e1d72",
+        "author": "yetval",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦞 diamond lobster",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/infra/update-managed-service-handoff.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-managed-service-handoff.ts",
+            "additions": 94,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92111",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92111.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 130,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92111:4680500386:2026-06-11T12:24:53Z:re_review",
+      "comment_id": "4680500386",
+      "comment_version_key": "4680500386:2026-06-11T12:24:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92111#issuecomment-4680500386",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92111,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T12:24:53Z",
+      "comment_updated_at": "2026-06-11T12:24:53Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(update): restart managed gateway when update handoff fails after stop",
+        "body": "## Summary\n\nFixes #92088. When a managed-service update handoff fails after the update command has already stopped `openclaw-gateway.service`, nothing restarted the gateway, leaving the host with no live gateway until manual recovery (`loaded inactive dead`, reported on Ubuntu systemd user services).\n\nThe detached handoff helper is the only process that survives the update command, so it now performs a best-effort gateway service start whenever the managed update command fails to spawn, exits nonzero, or dies on a signal (covers OOM kills and `exit 127` style wrapper failures that bypass the CLI's own restore path):\n\n- systemd: `systemctl --user start <unit>` (a no-op when the unit is already active, so failures that happen before the stop, or after the CLI already restored the gateway, do not bounce a healthy gateway)\n- launchd: `launchctl kickstart`, falling back to `enable` plus `bootstrap` with the agent plist (the CLI stop path uses `bootout`)\n- Windows: `schtasks /Run` on the gateway task\n\nThe service identity (unit/label/task name) is resolved at handoff start from the same env vars and `daemon/constants.js` resolvers the rest of the daemon code uses, and passed to the helper via its params file as a `serviceRecovery` descriptor.\n\nAlso closes the one CLI failure path that exited without restoring a gateway it had stopped: the plugin post-update sync error branch in `src/cli/update-cli/update-command.ts` now calls `maybeRestartServiceAfterFailedMutableUpdate` like the sibling error/skipped branches.\n\nThe issue's stale `update-restart-pending` sentinel note is already handled on main: the helper marks the pending sentinel as `error` via `markUpdateSentinelFailureIfPending` on the same failure paths.\n\n## Real behavior proof\n\nBehavior addressed: a failed managed update handoff left `openclaw-gateway.service` stopped (`loaded inactive dead`, gateway HTTP unreachable) with no automatic recovery.\n\nReal environment tested: Ubuntu Linux (kernel 6.8), systemd user manager, real `openclaw-gateway.service` installed by `openclaw gateway install` from this checkout's dist build, gateway serving HTTP 200 on port 18789. The real generated `handoff.cjs` ran inside a real `systemd-run --user --scope` transient unit via `startManagedServiceUpdateHandoff`, with the managed update command replaced by a stub that reproduces the reported timeline: stop `openclaw-gateway.service`, then exit 127.\n\nExact steps or command run after this patch: `systemctl --user start openclaw-gateway.service`, confirm `active` and HTTP 200, then run a driver that calls `startManagedServiceUpdateHandoff({ supervisor: \"systemd\", env: { ...process.env, OPENCLAW_SYSTEMD_UNIT: \"openclaw-gateway.service\" }, ... })` against the patched module with the failing update stub, wait for the handoff to finish, then check `systemctl --user is-active openclaw-gateway.service`, the unit list, HTTP on 18789, and the handoff log.\n\nEvidence after fix:\n\n```text\n=== AFTER fix, after failed update:\nunit: active\n  openclaw-gateway.service loaded active running OpenClaw Gateway (v2026.6.2)\nHTTP: 200\n=== handoff.log:\n[2026-06-11T07:28:36.078Z] starting managed update command: openclaw update --yes\n[2026-06-11T07:28:36.086Z] managed update command pid=46776\n[2026-06-11T07:28:36.132Z] Stopping openclaw-gateway...\n[2026-06-11T07:28:37.081Z] Running openclaw update...\n[2026-06-11T07:28:37.086Z] managed update command exited code=127 signal=null\n[2026-06-11T07:28:37.108Z] gateway service recovery succeeded target=openclaw-gateway.service\n```\n\nSame scenario on unpatched main (418d7e1e83c) for contrast:\n\n```text\n=== BEFORE fix, after failed update:\nunit: inactive\n  openclaw-gateway.service loaded inactive dead OpenClaw Gateway (v2026.6.2)\nHTTP: 000\n=== handoff.log:\n[2026-06-11T07:27:53.379Z] starting managed update command: openclaw update --yes\n[2026-06-11T07:27:53.385Z] managed update command pid=46685\n[2026-06-11T07:27:53.434Z] Stopping openclaw-gateway...\n[2026-06-11T07:27:57.154Z] Running openclaw update...\n[2026-06-11T07:27:57.161Z] managed update command exited code=127 signal=null\n```\n\nNo-bounce check on the patched build: an update command that fails with exit 1 before stopping the gateway leaves the running gateway untouched, `MainPID before=46787 after=46787 unit=active`, and the helper logs `gateway service recovery succeeded` from the idempotent `systemctl --user start`.\n\nObserved result after fix: the gateway service is automatically started again within about 20 ms of the failed update command exiting; the host keeps a live gateway instead of a full outage, and successful updates and pre-stop failures see no extra restart.\n\nWhat was not tested: launchd and schtasks recovery commands were not executed against real macOS/Windows service managers (covered by unit tests asserting the descriptor and the command wiring; the command sequences mirror `src/cli/update-cli/restart-helper.ts`); the plugin post-update sync error branch in `update-command.ts` has no existing test harness and was verified by code reading against the sibling error/skipped branches.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/infra/update-managed-service-handoff.test.ts` passes (8 tests); the 3 new regression tests fail on unpatched main and pass with this change\n- `pnpm tsgo:core` and `pnpm tsgo:core:test` clean\n- `node scripts/run-oxlint.mjs` and `oxfmt --check` clean on the touched files\n- Live systemd before/after repro above\n\nReported by @ofan.\n",
+        "branch": "fix/update-handoff-gateway-recovery",
+        "head_sha": "36ec65d6383ad0fbdaf73f39012dec7b024e1d72",
+        "author": "yetval",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦞 diamond lobster",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/infra/update-managed-service-handoff.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-managed-service-handoff.ts",
+            "additions": 94,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92111",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92111.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 130,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92111:4678411699:2026-06-11T07:56:35Z:re_review",
+      "comment_id": "4678411699",
+      "comment_version_key": "4678411699:2026-06-11T07:56:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92111#issuecomment-4678411699",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92111,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T07:56:35Z",
+      "comment_updated_at": "2026-06-11T07:56:35Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 841,
+    "total_ms": 2098,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 484
+        "ms": 254
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1446
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 348
+        "ms": 370
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
