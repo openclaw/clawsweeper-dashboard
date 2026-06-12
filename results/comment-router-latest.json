@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T10:51:40.848Z",
+  "generated_at": "2026-06-12T10:52:18.467Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T07:51:39.810Z",
+  "since": "2026-06-12T07:52:15.332Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    92406
+    92382
   ],
-  "comment_ids": [
-    4690447777
-  ],
-  "status_comment_id": 4690448185,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 5,
+  "commands_seen": 4,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +31,112 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92406:4690447777:2026-06-12T10:51:01Z:re_review",
-      "comment_id": "4690447777",
-      "comment_version_key": "4690447777:2026-06-12T10:51:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/issues/92406#issuecomment-4690447777",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92382:4688667314:2026-06-12T10:52:10Z:clawsweeper_auto_repair",
+      "comment_id": "4688667314",
+      "comment_version_key": "4688667314:2026-06-12T10:52:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92382#issuecomment-4688667314",
       "repo": "openclaw/openclaw",
-      "issue_number": 92406,
-      "author": "ayeshachohan",
-      "author_id": 123968536,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-12T10:51:01Z",
-      "comment_updated_at": "2026-06-12T10:51:01Z",
-      "status_comment_id": 4690448185,
+      "issue_number": 92382,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T07:34:16Z",
+      "comment_updated_at": "2026-06-12T10:52:10Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=cad22e56ff7b5dc6bfd5d4bec9faee2e61cb7ec5)",
+      "review_summary": "The PR emits gateway assistant stream events immediately while continuing to defer channel partial replies and block replies until `before_agent_finalize` resolves.\n\nPR surface: Source +3, Tests +7. Total +10 across 2 files.\n\nReproducibility: yes. from source. On current main, registering `before_agent_finalize` enables terminal deferral and queues gateway assistant events, matching the reported blank-then-burst webchat behavior.",
+      "review_followup": "- [P1] Maintainers must choose whether to preserve the recently established pre-delivery contract or approve a new provisional gateway preview API before implementation proceeds.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "cad22e56ff7b5dc6bfd5d4bec9faee2e61cb7ec5",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: don't defer text delta streaming for before_agent_finalize hooks",
+        "body": "## Summary\n\nAny plugin registering a `before_agent_finalize` hook silently disables all text streaming in webchat. The user sees \"in progress\" → \"done\" with no visible output, then a wall of text appears all at once after a long pause.\n\nThe root cause: `emitAssistantStreamData` defers ALL assistant output (gateway SSE + channel partial replies) when `onBeforeTerminalDelivery` is set. Gateway SSE events are ephemeral text deltas for webchat streaming — they should emit immediately. Only channel partial replies (Telegram/Discord live preview) need to be gated for hook inspection.\n\n**Fix (split approach):** `emitAssistantStreamData` always emits gateway SSE events (`emitAgentEvent` / `onAgentEvent`) immediately. Only channel partial replies (`onPartialReply`) are deferred until the `before_agent_finalize` terminal gate resolves. `flushDeferredAssistantEvents` only replays partial replies (gateway events were already emitted). Removed dead `emitAssistantStreamDataSafely` (no callers after the split).\n\n## Linked context\n\nNo linked issue — discovered during local debugging of a user config where `hook-logger` (which registers `before_agent_finalize`) was installed.\n\n## Root cause analysis\n\nThe call chain:\n\n1. **`attempt.ts:3165`** — `hookRunner?.hasHooks(\"before_agent_finalize\")` → `onBeforeTerminalDelivery` is created\n2. **`embedded-agent-subscribe.ts:194`** — `deferBlockReplyDelivery = true`\n3. **`embedded-agent-subscribe.ts:286-288`** (original code) — `emitAssistantStreamData` checks `deferBlockReplyDelivery` and pushes everything into `deferredAssistantEvents`\n4. All events are flushed in a single burst at `deliverTerminal()` line 259\n5. Result: 469 text delta events emitted in ~200ms instead of streaming over 35s\n\nPR #87703 (which introduced the guard) was correct to gate block replies and partial replies for hooks, but it over-applied deferral to gateway SSE events that don't need it.\n\n## Fix\n\n`src/agents/embedded-agent-subscribe.ts` — Split `emitAssistantStreamData`:\n\n- Gateway SSE (`emitAgentEvent` / `onAgentEvent`): always emitted immediately\n- Channel partial replies (`onPartialReply`): deferred when `deferBlockReplyDelivery` is set, flushed when the terminal gate resolves\n- `flushDeferredAssistantEvents`: only replays partial replies, doesn't re-emit gateway events\n- `emitAssistantStreamDataSafely`: removed (no callers)\n\n## Real behavior proof\n\n- Behavior or issue addressed: Webchat text streaming disabled when any plugin registers `before_agent_finalize` hook\n- Real environment tested: macOS 15.5, Node 24, source-built gateway on port 18789 using `~/.openclaw` config with `hook-logger` plugin (installed from npm `@scotthuang/hook-logger`) that registers `before_agent_finalize`\n- Exact steps or command run after this patch:\n  1. `pnpm build` — clean build of the fixed code\n  2. `bash ~/.codebuddy/skills/openclaw-source-dev/scripts/oc-dev.sh restartStable` — restart gateway with `.openclaw` config\n  3. Open webchat in browser at `http://127.0.0.1:18789/` and send a message using model `deepseek/deepseek-v4-flash`\n- Evidence after fix (terminal output from before-terminal-delivery tests showing all scenarios pass, plus manual webchat verification):\n\n```\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > suppresses deferred block replies when the terminal gate requests a revision\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > waits for async terminal gate decisions before draining\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > defers channel partial replies but streams gateway SSE until the terminal gate continues\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > does not send final-only assistant events through partial replies\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > finalizes normally when the terminal gate rejects\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > flushes deferred block replies when the terminal gate continues\n Test Files  1 passed (1)\n      Tests  6 passed (6)\n```\n\n  Manual webchat test: text appears incrementally in the chat UI — each word streams as the model generates it, instead of a blank \"in progress\" state followed by a wall of text at the end.\n\n- Observed result after fix: Webchat streaming works correctly with `hook-logger` enabled. Text appears character by character as the model generates, matching the streaming behavior when no `before_agent_finalize` hook is registered.\n- Before evidence: Before the fix, user observed webchat stuck on \"in progress\" for the full generation duration, then all 469 text-delta events flushed in a single burst within ~200ms at termination. Gateway log confirmed all assistant events were queued in `deferredAssistantEvents` instead of being emitted immediately.\n- What was not tested: Other plugins that register `before_agent_finalize` (e.g. Codex native hook relay). The code path is identical for all hook registrations.\n- Proof limitations or environment constraints: Video recording and screenshots of streaming behavior require browser interaction; terminal output from the structured test suite and manual webchat observation provide equivalent proof. A maintainer can apply `proof: override` if further visual evidence is required.\n\n## Tests and validation\n\n- `pnpm test src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts` — 6 passed\n- `pnpm test src/agents/embedded-agent-subscribe.handlers.messages.test.ts` — 38 passed\n- `pnpm build` — clean\n- CI `checks-node-agentic-agents-core-subagents` — passed\n- Manual webchat smoke test with `hook-logger` enabled/disabled — streaming works in both cases\n\n## Risk checklist\n\n- User-visible behavior change? `Yes` — webchat streams text incrementally when `before_agent_finalize` hooks are registered, instead of showing all text at once at the end\n- Config, environment, or migration behavior change? `No`\n- Security, auth, secrets, network, or tool execution behavior change? `No`\n- Highest-risk area: A hook that returns `suppressTerminalDelivery` on revision may briefly show streamed text that gets replaced in the final reply\n- How is that risk mitigated? The hook still receives the full response and can suppress/modify terminal delivery; only the ephemeral preview is visible earlier. Channel partial replies remain fully gated.\n\n## Current review state\n\n- Next action: Awaiting review",
+        "branch": "fix/streaming-defer-text-deltas",
+        "head_sha": "cad22e56ff7b5dc6bfd5d4bec9faee2e61cb7ec5",
+        "author": "scotthuang",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts",
+            "additions": 12,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.ts",
+            "additions": 20,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92382",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92382.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 130,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92382:4690407366:2026-06-12T10:46:30Z:re_review",
+      "comment_id": "4690407366",
+      "comment_version_key": "4690407366:2026-06-12T10:46:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92382#issuecomment-4690407366",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92382,
+      "author": "scotthuang",
+      "author_id": 1670837,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T10:46:30Z",
+      "comment_updated_at": "2026-06-12T10:46:30Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,64 +153,158 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-12T10:51:41.613Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 92406
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-12T10:51:42.498Z",
-          "response_comment_id": "4690448185",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
-        "kind": "issue",
-        "state": "open",
-        "locked": false,
-        "title": "[Bug]: streamMode field in 3.x config blocks upgrade to 6.x (schema rejects unknown field)",
-        "body": "## Summary\n\nUpgrading OpenClaw from 2026.3.x to 2026.6.5 with an existing `~/.openclaw/openclaw.json` that contains `channels.googlechat.streamMode` causes `openclaw config validate` and `openclaw-gateway.service` startup to fail with `channels.googlechat.streamMode: Unknown field`. The field was valid in 3.x. The 6.5 schema is strict and rejects unknown keys instead of stripping or warning.\n\n## Steps to reproduce\n\n1. On a host that ran OpenClaw 2026.3.x with `channels.googlechat.enabled: true` and `channels.googlechat.streamMode: \"replace\"` written into `~/.openclaw/openclaw.json`.\n2. Upgrade: `npm install -g openclaw@2026.6.5`\n3. Run `openclaw config validate`\n\n## Expected behavior\n\nEither:\n- The unknown `streamMode` field is stripped silently on first 6.5 read, **or**\n- A `openclaw config migrate` command exists that performs the strip, **or**\n- A clear deprecation/removal note in the upgrade changelog lists the fields to remove pre-upgrade\n\nAny of the three would have prevented the failure.\n\n## Actual behavior\n\n```\n$ openclaw config validate\nError: channels.googlechat.streamMode: Unknown field\n```\n\nThe gateway service refuses to start until the field is manually removed from `~/.openclaw/openclaw.json`. The upgrade silently breaks production for anyone whose 3.x config still has the field.\n\n## OpenClaw version\n\n2026.6.5\n\n## Operating system\n\nUbuntu 22.04 LTS (Linux 5.15)\n\n## Install method\n\nnpm global (`npm install -g openclaw@2026.6.5`)\n\n## Model\n\nNot applicable — fails before any model call.\n\n## Additional context\n\nConfirmed three workarounds, but each is a workaround, not a fix:\n\n1. Pre-upgrade strip via a small Python snippet:\n   ```python\n   import json, pathlib\n   p = pathlib.Path(\"/home/ubuntu/.openclaw/openclaw.json\")\n   cfg = json.loads(p.read_text())\n   cfg.get(\"channels\", {}).get(\"googlechat\", {}).pop(\"streamMode\", None)\n   p.write_text(json.dumps(cfg, indent=2))\n   ```\n2. Post-upgrade manual JSON edit (same result, manual).\n3. Restore the previous OpenClaw version, do the strip, then upgrade.\n\nSuggested upstream remedies (in order of how invasive each is to the codebase):\n\n1. **Migration command:** add `openclaw config migrate` that strips/renames deprecated fields based on a versioned migration table. Auto-run on first 6.x boot when last-seen version is older.\n2. **Strip-unknown policy:** change the zod schema for `channels.googlechat` to use `.strip()` instead of `.strict()`. Friendly to upgrades but loses typo detection.\n3. **Documented breaking changes:** at minimum, list `streamMode` as a removed field in 6.x upgrade docs and add it to a deprecation-keys list checked at `config validate` time with a message like `\"channels.googlechat.streamMode\" was removed in 4.x. Remove it from your config to continue.` Cheapest fix; the user still has to act, but the failure becomes actionable instead of opaque.\n\nHappy to send a PR for option (3) if a maintainer agrees that's the right shape.\n",
-        "author": "ayeshachohan",
-        "labels": [],
+        "kind": "pull_request",
+        "title": "fix: don't defer text delta streaming for before_agent_finalize hooks",
+        "body": "## Summary\n\nAny plugin registering a `before_agent_finalize` hook silently disables all text streaming in webchat. The user sees \"in progress\" → \"done\" with no visible output, then a wall of text appears all at once after a long pause.\n\nThe root cause: `emitAssistantStreamData` defers ALL assistant output (gateway SSE + channel partial replies) when `onBeforeTerminalDelivery` is set. Gateway SSE events are ephemeral text deltas for webchat streaming — they should emit immediately. Only channel partial replies (Telegram/Discord live preview) need to be gated for hook inspection.\n\n**Fix (split approach):** `emitAssistantStreamData` always emits gateway SSE events (`emitAgentEvent` / `onAgentEvent`) immediately. Only channel partial replies (`onPartialReply`) are deferred until the `before_agent_finalize` terminal gate resolves. `flushDeferredAssistantEvents` only replays partial replies (gateway events were already emitted). Removed dead `emitAssistantStreamDataSafely` (no callers after the split).\n\n## Linked context\n\nNo linked issue — discovered during local debugging of a user config where `hook-logger` (which registers `before_agent_finalize`) was installed.\n\n## Root cause analysis\n\nThe call chain:\n\n1. **`attempt.ts:3165`** — `hookRunner?.hasHooks(\"before_agent_finalize\")` → `onBeforeTerminalDelivery` is created\n2. **`embedded-agent-subscribe.ts:194`** — `deferBlockReplyDelivery = true`\n3. **`embedded-agent-subscribe.ts:286-288`** (original code) — `emitAssistantStreamData` checks `deferBlockReplyDelivery` and pushes everything into `deferredAssistantEvents`\n4. All events are flushed in a single burst at `deliverTerminal()` line 259\n5. Result: 469 text delta events emitted in ~200ms instead of streaming over 35s\n\nPR #87703 (which introduced the guard) was correct to gate block replies and partial replies for hooks, but it over-applied deferral to gateway SSE events that don't need it.\n\n## Fix\n\n`src/agents/embedded-agent-subscribe.ts` — Split `emitAssistantStreamData`:\n\n- Gateway SSE (`emitAgentEvent` / `onAgentEvent`): always emitted immediately\n- Channel partial replies (`onPartialReply`): deferred when `deferBlockReplyDelivery` is set, flushed when the terminal gate resolves\n- `flushDeferredAssistantEvents`: only replays partial replies, doesn't re-emit gateway events\n- `emitAssistantStreamDataSafely`: removed (no callers)\n\n## Real behavior proof\n\n- Behavior or issue addressed: Webchat text streaming disabled when any plugin registers `before_agent_finalize` hook\n- Real environment tested: macOS 15.5, Node 24, source-built gateway on port 18789 using `~/.openclaw` config with `hook-logger` plugin (installed from npm `@scotthuang/hook-logger`) that registers `before_agent_finalize`\n- Exact steps or command run after this patch:\n  1. `pnpm build` — clean build of the fixed code\n  2. `bash ~/.codebuddy/skills/openclaw-source-dev/scripts/oc-dev.sh restartStable` — restart gateway with `.openclaw` config\n  3. Open webchat in browser at `http://127.0.0.1:18789/` and send a message using model `deepseek/deepseek-v4-flash`\n- Evidence after fix (terminal output from before-terminal-delivery tests showing all scenarios pass, plus manual webchat verification):\n\n```\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > suppresses deferred block replies when the terminal gate requests a revision\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > waits for async terminal gate decisions before draining\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > defers channel partial replies but streams gateway SSE until the terminal gate continues\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > does not send final-only assistant events through partial replies\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > finalizes normally when the terminal gate rejects\n ✓ |agents| subscribeEmbeddedAgentSession before terminal delivery > flushes deferred block replies when the terminal gate continues\n Test Files  1 passed (1)\n      Tests  6 passed (6)\n```\n\n  Manual webchat test: text appears incrementally in the chat UI — each word streams as the model generates it, instead of a blank \"in progress\" state followed by a wall of text at the end.\n\n- Observed result after fix: Webchat streaming works correctly with `hook-logger` enabled. Text appears character by character as the model generates, matching the streaming behavior when no `before_agent_finalize` hook is registered.\n- Before evidence: Before the fix, user observed webchat stuck on \"in progress\" for the full generation duration, then all 469 text-delta events flushed in a single burst within ~200ms at termination. Gateway log confirmed all assistant events were queued in `deferredAssistantEvents` instead of being emitted immediately.\n- What was not tested: Other plugins that register `before_agent_finalize` (e.g. Codex native hook relay). The code path is identical for all hook registrations.\n- Proof limitations or environment constraints: Video recording and screenshots of streaming behavior require browser interaction; terminal output from the structured test suite and manual webchat observation provide equivalent proof. A maintainer can apply `proof: override` if further visual evidence is required.\n\n## Tests and validation\n\n- `pnpm test src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts` — 6 passed\n- `pnpm test src/agents/embedded-agent-subscribe.handlers.messages.test.ts` — 38 passed\n- `pnpm build` — clean\n- CI `checks-node-agentic-agents-core-subagents` — passed\n- Manual webchat smoke test with `hook-logger` enabled/disabled — streaming works in both cases\n\n## Risk checklist\n\n- User-visible behavior change? `Yes` — webchat streams text incrementally when `before_agent_finalize` hooks are registered, instead of showing all text at once at the end\n- Config, environment, or migration behavior change? `No`\n- Security, auth, secrets, network, or tool execution behavior change? `No`\n- Highest-risk area: A hook that returns `suppressTerminalDelivery` on revision may briefly show streamed text that gets replaced in the final reply\n- How is that risk mitigated? The hook still receives the full response and can suppress/modify terminal delivery; only the ephemeral preview is visible earlier. Channel partial replies remain fully gated.\n\n## Current review state\n\n- Next action: Awaiting review",
+        "branch": "fix/streaming-defer-text-deltas",
+        "head_sha": "cad22e56ff7b5dc6bfd5d4bec9faee2e61cb7ec5",
+        "author": "scotthuang",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts",
+            "additions": 12,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.ts",
+            "additions": 20,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "open_prs": [],
-        "issue_implementation_cluster_id": "issue-openclaw-openclaw-92406",
-        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-92406.md",
-        "mode": "autonomous"
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92382",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92382.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 130,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92382:4689924850:2026-06-12T09:58:56Z:re_review",
+      "comment_id": "4689924850",
+      "comment_version_key": "4689924850:2026-06-12T09:58:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92382#issuecomment-4689924850",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92382,
+      "author": "scotthuang",
+      "author_id": 1670837,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T09:58:56Z",
+      "comment_updated_at": "2026-06-12T09:58:56Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92382:4689221299:2026-06-12T08:42:21Z:re_review",
+      "comment_id": "4689221299",
+      "comment_version_key": "4689221299:2026-06-12T08:42:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92382#issuecomment-4689221299",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92382,
+      "author": "scotthuang",
+      "author_id": 1670837,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T08:42:21Z",
+      "comment_updated_at": "2026-06-12T08:42:21Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3146,
+    "total_ms": 6256,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 414
+        "ms": 466
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 321
+        "ms": 2651
       },
       {
         "name": "classify_commands",
-        "ms": 291
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 2096
+        "ms": 3110
       },
       {
         "name": "append_ledger",
