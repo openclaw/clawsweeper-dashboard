@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T05:12:44.632Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-12T05:13:06.019Z",
+  "repo": "openclaw/openclaw-windows-node",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T02:12:44.141Z",
+  "since": "2026-06-12T02:13:04.748Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    64472
+    526
   ],
-  "comment_ids": [
-    4687665372
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 9,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,17 +31,186 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92151:4687665372:2026-06-12T05:11:16Z:re_review",
-      "comment_id": "4687665372",
-      "comment_version_key": "4687665372:2026-06-12T05:11:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92151#issuecomment-4687665372",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92151,
-      "author": "xialonglee",
-      "author_id": 22994703,
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw-windows-node:526:4524434063:2026-06-12T05:13:00Z:clawsweeper_needs_human",
+      "comment_id": "4524434063",
+      "comment_version_key": "4524434063:2026-06-12T05:13:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/526#issuecomment-4524434063",
+      "repo": "openclaw/openclaw-windows-node",
+      "issue_number": 526,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-23T06:38:47Z",
+      "comment_updated_at": "2026-06-12T05:13:00Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=da0b255e5dbdab9389194125b18a3a6bb48eb75a)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "da0b255e5dbdab9389194125b18a3a6bb48eb75a",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "feat: add ExecApprovalsStore write path and wire coordinator side effects",
+        "body": "## What\n\nAdds the write path to `ExecApprovalsStore` and wires the two side-effect calls into `ExecApprovalsCoordinator`, closing the persistence loop for the exec approvals V2 pipeline.\n\n**Store — new public API:**\n- `AddAllowlistEntryAsync(agentId, pattern)` — persists a new allowlist entry after an AllowAlways prompt decision. Deduplicates on write (OrdinalIgnoreCase). Returns `true` if the entry is present after the call (added or already there), `false` on empty pattern or I/O failure. New entries carry `{id, pattern}`; `lastUsedAt` is stamped later by `RecordAllowlistUseAsync` on first successful use (matches macOS parity).\n- `RecordAllowlistUseAsync(agentId, pattern, resolvedPath)` — updates `lastUsedAt` and `lastResolvedPath` for every matching entry after a final allow. No command text is persisted. Returns `false` if pattern not found or on I/O failure.\n\n**Store — private infrastructure:**\n- `UpdateFileAsync(mutate)` — load → mutate → atomic save, serialized by the existing `SemaphoreSlim`. Never throws. Refuses to overwrite a malformed file. Handles transient `IOException` on the atomic move as a degraded path: logs `Warn`, no retry.\n\n**Coordinator — side effects wired:**\n- `RecordAllowlistUsageAsync` fires on both allow exit points: the pass1 pre-approved branch and the post-pass2 branch. Both are required to cover the common allowlist-satisfied case.\n- `PersistAllowlistEntriesAsync` fires only after pass2 = Allow and `followupDecision == AllowAlways`, strictly outside the `_promptLock` block.\n- Each side effect is wrapped in its own independent best-effort `try/catch` so a failure in one does not skip the other and cannot flip an already-decided allow into `InternalError`.\n\n**Not wired in production yet:** the coordinator is still not referenced in any production `src/` file. The `ProductionWiring_CoordinatorNotReferencedInSrc` test remains green.\n\n## Design notes\n\nSide effects fire strictly after the final allow decision is confirmed — not before the second evaluator pass. This is a deliberate structural safety choice: the guarantee is structural rather than relying on proof that `Evaluate(context, AllowAlways)` always produces Allow.\n\nPattern validation in `AddAllowlistEntryAsync` is non-empty only, matching macOS parity. Basename-only patterns are inert at match time but not rejected at persist time.\n\nNo command text reaches disk. `lastUsedAt` (Unix ms) and `lastResolvedPath` provide sufficient operational metadata without exposing tokens or secrets embedded in command arguments.\n\n## Testing\n\n149 ExecApprovals tests passing, 0 failures. Build: 0 warnings, 0 errors (`TreatWarningsAsErrors` clean). Tray tests: 961/961.\n\nStore tests cover: success paths, dedup, not-found, malformed-file refusal, I/O failure degradation on both mutators, concurrency (5 concurrent writes produce a single entry), round-trip JSON validation, and a regression guard asserting `lastUsedCommand` is absent from the persisted file.\n\nCoordinator tests cover: AllowAlways persistence, non-allowlist security guard, duplicate pattern dedup, allowlist usage recording, allowlist-not-satisfied guard, pass1 pre-approved path, and fallback path with allowlist satisfied.\n\n## Real behavior proof\n\nEnd-to-end coordinator/store runtime proof using real filesystem I/O (test `RuntimeProof_AllowAlways_PersistsAndRecordsLastUsed` in `tests/OpenClaw.Shared.Tests/ExecApprovalsCoordinatorTests.cs`).\n\nScope clarification: this is **slice runtime proof**, not full production runtime proof. The coordinator is intentionally not wired in production yet. A follow-up production wiring slice connects the coordinator, and the WinUI prompt dialog is a separate slice after that. UI-driven proof against the live app is only meaningful once those land.\n\nReproduce locally:\n\n```\ndotnet test tests/OpenClaw.Shared.Tests/OpenClaw.Shared.Tests.csproj \\\n  --filter \"FullyQualifiedName~RuntimeProof_AllowAlways_PersistsAndRecordsLastUsed\" \\\n  --logger \"console;verbosity=detailed\" --nologo\n```\n\nCaptured output — current head (ad4021d), `lastUsedCommand` absent:\n\n```\n=== Initial exec-approvals.json ===\n{\"version\":1,\"agents\":{\"main\":{\"security\":\"allowlist\",\"ask\":\"always\"}}}\n\n=== After AllowAlways (correlationId=proof-1) ===\n{\n  \"version\": 1,\n  \"agents\": {\n    \"main\": {\n      \"security\": \"allowlist\",\n      \"ask\": \"always\",\n      \"allowlist\": [\n        {\n          \"id\": \"af40c359-2cd8-4afb-a6f7-068330ac5b08\",\n          \"pattern\": \"C:\\WINDOWS\\system32\\cmd.EXE\"\n        }\n      ]\n    }\n  }\n}\n\n=== After allowlist hit (correlationId=proof-2) ===\n{\n  \"version\": 1,\n  \"agents\": {\n    \"main\": {\n      \"security\": \"allowlist\",\n      \"ask\": \"always\",\n      \"allowlist\": [\n        {\n          \"id\": \"af40c359-2cd8-4afb-a6f7-068330ac5b08\",\n          \"pattern\": \"C:\\WINDOWS\\system32\\cmd.EXE\",\n          \"lastUsedAt\": 1780863068197,\n          \"lastResolvedPath\": \"C:\\WINDOWS\\system32\\cmd.EXE\"\n        }\n      ]\n    }\n  }\n}\n```\n\nThe entry `id` is identical between the two invocations, proving on-disk dedup. `lastUsedAt` and `lastResolvedPath` appear only after the second invocation, proving `RecordAllowlistUseAsync` fires on the allowlist-hit path. No `lastUsedCommand` field is present at any stage.  \n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>",
+        "branch": "feat/exec-approvals-write-path",
+        "head_sha": "da0b255e5dbdab9389194125b18a3a6bb48eb75a",
+        "author": "alexalves87",
+        "labels": [
+          "P2",
+          "rating: 🌊 off-meta tidepool",
+          "merge-risk: 🚨 security-boundary"
+        ],
+        "files": [
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/CanonicalCommandIdentity.cs",
+            "additions": 9,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalEvaluation.cs",
+            "additions": 5,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalV2InputValidator.cs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalV2NormalizationStep.cs",
+            "additions": 6,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalV2NullHandler.cs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalV2Result.cs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalsContracts.cs",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalsCoordinator.cs",
+            "additions": 57,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalsStore.cs",
+            "additions": 128,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecCommandResolution.cs",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecShellWrapperNormalizer.cs",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ICanPresentEvaluator.cs",
+            "additions": 5,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/IExecApprovalV2Handler.cs",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.Shared.Tests/ExecApprovalsCoordinatorTests.cs",
+            "additions": 219,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.Shared.Tests/ExecApprovalsStoreTests.cs",
+            "additions": 362,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-windows-node-526",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-windows-node-526.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 6,
+          "counts": {
+            "SUCCESS": 2,
+            "IN_PROGRESS": 2,
+            "SKIPPED": 2
+          },
+          "blockers": [
+            "test:IN_PROGRESS",
+            "e2etests:IN_PROGRESS"
+          ],
+          "pending": [
+            "test:IN_PROGRESS",
+            "e2etests:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw-windows-node:526:4524771698:2026-05-23T08:15:05Z:re_review",
+      "comment_id": "4524771698",
+      "comment_version_key": "4524771698:2026-05-23T08:15:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/526#issuecomment-4524771698",
+      "repo": "openclaw/openclaw-windows-node",
+      "issue_number": 526,
+      "author": "AlexAlves87",
+      "author_id": 203463267,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-12T05:10:17Z",
-      "comment_updated_at": "2026-06-12T05:11:16Z",
+      "comment_created_at": "2026-05-23T08:15:05Z",
+      "comment_updated_at": "2026-05-23T08:15:05Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -63,32 +230,202 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat: add ExecApprovalsStore write path and wire coordinator side effects",
+        "body": "## What\n\nAdds the write path to `ExecApprovalsStore` and wires the two side-effect calls into `ExecApprovalsCoordinator`, closing the persistence loop for the exec approvals V2 pipeline.\n\n**Store — new public API:**\n- `AddAllowlistEntryAsync(agentId, pattern)` — persists a new allowlist entry after an AllowAlways prompt decision. Deduplicates on write (OrdinalIgnoreCase). Returns `true` if the entry is present after the call (added or already there), `false` on empty pattern or I/O failure. New entries carry `{id, pattern}`; `lastUsedAt` is stamped later by `RecordAllowlistUseAsync` on first successful use (matches macOS parity).\n- `RecordAllowlistUseAsync(agentId, pattern, resolvedPath)` — updates `lastUsedAt` and `lastResolvedPath` for every matching entry after a final allow. No command text is persisted. Returns `false` if pattern not found or on I/O failure.\n\n**Store — private infrastructure:**\n- `UpdateFileAsync(mutate)` — load → mutate → atomic save, serialized by the existing `SemaphoreSlim`. Never throws. Refuses to overwrite a malformed file. Handles transient `IOException` on the atomic move as a degraded path: logs `Warn`, no retry.\n\n**Coordinator — side effects wired:**\n- `RecordAllowlistUsageAsync` fires on both allow exit points: the pass1 pre-approved branch and the post-pass2 branch. Both are required to cover the common allowlist-satisfied case.\n- `PersistAllowlistEntriesAsync` fires only after pass2 = Allow and `followupDecision == AllowAlways`, strictly outside the `_promptLock` block.\n- Each side effect is wrapped in its own independent best-effort `try/catch` so a failure in one does not skip the other and cannot flip an already-decided allow into `InternalError`.\n\n**Not wired in production yet:** the coordinator is still not referenced in any production `src/` file. The `ProductionWiring_CoordinatorNotReferencedInSrc` test remains green.\n\n## Design notes\n\nSide effects fire strictly after the final allow decision is confirmed — not before the second evaluator pass. This is a deliberate structural safety choice: the guarantee is structural rather than relying on proof that `Evaluate(context, AllowAlways)` always produces Allow.\n\nPattern validation in `AddAllowlistEntryAsync` is non-empty only, matching macOS parity. Basename-only patterns are inert at match time but not rejected at persist time.\n\nNo command text reaches disk. `lastUsedAt` (Unix ms) and `lastResolvedPath` provide sufficient operational metadata without exposing tokens or secrets embedded in command arguments.\n\n## Testing\n\n149 ExecApprovals tests passing, 0 failures. Build: 0 warnings, 0 errors (`TreatWarningsAsErrors` clean). Tray tests: 961/961.\n\nStore tests cover: success paths, dedup, not-found, malformed-file refusal, I/O failure degradation on both mutators, concurrency (5 concurrent writes produce a single entry), round-trip JSON validation, and a regression guard asserting `lastUsedCommand` is absent from the persisted file.\n\nCoordinator tests cover: AllowAlways persistence, non-allowlist security guard, duplicate pattern dedup, allowlist usage recording, allowlist-not-satisfied guard, pass1 pre-approved path, and fallback path with allowlist satisfied.\n\n## Real behavior proof\n\nEnd-to-end coordinator/store runtime proof using real filesystem I/O (test `RuntimeProof_AllowAlways_PersistsAndRecordsLastUsed` in `tests/OpenClaw.Shared.Tests/ExecApprovalsCoordinatorTests.cs`).\n\nScope clarification: this is **slice runtime proof**, not full production runtime proof. The coordinator is intentionally not wired in production yet. A follow-up production wiring slice connects the coordinator, and the WinUI prompt dialog is a separate slice after that. UI-driven proof against the live app is only meaningful once those land.\n\nReproduce locally:\n\n```\ndotnet test tests/OpenClaw.Shared.Tests/OpenClaw.Shared.Tests.csproj \\\n  --filter \"FullyQualifiedName~RuntimeProof_AllowAlways_PersistsAndRecordsLastUsed\" \\\n  --logger \"console;verbosity=detailed\" --nologo\n```\n\nCaptured output — current head (ad4021d), `lastUsedCommand` absent:\n\n```\n=== Initial exec-approvals.json ===\n{\"version\":1,\"agents\":{\"main\":{\"security\":\"allowlist\",\"ask\":\"always\"}}}\n\n=== After AllowAlways (correlationId=proof-1) ===\n{\n  \"version\": 1,\n  \"agents\": {\n    \"main\": {\n      \"security\": \"allowlist\",\n      \"ask\": \"always\",\n      \"allowlist\": [\n        {\n          \"id\": \"af40c359-2cd8-4afb-a6f7-068330ac5b08\",\n          \"pattern\": \"C:\\WINDOWS\\system32\\cmd.EXE\"\n        }\n      ]\n    }\n  }\n}\n\n=== After allowlist hit (correlationId=proof-2) ===\n{\n  \"version\": 1,\n  \"agents\": {\n    \"main\": {\n      \"security\": \"allowlist\",\n      \"ask\": \"always\",\n      \"allowlist\": [\n        {\n          \"id\": \"af40c359-2cd8-4afb-a6f7-068330ac5b08\",\n          \"pattern\": \"C:\\WINDOWS\\system32\\cmd.EXE\",\n          \"lastUsedAt\": 1780863068197,\n          \"lastResolvedPath\": \"C:\\WINDOWS\\system32\\cmd.EXE\"\n        }\n      ]\n    }\n  }\n}\n```\n\nThe entry `id` is identical between the two invocations, proving on-disk dedup. `lastUsedAt` and `lastResolvedPath` appear only after the second invocation, proving `RecordAllowlistUseAsync` fires on the allowlist-hit path. No `lastUsedCommand` field is present at any stage.  \n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>",
+        "branch": "feat/exec-approvals-write-path",
+        "head_sha": "da0b255e5dbdab9389194125b18a3a6bb48eb75a",
+        "author": "alexalves87",
+        "labels": [
+          "P2",
+          "rating: 🌊 off-meta tidepool",
+          "merge-risk: 🚨 security-boundary"
+        ],
+        "files": [
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/CanonicalCommandIdentity.cs",
+            "additions": 9,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalEvaluation.cs",
+            "additions": 5,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalV2InputValidator.cs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalV2NormalizationStep.cs",
+            "additions": 6,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalV2NullHandler.cs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalV2Result.cs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalsContracts.cs",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalsCoordinator.cs",
+            "additions": 57,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecApprovalsStore.cs",
+            "additions": 128,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecCommandResolution.cs",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ExecShellWrapperNormalizer.cs",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/ICanPresentEvaluator.cs",
+            "additions": 5,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Shared/ExecApprovals/IExecApprovalV2Handler.cs",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.Shared.Tests/ExecApprovalsCoordinatorTests.cs",
+            "additions": 219,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.Shared.Tests/ExecApprovalsStoreTests.cs",
+            "additions": 362,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-windows-node-526",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-windows-node-526.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 6,
+          "counts": {
+            "SUCCESS": 2,
+            "IN_PROGRESS": 2,
+            "SKIPPED": 2
+          },
+          "blockers": [
+            "test:IN_PROGRESS",
+            "e2etests:IN_PROGRESS"
+          ],
+          "pending": [
+            "test:IN_PROGRESS",
+            "e2etests:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw-windows-node:526:4524677946:2026-05-23T07:50:28Z:re_review",
+      "comment_id": "4524677946",
+      "comment_version_key": "4524677946:2026-05-23T07:50:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/526#issuecomment-4524677946",
+      "repo": "openclaw/openclaw-windows-node",
+      "issue_number": 526,
+      "author": "AlexAlves87",
+      "author_id": 203463267,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T07:50:28Z",
+      "comment_updated_at": "2026-05-23T07:50:28Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1859,
+    "total_ms": 1699,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 479
+        "ms": 362
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 891
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 1368
+        "ms": 418
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
