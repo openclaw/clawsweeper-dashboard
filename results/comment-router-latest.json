@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T05:00:48.981Z",
+  "generated_at": "2026-06-12T05:01:23.662Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T02:00:46.581Z",
+  "since": "2026-06-12T02:01:19.324Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    91332
+    92135
   ],
   "comment_ids": [
-    4645680458
+    4687616926
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,57 +33,64 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91332:4645680458:2026-06-12T04:59:56Z:clawsweeper_auto_repair",
-      "comment_id": "4645680458",
-      "comment_version_key": "4645680458:2026-06-12T04:59:56Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91332#issuecomment-4645680458",
+      "idempotency_key": "comment-router:openclaw/openclaw:92135:4687616926:2026-06-12T04:59:49Z:re_review",
+      "comment_id": "4687616926",
+      "comment_version_key": "4687616926:2026-06-12T04:59:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92135#issuecomment-4687616926",
       "repo": "openclaw/openclaw",
-      "issue_number": 91332,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 92135,
+      "author": "xialonglee",
+      "author_id": 22994703,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-08T05:18:43Z",
-      "comment_updated_at": "2026-06-12T04:59:56Z",
+      "comment_created_at": "2026-06-12T04:59:49Z",
+      "comment_updated_at": "2026-06-12T04:59:49Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=9851714a9b6aada30da0e6b3877de4d03c37eb90)",
-      "review_summary": "The PR wraps session write-lock release with a PID- and reentrancy-guarded fallback removal of a leftover sidecar lock file.\n\nPR surface: Source +17. Total +17 across 1 file.\n\nReproducibility: no. high-confidence end-to-end reproduction is provided; source and production logs support the leaked-lock path, but the exact snapshot-mismatch race has not been triggered on current main.",
-      "review_followup": "- [P1] The blocking defect has a concrete mechanical repair: retain file identity through unlink and add focused race coverage before obtaining runtime proof.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "9851714a9b6aada30da0e6b3877de4d03c37eb90",
+      "expected_head_sha": null,
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(session): add fallback lock file cleanup on session write-lock release",
-        "body": "## Problem\n\nWhen `sidecar-lock`'s `removeLockIfUnchanged` fails because the lock file snapshot doesn't match (content/inode changed between acquisition and release), the session write-lock file persists on disk permanently. This blocks all subsequent messages to that session with `SessionWriteLockTimeoutError` until the gateway is restarted.\n\nObserved in production (OpenClaw 2026.6.1):\n```\n04:35:55 chat.abort ✓ 87ms\n04:35:55 embedded abort settle timed out (timeoutMs=2000)\n04:35:55 lock file created: pid=<gateway> maxHoldMs=1020000\n04:37:14 SessionWriteLockTimeoutError ageMs=79210  (×2 lanes)\n04:38:25 SessionWriteLockTimeoutError ageMs=149601 (×2 lanes)\n```\n\nSee https://github.com/openclaw/openclaw/issues/91327 for full root cause analysis.\n\n## Fix\n\nAdd a **fallback cleanup** in `acquireSessionWriteLock` in `session-write-lock.ts`: after the inner sidecar-lock `release()` completes, check if the `.lock` file still exists on disk and no reentrant holder remains. If both conditions hold and the file's `pid` field matches the current process, force-remove it.\n\n```typescript\nconst innerRelease = lock.release;\nconst release = async () => {\n    await innerRelease();\n    // Fallback cleanup: if sidecar-lock's removeLockIfUnchanged failed\n    // due to snapshot mismatch, force-remove the lock file if no\n    // reentrant holder remains and the file still matches our pid.\n    try {\n        if (!sessionLockHeldByThisProcess(normalizedSessionFile)) {\n            const payload = await readLockPayload(lockPath);\n            if (payload?.pid === process.pid) {\n                await fs.rm(lockPath, { force: true });\n            }\n        }\n    } catch {\n        // Best-effort fallback on filesystem errors.\n    }\n};\nreturn { release };\n```\n\n## Why this is safe\n\n1. **Reentrancy guard**: `sessionLockHeldByThisProcess()` prevents removing the lock file while other reentrant holders still expect it to exist.\n2. **pid check**: Only force-removes if the lock file's pid matches `process.pid`. If another process replaced the lock file, it won't match → we don't touch it.  \n3. **Best-effort**: Falls back silently on filesystem errors.\n4. **Non-breaking**: The inner `release()` still runs as before. This is purely additive cleanup.\n\n## Files changed\n\n- `src/agents/session-write-lock.ts`: +18 lines, 1 changed\n\n## Real behavior proof\n\n**Setup:**\n- OS: Oracle Linux 9.7 (aarch64)\n- Node.js: v22.22.3\n- Fork rebased onto `openclaw/main` tip — previously was 4,466 commits behind, now cleanly atop current upstream\n\n**Verified before push:**\n\n1. **Rebase integrity:** clean rebase, zero conflicts\n2. **Diff confirms only intended change:**\n```\n$ git diff upstream/main --stat\n src/agents/session-write-lock.ts | 19 ++++++++++++++++++-\n 1 file changed, 18 insertions(+), 1 deletion(-)\n```\n\n3. **Reentrancy fix (v2):** First iteration broke `expectLockRemovedOnlyAfterFinalRelease` — the fallback removed the lock file during the first release in a reentrant pair. Added `sessionLockHeldByThisProcess()` guard so the fallback only triggers when all holders have released.\n\n4. **Scope check** — `readLockPayload`, `lockPath`, `fs`, `process.pid`, `normalizedSessionFile`, and `sessionLockHeldByThisProcess` are all in scope at the fix site.\n\n**CI:** Full test suite running.\n\n**Not tested (requires production environment):**\n- Reproduction of the exact sidecar-lock snapshot mismatch race condition\n- Multi-process lock contention with the fallback path triggered\n- Long-running gateway with stale lock accumulation",
-        "branch": "main",
-        "head_sha": "9851714a9b6aada30da0e6b3877de4d03c37eb90",
-        "author": "immortal-autumn",
+        "title": "fix(openai-embedding): preserve openai/ prefix for non-native base URLs",
+        "body": "## Summary\n\n- Preserve `openai/` model prefix for non-native OpenAI embedding base URLs\n- When `agents.defaults.memorySearch.provider` is `openai` but `remote.baseUrl` points to a non-native OpenAI router (e.g. Requesty), OpenClaw was stripping the `openai/` prefix from the embedding model name, breaking memory search in two ways: non-native routers reject the unqualified model name, and existing memory index identity no longer matches, forcing an index rebuild\n- Root cause: `normalizeOpenAiModel()` unconditionally strips the `openai/` prefix, but the resolved base URL determines whether the prefix should be preserved\n- This PR adds `isNativeOpenAiBaseUrl()` to check the resolved base URL, restores the `openai/` prefix for non-native URLs, and normalizes the model name before the `maxInputTokens` capability lookup so token caps are not lost when the model is qualified\n- Fixes #92124\n\n## Verification\n\n- `node scripts/run-vitest.mjs extensions/openai/embedding-provider.test.ts` — 10 passed (4 new: native URL strips prefix, non-native preserves prefix, non-native prefix in request body, maxInputTokens preserved for qualified model)\n- `node scripts/run-vitest.mjs packages/memory-host-sdk/src/host/embeddings-model-normalize.test.ts` — 3 passed (existing prefix stripping behavior)\n\n## Real behavior proof\n\nBehavior addressed: OpenAI embedding model prefix is stripped for non-native OpenAI-compatible routers (e.g. Requesty), causing request rejection and memory index identity mismatch\nReal environment tested: Linux, Node 22, branch fix/issue-92124-embedding-prefix\nExact steps or command run after this patch:\n```bash\nnode scripts/run-vitest.mjs extensions/openai/embedding-provider.test.ts\n```\n\nEvidence after fix:\n\n```console\n RUN  v4.1.7\n\n Test Files  1 passed (1)\n      Tests  10 passed (10)\n   Start at  12:17:51\n   Duration  1.85s\n```\n\nObserved result after fix: All 10 tests pass, including 4 new tests covering native URL prefix stripping, non-native prefix preservation, non-native prefix in request body, and maxInputTokens lookup for qualified model names\nWhat was not tested: Live Requesty endpoint — the fix is a pure classifier change (base URL comparison and model string manipulation) fully covered by unit tests; no external service dependency\n",
+        "branch": "fix/issue-92124-embedding-prefix",
+        "head_sha": "33860fe4c1dc084be7d13683da3f8c6c35d463f9",
+        "author": "xialonglee",
         "labels": [
-          "agents",
-          "size: XS",
-          "triage: needs-real-behavior-proof",
-          "P1",
+          "size: S",
+          "extensions: openai",
+          "proof: supplied",
+          "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 compatibility",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/session-write-lock.ts",
-            "additions": 18,
-            "deletions": 1,
+            "path": "extensions/openai/embedding-provider.test.ts",
+            "additions": 82,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/openai/embedding-provider.ts",
+            "additions": 14,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
@@ -92,58 +99,52 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91332",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91332.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92135",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92135.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 164,
+          "total": 159,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 132,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
+            "SUCCESS": 129,
+            "SKIPPED": 30
           },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2690,
+    "total_ms": 4675,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 563
+        "ms": 753
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1823
+        "ms": 3569
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 279
+        "ms": 338
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
