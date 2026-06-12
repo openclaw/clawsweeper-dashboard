@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T03:17:31.857Z",
+  "generated_at": "2026-06-12T03:18:18.561Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T00:17:29.229Z",
+  "since": "2026-06-12T00:18:17.960Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4687002650
   ],
-  "status_comment_id": 4687002805,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-12T03:16:44Z",
       "comment_updated_at": "2026-06-12T03:16:44Z",
-      "status_comment_id": 4687002805,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,104 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-12T03:17:32.835Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 92294
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-12T03:17:35.052Z",
-          "response_comment_id": "4686897840",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): keep OpenClaw exec when native surface has no environment (#92238)",
-        "body": "## Summary\n\nIsolated cron jobs on the OpenAI/Codex runtime (gpt-5.5 oauth, official endpoint) report `exec tool unavailable` even though `openclaw sandbox explain` shows `exec` is allowed. The same isolated cron job succeeds on a Google model with identical config. Fixes #92238.\n\n### Root cause\n\nWith the 2026.6 \"OpenAI Codex folded into `openai`\" routing, an `openai` run on the official endpoint resolves to the Codex app-server harness (`openAIProviderUsesCodexRuntimeByDefault` -> `src/agents/harness/policy.ts`), not the embedded Responses transport. Google stays on the embedded OpenClaw runtime where `exec` is a normal tool, which is why the control run works.\n\nThe Codex app-server strips OpenClaw's own `exec`/`process`/`read`/`write`/`edit`/`apply_patch` (`CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES`) on the assumption that Codex owns shell natively. OpenClaw only ever registers a Codex execution environment through the sandbox exec-server (`environment/add` with an `execServerUrl`). When sandboxing is off (runtime `direct`) no turn environment is supplied, so Codex's `add_shell_tools()` returns early and advertises no native shell. Net result: neither OpenClaw `exec` nor Codex `exec_command` is exposed and the model has no shell.\n\nVerified against the bundled `@openai/codex` `0.139.0` (`rust-v0.139.0`):\n- `codex-rs/core/src/tools/spec_plan.rs:582` `add_shell_tools()` returns early at line 586 when `!environment_mode.has_environment()`.\n- `codex-rs/core/src/session/turn_context.rs:168` `tool_environment_mode()` = `ToolEnvironmentMode::from_count(self.environments.turn_environments.len())` -> `None` with zero environments.\n- `codex-rs/tools/src/tool_config.rs:175` `from_count(0) => None`; line 183 `has_environment()` is `false` for `None`.\n\nThe code already restores OpenClaw's shell for the two analogous \"Codex can't run it natively\" cases: sandbox-backed (`sandbox_exec`/`sandbox_process`) and exec host=node (`exec`/`process`). The sandbox-off / direct case was the missing fourth branch.\n\n## Fix\n\n`extensions/codex/src/app-server/dynamic-tool-build.ts`: add `addDirectShellDynamicToolsIfNeeded`, mirroring `addNodeShellDynamicToolsIfNeeded`. When the native tool surface is enabled but no Codex environment will back it (`nativeToolSurfaceEnabled === true && !sandbox.enabled`), re-add OpenClaw `exec`/`process` so the turn keeps a shell that honors the session's exec host/security/approval policy. Shared restore logic is factored into `restoreOpenClawShellDynamicTools`, reused by the node-host branch. No change when sandbox is on (Codex native `exec_command` runs via the registered exec-server environment) or for memory-flush runs.\n\n## Verification\n\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/dynamic-tool-build.test.ts` -> 33 passed (adds two regression tests that dispatch the restored `exec` through the real Codex app-server bridge `createCodexDynamicToolBridge.handleToolCall`, and assert the sandbox-on path still reports `exec` as unavailable)\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts run-attempt.dynamic-tools.test.ts native-execution-policy.test.ts` -> 113 passed\n- `node scripts/run-oxlint.mjs <changed files>` -> clean\n- `pnpm tsgo:extensions:test` -> EXIT 0\n\n## Real behavior proof\n\n- **Behavior addressed:** isolated-cron OpenAI/Codex runs with sandbox off get a working `exec` again instead of `exec tool unavailable`; the restored tool actually dispatches and runs a shell command through the Codex app-server bridge rather than only appearing in the tool list.\n- **Real environment tested:** the production `buildDynamicTools()` built with the REAL `createOpenClawCodingTools` factory (no stub) in the issue's exact config (provider `openai`, model `gpt-5.5`, sandbox off, host auto, no `toolsAllow`); `nativeToolSurfaceEnabled` computed by the real `shouldEnableCodexAppServerNativeToolSurface` decision (asserted `true`). The restored `exec` was then dispatched through the real Codex app-server bridge `createCodexDynamicToolBridge.handleToolCall`, which invokes the tool and spawns a real local OS process.\n- **Exact steps or command run after this patch:** drove the production chain end to end (`buildDynamicTools()` -> `createCodexDynamicToolBridge.handleToolCall({ tool: \"exec\", arguments: { command: \"echo openclaw-92238-live-exec-ok\" } })`) against unfixed `main` and against this patch, via `node scripts/run-vitest.mjs <local repro>`.\n- **Evidence after fix:**\n\n```\n# Unfixed main (pre-patch) -- real Codex bridge dispatch of `exec`:\nnativeToolSurfaceEnabled=true\nexec present in built tools=false\nbridge.success=false\nbridge.output=Unknown OpenClaw tool: exec\n\n# With this patch -- same production chain, a real local process is spawned:\nnativeToolSurfaceEnabled=true\nexec present in built tools=true\nbridge.success=true\nbridge.output=openclaw-92238-live-exec-ok\n```\n\n- **Observed result after fix:** the native surface stays enabled; dispatching `exec` through the real Codex app-server bridge invoked the restored tool, spawned a real process, and returned the command's stdout (`openclaw-92238-live-exec-ok`) with `success=true`. On unfixed `main` the same dispatch returned `Unknown OpenClaw tool: exec` with `success=false`, which is the exact `exec tool unavailable` surface from the report. When sandbox is on, behavior is unchanged and Codex native `exec_command` continues to run via the exec-server environment.\n- **What was not tested:** a live end-to-end cron turn against the hosted OpenAI Codex app-server with real OAuth credentials (none available in this environment). Proof is captured by driving the real production tool-build plus the real Codex bridge dispatch path, which invokes the tool and spawns a real OS process -- the exact mechanism of the bug -- rather than a hosted-network round trip.\n",
-        "branch": "fix/codex-direct-exec-tool-surface",
-        "head_sha": "1d3abeeb8deceb232ab152e7b71465f4edc284f9",
-        "author": "yetval",
-        "labels": [
-          "size: M",
-          "extensions: codex",
-          "proof: supplied",
-          "P1",
-          "rating: 🌊 off-meta tidepool"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
-            "additions": 135,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tool-build.ts",
-            "additions": 45,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92294",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92294.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 157,
-          "counts": {
-            "SUCCESS": 126,
-            "SKIPPED": 31
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6520,
+    "total_ms": 1837,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 671
+        "ms": 590
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1945
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3882
+        "ms": 1236
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
