@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T05:13:35.193Z",
+  "generated_at": "2026-06-12T05:13:37.473Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T02:13:33.462Z",
+  "since": "2026-06-12T02:13:36.999Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    66147
+    66957
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 2,
+  "scanned_comments": 3,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,363 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:66147:4323856144:2026-06-12T05:13:30Z:clawsweeper_needs_human",
-      "comment_id": "4323856144",
-      "comment_version_key": "4323856144:2026-06-12T05:13:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/66147#issuecomment-4323856144",
-      "repo": "openclaw/openclaw",
-      "issue_number": 66147,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-27T02:57:49Z",
-      "comment_updated_at": "2026-06-12T05:13:30Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=864f88e006238b0b0b9e84d424d1e163f1899ac1)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +182, Tests +311. Total +493 across 11 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "864f88e006238b0b0b9e84d424d1e163f1899ac1",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat: split model routing for tool-call turns",
-        "body": "## Summary\n\n- Adds `model.tool` config alongside `model.primary` so tool-call turns route to a different model than chat turns\n- Enables cost-efficient setups like local Ollama for chat + Claude API for tool execution\n- Wraps the session `StreamFn` to detect tool-continuation turns and swap models transparently\n\n## Motivation\n\nSmall local models (7b-14b) are fast and free but can't reliably use tools. API models handle tools perfectly but cost money. This feature lets users get the best of both worlds within a single conversation:\n\n```json\n{\n  \"agents\": {\n    \"defaults\": {\n      \"model\": {\n        \"primary\": \"ollama/qwen2.5-7b-fast\",\n        \"tool\": \"anthropic/claude-sonnet-4-20250514\"\n      }\n    }\n  }\n}\n```\n\nChat turns use the primary model. When the assistant triggers tool use, the tool model handles tool-call turns. Multi-step tool chains stay on the tool model until the chain completes.\n\n## Changes\n\n**Config layer:**\n- `src/config/types.agents-shared.ts` — Added `tool?: string` to `AgentModelConfig`\n- `src/config/zod-schema.agent-model.ts` — Added `tool` to zod schema (`.strict()` preserved)\n- `src/config/model-input.ts` — Added `resolveAgentModelToolValue()` resolver\n\n**Resolution layer:**\n- `src/agents/agent-scope.ts` — Added `resolveConfiguredToolModel()` with per-agent override + global defaults\n\n**Routing layer:**\n- `src/agents/pi-embedded-runner/split-model-stream.ts` — New `StreamFn` wrapper that detects tool-continuation turns (last message role is `\"tool\"` or `\"toolResult\"`) and routes to the tool model\n- `src/agents/pi-embedded-runner/run.ts` — Resolves tool model alongside primary, passes through to attempt\n- `src/agents/pi-embedded-runner/run/types.ts` — Added optional `toolModel`, `toolModelProvider`, `toolModelId` to attempt params\n- `src/agents/pi-embedded-runner/run/attempt.ts` — Wires split model wrapper into the `streamFn` chain\n\n## How it works\n\n```\nUser prompt → Primary Model (local/cheap)\n                    │\n                    ├─ No tool calls → respond directly\n                    │\n                    └─ Tool calls detected → Tool Model (API/capable)\n                                                  │\n                                                  ├─ More tool calls → stay on tool model\n                                                  └─ Done → next user turn uses primary\n```\n\nThe routing is implemented as a `StreamFn` wrapper positioned after message sanitization but before timeout detection in the wrapper chain. This means tool-continuation turns get all the same message cleanup (thinking block removal, tool call ID sanitization, etc.) before the routing decision.\n\n## Test plan\n\n- [x] 8 tests for `resolveAgentModelToolValue()` config resolver\n- [x] 6 tests for `AgentModelSchema` zod validation with `tool` field\n- [x] 6 tests for `wrapStreamFnWithSplitModelRouting()` stream wrapper (chat routing, tool routing, model swap-back, empty messages, options passthrough)\n- [ ] Manual integration test with Ollama primary + Anthropic tool model\n- [ ] Full `pnpm build && pnpm check && pnpm test` (in progress)\n\n## Known limitations\n\n1. **Context window mismatch**: Session uses primary model's context budget for compaction regardless of which model is active\n2. **Auth profile routing**: Tool model uses primary model's auth resolution; separate auth profiles not yet supported\n3. **Fallback interaction**: Tool model failures fall back to primary's fallback chain, not a tool-specific chain\n\n## AI-assisted PR 🤖\n\n- [x] **AI-assisted**: Built with Claude Code (Claude Opus 4.6)\n- [x] **Degree of testing**: Unit tests fully passing (20/20). Manual integration test pending.\n- [x] **I understand what the code does**: The `StreamFn` wrapper intercepts every LLM call within the session's tool-execution loop. It checks if the last message in the conversation context has role `\"tool\"` or `\"toolResult\"` — if so, the tool model `Model` object is substituted for the primary. The wrapper is stateless per-call (inspects messages each time) and positioned in the streamFn chain after message sanitization but before timeout/logging wrappers.\n- [x] Session logs available on request\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "feature/split-model-routing",
-        "head_sha": "864f88e006238b0b0b9e84d424d1e163f1899ac1",
-        "author": "hakibbumbus",
-        "labels": [
-          "agents",
-          "size: M",
-          "triage: refactor-only",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 security-boundary"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-scope.ts",
-            "additions": 39,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/types.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/split-model-stream.test.ts",
-            "additions": 194,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/split-model-stream.ts",
-            "additions": 66,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/model-input.split-model.test.ts",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/model-input.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.agents-shared.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-model.split-model.test.ts",
-            "additions": 50,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-model.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-66147",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-66147.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 51,
-          "counts": {
-            "FAILURE": 10,
-            "SUCCESS": 26,
-            "SKIPPED": 15
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-extensions-shard-3:FAILURE",
-            "check:FAILURE",
-            "check-additional:FAILURE",
-            "checks-node-core-support-boundary:FAILURE",
-            "checks-node-core-runtime:FAILURE",
-            "checks-node-agentic:FAILURE",
-            "build-smoke:FAILURE",
-            "checks-node-extensions:FAILURE",
-            "checks-node-core:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-extensions-shard-3:FAILURE",
-            "check:FAILURE",
-            "check-additional:FAILURE",
-            "checks-node-core-support-boundary:FAILURE",
-            "checks-node-core-runtime:FAILURE",
-            "checks-node-agentic:FAILURE",
-            "build-smoke:FAILURE",
-            "checks-node-extensions:FAILURE",
-            "checks-node-core:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:66147:4345491114:2026-04-29T16:13:07Z:clawsweeper_needs_human",
-      "comment_id": "4345491114",
-      "comment_version_key": "4345491114:2026-04-29T16:13:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/66147#issuecomment-4345491114",
-      "repo": "openclaw/openclaw",
-      "issue_number": 66147,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-29T16:13:07Z",
-      "comment_updated_at": "2026-04-29T16:13:07Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=864f88e006238b0b0b9e84d424d1e163f1899ac1)",
-      "review_summary": "The PR adds a `model.tool` config value, resolver/schema support, and a Pi embedded runner stream wrapper intended to route tool-continuation LLM calls to a configured alternate model.",
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "864f88e006238b0b0b9e84d424d1e163f1899ac1",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat: split model routing for tool-call turns",
-        "body": "## Summary\n\n- Adds `model.tool` config alongside `model.primary` so tool-call turns route to a different model than chat turns\n- Enables cost-efficient setups like local Ollama for chat + Claude API for tool execution\n- Wraps the session `StreamFn` to detect tool-continuation turns and swap models transparently\n\n## Motivation\n\nSmall local models (7b-14b) are fast and free but can't reliably use tools. API models handle tools perfectly but cost money. This feature lets users get the best of both worlds within a single conversation:\n\n```json\n{\n  \"agents\": {\n    \"defaults\": {\n      \"model\": {\n        \"primary\": \"ollama/qwen2.5-7b-fast\",\n        \"tool\": \"anthropic/claude-sonnet-4-20250514\"\n      }\n    }\n  }\n}\n```\n\nChat turns use the primary model. When the assistant triggers tool use, the tool model handles tool-call turns. Multi-step tool chains stay on the tool model until the chain completes.\n\n## Changes\n\n**Config layer:**\n- `src/config/types.agents-shared.ts` — Added `tool?: string` to `AgentModelConfig`\n- `src/config/zod-schema.agent-model.ts` — Added `tool` to zod schema (`.strict()` preserved)\n- `src/config/model-input.ts` — Added `resolveAgentModelToolValue()` resolver\n\n**Resolution layer:**\n- `src/agents/agent-scope.ts` — Added `resolveConfiguredToolModel()` with per-agent override + global defaults\n\n**Routing layer:**\n- `src/agents/pi-embedded-runner/split-model-stream.ts` — New `StreamFn` wrapper that detects tool-continuation turns (last message role is `\"tool\"` or `\"toolResult\"`) and routes to the tool model\n- `src/agents/pi-embedded-runner/run.ts` — Resolves tool model alongside primary, passes through to attempt\n- `src/agents/pi-embedded-runner/run/types.ts` — Added optional `toolModel`, `toolModelProvider`, `toolModelId` to attempt params\n- `src/agents/pi-embedded-runner/run/attempt.ts` — Wires split model wrapper into the `streamFn` chain\n\n## How it works\n\n```\nUser prompt → Primary Model (local/cheap)\n                    │\n                    ├─ No tool calls → respond directly\n                    │\n                    └─ Tool calls detected → Tool Model (API/capable)\n                                                  │\n                                                  ├─ More tool calls → stay on tool model\n                                                  └─ Done → next user turn uses primary\n```\n\nThe routing is implemented as a `StreamFn` wrapper positioned after message sanitization but before timeout detection in the wrapper chain. This means tool-continuation turns get all the same message cleanup (thinking block removal, tool call ID sanitization, etc.) before the routing decision.\n\n## Test plan\n\n- [x] 8 tests for `resolveAgentModelToolValue()` config resolver\n- [x] 6 tests for `AgentModelSchema` zod validation with `tool` field\n- [x] 6 tests for `wrapStreamFnWithSplitModelRouting()` stream wrapper (chat routing, tool routing, model swap-back, empty messages, options passthrough)\n- [ ] Manual integration test with Ollama primary + Anthropic tool model\n- [ ] Full `pnpm build && pnpm check && pnpm test` (in progress)\n\n## Known limitations\n\n1. **Context window mismatch**: Session uses primary model's context budget for compaction regardless of which model is active\n2. **Auth profile routing**: Tool model uses primary model's auth resolution; separate auth profiles not yet supported\n3. **Fallback interaction**: Tool model failures fall back to primary's fallback chain, not a tool-specific chain\n\n## AI-assisted PR 🤖\n\n- [x] **AI-assisted**: Built with Claude Code (Claude Opus 4.6)\n- [x] **Degree of testing**: Unit tests fully passing (20/20). Manual integration test pending.\n- [x] **I understand what the code does**: The `StreamFn` wrapper intercepts every LLM call within the session's tool-execution loop. It checks if the last message in the conversation context has role `\"tool\"` or `\"toolResult\"` — if so, the tool model `Model` object is substituted for the primary. The wrapper is stateless per-call (inspects messages each time) and positioned in the streamFn chain after message sanitization but before timeout/logging wrappers.\n- [x] Session logs available on request\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "feature/split-model-routing",
-        "head_sha": "864f88e006238b0b0b9e84d424d1e163f1899ac1",
-        "author": "hakibbumbus",
-        "labels": [
-          "agents",
-          "size: M",
-          "triage: refactor-only",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 security-boundary"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-scope.ts",
-            "additions": 39,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/types.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/split-model-stream.test.ts",
-            "additions": 194,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/split-model-stream.ts",
-            "additions": 66,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/model-input.split-model.test.ts",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/model-input.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.agents-shared.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-model.split-model.test.ts",
-            "additions": 50,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-model.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-66147",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-66147.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 51,
-          "counts": {
-            "FAILURE": 10,
-            "SUCCESS": 26,
-            "SKIPPED": 15
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-extensions-shard-3:FAILURE",
-            "check:FAILURE",
-            "check-additional:FAILURE",
-            "checks-node-core-support-boundary:FAILURE",
-            "checks-node-core-runtime:FAILURE",
-            "checks-node-agentic:FAILURE",
-            "build-smoke:FAILURE",
-            "checks-node-extensions:FAILURE",
-            "checks-node-core:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-extensions-shard-3:FAILURE",
-            "check:FAILURE",
-            "check-additional:FAILURE",
-            "checks-node-core-support-boundary:FAILURE",
-            "checks-node-core-runtime:FAILURE",
-            "checks-node-agentic:FAILURE",
-            "build-smoke:FAILURE",
-            "checks-node-extensions:FAILURE",
-            "checks-node-core:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1937,
+    "total_ms": 877,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 278
+        "ms": 463
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1437
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 196
+        "ms": 404
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
