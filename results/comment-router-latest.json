@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T08:32:15.510Z",
+  "generated_at": "2026-06-12T08:32:21.601Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T05:32:14.937Z",
+  "since": "2026-06-12T05:32:16.283Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    92113
+    92387
   ],
   "comment_ids": [
-    4689073399
+    4689052924
   ],
-  "status_comment_id": 4689146520,
+  "status_comment_id": 4689146206,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92113:4689073399:2026-06-12T08:21:07Z:re_review",
-      "comment_id": "4689073399",
-      "comment_version_key": "4689073399:2026-06-12T08:21:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92113#issuecomment-4689073399",
+      "idempotency_key": "comment-router:openclaw/openclaw:92387:4689052924:2026-06-12T08:17:48Z:re_review",
+      "comment_id": "4689052924",
+      "comment_version_key": "4689052924:2026-06-12T08:17:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92387#issuecomment-4689052924",
       "repo": "openclaw/openclaw",
-      "issue_number": 92113,
-      "author": "wangmiao0668000666",
-      "author_id": 290215524,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-12T08:21:07Z",
-      "comment_updated_at": "2026-06-12T08:21:07Z",
-      "status_comment_id": 4689146520,
+      "issue_number": 92387,
+      "author": "openperf",
+      "author_id": 80630709,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-06-12T08:17:48Z",
+      "comment_updated_at": "2026-06-12T08:17:48Z",
+      "status_comment_id": 4689146206,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -63,28 +63,82 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(anthropic-vertex): stop re-marking cache_control on transport-budgeted payloads",
+        "body": "### Summary\n\n- **Problem**: Issue #91982 reports that `anthropic-vertex` requests are intermittently rejected with `FailoverError: LLM request rejected: A maximum of 4 blocks with cache_control may be provided. Found 5.` In the reporter's production deployment the rejection fires whenever active-memory recall injects context into the turn, forcing a model fallback on every hit; the only workaround is disabling active-memory.\n- **Root cause**: the request passes through two cache-control writers. The shared anthropic-messages transport (`src/llm/providers/anthropic.ts`) builds the payload with full marker budgeting: it splits the system prompt at the cache boundary into a stable prefix (with `cache_control`) and an intentionally uncached dynamic suffix, marks the tool array, and gives the message pass only the remaining budget (`4 - system - tools`), so legitimate payloads can carry exactly four markers. The vertex plugin then ran `applyAnthropicPayloadPolicyToParams` again on that finished payload inside its `onPayload` hook (`createAnthropicVertexOnPayload` in `extensions/anthropic-vertex/stream-runtime.ts`). That helper is written for raw payloads (the agents-side `anthropic-transport-stream.ts` builds its system blocks with no markers and boundary text intact): any system text block with no boundary marker and no `cache_control` gets a marker added unconditionally. Post-transport, the dynamic suffix is exactly such a block, so the shim adds a fifth marker and Anthropic rejects the request. Turns that don't fill the budget stay at four and pass, which is why the failure tracks active-memory hits rather than every request.\n- **Provenance**: the shim was added in `1a13c34f5b` (\"close cache boundary transport gaps\"), when the then-external transport did not understand the OpenClaw cache boundary and the plugin-level policy pass was the only splitter. `eef24d452f` (\"preserve provider prompt cache boundaries\", shipped in v2026.6.2-beta.1) moved boundary splitting and marker budgeting natively into the shared transport, which turned the shim from a gap-closer into a double-application. The reporter's first failures on 2026.6.5 line up with that release.\n- **Fix**: delete the shim and forward the caller's `onPayload` hook unchanged. The shared transport is the single owner of cache-control budgeting for this API family, which is already how the plain `anthropic` provider behaves (its wrapper applies the payload policy only for `service_tier`, without `enableCacheControl`).\n- **What changed**: `extensions/anthropic-vertex/stream-runtime.ts` removes `createAnthropicVertexOnPayload` and its policy imports and passes `options?.onPayload` straight through (net −35 lines); the stale tests that encoded the pre-split payload shape are replaced with regression tests for the budgeted-payload invariant.\n- **What did NOT change (scope boundary)**: config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`). Plugin surface unchanged (no exported signature, manifest, `api.ts`, or SDK changes; `createAnthropicVertexStreamFn` keeps its signature). The shared transport, the agents-side anthropic transport (which builds raw payloads and correctly applies the policy once), and the `anthropic` plugin's service-tier wrapper are untouched.\n\n### Reproduction\n\n1. Configure `anthropic-vertex` as the primary provider with prompt caching at its defaults, and enable active-memory for the agent.\n2. Drive a turn whose payload legitimately uses the full marker budget — an agentic turn where the transport marks the stable system prefix, the tool array, the last user text block, and the trailing `tool_result` fallback (the reporter hits this whenever a memory recall injects context).\n3. The system prompt contains the cache boundary, so the transport emits a cached stable prefix plus an uncached dynamic suffix.\n4. **Before this PR**: the vertex `onPayload` shim re-runs the payload policy on the finished payload, adds `cache_control` to the dynamic suffix, and Vertex `StreamRawPredict` returns 400 `A maximum of 4 blocks with cache_control may be provided. Found 5.`, triggering a model fallback.\n5. **After this PR**: the payload reaches the wire exactly as the transport budgeted it (at most four markers, dynamic suffix uncached) and the request is accepted.\n\n### Real behavior proof\n\n**Behavior addressed (#91982)**: an `anthropic-vertex` payload that already carries the transport's full cache-control budget is no longer re-marked on its way out, so requests that previously breached Anthropic's four-marker cap with `Found 5` now keep exactly the budgeted markers and the dynamic system suffix stays uncached.\n\n**Real environment tested (Linux x64, Node v22.22.3 — Vitest against the production vertex stream runtime)**: `createAnthropicVertexStreamFn` from the shipped plugin module, exercised through its injectable transport seam; the regression payload mirrors the shared transport's real output shape (split system prefix/suffix, marked tools, marked user text, marked trailing tool_result).\n\n**Exact steps or command run after this patch**: `pnpm test extensions/anthropic-vertex/stream-runtime.test.ts`; `pnpm tsgo:extensions && pnpm tsgo:extensions:test`; `node scripts/run-oxlint.mjs` and format check on the changed files; `.agents/skills/autoreview/scripts/autoreview --engine claude --thinking claude=max`.\n\n**Evidence after fix (Vitest output for the touched test file)**:\n\n```text\n Test Files  1 passed (1)\n      Tests  25 passed (25)\n```\n\n**Observed result after fix**: the transport options forward the caller's payload hook unchanged; a payload carrying the transport's four budgeted markers keeps exactly four after the hook path runs, with the dynamic suffix block still uncached; when the caller supplies no hook, the transport sets none.\n\n**What was not tested**: a live Vertex AI `StreamRawPredict` round-trip against GCP (no Vertex credentials in this environment). The reporter's GCP Cloud Logging captures in #91982 document the live failure mode this removes.\n\n**Repro confirmation**: both new tests fail on the unpatched tree — the marker count comes back as `expected 5 to be 4`, the same five-marker breach the reporter logged, and a transport-injected hook appears where none was supplied — and pass with the fix, so the tests cover the production change.\n\n### Risk / Mitigation\n\n- **Risk**: vertex payloads could lose prompt caching if nothing re-applied markers. **Mitigation**: the shared anthropic-messages transport applies cache-control budgeting for every request on this API family before `onPayload` runs, and the vertex stream function routes all requests through it — the same single-owner arrangement the plain `anthropic` provider already ships with.\n- **Risk**: a downstream `onPayload` consumer relied on the shim re-shaping its returned payload. **Mitigation**: every runtime supplier was audited (anthropic payload logging, command delivery logging, diagnostics byte accounting, and the `before_provider_request` plugin hook); all of them inspect or patch the finished payload and none construct boundary-marked system arrays, and the plain anthropic path likewise sends hook results without re-policing.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Integrations\n\n### Linked Issue/PR\n\nFixes #91982\n",
+        "branch": "fix/91982-vertex-cache-control-double-apply",
+        "head_sha": "6ef19602bfb48a819e096b23b66ece94a8072ed4",
+        "author": "openperf",
+        "labels": [
+          "size: S",
+          "extensions: anthropic-vertex",
+          "P1",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/anthropic-vertex/stream-runtime.test.ts",
+            "additions": 56,
+            "deletions": 67,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/anthropic-vertex/stream-runtime.ts",
+            "additions": 5,
+            "deletions": 40,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92387",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92387.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 157,
+          "counts": {
+            "SUCCESS": 126,
+            "SKIPPED": 31
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2061,
+    "total_ms": 5661,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 561
+        "ms": 2271
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 3034
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1487
+        "ms": 343
       },
       {
         "name": "append_ledger",
