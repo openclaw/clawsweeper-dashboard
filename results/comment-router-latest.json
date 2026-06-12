@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T06:05:03.619Z",
+  "generated_at": "2026-06-12T06:05:24.844Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T03:05:03.305Z",
+  "since": "2026-06-12T03:05:22.051Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92353
+    86744
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 16,
+  "commands_seen": 8,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,762 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86744:4539737334:2026-06-12T06:05:18Z:clawsweeper_needs_human",
+      "comment_id": "4539737334",
+      "comment_version_key": "4539737334:2026-06-12T06:05:18Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4539737334",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86744,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T03:30:45Z",
+      "comment_updated_at": "2026-06-12T06:05:18Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] No narrow automated repair blocker remains; a maintainer must choose whether automatic fresh-empty shared-state recovery and the current cross-platform evidence are acceptable before merge.; Cleared: The functional patch is limited to local SQLite resource and file handling and introduces no concrete dependency, workflow, permission, credential, downloaded-code, or supply-chain concern. (sha=236273e71a0fa1236a74c5c4dc3cf09047f1d4c0)",
+      "review_summary": "The PR makes the canonical shared state SQLite opener close partial resources, quarantine corrupted database and sidecar files, initialize a fresh database, and adds task-registry and file-descriptor regression coverage.\n\nPR surface: Source +71, Tests +114, Other +2. Total +187 across 29 files.\n\nReproducibility: yes. Writing malformed bytes to the canonical shared SQLite path deterministically exercises initialization failure, and the PR supplies after-fix output from the production task-registry loader using real files.",
+      "review_followup": "- [P2] No narrow automated repair blocker remains; a maintainer must choose whether automatic fresh-empty shared-state recovery and the current cross-platform evidence are acceptable before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "236273e71a0fa1236a74c5c4dc3cf09047f1d4c0",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tasks): recover from corrupted task registry SQLite on startup",
+        "body": "## Summary\n\n- Problem: Gateway startup can fail with uncaught SQLite corruption errors when the shared OpenClaw state database (`state/openclaw.sqlite`) is malformed; the task registry now restores through this shared database opener.\n- Solution: Detect SQLite corruption during shared state database open/setup, close every early `DatabaseSync` handle before retry, quarantine the malformed database, and create a fresh shared state database so startup can continue.\n- What changed: `src/state/openclaw-state-db.ts` now wraps WAL setup, PRAGMAs, and schema setup in one guarded initialization path; corruption recovery closes WAL/Kysely/SQLite state before quarantine retry. `src/state/openclaw-state-db.test.ts` adds regression coverage proving the WAL setup failure path leaves no stale quarantine file descriptor. `src/tasks/task-registry.store.test.ts` keeps the task-registry recovery roundtrip covered through the shared state database.\n- What did NOT change: No schema shape, task registry API, or healthy database behavior changed. Corrupted databases are preserved when quarantine succeeds; startup continues with a fresh empty shared state database.\n\nFixes #71689\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Gateway startup/task registry restore can crash when the shared `state/openclaw.sqlite` file is corrupted, including corruption detected by the early WAL setup path.\n- **Real environment tested:** Node 24.x on Linux, actual `loadTaskRegistryStateFromSqlite()` call through the production shared state DB opener (`openOpenClawStateDatabase()`), with a malformed `state/openclaw.sqlite` and WAL/SHM sidecar files.\n- **Exact steps or command run after this patch:**\n  ```bash\n  node --import tsx --input-type=module <<'NODE'\n  import { mkdirSync, readlinkSync, readdirSync, writeFileSync } from 'node:fs';\n  import { dirname, join } from 'node:path';\n\n  const stateDir = `/tmp/proof-openclaw-state-recovery-${Date.now()}`;\n  const sqlitePath = join(stateDir, 'state', 'openclaw.sqlite');\n  mkdirSync(dirname(sqlitePath), { recursive: true });\n  writeFileSync(sqlitePath, Buffer.from('not a sqlite database'));\n  writeFileSync(`${sqlitePath}-wal`, Buffer.from('corrupted wal'));\n  writeFileSync(`${sqlitePath}-shm`, Buffer.from('corrupted shm'));\n  process.env.OPENCLAW_STATE_DIR = stateDir;\n\n  const { loadTaskRegistryStateFromSqlite } = await import('./src/tasks/task-registry.store.sqlite.ts');\n  const { closeOpenClawStateDatabase } = await import('./src/state/openclaw-state-db.ts');\n\n  const snapshot = loadTaskRegistryStateFromSqlite();\n  const files = readdirSync(dirname(sqlitePath)).sort();\n  const quarantineFiles = files.filter((name) => name.startsWith('openclaw.sqlite.corrupted.'));\n  const fdTargets = process.platform === 'linux'\n    ? readdirSync('/proc/self/fd').flatMap((fd) => {\n        try {\n          return [readlinkSync(join('/proc/self/fd', fd))];\n        } catch {\n          return [];\n        }\n      })\n    : [];\n  const staleQuarantineFds = fdTargets.filter((target) =>\n    quarantineFiles.some((name) => target.startsWith(join(dirname(sqlitePath), name))),\n  );\n\n  console.log(JSON.stringify({\n    stateDir,\n    sqlitePath,\n    tasks: snapshot.tasks.size,\n    deliveryStates: snapshot.deliveryStates.size,\n    databaseExists: files.includes('openclaw.sqlite'),\n    quarantineFiles,\n    staleQuarantineFds,\n  }, null, 2));\n\n  closeOpenClawStateDatabase();\n  NODE\n  ```\n- **Evidence after fix:** Terminal output from the real loader path on the updated branch:\n  ```text\n  [openclaw-state-db] Corrupted OpenClaw state database quarantined, creating fresh database\n  {\n    \"stateDir\": \"/tmp/proof-openclaw-state-recovery-1780808040607\",\n    \"sqlitePath\": \"/tmp/proof-openclaw-state-recovery-1780808040607/state/openclaw.sqlite\",\n    \"tasks\": 0,\n    \"deliveryStates\": 0,\n    \"databaseExists\": true,\n    \"quarantineFiles\": [\n      \"openclaw.sqlite.corrupted.1780808041707\"\n    ],\n    \"staleQuarantineFds\": []\n  }\n  ```\n- **Observed result after fix:** The production task-registry restore path returned an empty snapshot instead of throwing, logged the quarantine event, created a fresh `state/openclaw.sqlite`, preserved the malformed main database under `openclaw.sqlite.corrupted.{timestamp}`, and left no open file descriptor pointing at the quarantined corrupted database after the WAL setup failure path.\n- **What was not tested:** Did not test corruption that appears mid-operation after startup. Did not test macOS or Windows locked-file behavior. Maintainers still need to accept the availability-first policy that a malformed shared state database is quarantined and startup continues with fresh empty shared state.\n\n## Regression Test Plan\n\n- Coverage level: Unit tests plus local real-behavior proof.\n- Target test files: `src/state/openclaw-state-db.test.ts` and `src/tasks/task-registry.store.test.ts`.\n- Scenario locked in: Shared state DB corruption triggers quarantine and fresh DB creation; the WAL setup corruption path closes the old database handle before retry; task registry writes and restores records after recovery.\n- Why this is the smallest reliable guardrail: The tests write malformed bytes to the real shared SQLite path and exercise the production opener and task-registry store instead of mocking SQLite corruption.\n\n## Local verification\n\n```text\nnode scripts/run-vitest.mjs src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# state DB shard: 14 tests passed\n# task registry shard: 28 tests passed\n\ncorepack pnpm format:check -- src/state/openclaw-state-db.ts src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# All matched files use the correct format.\n\ncorepack pnpm tsgo:core\n# passed\n\ngit diff --check\n# passed\n```\n\n## Root Cause\n\n- Root cause: The task registry now depends on the shared OpenClaw state database opener. That opener could surface SQLite corruption while setting up WAL or schema state, but the recovery path initially did not close every early `DatabaseSync` handle before attempting quarantine and retry.\n- Missing detection / guardrail: Corruption recovery needed to live at the shared state DB boundary, and the WAL setup path needed explicit handle cleanup coverage before rename-based quarantine.",
+        "branch": "feat/issue-71689",
+        "head_sha": "236273e71a0fa1236a74c5c4dc3cf09047f1d4c0",
+        "author": "mushuiyu886",
+        "labels": [
+          "channel: telegram",
+          "channel: whatsapp-web",
+          "app: web-ui",
+          "extensions: memory-core",
+          "cli",
+          "scripts",
+          "commands",
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.test.ts",
+            "additions": 8,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-db-probe.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-db.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-fts-state.test.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-search.ts",
+            "additions": 2,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/microsoft-foundry/index.test.ts",
+            "additions": 1,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/lane-delivery-text-deliverer.ts",
+            "additions": 11,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/lane-delivery.test.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/state-migrations.ts",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/auto-reply.web-auto-reply.connection-and-logging.e2e.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/pnpm-runner.mjs",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-approval-followup.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/btw.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/reliability.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/sandbox-skills.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 1,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-gateway-tool.test.ts",
+            "additions": 5,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sandbox/workspace-mounts.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.ts",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/cron-cli/shared.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-config-flow.test.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media-understanding/attachments.cache.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/exec.ts",
+            "additions": 1,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/shared/anthropic-model-contract.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.test.ts",
+            "additions": 34,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.ts",
+            "additions": 102,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tasks/task-registry.store.test.ts",
+            "additions": 86,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/vite.config.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86744",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86744.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "SUCCESS": 134,
+            "SKIPPED": 27,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-tooling:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS"
+          ],
+          "pending": [
+            "checks-node-core-tooling:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86744:4642860838:2026-06-07T13:49:04Z:re_review",
+      "comment_id": "4642860838",
+      "comment_version_key": "4642860838:2026-06-07T13:49:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4642860838",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86744,
+      "author": "mushuiyu886",
+      "author_id": 266724580,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-07T13:49:04Z",
+      "comment_updated_at": "2026-06-07T13:49:04Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tasks): recover from corrupted task registry SQLite on startup",
+        "body": "## Summary\n\n- Problem: Gateway startup can fail with uncaught SQLite corruption errors when the shared OpenClaw state database (`state/openclaw.sqlite`) is malformed; the task registry now restores through this shared database opener.\n- Solution: Detect SQLite corruption during shared state database open/setup, close every early `DatabaseSync` handle before retry, quarantine the malformed database, and create a fresh shared state database so startup can continue.\n- What changed: `src/state/openclaw-state-db.ts` now wraps WAL setup, PRAGMAs, and schema setup in one guarded initialization path; corruption recovery closes WAL/Kysely/SQLite state before quarantine retry. `src/state/openclaw-state-db.test.ts` adds regression coverage proving the WAL setup failure path leaves no stale quarantine file descriptor. `src/tasks/task-registry.store.test.ts` keeps the task-registry recovery roundtrip covered through the shared state database.\n- What did NOT change: No schema shape, task registry API, or healthy database behavior changed. Corrupted databases are preserved when quarantine succeeds; startup continues with a fresh empty shared state database.\n\nFixes #71689\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Gateway startup/task registry restore can crash when the shared `state/openclaw.sqlite` file is corrupted, including corruption detected by the early WAL setup path.\n- **Real environment tested:** Node 24.x on Linux, actual `loadTaskRegistryStateFromSqlite()` call through the production shared state DB opener (`openOpenClawStateDatabase()`), with a malformed `state/openclaw.sqlite` and WAL/SHM sidecar files.\n- **Exact steps or command run after this patch:**\n  ```bash\n  node --import tsx --input-type=module <<'NODE'\n  import { mkdirSync, readlinkSync, readdirSync, writeFileSync } from 'node:fs';\n  import { dirname, join } from 'node:path';\n\n  const stateDir = `/tmp/proof-openclaw-state-recovery-${Date.now()}`;\n  const sqlitePath = join(stateDir, 'state', 'openclaw.sqlite');\n  mkdirSync(dirname(sqlitePath), { recursive: true });\n  writeFileSync(sqlitePath, Buffer.from('not a sqlite database'));\n  writeFileSync(`${sqlitePath}-wal`, Buffer.from('corrupted wal'));\n  writeFileSync(`${sqlitePath}-shm`, Buffer.from('corrupted shm'));\n  process.env.OPENCLAW_STATE_DIR = stateDir;\n\n  const { loadTaskRegistryStateFromSqlite } = await import('./src/tasks/task-registry.store.sqlite.ts');\n  const { closeOpenClawStateDatabase } = await import('./src/state/openclaw-state-db.ts');\n\n  const snapshot = loadTaskRegistryStateFromSqlite();\n  const files = readdirSync(dirname(sqlitePath)).sort();\n  const quarantineFiles = files.filter((name) => name.startsWith('openclaw.sqlite.corrupted.'));\n  const fdTargets = process.platform === 'linux'\n    ? readdirSync('/proc/self/fd').flatMap((fd) => {\n        try {\n          return [readlinkSync(join('/proc/self/fd', fd))];\n        } catch {\n          return [];\n        }\n      })\n    : [];\n  const staleQuarantineFds = fdTargets.filter((target) =>\n    quarantineFiles.some((name) => target.startsWith(join(dirname(sqlitePath), name))),\n  );\n\n  console.log(JSON.stringify({\n    stateDir,\n    sqlitePath,\n    tasks: snapshot.tasks.size,\n    deliveryStates: snapshot.deliveryStates.size,\n    databaseExists: files.includes('openclaw.sqlite'),\n    quarantineFiles,\n    staleQuarantineFds,\n  }, null, 2));\n\n  closeOpenClawStateDatabase();\n  NODE\n  ```\n- **Evidence after fix:** Terminal output from the real loader path on the updated branch:\n  ```text\n  [openclaw-state-db] Corrupted OpenClaw state database quarantined, creating fresh database\n  {\n    \"stateDir\": \"/tmp/proof-openclaw-state-recovery-1780808040607\",\n    \"sqlitePath\": \"/tmp/proof-openclaw-state-recovery-1780808040607/state/openclaw.sqlite\",\n    \"tasks\": 0,\n    \"deliveryStates\": 0,\n    \"databaseExists\": true,\n    \"quarantineFiles\": [\n      \"openclaw.sqlite.corrupted.1780808041707\"\n    ],\n    \"staleQuarantineFds\": []\n  }\n  ```\n- **Observed result after fix:** The production task-registry restore path returned an empty snapshot instead of throwing, logged the quarantine event, created a fresh `state/openclaw.sqlite`, preserved the malformed main database under `openclaw.sqlite.corrupted.{timestamp}`, and left no open file descriptor pointing at the quarantined corrupted database after the WAL setup failure path.\n- **What was not tested:** Did not test corruption that appears mid-operation after startup. Did not test macOS or Windows locked-file behavior. Maintainers still need to accept the availability-first policy that a malformed shared state database is quarantined and startup continues with fresh empty shared state.\n\n## Regression Test Plan\n\n- Coverage level: Unit tests plus local real-behavior proof.\n- Target test files: `src/state/openclaw-state-db.test.ts` and `src/tasks/task-registry.store.test.ts`.\n- Scenario locked in: Shared state DB corruption triggers quarantine and fresh DB creation; the WAL setup corruption path closes the old database handle before retry; task registry writes and restores records after recovery.\n- Why this is the smallest reliable guardrail: The tests write malformed bytes to the real shared SQLite path and exercise the production opener and task-registry store instead of mocking SQLite corruption.\n\n## Local verification\n\n```text\nnode scripts/run-vitest.mjs src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# state DB shard: 14 tests passed\n# task registry shard: 28 tests passed\n\ncorepack pnpm format:check -- src/state/openclaw-state-db.ts src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# All matched files use the correct format.\n\ncorepack pnpm tsgo:core\n# passed\n\ngit diff --check\n# passed\n```\n\n## Root Cause\n\n- Root cause: The task registry now depends on the shared OpenClaw state database opener. That opener could surface SQLite corruption while setting up WAL or schema state, but the recovery path initially did not close every early `DatabaseSync` handle before attempting quarantine and retry.\n- Missing detection / guardrail: Corruption recovery needed to live at the shared state DB boundary, and the WAL setup path needed explicit handle cleanup coverage before rename-based quarantine.",
+        "branch": "feat/issue-71689",
+        "head_sha": "236273e71a0fa1236a74c5c4dc3cf09047f1d4c0",
+        "author": "mushuiyu886",
+        "labels": [
+          "channel: telegram",
+          "channel: whatsapp-web",
+          "app: web-ui",
+          "extensions: memory-core",
+          "cli",
+          "scripts",
+          "commands",
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.test.ts",
+            "additions": 8,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-db-probe.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-db.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-fts-state.test.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-search.ts",
+            "additions": 2,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/microsoft-foundry/index.test.ts",
+            "additions": 1,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/lane-delivery-text-deliverer.ts",
+            "additions": 11,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/lane-delivery.test.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/state-migrations.ts",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/auto-reply.web-auto-reply.connection-and-logging.e2e.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/pnpm-runner.mjs",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-approval-followup.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/btw.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/reliability.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/sandbox-skills.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 1,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-gateway-tool.test.ts",
+            "additions": 5,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sandbox/workspace-mounts.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.ts",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/cron-cli/shared.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-config-flow.test.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media-understanding/attachments.cache.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/exec.ts",
+            "additions": 1,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/shared/anthropic-model-contract.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.test.ts",
+            "additions": 34,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.ts",
+            "additions": 102,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tasks/task-registry.store.test.ts",
+            "additions": 86,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/vite.config.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86744",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86744.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "SUCCESS": 134,
+            "SKIPPED": 27,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-tooling:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS"
+          ],
+          "pending": [
+            "checks-node-core-tooling:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86744:4641552687:2026-06-07T05:38:25Z:re_review",
+      "comment_id": "4641552687",
+      "comment_version_key": "4641552687:2026-06-07T05:38:25Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4641552687",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86744,
+      "author": "mushuiyu886",
+      "author_id": 266724580,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-07T05:38:25Z",
+      "comment_updated_at": "2026-06-07T05:38:25Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86744:4641510199:2026-06-07T05:15:18Z:re_review",
+      "comment_id": "4641510199",
+      "comment_version_key": "4641510199:2026-06-07T05:15:18Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4641510199",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86744,
+      "author": "mushuiyu886",
+      "author_id": 266724580,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-07T05:15:18Z",
+      "comment_updated_at": "2026-06-07T05:15:18Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86744:4641479621:2026-06-07T05:01:19Z:re_review",
+      "comment_id": "4641479621",
+      "comment_version_key": "4641479621:2026-06-07T05:01:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4641479621",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86744,
+      "author": "mushuiyu886",
+      "author_id": 266724580,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-07T05:01:19Z",
+      "comment_updated_at": "2026-06-07T05:01:19Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86744:4541419121:2026-05-26T07:01:50Z:re_review",
+      "comment_id": "4541419121",
+      "comment_version_key": "4541419121:2026-05-26T07:01:50Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4541419121",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86744,
+      "author": "mushuiyu886",
+      "author_id": 266724580,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T07:01:50Z",
+      "comment_updated_at": "2026-05-26T07:01:50Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86744:4540536313:2026-05-26T05:32:40Z:re_review",
+      "comment_id": "4540536313",
+      "comment_version_key": "4540536313:2026-05-26T05:32:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4540536313",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86744,
+      "author": "mushuiyu886",
+      "author_id": 266724580,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T05:32:40Z",
+      "comment_updated_at": "2026-05-26T05:32:40Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86744:4539877045:2026-05-26T04:00:57Z:re_review",
+      "comment_id": "4539877045",
+      "comment_version_key": "4539877045:2026-05-26T04:00:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4539877045",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86744,
+      "author": "mushuiyu886",
+      "author_id": 266724580,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T04:00:57Z",
+      "comment_updated_at": "2026-05-26T04:00:57Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 627,
+    "total_ms": 4811,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 303
+        "ms": 423
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2352
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 313
+        "ms": 2007
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
