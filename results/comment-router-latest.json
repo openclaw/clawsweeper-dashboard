@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T07:50:39.393Z",
+  "generated_at": "2026-06-12T07:50:59.148Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T04:50:36.385Z",
+  "since": "2026-06-12T04:50:58.887Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    92376
+    92384
   ],
-  "comment_ids": [
-    4688552157
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,146 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92376:4688552157:2026-06-12T07:49:52Z:clawsweeper_auto_repair",
-      "comment_id": "4688552157",
-      "comment_version_key": "4688552157:2026-06-12T07:49:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92376#issuecomment-4688552157",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92376,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-12T07:24:55Z",
-      "comment_updated_at": "2026-06-12T07:49:52Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=6bab93dca6f3248aad485843a7d267eaff4540dd)",
-      "review_summary": "The PR adds a bounded archive for terminated approvals, distinct expired/already-resolved/unknown gateway errors, shared error detectors, and focused lifecycle tests.\n\nPR surface: Source +154, Tests +272. Total +426 across 6 files.\n\nReproducibility: yes. Resolve an expired approval through Telegram or WhatsApp on the PR head: the gateway returns a new terminal reason that the unchanged cleanup branches do not recognize.",
-      "review_followup": "- The merge blocker is a concrete, bounded migration of known plugin SDK and channel consumers that does not require a product decision.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "6bab93dca6f3248aad485843a7d267eaff4540dd",
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(approvals): distinguish expired, already-resolved, and unknown approval ids",
-        "body": "Resolving an exec/plugin approval that was not currently pending previously collapsed three different situations — the approval **expired**, it was **already resolved**, or the id was **never seen** — into a single `unknown or expired approval id` error. Operators could not tell whether to re-run the command (expired) or whether their decision had already landed (resolved), which is one of the concrete failure modes behind \"Failed to submit approval: unknown or expired approval id\".\n\n## What changed\n\n- `ExecApprovalManager` keeps a **bounded FIFO archive** of terminated records (512 entries) and exposes `classifyApprovalId()`, which **respects caller visibility** so it never leaks the existence of approvals the caller could not otherwise see.\n- `handleApprovalResolve` now reports an elapsed window as **`approval expired`** (`reason: APPROVAL_EXPIRED`, with remediation) both inside the resolved-grace window and after the record is archived, and reports a post-grace decided approval as **`approval already resolved`**. Genuinely unknown ids keep the existing `unknown or expired approval id` message. Same-decision idempotent retries during the grace window are unchanged.\n- Adds `isApprovalExpiredError` / `isApprovalAlreadyResolvedError` detectors alongside the existing `isApprovalNotFoundError`.\n\n## Tests\n\n- `pnpm exec vitest run --config test/vitest/vitest.gateway.config.ts src/gateway/exec-approval-manager.test.ts src/gateway/server-methods/approval-shared.test.ts` — classify pending/resolved/expired/unknown, visibility filtering, post-grace archive, FIFO eviction; in-grace and post-grace expired vs already-resolved resolution.\n- `pnpm exec vitest run --config vitest.config.ts src/infra/approval-errors.test.ts` — new detectors.\n- `./node_modules/.bin/oxfmt --check` on all changed files.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Submitting an approval that is no longer pending returned the same `unknown or expired approval id` whether it had expired, had already been resolved, or never existed, so the operator had no idea whether re-running the command would help. This change makes an expired approval report `approval expired` (with an `APPROVAL_EXPIRED` reason and remediation) distinctly from a genuinely unknown id, including after the in-memory grace window has elapsed and the record has moved to the bounded archive.\n\n**Real environment tested:** A real OpenClaw gateway runtime started from this branch's worktree on macOS (Darwin, Apple Silicon), exercising the genuine gateway server, `ExecApprovalManager`, and the `exec.approval.request` / `exec.approval.resolve` server methods over a websocket operator connection. No model backend is involved — approvals are created and resolved directly through the real gateway methods.\n\n**Exact steps or command run after this patch:** A standalone operator client connects to the in-process gateway and calls `exec.approval.request` (with a short or long `timeoutMs`) to register a real approval, lets the short one elapse, waits past the 15s resolved-grace window so the record is archived, then calls `exec.approval.resolve` for: an expired-but-in-grace id, an expired-and-archived id, and a never-issued id, capturing each error.\n\n**Evidence after fix:** Live error responses returned by the running gateway's `exec.approval.resolve`:\n```\n# expired, still inside the 15s grace window\n{\"ok\":false,\"error\":{\"message\":\"approval expired\",\"reason\":\"APPROVAL_EXPIRED\",\"code\":\"INVALID_REQUEST\"}}\n\n# expired, AFTER the grace window (record served from the bounded terminal archive)\nrequest(\"echo expired-archived\", timeout=1200) -> id=ff40df94-4ee1-467a-bf4c-1759e3f13aaa\nexpired post-grace -> {\"ok\":false,\"error\":{\"message\":\"approval expired\",\"reason\":\"APPROVAL_EXPIRED\",\"code\":\"INVALID_REQUEST\"}}\n\n# genuinely unknown id\nscenario 4: unknown -> {\"ok\":false,\"error\":{\"message\":\"unknown or expired approval id\",\"reason\":\"APPROVAL_NOT_FOUND\",\"code\":\"INVALID_REQUEST\"}}\n```\n\n**Observed result after fix:** An expired approval returns `approval expired` / `APPROVAL_EXPIRED` both within the grace window and after the record is archived, while a never-issued id still returns `unknown or expired approval id` / `APPROVAL_NOT_FOUND`. Before this patch all of these returned the same `unknown or expired approval id`. The remediation text now tells the operator to re-run the command to request a fresh approval.\n\n**What was not tested:** The already-resolved-after-grace path (`approval already resolved`) was exercised through the unit suite rather than this live run, because a gateway approval with no interactive delivery route is expired by the gateway before it can be decided in this headless harness; the resolved-vs-expired classification itself is covered by `exec-approval-manager.test.ts` and `approval-shared.test.ts`. No third-party model or channel was used.\n",
-        "branch": "hide/fix/approval-expired-resolved-ux",
-        "head_sha": "6bab93dca6f3248aad485843a7d267eaff4540dd",
-        "author": "hidetsugu55",
-        "labels": [
-          "gateway",
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/exec-approval-manager.test.ts",
-            "additions": 102,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/exec-approval-manager.ts",
-            "additions": 63,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/approval-shared.test.ts",
-            "additions": 122,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/approval-shared.ts",
-            "additions": 58,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/approval-errors.test.ts",
-            "additions": 49,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/approval-errors.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92376",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92376.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "SUCCESS": 133,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3202,
+    "total_ms": 507,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 516
+        "ms": 250
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2480
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 183
+        "ms": 246
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
