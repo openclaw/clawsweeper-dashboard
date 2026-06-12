@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T09:12:56.073Z",
-  "repo": "openclaw/clawhub",
+  "generated_at": "2026-06-12T09:13:34.951Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-12T06:12:54.503Z",
+  "since": "2026-06-12T06:13:34.694Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    2614
+    92403
   ],
-  "comment_ids": [
-    4689407555
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,122 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/clawhub:2614:4689407555:2026-06-12T09:12:10Z:clawsweeper_auto_repair",
-      "comment_id": "4689407555",
-      "comment_version_key": "4689407555:2026-06-12T09:12:10Z",
-      "comment_url": "https://github.com/openclaw/clawhub/pull/2614#issuecomment-4689407555",
-      "repo": "openclaw/clawhub",
-      "issue_number": 2614,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-12T09:08:06Z",
-      "comment_updated_at": "2026-06-12T09:12:10Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=91c3602128b858d1c5e70b0f41607c221cff8d8d)",
-      "review_summary": "The PR makes loopback docs-auth return origins development-only, removes them from the production CSP, and adds environment-specific regression tests.\n\nReproducibility: yes. On current main, a loopback `return_to` passes normalization, produces a loopback callback, and the docs-auth route auto-posts the signed-in bearer token to it.",
-      "review_followup": "- [P2] The remaining blocker is a narrow, mechanical repository-policy repair that can be added without changing the approved auth behavior.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "91c3602128b858d1c5e70b0f41607c221cff8d8d",
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: restrict docs auth return origins to dev only",
-        "body": "## What this fixes\n\nThe ClawHub docs auth broker (`/docs/auth`) signs a user in and then **auto-POSTs their ClawHub auth token** to the return origin's callback. The allowlist of return origins included loopback addresses in **every** environment, including production:\n\n```ts\nconst allowedDocsOrigins = new Set([\n  \"https://documentation.openclaw.ai\",\n  \"https://docs.openclaw.ai\",\n  \"http://localhost:4173\",   // accepted in prod too\n  \"http://127.0.0.1:4173\",\n]);\n```\n\nIn production, a user who lands on `/docs/auth?return_to=http://localhost:4173/...` has their auth token POSTed to that loopback address. On a shared or multi-process machine, any local process bound to `:4173` can receive a signed-in ClawHub bearer token. The production CSP `form-action` also listed those localhost origins, so the browser permitted the cross-origin POST.\n\nThis is the `/docs/auth` half of **GHSA-mp85-24m3-52jg** (\"Production auth handoff flows can post or redirect bearer tokens to localhost origins\").\n\n## Provenance\n\nBoth the localhost origin entries and the localhost `form-action` CSP entries were introduced together in `bec93623` (\"feat: add ClawHub docs auth broker\"). The loopback origins are the docs **dev** server — they were only ever meant for local development but were never gated to it.\n\n## The fix\n\nGate the loopback origins behind the existing `isDevRuntime()` helper so production only trusts the real docs origins, and remove the now-dead localhost entries from the production CSP `form-action`.\n\n```ts\nconst PROD_DOCS_ORIGINS = [\"https://documentation.openclaw.ai\", \"https://docs.openclaw.ai\"];\nconst DEV_DOCS_ORIGINS = [\"http://localhost:4173\", \"http://127.0.0.1:4173\"];\n\nfunction allowedDocsOrigins(): Set<string> {\n  return isDevRuntime()\n    ? new Set([...PROD_DOCS_ORIGINS, ...DEV_DOCS_ORIGINS])\n    : new Set(PROD_DOCS_ORIGINS);\n}\n```\n\nThe set is computed at call time so the gate reflects the runtime environment.\n\n## Behavior\n\n| `return_to` origin | Dev | Prod (before) | Prod (after) |\n|---|---|---|---|\n| `https://docs.openclaw.ai/...` | accepted | accepted | accepted |\n| `https://documentation.openclaw.ai/...` | accepted | accepted | accepted |\n| `http://localhost:4173/...` | accepted | **accepted** | **rejected** |\n| `http://127.0.0.1:4173/...` | accepted | **accepted** | **rejected** |\n\nLocal docs development keeps working; production stops handing tokens to loopback. `vercel.json` only applies to Vercel deployments, and the dev server doesn't use it, so trimming localhost from `form-action` has no dev impact.\n\n## Out of scope (follow-up)\n\nThe advisory also covers the `/cli/auth` loopback token handoff. That flow legitimately uses loopback redirects in production (standard CLI login), so it can't be dev-gated the same way — hardening it (scoped/short-lived tokens, PKCE or an approval screen) is a larger token-model change tracked separately.\n\n## Verification\n\n- `vitest run src/lib/docsAuth.test.ts src/lib/runtimeEnv.test.ts` — 8 passed (added tests assert prod rejects localhost and still accepts real docs origins; dev still accepts localhost)\n- `tsc --noEmit -p tsconfig.json` — exit 0\n- `oxlint --type-aware` on touched files — clean\n- `oxfmt --check` on touched files — clean\n",
-        "branch": "jesse/pick-up-ghsa-clawhub",
-        "head_sha": "91c3602128b858d1c5e70b0f41607c221cff8d8d",
-        "author": "jesse-merhi",
-        "labels": [
-          "status: 👀 ready for maintainer look",
-          "rating: 🐚 platinum hermit"
-        ],
-        "files": [
-          {
-            "path": "src/lib/docsAuth.test.ts",
-            "additions": 20,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/lib/docsAuth.ts",
-            "additions": 15,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "vercel.json",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-clawhub-2614",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawhub-2614.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 19,
-          "counts": {
-            "SUCCESS": 17,
-            "SKIPPED": 1,
-            "IN_PROGRESS": 1
-          },
-          "blockers": [
-            "playwright-local-auth:IN_PROGRESS"
-          ],
-          "pending": [
-            "playwright-local-auth:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1767,
+    "total_ms": 402,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 496
+        "ms": 246
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1062
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 555
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 184
+        "ms": 145
       },
       {
         "name": "append_ledger",
