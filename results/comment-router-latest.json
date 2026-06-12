@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-12T02:48:01.416Z",
+  "generated_at": "2026-06-12T02:49:50.771Z",
   "repo": "steipete/vox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T23:47:59.963Z",
+  "since": "2026-06-11T23:49:49.429Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
@@ -61,71 +61,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(logger): guard call-log writes after close so late events cannot crash the server",
-        "body": "## Summary\n\n**Classification: runtime bug fix — single-call defect with whole-server blast radius (process crash).**\n\n`createCallLogger`'s WriteStream has no closed-state guard and no `error` listener. Any `logger.event(...)` after `logger.close()` writes to an ended stream, which emits `ERR_STREAM_WRITE_AFTER_END` on a stream with **no error listener** — an uncaught exception that kills the entire `vox serve` process and every concurrent call on it.\n\nThis is reachable in production via an async path that #5's `closed` guard in `server.ts` doesn't cover:\n\n1. The model calls `query_agent`; `handleResponseDone` is fired-and-forgotten with a `.catch` that logs `tool.error` (`src/server.ts:235-247`).\n2. The caller hangs up while the agent query is in flight → Twilio `stop` / WS close → `cleanupCall()` closes the agent client **and the logger**.\n3. The pending agent query rejects (`\"Agent process closed\"`) → the `.catch` calls `logger.event(\"vox\", { type: \"tool.error\", ... })` → write-after-end → uncaught exception → server down.\n\nA hung agent + impatient caller is the *normal* failure mode this path exists for, so the crash triggers exactly when the system is already degraded.\n\n### The fix\n\nAll inside `src/logger.ts` (14 lines), so every call-site — including future ones — is covered at the single chokepoint:\n\n- `event()` becomes a no-op once the logger is closed. Late events are dropped deliberately: the call is over and `events.jsonl` is complete; previously those events were never persisted either (the process died instead).\n- `close()` is idempotent.\n- The stream gets an `error` listener that warns on stderr, so even a genuine fs error (ENOSPC, EBADF) degrades to a lost log line instead of a dead bridge.\n\nNo behavior change for any live call path; nothing about audio, barge-in, or tool dispatch is touched.\n\n## Reproducibility — deterministic, from production code\n\n`test/server-teardown.test.ts` drives the **real `handleTwilioSocket`** with a **real subprocess agent** (`node -e \"process.stdin.resume()\"` — accepts the query, never answers) through the exact production sequence above. Unlike a timing-dependent live-call defect, the crash mechanism here is the local fs WriteStream — the process death is real and reproduces deterministically. Only the two WS transports are stubbed; the defect does not involve them.\n\nAgainst the unfixed logger (`git checkout origin/main -- src/logger.ts`):\n\n```\n$ node --import tsx --test test/server-teardown.test.ts\nnot ok 1 - hang-up during an in-flight agent query does not crash the process\n  failureType: 'uncaughtException'\n  error: 'write after end'\n  code: 'ERR_STREAM_WRITE_AFTER_END'\n# tests 1\n# pass 0\n# fail 1\n```\n\nThat `uncaughtException` is the real process-killer observed end-to-end, not an assertion on mocked state. With the fix restored, the same test passes and asserts `events.jsonl` ends cleanly (contains `twilio.ws.closed`, does **not** contain a post-teardown `tool.error` line).\n\n`test/logger.test.ts` additionally pins the unit-level contract: events before close are persisted, events after close are dropped, `close()` is idempotent. The post-close test also fails on the unfixed logger (verified the same way: 3 tests → pass 2 / fail 1, uncaught `ERR_STREAM_WRITE_AFTER_END`).\n\n## Test plan — local run output (proof)\n\nRan the exact CI pipeline (`lint` → `typecheck` → `test` → `build`) on both matrix versions.\n\n### Node v22.22.3\n\n```\n$ pnpm run lint\n> oxfmt --check .\nAll matched files use the correct format.\n> oxlint --deny-warnings src test\n(clean exit)\n\n$ pnpm run typecheck\n> tsgo -p tsconfig.json --noEmit\n(clean exit, no output)\n\n$ pnpm test\n# tests 32\n# pass 32\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 539.129\n\n$ pnpm run build\nESM dist/cli.js     33.53 KB\nESM dist/cli.js.map 66.25 KB\nESM ⚡️ Build success in 35ms\n```\n\n### Node v24.16.0\n\n```\n$ pnpm test\nℹ tests 32\nℹ pass 32\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 487.813792\n```\n\n## Contributor baseline workflow run\n\nThe CI workflow also triggers on `push` (`branches: [\"**\"]`), so the exact head commit of this PR already ran the full pipeline end-to-end on GitHub's hosted infrastructure:\n\n**Run:** https://github.com/joeVenner/vox/actions/runs/27379247773 (original contributor commit `d58f02fa6e10423029aca098e6efeb9f448a582e`) — both matrix jobs succeeded: `test (22)` and `test (24)`.\n\nLive output from the hosted run confirming the new tests executed there:\n\n```\ntest (22)  Run pnpm test   # tests 32\ntest (22)  Run pnpm test   # pass 32\ntest (22)  Run pnpm test   # fail 0\ntest (22)  Run pnpm run build  ESM ⚡️ Build success in 24ms\ntest (24)  Run pnpm test   ℹ tests 32\ntest (24)  Run pnpm test   ℹ pass 32\ntest (24)  Run pnpm test   ℹ fail 0\ntest (24)  Run pnpm run build  ESM ⚡️ Build success in 29ms\n```\n\n## Risk notes\n\n- The only intentional behavior change is that events arriving after teardown are dropped instead of (attempted to be) written. Before this PR they were never written anyway — the write crashed the server. If post-teardown events should be persisted instead, that requires keeping the stream open past `cleanupCall()`, which is a different lifecycle decision; happy to follow up if preferred.\n- Security: no dependency, workflow, permission, or secret-handling changes.\n\n\n## Maintainer update — final candidate `47f41a90a754`\n\nI independently reproduced the current-`main` failure in a child process using the real `handleTwilioSocket` and subprocess agent path: the process exited with `ERR_STREAM_WRITE_AFTER_END` after hang-up rejected the in-flight query.\n\nThe contributor logger guard is retained, but the final candidate also repairs the broader teardown race instead of merely hiding it:\n\n- `createCallLogger` drops post-close writes, closes idempotently, handles stream errors, and stops accepting writes after an underlying stream failure.\n- `handleResponseDone` receives call-lifecycle state, stops after teardown, does not resume a closed OpenAI session, and suppresses the expected agent-close rejection instead of attempting a late `tool.error` log.\n- Focused regressions cover late events after teardown, logger double-close, overlapping Twilio `stop` and duplicate WebSocket close callbacks, single transport cleanup, and no late OpenAI function output.\n- `CHANGELOG.md` records the user-facing crash fix and credits @joeVenner.\n\n### Final verification\n\n- Focused: `node --import tsx --test test/logger.test.ts test/server-teardown.test.ts test/server-truncate.test.ts` — 10 passed.\n- Full CI-equivalent gate: frozen install, lint, typecheck, 33 tests, and build all passed.\n- Structured review: `$autoreview --mode branch --base origin/main --parallel-tests 'pnpm install --frozen-lockfile && pnpm run lint && pnpm run typecheck && pnpm test && pnpm run build'` — clean, no accepted/actionable findings.\n- PR CI on exact head: Node.js 22, Node.js 24, and GitGuardian all passed: https://github.com/steipete/vox/actions/runs/27380834533\n- Real built-server proof on exact pushed SHA: `dist/cli.js` handled a safe owned-number Twilio/OpenAI call where OpenAI issued one `query_agent` function call and the subprocess agent deliberately remained in flight through hang-up. The call completed; Twilio teardown was logged; the Vox process and local/public health endpoints remained alive at HTTP 200; `events.jsonl` ended cleanly; no function output resumed the closed session; and tool, OpenAI, logger/write-after-end error counts were all zero. The temporary destination webhook was restored successfully.\n\nThe ClawSweeper comments above are transport-failure states, not findings against the patch; maintainer autoreview completed successfully on the final branch.\n\n",
-        "branch": "fix/call-log-write-after-close",
-        "head_sha": "47f41a90a75478f0969d96c5274a8ece27e08703",
-        "author": "joevenner",
-        "labels": [],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logger.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/server.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/logger.test.ts",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/server-teardown.test.ts",
-            "additions": 199,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-steipete-vox-8",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-vox-8.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 3,
-          "counts": {
-            "SUCCESS": 3
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "target is not open"
+      "reason": "comment version already processed in ledger"
     },
     {
       "idempotency_key": "comment-router:steipete/vox:8:4685544720:2026-06-11T22:12:29Z:re_review",
@@ -292,17 +228,17 @@
       "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3857,
+    "total_ms": 3901,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 415
+        "ms": 423
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1022
+        "ms": 906
       },
       {
         "name": "classify_commands",
@@ -310,7 +246,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2395
+        "ms": 2559
       },
       {
         "name": "append_ledger",
