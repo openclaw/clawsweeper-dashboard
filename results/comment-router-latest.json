@@ -1,22 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-13T18:01:15.295Z",
+  "generated_at": "2026-06-13T18:01:19.228Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-13T15:01:14.778Z",
+  "since": "2026-06-13T15:01:16.277Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    92751
+    92752
   ],
-  "comment_ids": [
-    4699333512
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
+  "scanned_comments": 2,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -33,58 +31,118 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92751:4699333512:2026-06-13T17:59:41Z:re_review",
-      "comment_id": "4699333512",
-      "comment_version_key": "4699333512:2026-06-13T17:59:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92751#issuecomment-4699333512",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92752:4699298908:2026-06-13T18:01:11Z:clawsweeper_needs_human",
+      "comment_id": "4699298908",
+      "comment_version_key": "4699298908:2026-06-13T18:01:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92752#issuecomment-4699298908",
       "repo": "openclaw/openclaw",
-      "issue_number": 92751,
-      "author": "Pandah97",
-      "author_id": 80405497,
+      "issue_number": 92752,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-13T17:59:41Z",
-      "comment_updated_at": "2026-06-13T17:59:41Z",
+      "comment_created_at": "2026-06-13T17:45:01Z",
+      "comment_updated_at": "2026-06-13T18:01:11Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] No repair lane is needed because the PR has no blocking review findings and can proceed through normal maintainer merge review.; Cleared: No concrete security or supply-chain concern was found; the diff only changes diagnostics control flow and a colocated test. (sha=215547f45ceed1e5161592e0cde745380aafc645)",
+      "review_summary": "The branch separates diagnostic warning/event throttling from recovery scheduling for stuck or long-running sessions and adds regression coverage for throttled recovery ticks.\n\nPR surface: Source +17, Tests +46. Total +63 across 2 files.\n\nReproducibility: yes. Source inspection shows current main can return from logSessionAttention during stuck or long-running warning backoff before the heartbeat reaches requestStuckSessionRecovery; the PR body also provides before/after terminal proof for that runtime path.",
+      "review_followup": "- [P2] No repair lane is needed because the PR has no blocking review findings and can proceed through normal maintainer merge review.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "215547f45ceed1e5161592e0cde745380aafc645",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(diagnostics): keep recovery scheduling out of the stuck-session warning backoff",
+        "body": "## What\n\nDiagnostic stuck-session recovery is no longer gated by the warning-backoff\nthrottle. `logSessionAttention` previously returned `undefined` whenever a\n`session.stuck` or `session.long_running` classification fell inside its\nexponential warning-backoff window. The heartbeat only schedules recovery from\na returned classification, so throttling the *warning* also throttled\n*recovery*: a recovery-eligible lane could sit unrecovered until the next warn\ninterval (which doubles each time).\n\nThis change separates the two concerns. The warning backoff still suppresses\nthe repeated log line and diagnostic event, but a recovery-eligible\nclassification is now always returned so the heartbeat can call\n`requestStuckSessionRecovery` on every tick. In-flight recovery requests remain\nde-duplicated by the recovery coordinator, so this does not add redundant abort\nwork — it only removes the delay before the first (and each subsequent) recovery\nattempt.\n\n## Why\n\nReported in #92742: a stale active run blocked the `agent:main:direct` lane for\n~17 minutes. Diagnostics detected the stuck session, but the same warning\nbackoff path suppressed the follow-up recovery checks, so the lane was not\nreleased promptly even though the stale work was recoverable.\n\nRoot cause (`src/logging/diagnostic.ts`):\n\n- `logSessionAttention` computes `recoveryEligible`, then for `session.stuck`\n  and `session.long_running` does `if (params.ageMs < nextWarnAgeMs) return undefined;`\n  *before* returning the classification.\n- The heartbeat schedules recovery only when `logSessionAttention` returns a\n  classification (`classification?.recoveryEligible` / `isActiveAbortRecoveryEligible`),\n  so a throttled warning silently throttles recovery too.\n\n## Change\n\n- `src/logging/diagnostic.ts`: within the warning-backoff window, return early\n  only when the session is **not** recovery-eligible. When it is recovery-eligible,\n  suppress just the warning log + event and still return the classification.\n  The `lastStuckWarnAgeMs` / `lastLongRunningWarnAgeMs` markers now advance only\n  when a warning is actually emitted, so the backoff cadence is preserved.\n- `src/logging/diagnostic.test.ts`: add a regression test proving recovery is\n  still scheduled on a throttled tick, and update the existing backoff test\n  (which had encoded the old coupling) to assert recovery now runs each tick\n  while warnings stay throttled.\n\nScope is intentionally narrow. The QQ fast-ack / quick-reply path and the\nhook-process watchdog mentioned in the issue are separate follow-ups, as the\ntriage review also noted.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Recovery-eligible stuck / long-running sessions\nwere not being recovered while the diagnostic warning backoff was active, so a\nblocked lane stayed wedged until the next (exponentially growing) warn interval —\nthe ~17 minute direct-lane stall reported in #92742.\n\n**Real environment tested:** Local OpenClaw checkout at current `main`\n(`45e36a24`), Node v24.14.0, pnpm 11.2.2, macOS arm64. I drove the real\ndiagnostic runtime — `logSessionAttention` → `requestStuckSessionRecovery`, the\nexact calls the 30s diagnostic heartbeat makes (`src/logging/diagnostic.ts`\n~L1281–1303) — over a recovery-eligible stuck `agent:main:direct` session, with\nthe real diagnostic subsystem logger and event bus live. Only the terminal\n`recoverStuckSession` side effect is observed (logged) so the lane-release\nrequest is visible.\n\n**Exact steps or command run after this patch:** ran a throwaway `tsx` script\nthat imports the real `src/logging/diagnostic.ts`, registers a stuck\n`agent:main:direct` session, and replays three heartbeat ticks at ageMs = 60s,\n90s (inside the warn-backoff window), and 120s — feeding each\n`logSessionAttention` result into `requestStuckSessionRecovery` exactly like the\nheartbeat loop. Invoked with `node` via `./node_modules/.bin/tsx`.\n\n**Evidence after fix:** copied live terminal output (real `[diagnostic]`\nsubsystem warn lines, real emitted events, and the real recovery invocations).\nOn the throttled 90s tick the warn line/event stay suppressed but recovery still\nfires:\n\n```\n== heartbeat tick: ageMs=60s ==\n  [diagnostic] stuck session: sessionId=qq-direct-1 sessionKey=agent:main:direct age=60s reason=stale_session_state recovery=checking\n  [event] session.stuck ageMs=60000\n  [event] session.recovery.requested ageMs=60000\n  [recover] requestStuckSessionRecovery invoked #1 (ageMs=60000)\n\n== heartbeat tick: ageMs=90s ==          # inside warn backoff (next warn age = 120s)\n  [event] session.recovery.requested ageMs=90000\n  [recover] requestStuckSessionRecovery invoked #2 (ageMs=90000)\n\n== heartbeat tick: ageMs=120s ==\n  [diagnostic] stuck session: sessionId=qq-direct-1 ... age=120s recovery=checking\n  [event] session.stuck ageMs=120000\n  [recover] requestStuckSessionRecovery invoked #3 (ageMs=120000)\n\nTOTAL recovery invocations across the 3 ticks: 3\n```\n\nSame script on **unmodified `main`** (fix reverted with `git checkout HEAD~1 -- src/logging/diagnostic.ts`) — the 90s backoff tick drops recovery entirely:\n\n```\n== heartbeat tick: ageMs=90s ==\n  (no classification returned -> recovery NOT scheduled)\n...\nTOTAL recovery invocations across the 3 ticks: 2\n```\n\n**Observed result after fix:** on the throttled 90s heartbeat tick the\n`[diagnostic] stuck session` warn line and `session.stuck` event stay suppressed\n(still one warning), but `session.recovery.requested` fires and the\n`recoverStuckSession` lane-release request is invoked. Recovery invocations go\nfrom 2 (main, recovery skipped during backoff) to 3 (every tick). With the real\nexponential backoff the skipped window keeps doubling, which is what stretched\nthe reported lane stall to ~17 minutes; the fix releases the lane on the next\n~30s heartbeat instead.\n\nTargeted suites (issue acceptance criteria) and repo checks are also green:\n\n```\n$ node scripts/run-vitest.mjs src/logging/diagnostic.test.ts src/logging/diagnostic-stuck-session-recovery.runtime.test.ts\n Test Files  2 passed (2)   Tests  91 passed (91)\n$ node scripts/run-vitest.mjs --config test/vitest/vitest.logging.config.ts\n Test Files  29 passed (29) Tests  360 passed (360)\n$ pnpm tsgo:core && pnpm tsgo:core:test   # exit 0\n```\n\n**What was not tested:** I did not stand up a live QQ gateway to replay the\noriginal end-to-end 17-minute incident (no QQ environment available). The defect\nand fix are reproduced at the diagnostic heartbeat level above, exercising the\nreal `logSessionAttention` → recovery-scheduling control flow that failed.\n\nFixes #92742\n",
+        "branch": "fix/92742-diagnostic-recovery-warning-backoff",
+        "head_sha": "215547f45ceed1e5161592e0cde745380aafc645",
+        "author": "gnanam1990",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/logging/diagnostic.test.ts",
+            "additions": 47,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic.ts",
+            "additions": 21,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92752",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92752.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 30,
+            "SUCCESS": 131,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1922,
+    "total_ms": 3302,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 505
+        "ms": 477
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2461
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1404
+        "ms": 339
       },
       {
         "name": "append_ledger",
