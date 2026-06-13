@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-13T18:21:57.795Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-13T18:22:18.835Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-13T15:21:55.513Z",
+  "since": "2026-06-13T15:22:18.571Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92767
+    1488
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,133 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92767:4699375606:2026-06-13T18:21:52Z:clawsweeper_auto_repair",
-      "comment_id": "4699375606",
-      "comment_version_key": "4699375606:2026-06-13T18:21:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92767#issuecomment-4699375606",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92767,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-13T18:16:20Z",
-      "comment_updated_at": "2026-06-13T18:21:52Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=8ea5dbb28b3ea8c4fe3414cb1f787d6328270abd)",
-      "review_summary": "The PR threads gateway event-loop health into channel health monitoring so unhealthy channel restarts are deferred while the event loop is degraded.\n\nPR surface: Source +38, Tests +39. Total +77 across 4 files.\n\nReproducibility: yes. for the review finding: source inspection shows a reload plan can restart the health monitor, and the replacement callback is separate from the startup call changed by the PR. The linked production Telegram crash-loop still lacks a deterministic live reproduction.",
-      "review_followup": "- [P1] The code repair is narrow, but insufficient structured real-behavior proof makes this a human/contributor-action merge blocker rather than a repair-lane candidate.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "8ea5dbb28b3ea8c4fe3414cb1f787d6328270abd",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): defer channel health restarts while the event loop is saturated",
-        "body": "Fixes #89785\n\n### What & why\n\nUnder Telegram multi-account churn, the gateway can enter a fixed-interval 502 crash-loop. The channel health monitor restart-cascades against a channel start/connect phase that is *slow because the whole event loop is saturated* — not because the channel is dead. Each forced restart re-enters the same slow start and adds more startup work to an already-pegged loop, so the next cycle sees the same \"unhealthy\" channel and restarts again. In the report this was ~7–10 restarts over ~64 minutes, each preceded by a liveness warning at `channels.telegram.start-account` with `eventLoopDelayMaxMs ≈ 21000`, `eventLoopUtilization ≈ 0.97`. It self-resolved once the churn settled.\n\n### Root cause\n\n`startChannelHealthMonitor` (`src/gateway/channel-health-monitor.ts`) restarts any account the policy flags as unhealthy. During event-loop saturation a still-connecting channel is past its connect grace and reports `connected: false`, so the policy returns `disconnected` and the monitor restarts it. Restarting during saturation is counterproductive and is what turns a transient slow start into a sustained cascade.\n\n### The fix\n\nThe gateway already samples its own event-loop health (`createGatewayEventLoopHealthMonitor`, exposed as `readinessEventLoopHealth.snapshot`). This PR threads that signal into the channel health monitor and **defers channel restarts on any cycle where the event loop is `degraded`**, logging the deferral with the saturation reasons.\n\n- No change to the health *policy* — channels are still classified the same way.\n- When the loop is healthy, restarts behave exactly as before (dead channels are still recovered).\n- A genuinely dead channel under sustained saturation is simply restarted on a later cycle, once the loop recovers — which is the behavior the issue asks for (\"a slow channel bind … should be allowed to complete (or fail cleanly) without the gateway being declared unhealthy and force-restarted into the same stall\").\n\nThe new dependency is opt-in (`getEventLoopHealth?`), so existing callers and tests are unaffected. Files: `channel-health-monitor.ts` (+ wiring in `server-runtime-startup-services.ts` and `server.impl.ts`) and the monitor test. +77 lines, additive only.\n\n### Real behavior proof\n\n**Setup.** A small harness runs the **real** channel health monitor and the **real** gateway event-loop health monitor (`node:perf_hooks`) under **real** event-loop saturation — a synchronous busy-block (~1.2s of every ~1.4s) that mirrors the multi-account CPU pressure from the report. The monitored account is a Telegram account stuck in start/connect (`running: true`, `connected: false`, started past the connect grace). Time is compressed (1s check interval) so the ~64-minute production cascade shows in ~15s; the decision logic and the saturation signal are the production ones.\n\nThe A/B is exactly the shape of the fix (the new signal is opt-in):\n- **before** = monitor started without `getEventLoopHealth` (shipped behavior)\n- **after**  = monitor started with `getEventLoopHealth` (this PR's wiring)\n\n**Command.**\n```\nnode --import tsx repro_89785.ts before\nnode --import tsx repro_89785.ts after\n```\n\n**Observed result.**\n\n`before` — restart-cascade reproduced (real event-loop delay ~1220 ms, utilization ~0.86 → `degraded=true`), capped only by the restarts/hour limit, mirroring the report's ~10 restarts:\n```\n[health-monitor] [telegram:acct1] health-monitor: restarting (reason: disconnected)\n  RESTART #1  ... WHILE event-loop delayMax=20.3ms   util=0.041 degraded=false\n  RESTART #2  ... WHILE event-loop delayMax=1211.1ms util=0.754 degraded=true\n  ...\n  RESTART #10 ... WHILE event-loop delayMax=1219.5ms util=0.86  degraded=true\n[health-monitor] [telegram:acct1] health-monitor: hit 10 restarts/hour limit, skipping\nRESULT [before]: 10 forced restart(s) under sustained event-loop saturation\n```\n\n`after` — one restart while the loop was still healthy (correct: a real disconnect is still recovered), then deferred for every saturated cycle:\n```\n  [health-check] event-loop: delayMax=20.2ms   degraded=false -> allow restarts\n  RESTART #1 ... WHILE event-loop delayMax=20.2ms degraded=false\n  [health-check] event-loop: delayMax=1219.5ms degraded=true reasons=[event_loop_delay] -> DEFER restarts\n[health-monitor] deferring channel restarts while gateway event loop is degraded (reasons: event_loop_delay)\n  ... (deferred every subsequent saturated cycle) ...\nRESULT [after]: 1 forced restart(s) under sustained event-loop saturation\n```\n\nSo: **before = 10 forced restarts (cascade); after = 1 (only while healthy), then deferred.**\n\n**Automated checks.**\n- `node scripts/run-vitest.mjs run src/gateway/channel-health-monitor.test.ts src/gateway/channel-health-policy.test.ts` → all pass (incl. 2 new monitor tests covering defer-while-degraded and resume-on-recovery).\n- `node scripts/run-vitest.mjs run src/gateway/server-runtime-services.test.ts` → pass (wiring).\n- `pnpm tsgo:core` and `pnpm tsgo:core:test` → clean.\n\n**Not tested.** I did not reproduce the full live Telegram multi-account crash-loop end-to-end (the report notes it was not deterministically reproducible); the harness uses a stubbed channel, compressed time, and synthetic event-loop saturation rather than real churn. The harness itself is not part of this PR.\n\n### Notes\n\n- AI-assisted (developed with Claude Code). I understand and have reviewed the change.\n- No `CHANGELOG.md` edits.\n",
-        "branch": "fix/89785-telegram-health-restart-cascade",
-        "head_sha": "8ea5dbb28b3ea8c4fe3414cb1f787d6328270abd",
-        "author": "leorivastech",
-        "labels": [
-          "gateway",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/channel-health-monitor.test.ts",
-            "additions": 39,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/channel-health-monitor.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-startup-services.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92767",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92767.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 130,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2491,
+    "total_ms": 378,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 264
+        "ms": 248
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2003
+        "ms": 4
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 197
+        "ms": 115
       },
       {
         "name": "append_ledger",
