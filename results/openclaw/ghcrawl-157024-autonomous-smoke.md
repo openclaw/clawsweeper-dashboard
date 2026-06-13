@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "ghcrawl-157024-autonomous-smoke"
 mode: "autonomous"
-run_id: "27461452161"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27461452161"
+run_id: "27461745501"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27461745501"
 head_sha: "86d0ca37755b3b476a32f6b510a439ce1fa73eea"
-workflow_conclusion: "failure"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-06-13T08:35:08.432Z"
+published_at: "2026-06-13T08:35:56.904Z"
 canonical: "#67967"
 canonical_issue: null
 canonical_pr: "#67967"
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27461452161](https://github.com/openclaw/clawsweeper/actions/runs/27461452161)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27461745501](https://github.com/openclaw/clawsweeper/actions/runs/27461745501)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,7 +35,7 @@ Canonical: #67967
 
 ## Summary
 
-No GitHub mutations recommended now. The original issue candidates are already closed, the current live canonical path is open PR #67967, and #67967 needs repair/proof before merge because real behavior proof and relevant checks are failing or stale.
+Current phase: autonomous classification and repair planning for the same hydrated cluster only. Scope remains limited to #41257, #41839, #46401, #46405, #51514, #65371, #65380, and #67967. The live canonical path is open PR #67967, but it needs repair/proof before merge because the artifact shows a dirty merge state, failing checks, and no current-head Codex /review pass.
 
 ## Impact
 
@@ -66,14 +66,14 @@ No GitHub mutations recommended now. The original issue candidates are already c
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #41257 | keep_closed | skipped | fixed_by_candidate |  |
-| #41839 | keep_closed | skipped | duplicate |  |
-| #46401 | keep_closed | skipped | superseded |  |
-| #46405 | keep_closed | skipped | superseded |  |
-| #51514 | keep_closed | skipped | superseded |  |
-| #65371 | route_security | planned | security_sensitive | Security-sensitive review evidence appears on this closed historical PR; do not repair, close, merge, or use it as the MiniMax canonical path. |
-| #65380 | keep_closed | skipped | fixed_by_candidate |  |
-| #67967 | fix_needed | planned | canonical | Repair or refresh #67967 and collect real MiniMax Anthropic-compatible tool-use proof before merge or post-merge issue closeout. |
+| #41257 | keep_closed | skipped | fixed_by_candidate | Already closed; remaining validation belongs to #67967. |
+| #41839 | keep_closed | skipped | duplicate | Already closed duplicate; no action beyond preserving the current closed state. |
+| #46401 | keep_closed | skipped | superseded | Already closed and superseded by the narrower canonical provider fix path. |
+| #46405 | keep_closed | skipped | superseded | Already closed and superseded by narrower work. |
+| #51514 | keep_closed | skipped | superseded | Already closed and superseded by the narrower canonical PR. |
+| #65371 | route_security | planned | security_sensitive | Security-shaped SSRF evidence appears on this exact historical PR; route only this item and continue classifying the MiniMax cluster. |
+| #65380 | keep_closed | skipped | fixed_by_candidate | Already closed and covered by #67967 if repaired and validated. |
+| #67967 | fix_needed | planned | canonical | Canonical PR is useful and repairable, but failing checks and missing current review/proof block merge. |
 
 ## Needs Human
 
