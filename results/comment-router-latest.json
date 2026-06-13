@@ -1,20 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-13T05:15:43.593Z",
+  "generated_at": "2026-06-13T05:16:11.605Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-13T02:15:41.240Z",
+  "since": "2026-06-13T02:16:10.927Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     63330
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4340783699
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 6,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -61,171 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(plugins): add session followup turn API and gateway-restart extension",
-        "body": "## Summary\n\nAdd a new `runtime.followup.enqueueFollowupTurn()` method to the plugin runtime, enabling plugins to schedule proactive agent turns for any session — including cold sessions with no active user interaction.\n\n> **Supersedes #60951** — rebased onto latest main, all CI issues resolved, bug fixes included.\n\n## Problem\n\nPlugins have no way to inject a user-role message into an existing session and trigger an agent turn. The available primitives (`enqueueSystemEvent`, `subagent.run`) either don't initiate turns or create new sessions instead of continuing the original conversation. This blocks use cases like:\n\n- **Post-restart session resume** — an agent restarts its own gateway and needs to automatically continue working after the restart completes\n- **Model backend switching** — an agent swaps inference backends (e.g., switching between local LLMs on a single-GPU workstation) and needs to resume the session on the new model with full context\n- **Proactive plugin notifications** — a service detects an external event and needs to wake a sleeping session\n- **Deferred task completion** — a plugin schedules follow-up work after a long-running background operation\n\n## Solution\n\n### Core API: `runtime.followup.enqueueFollowupTurn()`\n\nA new `followup` namespace on `PluginRuntimeCore` that:\n\n1. **Reconstructs a full `FollowupRun`** from the session store via `buildFollowupRunForSession()` — resolving agent identity, workspace, provider/model, session file, and delivery context from the persisted `SessionEntry`.\n\n2. **Enqueues the run** into the existing followup queue infrastructure with preserved queue mode (respects `mode` of any existing queue for the session key, defaults to `\"followup\"`).\n\n3. **Handles cold-start drain** by detecting whether the session's followup queue is already draining. If not (cold session), creates a fresh followup runner with preloaded session metadata and a no-op typing controller, then kicks the drain loop.\n\n```typescript\n// Plugin usage\nconst enqueued = await api.runtime.followup.enqueueFollowupTurn({\n  sessionKey: \"agent:my-agent:telegram:direct:12345\",\n  prompt: \"Background task complete. Here are the results...\",\n  source: \"my-plugin\",\n});\n```\n\n### Bundled Extension: `gateway-restart`\n\nA reference implementation that demonstrates the followup turn API:\n\n- **Tool** (`gateway_restart`): Agent calls this to run optional allowlisted pre-commands, write a restart marker (only after commands succeed), then exit the process. Systemd (or equivalent) auto-restarts the gateway.\n\n- **Service** (`gateway-restart-watcher`): On startup, checks for the restart marker. If found, calls `enqueueFollowupTurn()` to resume the original session with a completion message. Marker is deleted only after successful enqueue — preserved for retry on failure.\n\nDisabled by default (`enabledByDefault: false`). Opt-in via `plugins.entries.gateway-restart.enabled: true`.\n\n## Files Changed\n\n| File | Description |\n|------|-------------|\n| `src/auto-reply/reply/queue/build-followup-run.ts` | New: cold-session FollowupRun builder with session store resolution |\n| `src/plugins/runtime/runtime-followup.ts` | New: plugin runtime followup namespace with hot/cold session detection |\n| `src/plugins/runtime/types-core.ts` | Add `followup` type to `PluginRuntimeCore` |\n| `src/plugins/runtime/index.ts` | Wire `createRuntimeFollowup()` |\n| `extensions/gateway-restart/index.ts` | New: gateway-restart plugin (tool + watcher service) |\n| `extensions/gateway-restart/openclaw.plugin.json` | New: plugin manifest |\n| `extensions/gateway-restart/package.json` | New: package metadata |\n| `test/helpers/plugins/plugin-runtime-mock.ts` | Add `followup` to mock |\n| `**/**.test.ts` | 24 unit tests across 3 test files |\n\n## Bug Fixes (vs #60951)\n\n1. **Marker written after pre-commands** — prevents stale markers when a pre-command fails\n2. **Marker deleted after enqueue confirmed** — preserves marker for retry if `enqueueFollowupTurn()` returns false\n3. **Hot session guard** — `rememberFollowupDrainCallback` only registers for cold sessions; existing hot-session drain runners are not overwritten\n4. **Queue mode preservation** — `enqueueFollowupRun` respects existing queue mode instead of forcing `\"followup\"`\n5. **Session metadata preload** — cold followup runners receive preloaded session store and entry for accounting/refresh paths\n\n## Testing\n\n- 24 unit tests across 3 test files (all passing)\n- `pnpm check` passes (tsgo + oxlint + all architecture checks)\n- Rebased onto latest main\n- End-to-end verified on a local workstation running OpenClaw 2026.4.8 with Gemma 4 26B via llama.cpp\n\n## Use Cases This Enables\n\nThis API is the foundation for several plugins currently in development:\n\n- **`model-switch`** — seamless switching between local LLMs on single-GPU workstations, with session continuation via `enqueueFollowupTurn()` after the new model is healthy\n- **`inference-guard`** — priority-aware request scheduling for single-slot inference (heartbeat/cron defer behind user messages)\n- **Self-modifying agents** — agents that update their own config, restart the gateway, and validate changes automatically\n\n## Test plan\n\n- [ ] `pnpm check` passes\n- [ ] `pnpm vitest run extensions/gateway-restart/index.test.ts` — 6 tests pass\n- [ ] `pnpm vitest run src/plugins/runtime/runtime-followup.test.ts` — 9 tests pass\n- [ ] `pnpm vitest run src/auto-reply/reply/queue/build-followup-run.test.ts` — 9 tests pass\n- [ ] Gateway-restart tool writes marker only after pre-commands succeed\n- [ ] Watcher service enqueues followup turn and deletes marker on success\n- [ ] Watcher preserves marker on enqueue failure\n\n## AI Disclosure\n\nThis PR was developed with AI assistance (Claude Code). Testing level: **fully tested** — 24 unit tests, `pnpm check` green, end-to-end verified on local hardware. The author understands all code in this PR and can explain design decisions.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "feat/followup-api-v2",
-        "head_sha": "ffd6d524a4dbfd169477a6a46d297fd891ccbac1",
-        "author": "corbin-breton",
-        "labels": [
-          "size: XL",
-          "extensions: qa-lab",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 security-boundary",
-          "merge-risk: 🚨 availability"
-        ],
-        "files": [
-          {
-            "path": "extensions/gateway-restart/index.test.ts",
-            "additions": 207,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/gateway-restart/index.ts",
-            "additions": 236,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/gateway-restart/openclaw.plugin.json",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/gateway-restart/package.json",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qa-lab/src/multipass.runtime.ts",
-            "additions": 2,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "pnpm-lock.yaml",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/build-followup-run.test.ts",
-            "additions": 263,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/build-followup-run.ts",
-            "additions": 151,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/canvas-host/a2ui/.bundle.hash",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/runtime/index.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/runtime/runtime-followup.test.ts",
-            "additions": 226,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugins/runtime/runtime-followup.ts",
-            "additions": 78,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugins/runtime/types-core.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/utils/delivery-context.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/helpers/plugins/plugin-runtime-mock.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-63330",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-63330.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 50,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 36,
-            "SKIPPED": 13
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2716,
+    "total_ms": 1587,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 535
+        "ms": 665
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1802
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 351
+        "ms": 909
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
