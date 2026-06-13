@@ -1,25 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-13T17:33:55.220Z",
+  "generated_at": "2026-06-13T17:35:25.112Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-13T14:33:52.144Z",
+  "since": "2026-06-13T14:35:20.942Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    46303
+    91800
   ],
   "comment_ids": [
-    4322676718
+    4699273062
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "status_comment_id": 4699273154,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -34,283 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:46303:4322676718:2026-06-13T17:32:50Z:clawsweeper_auto_repair",
-      "comment_id": "4322676718",
-      "comment_version_key": "4322676718:2026-06-13T17:32:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/46303#issuecomment-4322676718",
+      "idempotency_key": "comment-router:openclaw/openclaw:91800:4699273062:2026-06-13T17:34:31Z:re_review",
+      "comment_id": "4699273062",
+      "comment_version_key": "4699273062:2026-06-13T17:34:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91800#issuecomment-4699273062",
       "repo": "openclaw/openclaw",
-      "issue_number": 46303,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 91800,
+      "author": "jason-allen-oneal",
+      "author_id": 8335428,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-26T18:14:41Z",
-      "comment_updated_at": "2026-06-13T17:32:50Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=1f3e8011967a34008db148af1034b22274c454ee)",
-      "review_summary": "Adds a global inbound debouncer flush registry, followup and channel run-queue drain waiters, gateway-drain internal context, SIGUSR1 restart integration, and channel/test updates to preserve buffered inbound work before reload.\n\nPR surface: Source +486, Tests +777. Total +1263 across 30 files.\n\nReproducibility: yes. from source inspection, though I did not run a live channel repro. Current main keeps inbound debounce buffers in process-local closures and the SIGUSR1 path drains active tasks only, so a process reload can drop timeout-buffered messages before their callbacks fire.",
-      "review_followup": "- [P1] Human review is needed because contributor real-behavior proof is still incomplete and the remaining merge decision includes compatibility and overlap with the open durable followup-persistence PR.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "1f3e8011967a34008db148af1034b22274c454ee",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: drain inbound debounce buffer and followup queues before SIGUSR1 reload",
-        "body": "## Problem\n\nWhen `config.patch` triggers a SIGUSR1 restart, two in-memory message buffers are silently wiped, causing inbound messages to be permanently lost:\n\n1. **Inbound debounce buffers** — per-channel debounce timers (`createInboundDebouncer` closure-local `Map` + `setTimeout`) that batch messages over a ~2500ms window. On restart, the `setTimeout` callbacks never fire and buffered messages are garbage collected.\n\n2. **Followup queues** — the `FOLLOWUP_QUEUES` global `Map` that collects messages for sessions with active agent turns. Items enqueued but not yet drained are lost when the server reinitializes.\n\n### Reproduction\nSend a message on Signal → within 2.5s, trigger a config change (e.g. `config.patch`) → the message is silently dropped.\n\n## Fix\n\n### 1. Global debouncer registry (`src/auto-reply/inbound-debounce.ts`)\n- Each `createInboundDebouncer()` now auto-registers in a shared `Symbol.for('openclaw.inboundDebouncers')` global map\n- New `flushAll()` method on each debouncer instance that immediately processes all buffered items (clears timeouts, calls `onFlush` callbacks)\n- New exported `flushAllInboundDebouncers()` that iterates the registry, flushes all debouncers, and deregisters them\n\n### 2. Followup queue drain waiter (`src/auto-reply/reply/queue/drain-all.ts`)\n- New `waitForFollowupQueueDrain(timeoutMs)` that polls `FOLLOWUP_QUEUES` until all queues finish processing (or timeout)\n- Counts `draining: true` queues as having pending work even if `items.length` is momentarily 0\n\n### 3. SIGUSR1 restart integration (`src/cli/gateway-cli/run-loop.ts`)\nBefore `markGatewayDraining()`, the restart flow now:\n1. `await flushAllInboundDebouncers()` — pushes buffered messages into followup queues\n2. `await waitForFollowupQueueDrain(5000)` — gives the drain loops 5s to process newly flushed items\n3. Then proceeds with the existing `markGatewayDraining()` → task drain → server close flow\n\nThe ordering is critical: flush debouncers first (triggers `onFlush` callbacks that enqueue into followup queues), then wait for followup drain, then mark draining.\n\n## Tests\n\n- **`src/auto-reply/inbound.test.ts`**: `flushAllInboundDebouncers` flushes multiple registered debouncers, returns count, deregisters after flush; `createInboundDebouncer.flushAll` flushes all buffered keys\n- **`src/auto-reply/reply/queue/drain-all.test.ts`**: immediate return when empty, waits for drain completion, returns not-drained on timeout, counts actively draining queues as pending\n- **`src/cli/gateway-cli/run-loop.test.ts`**: SIGUSR1 restart calls flush before `markGatewayDraining`, skips followup wait when no debouncers had buffered messages, logs warning on followup drain timeout\n\nAll 118 tests pass across the 4 affected test files. No type errors introduced.\n\n## Files Changed\n- `src/auto-reply/inbound-debounce.ts` — global registry + `flushAll` + `flushAllInboundDebouncers()`\n- `src/auto-reply/reply/queue/drain-all.ts` — new `waitForFollowupQueueDrain()`\n- `src/auto-reply/reply/queue.ts` — barrel export\n- `src/cli/gateway-cli/run-loop.ts` — hook into restart flow\n- Test files for all of the above\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: When a SIGUSR1 restart fires within the inbound debounce window (~2.5s) or while a followup queue is mid-drain, buffered messages are silently dropped because the in-process `setTimeout` callbacks never fire and the closure-local `Map` is garbage collected. After this fix, `flushAllInboundDebouncers()` immediately flushes every registered debouncer into followup queues and `waitForFollowupQueueDrain()` blocks the SIGUSR1 path until those queues drain or a 5s ceiling is hit.\n- **Real environment tested**: Local OpenClaw checkout at HEAD `5d1e6592d02782361b871581c10a6b3c0329105f` of branch `fix/drain-queue-before-sigusr1`. Linux 6.12.67, Node v24.15.0, pnpm-driven monorepo. Patched modules loaded directly with `tsx` from the working tree (no rebuild step), and the built CLI (`pnpm openclaw --version`) reports `OpenClaw 2026.5.4 (5d1e659)` confirming the binary is built from the patched commit.\n- **Exact steps or command run after this patch**:\n  1. `pnpm openclaw --version` to confirm the live CLI is built from the patched HEAD.\n  2. `node_modules/.bin/tsx proof-pr46303.mts` — small driver that registers two `createInboundDebouncer` instances with a 2500ms debounce, enqueues five items across three keys, then calls `flushAllInboundDebouncers({ timeoutMs: 5000 })` and prints the timing and what each `onFlush` actually received.\n  3. `node_modules/.bin/tsx proof-pr46303-drain.mts` — driver that exercises `waitForFollowupQueueDrain` directly against the live `FOLLOWUP_QUEUES` `Map` for three cases: empty registry, busy queue that drains at ~120ms, and a queue that stays busy past the timeout.\n  4. `pnpm test src/auto-reply/inbound.test.ts src/auto-reply/reply/queue/drain-all.test.ts src/cli/gateway-cli/run-loop.test.ts` — full targeted suites for all three changed files.\n- **Evidence after fix**: Terminal capture from running the patched modules in this worktree.\n\n  Live CLI build proves the binary contains the patched code:\n\n  ```\n  $ pnpm openclaw --version\n  OpenClaw 2026.5.4 (5d1e659)\n  ```\n\n  `flushAllInboundDebouncers` console output — 5 enqueued items across 2 debouncers and 3 keys, flushed in 1ms instead of waiting 2500ms:\n\n  ```\n  [before flush] A delivered=0, B delivered=0 (still buffered)\n  [flushAllInboundDebouncers] flushedCount=3 elapsed=1ms (vs 2500ms debounce)\n  [after flush] A delivered groups=[[\"alice:hello\",\"alice:there\"],[\"bob:howdy\"]]\n  [after flush] B delivered groups=[[\"ping-1\",\"ping-2\"]]\n  ```\n\n  `waitForFollowupQueueDrain` console output — three live cases against the real `FOLLOWUP_QUEUES` map, including the timeout path that returns `drained:false` with the right `remaining` count:\n\n  ```\n  [empty]         {\"drained\":true,\"remaining\":0} elapsed=0ms\n  [busy->drained] {\"drained\":true,\"remaining\":0} elapsed=151ms\n  [timeout]       {\"drained\":false,\"remaining\":2} elapsed=200ms\n  ```\n\n  Real test runner output for the changed files (vitest reports the actual function counts; pnpm `test-projects.mjs` shards by project):\n\n  ```\n  [test] starting test/vitest/vitest.cli.config.ts\n   Test Files  1 passed (1)\n        Tests  24 passed (24)\n     Duration  2.21s\n  [test] starting test/vitest/vitest.auto-reply.config.ts\n   Test Files  2 passed (2)\n        Tests  71 passed (71)\n     Duration  4.05s\n  [test] passed 2 Vitest shards in 11.96s\n  ```\n\n- **Observed result after fix**: `flushAllInboundDebouncers` deterministically drains buffered Signal-style messages in 1 ms while the natural debounce window is 2500 ms, and reports the right buffer count (`flushedCount=3` for two keys in one debouncer plus one in another). `waitForFollowupQueueDrain` returns immediately when the registry is empty, observes the queue clearing in real time during the busy case (151 ms — one poll interval past the 120 ms cleanup), and correctly returns `drained:false` with `remaining=2` when the timeout fires before drain. The CLI banner reports `(5d1e659)` confirming the built binary contains the patched commit. With the SIGUSR1 hook in `src/cli/gateway-cli/run-loop.ts` calling these helpers in the right order before `markGatewayDraining()`, late inbound messages are pushed into followup queues and given up to 5 s to drain instead of being silently dropped.\n- **What was not tested**: An end-to-end real-Signal SIGUSR1 reproduction was not executed on this machine (no signal-cli account paired here); the production restart path is exercised through `src/cli/gateway-cli/run-loop.test.ts`, but a live Signal → `config.patch` → restart roundtrip on real `signal-cli` was not run. Behavior under simultaneous restart-while-flushing on a hung `onFlush` (the registered handle is intentionally retained on flush failure for a future sweep) was not exercised live; that path is covered only by the unit tests in `src/auto-reply/inbound.test.ts`.\n",
-        "branch": "fix/drain-queue-before-sigusr1",
-        "head_sha": "1f3e8011967a34008db148af1034b22274c454ee",
-        "author": "joeykrug",
-        "labels": [
-          "channel: bluebubbles",
-          "channel: discord",
-          "channel: msteams",
-          "channel: slack",
-          "cli",
-          "agents",
-          "channel: feishu",
-          "size: XL",
-          "triage: dirty-candidate",
-          "proof: supplied",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/discord/src/monitor/message-handler.ts",
-            "additions": 17,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-run-queue.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/monitor.reaction.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/test-support/lifecycle-test-support.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/monitor-handler.feedback-authz.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/monitor-handler.file-consent.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/message-handler.app-mention-race.test.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 9,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/params.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/sandbox-skills.ts",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/workspace-mounts.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/inbound-debounce.ts",
-            "additions": 202,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/inbound.test.ts",
-            "additions": 473,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/abort.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/drain-all.test.ts",
-            "additions": 96,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/drain-all.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/drain.ts",
-            "additions": 46,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/enqueue.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/lifecycle.runtime.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.test.ts",
-            "additions": 136,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-lifecycle.core.ts",
-            "additions": 100,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-lifecycle.queue.test.ts",
-            "additions": 39,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.test.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.ts",
-            "additions": 26,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.types.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/exec.ts",
-            "additions": 1,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-46303",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-46303.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 165,
-          "counts": {
-            "SUCCESS": 140,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/gogcli:791:4699253868:2026-06-13T17:27:34Z:re_review",
-      "comment_id": "4699253868",
-      "comment_version_key": "4699253868:2026-06-13T17:27:34Z",
-      "comment_url": "https://github.com/openclaw/gogcli/pull/791#issuecomment-4699253868",
-      "repo": "openclaw/gogcli",
-      "issue_number": 791,
-      "author": "steipete",
-      "author_id": 58493,
-      "author_association": "COLLABORATOR",
-      "comment_created_at": "2026-06-13T17:27:34Z",
-      "comment_updated_at": "2026-06-13T17:27:34Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-13T17:34:31Z",
+      "comment_updated_at": "2026-06-13T17:34:31Z",
+      "status_comment_id": 4699273154,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -327,30 +61,141 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-13T17:35:25.772Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 91800
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-13T17:35:26.715Z",
+          "response_comment_id": "4699273154",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tools): propagate external content provenance to policy hooks",
+        "body": "Summary:\n- Adds structured external-content provenance to tool-call policy hook types.\n- Propagates provenance through HookContext, before_tool_call plugin events, trusted tool policy events, and tool hook context.\n- Detects EXTERNAL_UNTRUSTED_CONTENT markers from the active embedded run prompt/session context.\n- Refreshes provenance after same-run tool results through run-owned state keyed by `runId`, so fetch/browser/file external content is visible to later policy hooks even when wrapped tools use separate `HookContext` objects.\n- Documents the public hook field and source semantics.\n- Refreshes the plugin SDK type barrel so extension package-boundary cache keys invalidate when hook contract shapes change.\n\nWhy:\n- External content is already wrapped as untrusted prompt text.\n- Before this change, the post-model tool-call policy boundary did not receive structured provenance showing whether external content was present.\n- Policy plugins could see the tool name, params, tool kind/input kind, run/toolCallId, derived paths, and session context, but not whether the tool call followed browser, web_fetch, email, webhook, file-fetch, or other untrusted external context.\n\n## Real behavior proof\n\nBehavior or issue addressed:\nSame-run external content provenance reaches a later `before_tool_call` policy boundary after a `web_fetch` result introduces wrapped `EXTERNAL_UNTRUSTED_CONTENT`, even when the two wrapped tools do not share the same wrapper-local `HookContext`.\n\nThis is the reviewed production failure mode:\n- `web_fetch` runs first with one wrapper `HookContext`\n- `bash` / exec runs later with a different wrapper `HookContext`\n- both contexts share only `runId`\n- the later exec hook must still receive `externalContent: { \"present\": true, \"sources\": [\"web_fetch\"] }`\n\nReal environment tested:\nLocal OpenClaw checkout on branch `fix/tool-call-external-provenance`, head `0daf2ca1f70a8b9992f42f7f57ab5841ae465994`, running the real `wrapToolWithBeforeToolCallHook -> runBeforeToolCallHook` runtime path through the focused e2e regression.\n\nExact command run after this patch:\n\n```text\npnpm exec vitest run --config test/vitest/vitest.e2e.config.ts src/agents/agent-tools.before-tool-call.e2e.test.ts -t \"shares same-run external content provenance across split core tool wrapper contexts\" --reporter=verbose --silent=false\n```\n\nEvidence after fix:\nTerminal capture / copied live output from the real local proof run:\n\n```text\n[proof] pr=91800\n[proof] head_sha=0daf2ca1f70a8b9992f42f7f57ab5841ae465994\n[proof] branch=fix/tool-call-external-provenance\n[proof-command] pnpm exec vitest run --config test/vitest/vitest.e2e.config.ts src/agents/agent-tools.before-tool-call.e2e.test.ts -t \"shares same-run external content provenance across split core tool wrapper contexts\" --reporter=verbose --silent=false\n[proof-case] pr=91800 split-wrapper-context web_fetch-to-exec provenance\n[proof-path] runtime=wrapToolWithBeforeToolCallHook -> runBeforeToolCallHook\n[proof-context] first_tool=web_fetch first_context_id=fetchContext\n[proof-context] second_tool=exec second_context_id=execContext\n[proof-context] shared_only=runId:run-split-fetch-then-exec\n[proof-observed] first_event_externalContent=null\n[proof-observed] first_context_externalContent=null\n[proof-observed] second_event_toolName=exec\n[proof-observed] second_event_runId=run-split-fetch-then-exec\n[proof-observed] second_event_toolCallId=exec-1\n[proof-observed] second_event_externalContent={\"present\":true,\"sources\":[\"web_fetch\"]}\n[proof-observed] second_context_externalContent={\"present\":true,\"sources\":[\"web_fetch\"]}\n[proof-result] split-wrapper-context external provenance propagated=PASS\n```\n\nObserved result after fix:\nBefore the `web_fetch` result returned, the first policy hook saw no `externalContent`. After `web_fetch` returned wrapped external content with `Source: Web Fetch`, the later exec policy hook received both `event.externalContent` and `ctx.externalContent` as `{\"present\":true,\"sources\":[\"web_fetch\"]}`, despite using a separate wrapper `HookContext`.\n\nWhat this proves:\nThis proves the specific reviewed failure mode. Provenance is no longer wrapper-local only. It is shared across same-run tool wrappers through run-owned state keyed by `runId`.\n\n## Validation\n\n- node scripts/run-vitest.mjs run src/agents/agent-tools.before-tool-call.e2e.test.ts\n- node scripts/run-vitest.mjs run src/agents/agent-tools.before-tool-call.integration.e2e.test.ts src/agents/agent-tools.before-tool-call.embedded-mode.test.ts src/plugins/contracts/plugin-sdk-subpaths.test.ts\n- pnpm run test:extensions:package-boundary:compile\n- git diff --check\n\n## Review status\n\nThis update supersedes the earlier shared-context proof. The PR now includes a split-wrapper-context regression and real behavior proof for the run-owned provenance path requested by review.\n\nValidation run locally after the split-context repair:\n- `node scripts/run-vitest.mjs run src/agents/agent-tools.before-tool-call.e2e.test.ts --reporter=dot` -> 58 passed\n- `node scripts/run-vitest.mjs run src/agents/agent-tools.before-tool-call.integration.e2e.test.ts src/agents/agent-tools.before-tool-call.embedded-mode.test.ts src/plugins/contracts/plugin-sdk-subpaths.test.ts --reporter=dot` -> 18 + 11 + 19 passed\n- `pnpm run test:extensions:package-boundary:compile` -> passed\n- `git diff --check` -> passed\n\n\n\n## Additional real behavior proof: prompt history provenance\n\nThis current-head proof covers the remaining reviewed failure mode: wrapped external content already present in prompt/session history is detected before the later exec `before_tool_call` hook.\n\nCurrent head: `1216680cfad1ce9b78199d1782c1eb29dc7d6ac1`\n\nCommand:\n\n```text\npnpm exec vitest run --config test/vitest/vitest.e2e.config.ts src/agents/agent-tools.before-tool-call.e2e.test.ts -t \"seeds external content provenance from prompt history before exec hooks\" --reporter=verbose --silent=false\n```\n\nEvidence:\n\n```text\n[proof] pr=91800\n[proof] head_sha=1216680cfad1ce9b78199d1782c1eb29dc7d6ac1\n[proof] branch=fix/tool-call-external-provenance\n[proof-command] pnpm exec vitest run --config test/vitest/vitest.e2e.config.ts src/agents/agent-tools.before-tool-call.e2e.test.ts -t \"seeds external content provenance from prompt history before exec hooks\" --reporter=verbose --silent=false\n[proof-case] pr=91800 history-context web_fetch-to-exec provenance\n[proof-path] runtime=prompt-history-scan -> runBeforeToolCallHook\n[proof-context] first_source=promptHistoryMessages\n[proof-context] second_tool=exec\n[proof-observed] history_externalContent={\"present\":true,\"sources\":[\"web_fetch\"]}\n[proof-observed] event_externalContent={\"present\":true,\"sources\":[\"web_fetch\"]}\n[proof-observed] context_externalContent={\"present\":true,\"sources\":[\"web_fetch\"]}\n[proof-result] history-context external provenance propagated=PASS\n```\n\n## Real behavior proof: prompt history provenance\n\nBehavior or issue addressed:\nWrapped external content already present in the active prompt/session history must be detected before a later exec `before_tool_call` policy hook, even when no same-run external tool result refresh happens first.\n\nReal environment tested:\nLocal OpenClaw checkout on branch `fix/tool-call-external-provenance`, head `1216680cfad1ce9b78199d1782c1eb29dc7d6ac1`, using the real OpenClaw before_tool_call hook path and the prompt-history provenance detector added in this PR.\n\nExact steps or command run after this patch:\n```text\npnpm exec vitest run --config test/vitest/vitest.e2e.config.ts src/agents/agent-tools.before-tool-call.e2e.test.ts -t \"seeds external content provenance from prompt history before exec hooks\" --reporter=verbose --silent=false\n```\n\nEvidence after fix:\nTerminal capture / copied live output from the local OpenClaw run:\n```text\n[proof-case] pr=91800 history-context web_fetch-to-exec provenance\n[proof-path] runtime=prompt-history-scan -> runBeforeToolCallHook\n[proof-context] first_source=promptHistoryMessages\n[proof-context] second_tool=exec\n[proof-observed] history_externalContent={\"present\":true,\"sources\":[\"web_fetch\"]}\n[proof-observed] event_externalContent={\"present\":true,\"sources\":[\"web_fetch\"]}\n[proof-observed] context_externalContent={\"present\":true,\"sources\":[\"web_fetch\"]}\n[proof-result] history-context external provenance propagated=PASS\n```\n\nObserved result after fix:\nThe prompt-history scan found `{\"present\":true,\"sources\":[\"web_fetch\"]}`, and the later exec `before_tool_call` event and hook context both received the same `externalContent` value.\n\nWhat was not tested:\nNo known gaps.\n\n",
+        "branch": "fix/tool-call-external-provenance",
+        "head_sha": "1216680cfad1ce9b78199d1782c1eb29dc7d6ac1",
+        "author": "jason-allen-oneal",
+        "labels": [
+          "docs",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "docs/.i18n/glossary.zh-CN.json",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/docs.json",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/hooks.md",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.before-tool-call.e2e.test.ts",
+            "additions": 330,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.before-tool-call.ts",
+            "additions": 187,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 136,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-types.ts",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91800",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91800.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "SUCCESS": 136,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3401,
+    "total_ms": 6214,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 618
+        "ms": 2285
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2443
+        "ms": 1869
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 313
+        "ms": 2033
       },
       {
         "name": "append_ledger",
