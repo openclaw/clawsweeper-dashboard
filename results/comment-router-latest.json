@@ -1,22 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-13T15:15:22.056Z",
+  "generated_at": "2026-06-13T15:15:47.198Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-13T12:15:21.395Z",
+  "since": "2026-06-13T12:15:45.165Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    92654
+    92284
   ],
-  "comment_ids": [
-    4698912651
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
+  "scanned_comments": 2,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -33,62 +31,122 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92654:4698912651:2026-06-13T15:13:41Z:re_review",
-      "comment_id": "4698912651",
-      "comment_version_key": "4698912651:2026-06-13T15:13:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92654#issuecomment-4698912651",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92284:4685880757:2026-06-13T15:15:41Z:clawsweeper_needs_human",
+      "comment_id": "4685880757",
+      "comment_version_key": "4685880757:2026-06-13T15:15:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92284#issuecomment-4685880757",
       "repo": "openclaw/openclaw",
-      "issue_number": 92654,
-      "author": "programmingWTF",
-      "author_id": 114961940,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-13T15:13:41Z",
-      "comment_updated_at": "2026-06-13T15:13:41Z",
+      "issue_number": 92284,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T23:13:07Z",
+      "comment_updated_at": "2026-06-13T15:15:41Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The PR needs contributor or maintainer proof rather than an automated repair because the remaining blocker is real behavior evidence for an external timing-sensitive setup.; Cleared: The diff only changes queue runtime/test code and does not touch secrets, dependencies, workflows, package execution, or other supply-chain surfaces. (sha=1f34dc6b8e2a8216d868bbe56657129e8a1bac2e)",
+      "review_summary": "The PR changes the active-run follow-up enqueue path to pass `restartIfIdle=true` and updates the existing mocked assertion for that queue call.\n\nPR surface: Source 0, Tests 0. Total 0 across 2 files.\n\nReproducibility: no. high-confidence live reproduction was established in this review. Source and issue evidence show the race window on current main, but the timing-sensitive user flow still needs a live or scripted after-fix proof.",
+      "review_followup": "- [P1] The PR needs contributor or maintainer proof rather than an automated repair because the remaining blocker is real behavior evidence for an external timing-sensitive setup.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "1f34dc6b8e2a8216d868bbe56657129e8a1bac2e",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(queue): kick followup drain on enqueue to prevent race-induced stall",
+        "body": "## Summary\n\nWhen a new inbound message arrives during the terminal window of a previous run, the `enqueue-followup` path called `enqueueFollowupRun` with `restartIfIdle=false`. This relied on a non-atomic `isRunActive()` snapshot to decide whether to schedule a drain. If the snapshot returned `true` (stale — the run was still in its terminal/clearing window) but the run's completion drain had already fired against an empty queue, the newly enqueued item sat idle with no scheduled drain. The session went silent for ~5 minutes until the stuck-session watchdog intervened.\n\n**Fix:** Change `restartIfIdle` from `false` to `true` in the `enqueue-followup` branch of `runReplyAgent` (`src/auto-reply/reply/agent-runner.ts:1292`). This ensures `kickFollowupDrainIfIdle` runs inside `enqueueFollowupRun` when the queue is not already draining, eliminating the race window.\n\nThe existing re-check (`isRunActive()` + `scheduleFollowupDrain` on lines 1294-1298) remains as a belt-and-suspenders guard.\n\n**Scope:** 1 line changed, 1 file. No new dependencies, no API changes.\n\n## Linked Issue\n\n- Closes #91909\n\n## Root Cause\n\n`enqueueFollowupRun(..., restartIfIdle=false)` defers drain scheduling to the caller. The caller checks `isRunActive()` — a snapshot that can be stale if the previous run is in its terminal window. When the snapshot says \"a run is active\" but that run's drain already completed against an empty queue, the new item sits in `FOLLOWUP_QUEUES[key]` with `draining=false` and no one to kick it.\n\nChanging to `restartIfIdle=true` means `enqueueFollowupRun` itself calls `kickFollowupDrainIfIdle(key)` when `!queue.draining`, which is the correct invariant: if the queue has items and nobody is draining, start a drain.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Inbound dispatch race where a message enqueued during a previous run's terminal window never gets drained, causing the agent to go silent for ~5 minutes until the stuck-session watchdog fires.\n\n**Real environment tested:** Linux 6.6.114 (WSL2), Node v24.16.0, OpenClaw repo at commit 301213a0 (upstream/main). Source-level analysis of `src/auto-reply/reply/agent-runner.ts`, `src/auto-reply/reply/queue/enqueue.ts`, and `src/auto-reply/reply/queue/drain.ts`.\n\n**Exact steps or command run after this patch:**\n1. Read the `enqueue-followup` branch in `agent-runner.ts` (line 1285-1305) — confirmed `restartIfIdle` is now `true`.\n2. Read `enqueueFollowupRun` in `queue/enqueue.ts` — confirmed when `restartIfIdle=true` and `!queue.draining`, it calls `kickFollowupDrainIfIdle(key)`.\n3. Read `kickFollowupDrainIfIdle` in `queue/drain.ts` — confirmed it retrieves the cached callback and calls `scheduleFollowupDrain`.\n4. Read `scheduleFollowupDrain` in `queue/drain.ts` — confirmed it calls `beginQueueDrain` which sets `queue.draining = true` and starts the drain loop.\n\n**Evidence after fix:** The diff is exactly 1 line:\n```diff\n-      false,\n+      true,\n```\n\nThe control flow after the fix: `enqueueFollowupRun` → `restartIfIdle=true` → `!queue.draining` → `kickFollowupDrainIfIdle(key)` → `scheduleFollowupDrain(key, cb)` → drain loop starts. This is the same path that works correctly for all other `enqueueFollowupRun` call sites (lines 1433, queue tests).\n\n**Observed result after fix:** When a message arrives during a previous run's terminal window, `enqueueFollowupRun` now proactively kicks the drain if the queue is idle. The race between `isRunActive()` returning a stale value and the previous drain completing is eliminated because the drain is started from inside the enqueue, not from a post-enqueue snapshot.\n\n**What was not tested:** Live end-to-end reproduction of the timing-sensitive race was not performed (requires multi-second coordination between run completion and inbound message arrival). The fix is validated by (a) source-level analysis showing the race path is eliminated, (b) the same `restartIfIdle=true` pattern is used by all other call sites without issues, and (c) the existing `queue.drain-restart.test.ts` test suite covers `kickFollowupDrainIfIdle` behavior.\n\n**Proof limitations:** No live reproduction of the ~5min silent-agent scenario. The fix is a defensive parameter change that aligns this call site with the default behavior of `enqueueFollowupRun`.",
+        "branch": "fix/91909-inbound-dispatch-race-followup-drain",
+        "head_sha": "1f34dc6b8e2a8216d868bbe56657129e8a1bac2e",
+        "author": "xuzehan-icenter",
+        "labels": [
+          "size: XS",
+          "proof: supplied",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92284",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92284.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 166,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 134,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2540,
+    "total_ms": 2252,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 650
+        "ms": 367
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1651
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 1880
+        "ms": 209
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
