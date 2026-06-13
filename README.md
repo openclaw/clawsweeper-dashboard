@@ -31,6 +31,11 @@ At a high level ClawSweeper:
 - publishes dashboard, audit, repair, and activity state to
   `openclaw/clawsweeper-state`
 
+For the complete architecture and operator guide covering issue-to-PR work, PR
+repair, GitCrawl intake, durable Codex threads, CrabFleet steering, completion
+gates, quotas, dashboards, and recovery, see
+[`docs/steerable-repair-automation.md`](docs/steerable-repair-automation.md).
+
 ClawSweeper is not a generic auto-close bot. Review is proposal-only, apply is
 guarded, Codex never gets write credentials during review, and every GitHub
 mutation is rechecked against live target state immediately before it happens.
@@ -213,6 +218,9 @@ Common commands:
 - `automerge` labels an open PR, creates or reuses the adopted job, dispatches
   review, and enters the bounded review/fix/merge loop. Draft PRs are fix-only
   until GitHub marks them ready for review.
+- `implement issue` on an open issue creates or reuses one issue implementation
+  job and dispatches the issue-to-PR lane. OpenClaw organization members may
+  request this explicitly even without repository write permission.
 - User-facing OpenClaw `fix`, `feat`, and `perf` automerge PRs preserve
   release-note context in PR bodies and commit messages before merge;
   contributors are not asked to edit `CHANGELOG.md`.
@@ -225,6 +233,9 @@ Common commands:
   older automerge/autofix comments ineligible to continue. `/autoclose <reason>`
   closes the item and any open same-repo targets explicitly referenced in the
   command text.
+- `clawsweeper:human-review` and `clawsweeper:manual-only` stop automatic PR
+  repair and issue-to-PR mutation. Issue implementation rechecks the live issue
+  immediately before every branch push and before PR creation.
 
 Only maintainers are accepted for write actions. The router checks repository
 collaborator permission (`admin`, `maintain`, or `write`) and falls back to
@@ -247,8 +258,12 @@ Live pipeline dashboard: https://clawsweeper.openclaw.ai/
 
 The Cloudflare dashboard is observability-only: it shows the system flow, live
 worker capacity, per-worker current steps and drill-down timelines,
-repair/automerge pipeline rows, CI state, recent failures, and automerge timing
-without owning GitHub mutations. See [`docs/live-dashboard.md`](docs/live-dashboard.md).
+separate issue-to-PR and PR-repair worker views, repair/automerge pipeline rows,
+CI state, recent failures, and automerge timing without owning GitHub mutations.
+Its Live terminals link opens CrabFleet for browser steering of registered
+GitHub Actions sessions. See [`docs/live-dashboard.md`](docs/live-dashboard.md).
+The end-to-end session lifecycle is documented in
+[`docs/steerable-repair-automation.md`](docs/steerable-repair-automation.md).
 
 The optional triage dashboard page at `/triage` exposes ClawSweeper advisory
 issue labels as read-only maintainer views, backed by GitHub Search snapshots
@@ -383,12 +398,13 @@ appropriate repair job.
   re-dispatches exact-head review, and waits for required checks.
 - `automerge` merges only after review verdict, checks, mergeability,
   security, maintainer stop/approve state, and repository policy gates pass.
-- Issue implementation remains guarded. In configured projects outside
-  `openclaw/openclaw` and `openclaw/clawhub`, a complete high-confidence
-  `queue_fix_pr` review with no linked PR, security signal, or product decision
-  automatically dispatches the existing implementation worker. The generated
-  PR enters the normal review, autofix, and automerge loop. Core OpenClaw and
-  ClawHub issues retain their stricter manual/explicit lanes.
+- Issue implementation remains guarded and explicit by default. An OpenClaw
+  organization member can comment `@clawsweeper implement issue`; ClawSweeper
+  refuses when an open PR already mentions the issue, a generated branch PR is
+  already open, the issue is paused, or security/product blockers remain.
+  Automatic review-to-implementation dispatch requires the separate
+  `CLAWSWEEPER_AUTO_IMPLEMENT_ISSUES=1` master variable in addition to the
+  candidate-specific gate.
 
 Repair internals are documented in
 [`docs/repair/README.md`](docs/repair/README.md), and the automerge state
@@ -493,7 +509,7 @@ source ~/.profile
 corepack enable
 pnpm install
 pnpm run build
-pnpm run plan -- --target-repo openclaw/openclaw --batch-size 5 --shard-count 22 --max-pages 250 --codex-model internal --codex-reasoning-effort high
+pnpm run plan -- --target-repo openclaw/openclaw --batch-size 5 --shard-count 44 --max-pages 250 --codex-model internal --codex-reasoning-effort high
 pnpm run review -- --target-repo openclaw/openclaw --target-dir ../openclaw --batch-size 5 --max-pages 250 --artifact-dir artifacts/reviews --codex-model internal --codex-reasoning-effort high --codex-timeout-ms 600000
 pnpm run apply-artifacts -- --target-repo openclaw/openclaw --artifact-dir artifacts/reviews --skip-dashboard
 pnpm run audit -- --target-repo openclaw/openclaw --max-pages 250 --sample-limit 25 --update-dashboard
@@ -550,12 +566,12 @@ default, subject to the selected repository profile; pass `target_repo`,
 `apply_kind=issue`, or `apply_kind=pull_request` to narrow a manual run.
 
 Scheduled runs cover the configured product profiles. `openclaw/openclaw` runs
-normal backfill every 5 minutes with up to 12 review shards when the system is
+normal backfill every 5 minutes with up to 24 review shards when the system is
 quiet; `openclaw/clawhub` runs on offset review/apply/audit crons so its reports
 live under `records/openclaw-clawhub/` without colliding with default repo
 records. `openclaw/clawsweeper` has a scheduled read-only audit row and is
 available for manual and event self-review smoke tests. Broad hot-intake sweeps
-cap scheduled fan-out at 11 one-item shards per run when quiet; exact event
+cap scheduled fan-out at 22 one-item shards per run when quiet; exact event
 reviews still use one shard. Normal review, hot intake, and commit review are
 background lanes, so they shrink automatically while repair or exact-item work
 is active. Throughput defaults live in
@@ -564,12 +580,12 @@ is active. Throughput defaults live in
 ### Worker Budget
 
 ClawSweeper has one main capacity knob:
-`config/automation-limits.json` -> `workers.max`. The current value is `32`.
-Lane limits are derived from that number: normal review defaults to 22 shards
-for manual/backstop runs, scheduled normal review gets up to 12 after reserves,
-hot intake up to 11 shards, commit review 1 commit per page, and existing
-repair/issue implementation lanes use 40% of `workers.max`, currently 12 live
-workers. Imported gitcrawl cluster repair stays at 1 live worker by default.
+`config/automation-limits.json` -> `workers.max`. The current value is `64`.
+Lane limits are derived from that number: normal review defaults to 44 shards
+for manual/backstop runs, scheduled normal review gets up to 24 after reserves,
+hot intake up to 22 shards, commit review 3 commits per page, and existing
+repair/issue implementation lanes use 40% of `workers.max`, currently 25 live
+workers. Imported gitcrawl cluster repair allows 2 live workers by default.
 Exact-item review, repair, and issue implementation are priority work; normal
 review, hot intake, and commit review are background work and automatically
 yield when priority work is active.
@@ -622,9 +638,14 @@ Required secrets:
 
 Token flow:
 
-- Review and repair jobs create an isolated per-run `CODEX_HOME`, start a local
-  Responses proxy from `OPENAI_API_KEY`, write proxy-only Codex config there,
-  and run Codex without OpenAI or Codex token environment variables.
+- Review jobs create an isolated per-run `CODEX_HOME`; steerable repair jobs
+  use a stable per-work cache path. Both start a local Responses proxy from
+  `OPENAI_API_KEY`, write proxy-only Codex config there, and run Codex without
+  OpenAI or Codex token environment variables.
+- Steerable repair jobs cache only the app-server `sessions/` directory and
+  ClawSweeper thread-id file. Planning and execution resume the same logical
+  Codex thread; CrabFleet credentials stay in the wrapper and are stripped
+  before Codex starts.
 - ClawSweeper uses the `clawsweeper` GitHub App token for read-heavy target
   context.
 - Apply mode uses the same app token for review comments and closes, so GitHub
@@ -649,6 +670,20 @@ Required `clawsweeper` app permissions:
   dispatch, self-heal, and commit-review continuations.
 - Checks: write on target repositories when commit Check Runs should be
   published.
+
+Optional steerable Action setup:
+
+- secret `CLAWSWEEPER_CRABFLEET_SERVICE_TOKEN`: CrabFleet OpenClaw service
+  token used only to register or resume the Action session
+- variable `CLAWSWEEPER_STEERABLE_CODEX=1`: enables app-server thread
+  persistence and browser steering in the repair cluster workflow
+- variable `CLAWSWEEPER_CRABFLEET_URL`: optional CrabFleet API/dashboard base;
+  defaults to `https://crabfleet.openclaw.ai`
+
+See
+[`docs/steerable-repair-automation.md`](docs/steerable-repair-automation.md)
+for the registration, token, heartbeat, thread-resume, steering, completion,
+dashboard, and recovery contracts.
 
 ClawSweeper no longer falls back to PAT-based write tokens. If the GitHub App
 installation does not grant the requested permission set, the workflow fails at
