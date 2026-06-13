@@ -1,18 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-13T18:01:19.228Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-13T18:01:29.163Z",
+  "repo": "openclaw/gogcli",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-13T15:01:16.277Z",
+  "since": "2026-06-13T15:01:26.016Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92752
+    791
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4699336086
+  ],
+  "status_comment_id": 4699336231,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
   "commands_seen": 1,
@@ -31,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92752:4699298908:2026-06-13T18:01:11Z:clawsweeper_needs_human",
-      "comment_id": "4699298908",
-      "comment_version_key": "4699298908:2026-06-13T18:01:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92752#issuecomment-4699298908",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92752,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-13T17:45:01Z",
-      "comment_updated_at": "2026-06-13T18:01:11Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "idempotency_key": "comment-router:openclaw/gogcli:791:4699336086:2026-06-13T18:00:38Z:re_review",
+      "comment_id": "4699336086",
+      "comment_version_key": "4699336086:2026-06-13T18:00:38Z",
+      "comment_url": "https://github.com/openclaw/gogcli/pull/791#issuecomment-4699336086",
+      "repo": "openclaw/gogcli",
+      "issue_number": 791,
+      "author": "steipete",
+      "author_id": 58493,
+      "author_association": "COLLABORATOR",
+      "comment_created_at": "2026-06-13T18:00:38Z",
+      "comment_updated_at": "2026-06-13T18:00:38Z",
+      "status_comment_id": 4699336231,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -59,34 +61,106 @@
       "visual_lens": null,
       "expected_head_sha": "215547f45ceed1e5161592e0cde745380aafc645",
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-13T18:01:29.861Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 791
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-13T18:01:30.801Z",
+          "response_comment_id": "4699336231",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "admin",
       "target": {
         "kind": "pull_request",
-        "title": "fix(diagnostics): keep recovery scheduling out of the stuck-session warning backoff",
-        "body": "## What\n\nDiagnostic stuck-session recovery is no longer gated by the warning-backoff\nthrottle. `logSessionAttention` previously returned `undefined` whenever a\n`session.stuck` or `session.long_running` classification fell inside its\nexponential warning-backoff window. The heartbeat only schedules recovery from\na returned classification, so throttling the *warning* also throttled\n*recovery*: a recovery-eligible lane could sit unrecovered until the next warn\ninterval (which doubles each time).\n\nThis change separates the two concerns. The warning backoff still suppresses\nthe repeated log line and diagnostic event, but a recovery-eligible\nclassification is now always returned so the heartbeat can call\n`requestStuckSessionRecovery` on every tick. In-flight recovery requests remain\nde-duplicated by the recovery coordinator, so this does not add redundant abort\nwork — it only removes the delay before the first (and each subsequent) recovery\nattempt.\n\n## Why\n\nReported in #92742: a stale active run blocked the `agent:main:direct` lane for\n~17 minutes. Diagnostics detected the stuck session, but the same warning\nbackoff path suppressed the follow-up recovery checks, so the lane was not\nreleased promptly even though the stale work was recoverable.\n\nRoot cause (`src/logging/diagnostic.ts`):\n\n- `logSessionAttention` computes `recoveryEligible`, then for `session.stuck`\n  and `session.long_running` does `if (params.ageMs < nextWarnAgeMs) return undefined;`\n  *before* returning the classification.\n- The heartbeat schedules recovery only when `logSessionAttention` returns a\n  classification (`classification?.recoveryEligible` / `isActiveAbortRecoveryEligible`),\n  so a throttled warning silently throttles recovery too.\n\n## Change\n\n- `src/logging/diagnostic.ts`: within the warning-backoff window, return early\n  only when the session is **not** recovery-eligible. When it is recovery-eligible,\n  suppress just the warning log + event and still return the classification.\n  The `lastStuckWarnAgeMs` / `lastLongRunningWarnAgeMs` markers now advance only\n  when a warning is actually emitted, so the backoff cadence is preserved.\n- `src/logging/diagnostic.test.ts`: add a regression test proving recovery is\n  still scheduled on a throttled tick, and update the existing backoff test\n  (which had encoded the old coupling) to assert recovery now runs each tick\n  while warnings stay throttled.\n\nScope is intentionally narrow. The QQ fast-ack / quick-reply path and the\nhook-process watchdog mentioned in the issue are separate follow-ups, as the\ntriage review also noted.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Recovery-eligible stuck / long-running sessions\nwere not being recovered while the diagnostic warning backoff was active, so a\nblocked lane stayed wedged until the next (exponentially growing) warn interval —\nthe ~17 minute direct-lane stall reported in #92742.\n\n**Real environment tested:** Local OpenClaw checkout at current `main`\n(`45e36a24`), Node v24.14.0, pnpm 11.2.2, macOS arm64. I drove the real\ndiagnostic runtime — `logSessionAttention` → `requestStuckSessionRecovery`, the\nexact calls the 30s diagnostic heartbeat makes (`src/logging/diagnostic.ts`\n~L1281–1303) — over a recovery-eligible stuck `agent:main:direct` session, with\nthe real diagnostic subsystem logger and event bus live. Only the terminal\n`recoverStuckSession` side effect is observed (logged) so the lane-release\nrequest is visible.\n\n**Exact steps or command run after this patch:** ran a throwaway `tsx` script\nthat imports the real `src/logging/diagnostic.ts`, registers a stuck\n`agent:main:direct` session, and replays three heartbeat ticks at ageMs = 60s,\n90s (inside the warn-backoff window), and 120s — feeding each\n`logSessionAttention` result into `requestStuckSessionRecovery` exactly like the\nheartbeat loop. Invoked with `node` via `./node_modules/.bin/tsx`.\n\n**Evidence after fix:** copied live terminal output (real `[diagnostic]`\nsubsystem warn lines, real emitted events, and the real recovery invocations).\nOn the throttled 90s tick the warn line/event stay suppressed but recovery still\nfires:\n\n```\n== heartbeat tick: ageMs=60s ==\n  [diagnostic] stuck session: sessionId=qq-direct-1 sessionKey=agent:main:direct age=60s reason=stale_session_state recovery=checking\n  [event] session.stuck ageMs=60000\n  [event] session.recovery.requested ageMs=60000\n  [recover] requestStuckSessionRecovery invoked #1 (ageMs=60000)\n\n== heartbeat tick: ageMs=90s ==          # inside warn backoff (next warn age = 120s)\n  [event] session.recovery.requested ageMs=90000\n  [recover] requestStuckSessionRecovery invoked #2 (ageMs=90000)\n\n== heartbeat tick: ageMs=120s ==\n  [diagnostic] stuck session: sessionId=qq-direct-1 ... age=120s recovery=checking\n  [event] session.stuck ageMs=120000\n  [recover] requestStuckSessionRecovery invoked #3 (ageMs=120000)\n\nTOTAL recovery invocations across the 3 ticks: 3\n```\n\nSame script on **unmodified `main`** (fix reverted with `git checkout HEAD~1 -- src/logging/diagnostic.ts`) — the 90s backoff tick drops recovery entirely:\n\n```\n== heartbeat tick: ageMs=90s ==\n  (no classification returned -> recovery NOT scheduled)\n...\nTOTAL recovery invocations across the 3 ticks: 2\n```\n\n**Observed result after fix:** on the throttled 90s heartbeat tick the\n`[diagnostic] stuck session` warn line and `session.stuck` event stay suppressed\n(still one warning), but `session.recovery.requested` fires and the\n`recoverStuckSession` lane-release request is invoked. Recovery invocations go\nfrom 2 (main, recovery skipped during backoff) to 3 (every tick). With the real\nexponential backoff the skipped window keeps doubling, which is what stretched\nthe reported lane stall to ~17 minutes; the fix releases the lane on the next\n~30s heartbeat instead.\n\nTargeted suites (issue acceptance criteria) and repo checks are also green:\n\n```\n$ node scripts/run-vitest.mjs src/logging/diagnostic.test.ts src/logging/diagnostic-stuck-session-recovery.runtime.test.ts\n Test Files  2 passed (2)   Tests  91 passed (91)\n$ node scripts/run-vitest.mjs --config test/vitest/vitest.logging.config.ts\n Test Files  29 passed (29) Tests  360 passed (360)\n$ pnpm tsgo:core && pnpm tsgo:core:test   # exit 0\n```\n\n**What was not tested:** I did not stand up a live QQ gateway to replay the\noriginal end-to-end 17-minute incident (no QQ environment available). The defect\nand fix are reproduced at the diagnostic heartbeat level above, exercising the\nreal `logSessionAttention` → recovery-scheduling control flow that failed.\n\nFixes #92742\n",
-        "branch": "fix/92742-diagnostic-recovery-warning-backoff",
-        "head_sha": "215547f45ceed1e5161592e0cde745380aafc645",
-        "author": "gnanam1990",
+        "title": "fix(backup): keep read commands non-mutating",
+        "body": "## Summary\n\n- separate backup read repository preparation from write-oriented initialization\n- let status, verify, cat, and export pull existing repos or clone configured remotes without falling back to `git init`\n- clone read repositories through a sibling temporary directory and atomically install them, leaving no partial target on failure\n- make global `--no-input` disable Git credential/UI prompts and force SSH batch mode across backup commands\n- redact URL credentials from displayed Git arguments and captured diagnostics\n- make status and verify return file-free `--dry-run` plans before repository preparation\n- add `--no-pull` to status/verify while retaining legacy `--recipient`/`--no-push` as hidden ignored compatibility flags\n- update backup docs, generated command docs, changelog, and regression coverage\n\n## Testing\n\n- `go test ./internal/backup -count=1`\n- focused backup command/schema tests\n- `make ci`\n- structured autoreview: clean, no accepted/actionable findings\n- compatibility smoke: legacy flags parse successfully but remain absent from normal help and generated docs\n- fake-Git binary smoke: prompt environment disabled, failed clone returns immediately, and neither target nor temp repository remains\n- credentialed-remote smoke: fake Git echoed a credentialed URL; returned diagnostics contained only redacted URL components\n- binary dry-run smoke: status and verify return resolved repo/pull plans without creating their target paths\n\n## Binary proof\n\nDisposable repositories verified:\n\n```text\nvalid_status_rc=0\nvalid_verify_rc=0\nmissing_rc=1\nclone_rc=1\ncat_rc=1\nexport_rc=1\nmissing_repo_exists=no\nclone_git_exists=no\nexport_exists=no\nno_input_git_terminal_prompt=0\nno_input_gcm_interactive=Never\nno_input_ssh_batch_mode=yes\npartial_clone_target_exists=no\npartial_clone_temp_count=0\ncredential_leak=no\nstatus_dry_run_repo_exists=no\nverify_dry_run_repo_exists=no\n```\n\nMissing repositories return actionable init/remote guidance. Clone failures preserve the original `git clone` error and do not create a fallback `.git` repository.\n",
+        "branch": "fix/backup-read-repo-safety",
+        "head_sha": "34ed3046b266e478cfc232880617857f537374ae",
+        "author": "steipete",
         "labels": [
-          "size: S",
-          "proof: supplied",
+          "P2",
           "proof: sufficient",
-          "P1",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
+          "status: ⏳ waiting on author",
+          "merge-risk: 🚨 compatibility",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 security-boundary"
         ],
         "files": [
           {
-            "path": "src/logging/diagnostic.test.ts",
-            "additions": 47,
-            "deletions": 1,
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/logging/diagnostic.ts",
-            "additions": 21,
+            "path": "docs/backup.md",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/commands/gog-backup-status.md",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/commands/gog-backup-verify.md",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/backup/backup.go",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/backup/git.go",
+            "additions": 178,
+            "deletions": 38,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/backup/read.go",
+            "additions": 4,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/backup/read_repo_test.go",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/cmd/backup.go",
+            "additions": 43,
             "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cmd/backup_cmd_test.go",
+            "additions": 105,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cmd/backup_export.go",
+            "additions": 2,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
@@ -95,46 +169,47 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92752",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92752.md",
+        "automerge_cluster_id": "automerge-openclaw-gogcli-791",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-gogcli-791.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 164,
+          "total": 5,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 131,
-            "NEUTRAL": 1
+            "IN_PROGRESS": 3,
+            "SUCCESS": 2
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "test:IN_PROGRESS",
+            "windows:IN_PROGRESS",
+            "darwin-cgo-build:IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
+          "pending": [
+            "test:IN_PROGRESS",
+            "windows:IN_PROGRESS",
+            "darwin-cgo-build:IN_PROGRESS"
           ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3302,
+    "total_ms": 5252,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 477
+        "ms": 2274
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2461
+        "ms": 859
       },
       {
         "name": "classify_commands",
@@ -142,7 +217,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 339
+        "ms": 2093
       },
       {
         "name": "append_ledger",
