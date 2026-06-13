@@ -2,12 +2,12 @@
 repo: "openclaw/gogcli"
 cluster_id: "issue-openclaw-gogcli-774"
 mode: "autonomous"
-run_id: "27460569051"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27460569051"
-head_sha: "5abcd35eb422c1da671dc2719591c4311548b75b"
+run_id: "27462035081"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27462035081"
+head_sha: "86d0ca37755b3b476a32f6b510a439ce1fa73eea"
 workflow_conclusion: "failure"
-result_status: "blocked"
-published_at: "2026-06-13T07:41:27.867Z"
+result_status: "planned"
+published_at: "2026-06-13T08:50:26.694Z"
 canonical: "https://github.com/openclaw/gogcli/issues/774"
 canonical_issue: "https://github.com/openclaw/gogcli/issues/774"
 canonical_pr: null
@@ -25,17 +25,17 @@ needs_human_count: 0
 
 Repo: openclaw/gogcli
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27460569051](https://github.com/openclaw/clawsweeper/actions/runs/27460569051)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27462035081](https://github.com/openclaw/clawsweeper/actions/runs/27462035081)
 
 Workflow conclusion: failure
 
-Worker result: blocked
+Worker result: planned
 
 Canonical: https://github.com/openclaw/gogcli/issues/774
 
 ## Summary
 
-Issue #774 is a viable, non-security, narrow implementation request. Current main still has `--body-html-file` for `gmail send` but not for `gmail drafts create` or `gmail drafts update`. A write-enabled executor should apply the planned new-fix PR; this worker could not edit or validate because the filesystem is read-only.
+Verified #774 against current main 51ad56cc72d15c580b39cafd969a337f1b1c8ef1: gmail send has --body-html-file, but gmail drafts create/update still do not. A narrow new fix PR is appropriate; this worker produced the fix artifact only and did not mutate GitHub or the read-only checkout.
 
 ## Impact
 
@@ -66,9 +66,9 @@ Issue #774 is a viable, non-security, narrow implementation request. Current mai
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #575 | keep_closed | skipped | related | Already closed historical send-command context; no mutation needed. |
-| #774 | fix_needed | planned | canonical | No viable canonical PR exists and the bug/feature gap is still present on current main. |
-| cluster:issue-openclaw-gogcli-774 | build_fix_artifact | planned |  | A narrow fix PR is appropriate, but code application and validation require a write-enabled executor. |
+| #575 | keep_closed | skipped | related | Closed linked issue is evidence for desired send behavior, not a mutation target. |
+| #774 | fix_needed | planned | canonical | The issue is still valid on current main and has a narrow implementation path with no security-sensitive signal. |
+| cluster:issue-openclaw-gogcli-774 | build_fix_artifact | planned |  | No viable existing PR is hydrated; a new credited fix PR is the canonical path. |
 
 ## Needs Human
 
