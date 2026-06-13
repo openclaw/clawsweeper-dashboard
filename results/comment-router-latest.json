@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-13T15:00:16.813Z",
+  "generated_at": "2026-06-13T15:00:37.116Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-13T12:00:16.414Z",
+  "since": "2026-06-13T12:00:34.779Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92718
+    92716
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,120 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92716:4698859794:2026-06-13T15:00:32Z:clawsweeper_needs_human",
+      "comment_id": "4698859794",
+      "comment_version_key": "4698859794:2026-06-13T15:00:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92716#issuecomment-4698859794",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92716,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-13T14:52:59Z",
+      "comment_updated_at": "2026-06-13T15:00:32Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] Contributor proof is needed and maintainers may need to choose whether this narrow fix lands directly or is folded into related Windows fallback work; ClawSweeper automation cannot supply the reporter's Session 0...; Cleared: The diff only changes local Windows scheduled-task fallback control flow and comments; no dependency, credential, workflow, or supply-chain surface changed. (sha=982c799e47ab674e0455cae32fa352a8277b24a2)",
+      "review_summary": "The PR changes Windows scheduled-task launch fallback detection so non-running `other` states continue into the fallback poll loop instead of exiting early.\n\nPR surface: Source +5. Total +5 across 1 file.\n\nReproducibility: yes. from source and linked event-log evidence, but not live reproduced here. The issue gives a Windows Session 0 path where `openclaw gateway restart` stops the task and the subsequent `/Run` is silently dropped.",
+      "review_followup": "- [P2] Contributor proof is needed and maintainers may need to choose whether this narrow fix lands directly or is folded into related Windows fallback work; ClawSweeper automation cannot supply the reporter's Session 0 proof.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "982c799e47ab674e0455cae32fa352a8277b24a2",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(daemon): detect silently dropped schtasks /Run in Session 0 for restart",
+        "body": "## What\n\n`openclaw gateway restart` via the exec tool (Session 0 on Windows) stops the gateway but never restarts it. `schtasks /Run` returns exit code 0 but Task Scheduler silently drops the request — no Event 325 is logged.\n\n## Root cause\n\n`shouldFallbackScheduledTaskLaunch()` only enters the fallback-poll loop when the task state is `not-yet-run` (0x41303). After `/End` + a silently-dropped `/Run`, the task retains its previous result code (e.g. 0x0), which maps to state `other`. The function exits early at `initial.state !== \"not-yet-run\"` and never triggers the direct-spawn fallback.\n\n## Fix\n\nTreat both `not-yet-run` and `other` (non-running) states as candidates for fallback detection. Only bail out early when the task is confirmed running — if the task actually started, no fallback is needed.\n\n## Why `openclaw gateway start` works but `restart` does not\n\nBoth use `schtasks /Run` under the hood. The difference is that `start` runs `/Run` on a fresh task, which sets `lastRunResult=0x41303` (not-yet-run) — the exact condition the fallback check expects. `restart` runs `/End` first, and the subsequent `/Run` in Session 0 is silently dropped, leaving the task in its previous exit code state instead of resetting to `0x41303`.\n\nFixes #91926\n\n## Real behavior proof\n**Behavior or issue addressed:** `openclaw gateway restart` via exec tool on Windows stops the gateway but never restarts it — `schtasks /Run` is silently dropped by Task Scheduler when invoked from Session 0 (services session).\n\n**Real environment tested:** Windows_NT 10.0.26100 (x64), OpenClaw 2026.6.1, Node.js v24.14.1, task running in Session 0 via exec tool. Source analysis performed on commit `upstream/main` (latest).\n\n**Exact steps or command run after this patch:**\n```\n# Source-level analysis confirms the fix:\n# 1. shouldFallbackScheduledTaskLaunch() now accepts both \"not-yet-run\" and \"other\" states\n# 2. The early return changed from `state !== \"not-yet-run\"` to `state === \"running\"`\n# 3. This ensures the fallback poll loop runs when schtasks /Run is silently dropped\n```\n\n**Evidence after fix:** The function `shouldFallbackScheduledTaskLaunch` previously had:\n```typescript\nif (initial.state !== \"not-yet-run\") {\n  return false;  // ← exits here when state is \"other\" after silently dropped /Run\n}\n```\nAfter the fix:\n```typescript\nif (initial.state === \"running\") {\n  return false;  // ← only exits if task actually started\n}\n```\nWhen `/Run` is silently dropped in Session 0, the task state is `\"other\"` (not `\"not-yet-run\"` and not `\"running\"`). The fix allows the function to proceed into the fallback detection poll loop, which checks for launch evidence and falls back to direct process spawning when no evidence is found.\n\n**Observed result after fix:** The `runScheduledTaskOrThrow` function will now correctly detect silently dropped `/Run` requests and trigger `launchFallbackTaskScript()` to directly spawn the gateway process, bypassing the broken Task Scheduler path.\n\n**What was not tested:** Live Windows Task Scheduler behavior from Session 0 — this fix was validated through source-level analysis of the task state machine and the known behavior documented in the issue. The fallback mechanism (`launchFallbackTaskScript`) is already proven to work for other code paths (startup entry fallback, non-running task detection).\n\n**Proof limitations:** This is a source-level fix validated against the documented reproduction from the issue reporter. A live Windows Session 0 test would be needed for full end-to-end confirmation.",
+        "branch": "fix/windows-restart-session0-silent-drop",
+        "head_sha": "982c799e47ab674e0455cae32fa352a8277b24a2",
+        "author": "xuzehan-icenter",
+        "labels": [
+          "gateway",
+          "size: XS",
+          "proof: supplied",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/daemon/schtasks.ts",
+            "additions": 7,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92716",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92716.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 128,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-tooling-docker:FAILURE",
+            "checks-node-agentic-command-support:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-tooling-docker:FAILURE",
+            "checks-node-agentic-command-support:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 821,
+    "total_ms": 2607,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 387
+        "ms": 291
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2034
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 422
+        "ms": 259
       },
       {
         "name": "append_ledger",
