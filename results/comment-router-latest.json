@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-13T14:26:48.491Z",
+  "generated_at": "2026-06-13T14:26:55.841Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-13T11:26:46.463Z",
+  "since": "2026-06-13T11:26:55.263Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     92702
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4698720640
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,86 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): reap prior MCP runtime when a session rebinds its sessionKey",
-        "body": "### Summary\n\n- **Problem**: Issue #92569 reports that MCP servers using exclusive file locks (embedded databases — SQLite, LadybugDB, etc.) fail with lock contention when a session transitions: the previous session's MCP server processes are still alive and holding the lock when the next session spawns fresh ones, so the new session's tool calls fail and the per-server backoff escalates into a self-deepening paused state.\n- **Root Cause**: The session MCP runtime manager (`getSessionMcpRuntimeManager`) keys one runtime per `sessionId` and maps each `sessionKey` to exactly one `sessionId`. When a `sessionKey` is rebound to a **new** `sessionId`, `getOrCreate` overwrites the `sessionKey → sessionId` mapping but leaves the prior `sessionId`'s runtime registered and undisposed. Nothing reaps it promptly: for persistent interactive sessions the runtime is intentionally kept warm across turns (`cleanupBundleMcpOnRunEnd` is off), and the explicit session-reset retire path is not on this transition. The orphan therefore lingers until the idle sweep TTL (default 10 minutes), and its stdio MCP child processes keep their exclusive file locks the whole time — so the freshly spawned processes for the new `sessionId` cannot open the database.\n- **The rebind happens without any reset**: auto-compaction rotates the transcript and mints a new `sessionId` for the same `sessionKey` (`incrementCompactionCount`'s `newSessionId` path), which is exactly what a long-running session (large context, many turns — the file-lock case in the report) hits. The next turn calls `getOrCreateSessionMcpRuntime` with the same `sessionKey` and the new `sessionId`, stranding the prior runtime.\n- **Fix**: Enforce the manager's \"one live MCP runtime per `sessionKey`\" invariant at the rebind point. When `getOrCreate` rebinds a `sessionKey` to a different `sessionId`, eagerly reap the prior **registered, unleased** runtime instead of waiting for the idle sweep, so file-locking MCP servers release before the new session connects.\n- **What changed**:\n  - `src/agents/agent-bundle-mcp-runtime.ts` — extract `disposeSessionById` (the existing `disposeSession` method now delegates to it, behavior-preserving), and call it from `getOrCreate` when a `sessionKey` rebinds to a new `sessionId`, gated on the prior runtime being registered and `activeLeases === 0`.\n  - Tests added to `agent-bundle-mcp-runtime.test.ts`: the reap-on-rebind case and the still-leased-prior-runtime keep case.\n- **What did NOT change (scope boundary)**:\n  - The idle sweep, the `retireSessionMcpRuntime` / `retireSessionMcpRuntimeForSessionKey` helpers, and `session-reset-service` are unchanged; the reap runs only on the authoritative `sessionKey` rebind inside `getOrCreate`.\n  - An in-flight (not-yet-registered) prior creation is deliberately left alone so a concurrent same-`sessionKey` `getOrCreate` cannot have its pending runtime disposed out from under it.\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - Gateway protocol unchanged.\n\n### Reproduction\n\n1. A persistent interactive session (e.g. Telegram/Discord) has a file-locking MCP server configured (embedded DB such as SQLite/LadybugDB). The MCP runtime is kept warm across turns, so its child processes hold the DB's exclusive lock.\n2. The session runs long enough to trigger auto-compaction, which rotates the transcript and mints a new `sessionId` for the same `sessionKey`.\n3. The next turn calls `getOrCreateSessionMcpRuntime` with the same `sessionKey` and the new `sessionId`.\n4. **Before this PR**: the manager rebinds the `sessionKey` to the new `sessionId` but leaves the prior `sessionId`'s runtime registered; its MCP child processes keep their exclusive file lock until the idle TTL (default 10 minutes). The new session's freshly spawned processes cannot open the database, tool calls fail, and the per-server backoff escalates.\n5. **After this PR**: the rebind reaps the prior registered, unleased runtime; its processes exit and release the lock before the new session connects, so the new session's MCP tools work immediately.\n\n### Real behavior proof\n\n**Behavior addressed (#92569)**: when a `sessionKey` is rebound to a new `sessionId`, the prior MCP runtime is disposed at the rebind instead of lingering until the idle TTL, so a file-locking MCP server's exclusive lock is released before the new session reconnects. An actively-leased prior runtime (in-flight run) is preserved.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production `SessionMcpRuntimeManager`)**: `manager.getOrCreate` driving the real `runtimesBySessionId` / `sessionIdBySessionKey` maps, the `activeLeases` lease guard, and the `dispose` lifecycle, using the manager's own test factory seam (`testing.createSessionMcpRuntimeManager`).\n\n**Exact steps or command run after this patch**: `pnpm test src/agents/agent-bundle-mcp-runtime.test.ts`; `pnpm tsgo:core`; `pnpm exec oxfmt --check` and `node scripts/run-oxlint.mjs` on the changed files.\n\n**Evidence after fix (Vitest output for the touched test file)**:\n\n```text\n agent-bundle-mcp-runtime.test.ts   Tests  35 passed (35)\n```\n\n**Observed result after fix**: after a `sessionKey` rebinds from `session-old` to `session-new`, the prior runtime's `dispose()` fires and `listSessionIds()` no longer contains `session-old`, while `resolveSessionId` returns `session-new`. When the prior runtime reports an active lease, it is left alive (no force-kill of an in-flight run) and both runtimes remain registered. With the production change reverted, the reap test fails — the prior runtime is never disposed (`disposed=[]`) — confirming the test exercises the production change rather than the mock.\n\n**What was not tested**: the live gateway round-trip with a real file-locking MCP server (e.g. LadybugDB) under auto-compaction on a deployment. The manager invariant, the rebind reap, and the lease-guard keep are covered deterministically against the production manager; a full gateway round-trip was not driven.\n\n**Repro confirmation**: the reap-on-rebind test fails on current `main` (`disposed=[]`, prior runtime stranded) and passes with the fix.\n\n### Risk / Mitigation\n\n- **Risk**: Reaping a runtime still in use by an in-flight run. **Mitigation**: the reap is gated on `activeLeases === 0`, mirroring the idle sweep's existing invariant; a leased runtime is left to drain and be reaped by the idle sweep.\n- **Risk**: Disposing an in-flight prior creation out from under a concurrent same-`sessionKey` `getOrCreate`. **Mitigation**: the reap only targets a runtime already registered in `runtimesBySessionId`; an in-flight-only prior creation is left alone (its own caller keeps it, and the idle sweep reaps it later if it ends up orphaned).\n- **Risk**: The `disposeSession` extraction changes teardown behavior. **Mitigation**: `disposeSessionById` is a literal extraction — it always clears the maps and `forgetSessionKeysForSessionId`, then disposes the runtime when present, matching the previous method body; `disposeSession` now delegates to it.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Agents / runtime\n- [x] MCP / tools\n\n### Linked Issue/PR\n\nRefs #92569\n",
-        "branch": "fix/92569-mcp-runtime-orphan-on-sessionkey-rebind",
-        "head_sha": "3388951570aef3ebf7082fdc3f7098c73cea312d",
-        "author": "openperf",
-        "labels": [
-          "agents",
-          "size: S",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-bundle-mcp-runtime.test.ts",
-            "additions": 64,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-bundle-mcp-runtime.ts",
-            "additions": 26,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92702",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92702.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "SUCCESS": 131,
-            "CANCELLED": 1,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2286,
+    "total_ms": 1282,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 258
+        "ms": 566
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1753
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 250
+        "ms": 705
       },
       {
         "name": "append_ledger",
