@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-13T18:46:50.655Z",
+  "generated_at": "2026-06-13T18:47:26.401Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-13T15:46:48.231Z",
+  "since": "2026-06-13T15:47:26.074Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    92767
+    92769
   ],
-  "comment_ids": [
-    4699447679
-  ],
-  "status_comment_id": 4699447798,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,166 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:92767:4699447679:2026-06-13T18:46:02Z:re_review",
-      "comment_id": "4699447679",
-      "comment_version_key": "4699447679:2026-06-13T18:46:02Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92767#issuecomment-4699447679",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92767,
-      "author": "leorivastech",
-      "author_id": 173822993,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-13T18:46:02Z",
-      "comment_updated_at": "2026-06-13T18:46:02Z",
-      "status_comment_id": 4699447798,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-13T18:46:51.272Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 92767
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-13T18:46:52.205Z",
-          "response_comment_id": "4699447798",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): defer channel health restarts while the event loop is saturated",
-        "body": "Fixes #89785\n\n### What & why\n\nUnder Telegram multi-account churn, the gateway can enter a fixed-interval 502 crash-loop. The channel health monitor restart-cascades against a channel start/connect phase that is *slow because the whole event loop is saturated* — not because the channel is dead. Each forced restart re-enters the same slow start and adds more startup work to an already-pegged loop, so the next cycle sees the same \"unhealthy\" channel and restarts again. In the report this was ~7–10 restarts over ~64 minutes, each preceded by a liveness warning at `channels.telegram.start-account` with `eventLoopDelayMaxMs ≈ 21000`, `eventLoopUtilization ≈ 0.97`. It self-resolved once the churn settled.\n\n### Root cause\n\n`startChannelHealthMonitor` (`src/gateway/channel-health-monitor.ts`) restarts any account the policy flags as unhealthy. During event-loop saturation a still-connecting channel is past its connect grace and reports `connected: false`, so the policy returns `disconnected` and the monitor restarts it. Restarting during saturation is counterproductive and is what turns a transient slow start into a sustained cascade.\n\n### The fix\n\nThe gateway already samples its own event-loop health (`createGatewayEventLoopHealthMonitor`, exposed as `readinessEventLoopHealth.snapshot`). This PR threads that signal into the channel health monitor and **defers channel restarts on any cycle where the event loop is `degraded`**, logging the deferral with the saturation reasons.\n\n- No change to the health *policy* — channels are still classified the same way.\n- When the loop is healthy, restarts behave exactly as before (dead channels are still recovered).\n- A genuinely dead channel under sustained saturation is simply restarted on a later cycle, once the loop recovers — the behavior the issue asks for (\"a slow channel bind … should be allowed to complete (or fail cleanly) without the gateway being declared unhealthy and force-restarted into the same stall\").\n\nThe new dependency is opt-in (`getEventLoopHealth?`), so existing callers and tests are unaffected. Files: `channel-health-monitor.ts` (+ wiring in `server-runtime-startup-services.ts` and `server.impl.ts`) and the monitor test. +77 lines, additive only.\n\n### Real behavior proof\n\n**Behavior or issue addressed:** Telegram multi-account churn drives the gateway into a fixed-interval 502 restart-cascade — the channel health monitor force-restarts a channel whose start/connect phase is slow only because the event loop is saturated, and each restart re-enters the same slow start (issue #89785).\n\n**Real environment tested:** OpenClaw gateway built from this branch on Ubuntu 24.04 (Node 22). The real `startChannelHealthMonitor` and the real `createGatewayEventLoopHealthMonitor` (`node:perf_hooks`) run under real, sustained event-loop saturation — a synchronous busy-block holding the loop ~1.2s of every ~1.4s, mirroring the report's eventLoopDelayMax ≈ 21000 ms / utilization ≈ 0.97. Time is compressed (1s check interval) so the ~64-minute production cascade reproduces in ~15s; the decision logic and the saturation signal are the production ones.\n\n**Exact steps or command run after this patch:** Two runs, A/B on the opt-in signal this PR wires in (before = shipped behavior without the event-loop signal; after = with it):\n```\nnode --import tsx repro_89785.ts before\nnode --import tsx repro_89785.ts after\n```\n\n**Evidence after fix:** Console output captured from the two runs (the inline values are the real `perf_hooks` event-loop readings — `delayMax ≈ 1220 ms`, `degraded=true`).\n\nbefore — restart-cascade reproduced:\n```\n[health-monitor] [telegram:acct1] health-monitor: restarting (reason: disconnected)\n  RESTART #1  ... WHILE event-loop delayMax=20.3ms   util=0.041 degraded=false\n  RESTART #2  ... WHILE event-loop delayMax=1211.1ms util=0.754 degraded=true\n  ...\n  RESTART #10 ... WHILE event-loop delayMax=1219.5ms util=0.86  degraded=true\n[health-monitor] [telegram:acct1] health-monitor: hit 10 restarts/hour limit, skipping\nRESULT [before]: 10 forced restart(s) under sustained event-loop saturation\n```\n\nafter — restarts deferred while the loop is degraded:\n```\n  [health-check] event-loop: delayMax=20.2ms   degraded=false -> allow restarts\n  RESTART #1 ... WHILE event-loop delayMax=20.2ms degraded=false\n  [health-check] event-loop: delayMax=1219.5ms degraded=true reasons=[event_loop_delay] -> DEFER restarts\n[health-monitor] deferring channel restarts while gateway event loop is degraded (reasons: event_loop_delay)\n  ... (deferred every subsequent saturated cycle) ...\nRESULT [after]: 1 forced restart(s) under sustained event-loop saturation\n```\n\n**Observed result after fix:** Before, the monitor forced 10 restarts under saturation (capped only by the restarts/hour limit), reproducing the cascade. After, it restarted once while the loop was still healthy (a real disconnect is still recovered) and then deferred every restart while the loop stayed degraded — no cascade.\n\n**What was not tested:** The full live Telegram multi-account crash-loop end-to-end was not reproduced (the report itself notes it was not deterministically reproducible). The run uses a stubbed channel, compressed time, and synthetic event-loop saturation rather than real provider churn. The harness is not part of this PR.\n\n### Notes\n\n- Supplemental automated checks (not a substitute for the proof above): `channel-health-monitor.test.ts` (incl. 2 new tests for defer-while-degraded and resume-on-recovery), `channel-health-policy.test.ts`, and `server-runtime-services.test.ts` pass; `pnpm tsgo:core` and `pnpm tsgo:core:test` are clean.\n- AI-assisted (developed with Claude Code). I understand and have reviewed the change.\n- No `CHANGELOG.md` edits.\n",
-        "branch": "fix/89785-telegram-health-restart-cascade",
-        "head_sha": "834d32a011039a1f9acb2b9836da9e387d6d9817",
-        "author": "leorivastech",
-        "labels": [
-          "gateway",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/channel-health-monitor.test.ts",
-            "additions": 39,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/channel-health-monitor.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-reload-handlers.test.ts",
-            "additions": 131,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-reload-handlers.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-startup-services.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92767",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92767.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 163,
-          "counts": {
-            "SUCCESS": 130,
-            "SKIPPED": 31,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4405,
+    "total_ms": 545,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 437
+        "ms": 313
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1972
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 1969
+        "ms": 219
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
