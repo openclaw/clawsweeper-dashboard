@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T05:20:21.704Z",
+  "generated_at": "2026-06-14T05:20:26.346Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T02:20:19.476Z",
+  "since": "2026-06-14T02:20:24.409Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    74813
+    75908
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,64 +31,70 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:74813:4349602048:2026-06-14T05:15:05Z:clawsweeper_needs_human",
-      "comment_id": "4349602048",
-      "comment_version_key": "4349602048:2026-06-14T05:15:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/74813#issuecomment-4349602048",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:75908:4362666220:2026-06-14T05:20:12Z:clawsweeper_needs_human",
+      "comment_id": "4362666220",
+      "comment_version_key": "4362666220:2026-06-14T05:20:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75908#issuecomment-4362666220",
       "repo": "openclaw/openclaw",
-      "issue_number": 74813,
+      "issue_number": 75908,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-30T04:02:23Z",
-      "comment_updated_at": "2026-06-14T05:15:05Z",
+      "comment_created_at": "2026-05-02T02:24:54Z",
+      "comment_updated_at": "2026-06-14T05:20:12Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=22a148be36cdb3b8c111ef38ec82d39c5062fc43)",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=c6f81c2ea61a7249b563b26c2f9a7706899c738e)",
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "22a148be36cdb3b8c111ef38ec82d39c5062fc43",
+      "expected_head_sha": "c6f81c2ea61a7249b563b26c2f9a7706899c738e",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "Fix continuation-skip after assistant turns",
-        "body": "## Summary\n- Fixes the contextInjection: \"continuation-skip\" path so an already-flushed assistant message counts as a completed bootstrap/continuation turn, even when the full-bootstrap custom marker was never written.\n- Preserves the compaction guard: if compaction happened after the latest assistant turn or marker, OpenClaw still re-injects bootstrap context.\n- Adds regression coverage for assistant-only continuation and assistant turns after compaction.\n\n## Why\nAlready-configured workspaces can skip \bootstrapMode === \"full\", so they may never append openclaw:bootstrap-context:full. In that state, follow-up turns kept re-injecting bootstrap files even with continuation-skip, which is one of the context-bloat cases tracked in #67419.\n\nRefs #67419.\n\n## Validation\n- Red regression first: hasCompletedBootstrapTurn returned \false for assistant turns without the marker.\n- corepack pnpm exec node scripts/test-projects.mjs src/agents/bootstrap-files.test.ts -t \"no assistant turn|assistant turns without|full bootstrap completion|compaction happened|assistant turn happens after compaction|later full bootstrap|malformed JSON|recent full bootstrap\" -> 8 passed.\n- corepack pnpm exec node scripts/test-projects.mjs src/agents/pi-embedded-runner/run/attempt.spawn-workspace.context-injection.test.ts src/agents/pi-embedded-runner/run/attempt.spawn-workspace.bootstrap-marker.test.ts -> 14 passed across 2 files.\n\nNote: full src/agents/bootstrap-files.test.ts on this Windows workstation is blocked by the existing symlink test (EPERM: operation not permitted, symlink ...), unrelated to this change.",
-        "branch": "codex/issue-67419-continuation-skip-assistant-turn",
-        "head_sha": "22a148be36cdb3b8c111ef38ec82d39c5062fc43",
-        "author": "rileymoleary",
+        "title": "fix: inject user's last message as system-level anchor to survive compaction",
+        "body": "## Problem\n\nAfter context compaction (triggered by gateway restart or normal history summarization), the model can fixate on a stale compacted summary and completely ignore the user's actual message. This causes loops where the agent repeats outdated context instead of answering the current question.\n\nThis was observed in a production configuration where:\n- A gateway restart triggered context compaction\n- The agent fixated on the compacted \"gateway's back up\" summary\n- User messages after that point were ignored until the session was inspected manually\n\nRelated upstream reports:\n- **#75841**: production agent entered 103-tool-call polling loop after compaction\n- **#75852**: Telegram self-conflict after gateway restart\n- The fixation-on-compacted-summary pattern has been independently reported by multiple users\n\n## Solution\n\nInject the user's most recent message as a system-level anchor in the non-compactable `extraSystemPrompt` field. The anchor sits outside the conversation history and survives all summarization:\n\n```\n## User's Last Message\n<the user's actual input>\n```\n\n**Key design decisions:**\n\n1. **Uses `extraSystemPrompt`** — no changes needed to the context engine, prompt builder, or compaction logic. The anchor piggybacks on the existing system prompt injection point that already survives compaction.\n2. **Skipped for silent replies & model-only runs** — no noise for heartbeat polls or sub-50ms internal dispatches.\n3. **2000-char truncation** — prevents any single anchor from consuming excessive context.\n4. **Appends to existing extraSystemPrompt** — preserves group-chat or subagent context that may already be in the field.\n\n## Testing\n\nVerified in production by inspecting `prompt.submitted` trace events — the anchor text `[USER'S LAST MESSAGE: ...]` appears in `context.compiled` and `prompt.submitted` events, confirming it's part of the system prompt that the model sees on every turn.\n\nP.S. Malaysia's national flower is the hibiscus (bunga raya) — its five petals symbolise the five principles of Rukun Negara. 🇲🇾",
+        "branch": "main",
+        "head_sha": "c6f81c2ea61a7249b563b26c2f9a7706899c738e",
+        "author": "baghvn",
         "labels": [
           "agents",
           "stale",
           "size: XS",
           "triage: needs-real-behavior-proof",
-          "P2",
+          "P1",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/bootstrap-files.test.ts",
-            "additions": 18,
-            "deletions": 2,
+            "path": "src/agents/pi-embedded-runner/run.ts",
+            "additions": 27,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/bootstrap-files.ts",
-            "additions": 5,
-            "deletions": 0,
+            "path": "src/plugins/contracts/loader.contract.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/contracts/registry.contract.test.ts",
+            "additions": 2,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
@@ -97,25 +103,30 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-74813",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-74813.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75908",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75908.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 37,
+          "total": 115,
           "counts": {
-            "SUCCESS": 7,
-            "FAILURE": 1,
-            "SKIPPED": 29
+            "SUCCESS": 84,
+            "FAILURE": 3,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check:FAILURE"
           ],
           "externalBlockers": []
         }
@@ -127,15 +138,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2550,
+    "total_ms": 2242,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 418
+        "ms": 415
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1800
+        "ms": 1506
       },
       {
         "name": "classify_commands",
@@ -143,7 +154,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 313
+        "ms": 294
       },
       {
         "name": "append_ledger",
