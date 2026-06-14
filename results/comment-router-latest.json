@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T13:19:15.688Z",
+  "generated_at": "2026-06-14T13:19:27.343Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T10:19:13.749Z",
+  "since": "2026-06-14T10:19:25.227Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     92970
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4701867276
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -40,12 +42,12 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-14T13:14:05Z",
-      "comment_updated_at": "2026-06-14T13:19:10Z",
+      "comment_created_at": "2026-06-14T13:17:31Z",
+      "comment_updated_at": "2026-06-14T13:17:31Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,96 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): thread agentId through sessions.describe to resolve scoped global sessions (fixes #92960)",
-        "body": "### Summary\n\n- **Problem**: Gateway `sessions.describe` drops the caller's `agentId`, resolving `global` sessions through the default store agent regardless of caller scope. A consumer scoped to a non-default agent receives the wrong agent's session data.\n- **Root Cause**: `SessionsDescribeParamsSchema` lacks `agentId` (and uses `additionalProperties: false`), and the handler calls `resolveGatewaySessionTargetFromKey(key, cfg)` without passing agent scope — even though the function already supports `opts.agentId` and four sibling handlers already thread it.\n- **Fix**: Add optional `agentId` to the protocol schema; thread it through the handler to `resolveGatewaySessionTargetFromKey`.\n- **What changed**:\n  - `packages/gateway-protocol/src/schema/sessions.ts` — add `agentId: Type.Optional(NonEmptyString)` to `SessionsDescribeParamsSchema`\n  - `src/gateway/server-methods/sessions.ts` — pass `p.agentId` as opts to `resolveGatewaySessionTargetFromKey`\n- **What did NOT change (scope boundary)**:\n  - No other session methods — `sessions.patch`, `sessions.get`, `sessions.send`, and `sessions.compact` already pass `agentId`\n  - The field is optional — existing callers that omit `agentId` continue to work identically\n  - No transcript, store, or compaction path changes\n\n### Reproduction\n\n1. Configure a Gateway with multiple agents (default + non-default)\n2. Call `sessions.describe` with `agentId: \"<non-default-agent>\"` on a `global` session key\n3. **Before this PR**: the request is rejected by schema validation (`additionalProperties: false` rejects `agentId`); if schema is bypassed, `resolveGatewaySessionTargetFromKey` resolves the global session through the default store agent, returning wrong-session data\n4. **After this PR**: `agentId` is accepted by the schema and threaded into `resolveGatewaySessionTargetFromKey`, which uses the existing scoped store-target helper to resolve the correct agent's global session\n\n### Real behavior proof\n\n**Behavior or issue addressed (92960)**: When a Gateway client calls `sessions.describe` with a specific `agentId`, the handler now preserves that agent scope when resolving global sessions, instead of always using the default store agent.\n\n**Real environment tested**: Linux, Node 22 — using the project's gateway test configuration against the `sessions.describe` handler path through `resolveGatewaySessionTargetFromKey`\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/mcp/channel-server.test.ts`\n\n**Evidence after fix**:\n```text\n[test] starting test/vitest/vitest.unit.config.ts\n\n RUN  v4.1.7 /home/0668001395/openclawProject1\n\n Test Files  1 passed (1)\n      Tests  10 passed (10)\n   Start at  21:07:27\n   Duration  1.56s\n\n[test] passed 1 Vitest shard in 9.70s\n```\n\n**Observed result after fix**: The existing `channel-server` test for `sessions.describe` (which does not pass `agentId`) continues to pass with identical behavior — the optional `agentId` field is backward-compatible. The handler now threads `p.agentId` when present, using the same `opts.agentId` path that four sibling handlers (`sessions.patch`, `sessions.get`, `sessions.send`, `sessions.compact`) already exercise.\n\n**What was not tested**: A live multi-agent Gateway deployment with non-default agent `sessions.describe` calls was not driven. The scoped resolve path through `resolveGatewaySessionStoreTarget` is already exercised by sibling methods; this change only adds the missing protocol schema field and handler threading.\n\n**Repro confirmation**: Before this patch, calling `sessions.describe` with `{ key: \"global\", agentId: \"some-agent\" }` would be rejected by the schema validator due to `additionalProperties: false`. After this patch, the schema accepts `agentId` and the handler passes it through to `resolveGatewaySessionTargetFromKey`, which already forwards it to the scoped store-target helper — the same path that sibling methods `sessions.patch`, `sessions.get`, and `sessions.compact` use.\n\n### Risk / Mitigation\n\n- **Risk**: The new `agentId` field could be confused with the `key` field's built-in agent scope.\n  **Mitigation**: The field is optional and follows the same pattern as `SessionsResolveParamsSchema.agentId`, `SessionsPatchParamsSchema.agentId`, and every other session schema. Callers that omit it get identical behavior.\n- **Risk**: TypeScript types for downstream consumers (dashboard, CLI) need regeneration.\n  **Mitigation**: Types are derived from `Static<typeof SessionsDescribeParamsSchema>` and update automatically on schema change.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] gateway (Gateway runtime)\n- [x] gateway-protocol (Protocol schema)\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/mcp/channel-server.test.ts` — existing `sessions.describe` test\n- `node scripts/run-vitest.mjs src/gateway/sessions-resolve.test.ts` — session resolve path\n- `node scripts/run-vitest.mjs src/gateway/server.sessions.store-rpc.test.ts` — store target resolution\n- `node scripts/run-vitest.mjs src/gateway/server-methods/sessions.send-deleted-agent.test.ts` — agent-scoped handler path\n\n### Review Findings Addressed\n\nN/A (initial submission)\n\n### Linked Issue/PR\n\nFixes #92960\n",
-        "branch": "fix/issue-92960-sessions-describe-agentid",
-        "head_sha": "bd8fad05a5c2963b7aa3edbb464ac89bc83d0233",
-        "author": "zenglingbiao",
-        "labels": [
-          "app: web-ui",
-          "gateway",
-          "size: XS",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "packages/gateway-protocol/src/schema/sessions.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/sessions.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92970",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92970.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 130,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-fast-bundled-protocol:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-fast-bundled-protocol:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2168,
+    "total_ms": 4481,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 361
+        "ms": 2105
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1565
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 218
+        "ms": 2365
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
