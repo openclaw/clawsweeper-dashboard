@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T11:25:07.522Z",
+  "generated_at": "2026-06-14T11:25:33.481Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T08:25:06.918Z",
+  "since": "2026-06-14T08:25:31.476Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
     92341
   ],
-  "comment_ids": [
-    4701594623
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,30 +29,120 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92341:4687418540:2026-06-14T11:25:28Z:clawsweeper_auto_repair",
+      "comment_id": "4687418540",
+      "comment_version_key": "4687418540:2026-06-14T11:25:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92341#issuecomment-4687418540",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92341,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T04:17:22Z",
+      "comment_updated_at": "2026-06-14T11:25:28Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=9ece62d34f62f575755d54dbad57b7943cf6ca1d)",
+      "review_summary": "The PR routes all CJK trigram tokens through LIKE matching, adds an empty-MATCH LIKE fallback, and merges keyword scores into overlapping vector memory chunks.\n\nPR surface: Source +69. Total +69 across 2 files.\n\nReproducibility: yes. at source level. Current main and v2026.6.6 show the long-CJK MATCH and exception-only fallback paths, and the PR body plus related issues provide concrete memory_search scenarios; this read-only review did not run a live Ollama-backed memory setup.",
+      "review_followup": "- The remaining blocker is maintainer choice of CJK decomposition/ranking and relaxed-merge semantics, not a safe automatic patch on this external branch.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "9ece62d34f62f575755d54dbad57b7943cf6ca1d",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-core): CJK textScore=0 and empty MATCH LIKE fallback",
+        "body": "## Summary\n\nFixes three related bugs that cause `textScore: 0` in hybrid memory search for CJK queries (e.g. \"飞书插件配置\", \"股票分析\").\n\n## Bug 1: CJK tokens bypass LIKE path (trigram tokenizer)\n\nIn `planKeywordSearch`, CJK tokens with 3+ characters were sent to `matchTerms` as quoted phrase matches (`MATCH \"飞书插件配置\"`), which rarely match with the trigram tokenizer. The `< 3` character threshold incorrectly routed long CJK strings to the MATCH path.\n\n**Fix:** Remove the `< 3` threshold so all CJK tokens go to `substringTerms` for LIKE matching.\n\n## Bug 2: No LIKE fallback when MATCH returns 0 rows\n\nWhen FTS5 MATCH returned 0 rows (not an exception), no LIKE fallback triggered. This affected both CJK queries and short English tokens (e.g. `AI`, `A`) that the trigram tokenizer cannot index.\n\n**Fix:** Add LIKE fallback with OR-based matching when MATCH returns empty.\n\n## Bug 3: mergeHybridResults discards textScore when chunk IDs don't overlap (#92337)\n\nWhen keyword and vector results have different chunk IDs (common with CJK/trigram queries), the keyword search results were effectively discarded — `textScore` stayed 0 even though `searchKeyword` returned valid results.\n\n**Fix:** Add path + line range overlap fallback in `mergeHybridResults`:\n- Build a `vectorByPath` secondary index grouped by file path\n- When no exact chunk ID match: find the vector chunk with the highest `vectorScore` on the same path with overlapping line ranges\n- Merge `textScore` into that vector entry (using `Math.max`, expanded line range)\n- If no overlap found: preserve original keyword-only behavior\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: CJK memory search returns `textScore: 0` for all results when querying with multi-character Chinese strings (e.g. \"股票分析\", \"A股投研\"). Root cause: (1) CJK tokens bypass LIKE path, (2) no LIKE fallback when MATCH returns 0 rows, (3) `mergeHybridResults` discards textScore when keyword/vector chunk IDs don't overlap.\n- **Real environment tested**: macOS arm64, OpenClaw 2026.6.5, Ollama qwen3-embedding:4b, memory store with 73 indexed files / 358 chunks, SQLite with trigram tokenizer.\n- **Exact steps or command run after this patch**:\n```bash\nopenclaw memory search --json --max-results 10 \"股票分析\"\nopenclaw memory search --json --max-results 10 \"A股投研\"\nopenclaw memory search --json --max-results 10 \"memory plugin\"\n```\n- **Evidence after fix**:\n```console\n$ openclaw memory search --json --max-results 10 \"股票分析\"\n  \"textScore\": 1,\n  \"vectorScore\": 0.5289,\n  \"score\": 0.6703\n\n$ openclaw memory search --json --max-results 10 \"A股投研\"\n  \"textScore\": 1,\n  \"vectorScore\": 0.5008,\n  \"score\": 0.6506\n\n$ openclaw memory search --json --max-results 10 \"memory plugin\"\n  \"textScore\": 0.7530,\n  \"vectorScore\": 0.6297,\n  \"score\": 0.6667\n```\n- **Observed result after fix**:\n  - \"股票分析\": textScore=1, keyword+vector merged successfully\n  - \"A股投研\": textScore=1, keyword+vector merged successfully\n  - \"memory plugin\": textScore=0.75, keyword+vector merged successfully\n  - \"飞书插件配置\": textScore=0 — keyword results exist but from different files than vector results (LIKE fallback limitation, tracked in #92728)\n- **What was not tested**: CJK+English mixed queries (e.g. \"OpenClaw配置\") — LIKE fallback limitation tracked in #92728.\n\n## Files Changed\n\n- `extensions/memory-core/src/memory/manager-search.ts` — `planKeywordSearch` + `searchKeyword` (Bug 1 & 2)\n- `extensions/memory-core/src/memory/hybrid.ts` — `mergeHybridResults` (Bug 3)\n\nCloses #92061\nFixes #92337\n",
+        "branch": "fix/cjk-textscore-92061",
+        "head_sha": "9ece62d34f62f575755d54dbad57b7943cf6ca1d",
+        "author": "rrriiiccckkk",
+        "labels": [
+          "extensions: memory-core",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/hybrid.ts",
+            "additions": 58,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-search.ts",
+            "additions": 22,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92341",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92341.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 157,
+          "counts": {
+            "SUCCESS": 127,
+            "SKIPPED": 30
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 917,
+    "total_ms": 2287,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 594
+        "ms": 346
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1639
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 313
+        "ms": 271
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
