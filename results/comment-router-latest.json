@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T05:06:52.624Z",
+  "generated_at": "2026-06-14T05:06:54.535Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T02:06:51.131Z",
+  "since": "2026-06-14T02:06:54.145Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    71154
+    69799
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 6,
-  "commands_seen": 1,
+  "scanned_comments": 4,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,187 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:71154:4323359001:2026-06-14T05:06:46Z:clawsweeper_needs_human",
-      "comment_id": "4323359001",
-      "comment_version_key": "4323359001:2026-06-14T05:06:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/71154#issuecomment-4323359001",
-      "repo": "openclaw/openclaw",
-      "issue_number": 71154,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-27T00:02:52Z",
-      "comment_updated_at": "2026-06-14T05:06:46Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=b1c80c38fa05e64b27ed5ba3ac463c8c249016af)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "b1c80c38fa05e64b27ed5ba3ac463c8c249016af",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(exec): accept POSIX `\\<newline>` in allowlisted commands; distinct error for unparseable syntax",
-        "body": "## Summary\n\n- Splice POSIX `\\<newline>` line continuations before exec-allowlist analysis so multi-line invocations with an allowlisted leading binary resolve the same as their single-line form (fixes #71153).\n- Disambiguate denial signals: when a command cannot be parsed, the gateway throws `exec denied: unsupported shell syntax` and the node host emits `SYSTEM_RUN_DENIED: unsupported shell syntax` with event reason `unsupported-shell-syntax`. `allowlist miss` is reserved for the true case where analysis succeeded but the resolved binary is not on the allowlist.\n- New `joinShellLineContinuations` helper walks the command once with the same quote/heredoc/comment state machine used by `splitShellPipeline`, so splicing respects single-quoted strings, quoted-heredoc bodies, and `#` comments. Inside double quotes and unquoted heredoc bodies, `\\<newline>` is spliced (matching bash).\n\n## Why the old behavior\n\n`evaluateShellAllowlist()` previously rejected any command containing `\\<newline>` before analysis and emitted `allowlist miss`. Agents with allowlisted binaries but multi-line commands therefore concluded their binary was blocked (or the downstream service was down), and escalated incorrectly.\n\nThe comment at the old guard noted a concern that line-continuation semantics \"can rewrite token boundaries at runtime\". POSIX 2.2.1 is unambiguous: outside single-quotes and outside quoted-heredoc bodies, `\\<newline>` is *removed* before tokenization. Pre-splicing produces exactly the tokens the shell would see, so the allowlist decision cannot drift between analyzer and runtime — provided the splicing walker respects single-quote and quoted-heredoc exceptions, which it does.\n\n## Key files\n\n- `src/infra/exec-approvals-analysis.ts` — new `joinShellLineContinuations` helper, `parseHeredocDelimiter` lifted to module scope for reuse.\n- `src/infra/exec-approvals-allowlist.ts` — drop the early-reject, normalize via `joinShellLineContinuations` before analysis.\n- `src/agents/bash-tools.exec-host-gateway.ts` — split error-string path: `unsupported-shell-syntax` vs `allowlist-miss`.\n- `src/node-host/exec-policy.ts`, `src/node-host/invoke-system-run.ts`, `src/agents/exec-approval-result.ts` — matching reason/message additions.\n\n## Test plan\n\n- [x] New `src/infra/exec-approvals-allowlist.test.ts`: multi-line allowlisted `curl` with `\\<LF>` and `\\<CRLF>` resolves identically to single-line; non-allowlisted binary still misses cleanly; direct `joinShellLineContinuations` unit tests cover quote state, comments, heredoc bodies (quoted and unquoted), unterminated quote fallback, and CRLF.\n- [x] Extended `src/agents/bash-tools.exec-host-gateway.test.ts`: new assertion that unparseable input throws the distinct `exec denied: unsupported shell syntax` message while the true allowlist-miss case still throws the original string.\n- [x] Extended `src/node-host/exec-policy.test.ts`: parallel coverage for `SYSTEM_RUN_DENIED: unsupported shell syntax` with `eventReason: \"unsupported-shell-syntax\"`.\n- [x] `pnpm check:changed` green (typecheck, lint, import cycles, changed-test lanes).\n- [x] Targeted regression sweep across `pi-tools.safe-bins`, `exec-approvals-parity`, `exec-approvals-safe-bins`, `exec-approvals-policy`, `invoke-system-run`, `server-node-events`, and `exec-approval-result` suites: all passing.\n\n## Risk notes\n\n- Parity with runtime shell: POSIX line-continuation splicing happens before word-splitting. The walker respects single-quotes, quoted heredocs, and `#` comments, so splicing matches bash semantics.\n- Rollback: additive helper + one branch swap in `evaluateShellAllowlist` + one error-string split; small diff.\n- No command that previously succeeded changes outcome; only commands previously rejected as \"allowlist miss\" can now either succeed (multi-line with allowlisted binary) or emit the clearer `unsupported shell syntax` signal.\n\nFixes #71153.",
-        "branch": "fix/exec-allowlist-line-continuations",
-        "head_sha": "b1c80c38fa05e64b27ed5ba3ac463c8c249016af",
-        "author": "scottgl9",
-        "labels": [
-          "agents",
-          "stale",
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-tools.exec-host-gateway.test.ts",
-            "additions": 18,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-tools.exec-host-gateway.ts",
-            "additions": 32,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/exec-approval-result.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-tools.safe-bins.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/exec-approvals-allowlist.test.ts",
-            "additions": 145,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/exec-approvals-allowlist.ts",
-            "additions": 6,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/exec-approvals-analysis.ts",
-            "additions": 249,
-            "deletions": 41,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/node-host/exec-policy.test.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/node-host/exec-policy.ts",
-            "additions": 23,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/node-host/invoke-system-run.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-71154",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-71154.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 72,
-          "counts": {
-            "FAILURE": 5,
-            "SUCCESS": 54,
-            "SKIPPED": 13
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check:FAILURE",
-            "check-additional:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check:FAILURE",
-            "check-additional:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1694,
+    "total_ms": 642,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 363
+        "ms": 379
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1115
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 186
+        "ms": 252
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
