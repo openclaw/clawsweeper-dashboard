@@ -26,7 +26,8 @@ At a high level ClawSweeper:
   webhook before the GitHub Actions fallback starts
 - repairs opted-in PRs through a bounded Codex review/fix loop before merge
 - automatically opens guarded implementation PRs for viable reviewed issues in
-  configured projects outside `openclaw/openclaw` and `openclaw/clawhub`
+  eligible public `openclaw/*` and `steipete/*` projects outside
+  `openclaw/openclaw` and `openclaw/clawhub`
 - can manually review selected code-bearing commits on target `main` branches
 - publishes dashboard, audit, repair, and activity state to
   `openclaw/clawsweeper-state`
@@ -221,6 +222,11 @@ Common commands:
 - `implement issue` on an open issue creates or reuses one issue implementation
   job and dispatches the issue-to-PR lane. OpenClaw organization members may
   request this explicitly even without repository write permission.
+- With automatic issue implementation enabled, a newly opened or reopened issue
+  in an eligible sibling repository enters the same lane after its ClawSweeper
+  review completes. Codex inspects the issue and repository, chooses the
+  implementation, discovers validation, and stops without a PR when the request
+  is no longer viable.
 - User-facing OpenClaw `fix`, `feat`, and `perf` automerge PRs preserve
   release-note context in PR bodies and commit messages before merge;
   contributors are not asked to edit `CHANGELOG.md`.
@@ -258,8 +264,9 @@ Live pipeline dashboard: https://clawsweeper.openclaw.ai/
 
 The Cloudflare dashboard is observability-only: it shows the system flow, live
 worker capacity, per-worker current steps and drill-down timelines,
-separate issue-to-PR and PR-repair worker views, repair/automerge pipeline rows,
-CI state, recent failures, and automerge timing without owning GitHub mutations.
+separate issue-to-PR and PR-repair worker views, automatic issue-build cards
+with lifecycle drill-down, repair/automerge pipeline rows, CI state, recent
+failures, and automerge timing without owning GitHub mutations.
 Its Live terminals link opens CrabFleet for browser steering of registered
 GitHub Actions sessions. See [`docs/live-dashboard.md`](docs/live-dashboard.md).
 The end-to-end session lifecycle is documented in
@@ -398,13 +405,13 @@ appropriate repair job.
   re-dispatches exact-head review, and waits for required checks.
 - `automerge` merges only after review verdict, checks, mergeability,
   security, maintainer stop/approve state, and repository policy gates pass.
-- Issue implementation remains guarded and explicit by default. An OpenClaw
-  organization member can comment `@clawsweeper implement issue`; ClawSweeper
-  refuses when an open PR already mentions the issue, a generated branch PR is
-  already open, the issue is paused, or security/product blockers remain.
-  Automatic review-to-implementation dispatch requires the separate
-  `CLAWSWEEPER_AUTO_IMPLEMENT_ISSUES=1` master variable in addition to the
-  candidate-specific gate.
+- An OpenClaw organization member can comment `@clawsweeper implement issue`;
+  ClawSweeper refuses when an open PR already mentions the issue, a generated
+  branch PR is already open, the issue is paused, or security blockers remain.
+- `CLAWSWEEPER_AUTO_IMPLEMENT_ISSUES=1` enables newly opened or reopened issues
+  in eligible public sibling repositories. `openclaw/openclaw` and
+  `openclaw/clawhub` remain excluded. Existing reviewed issues stay manual
+  unless `CLAWSWEEPER_AUTO_IMPLEMENT_BACKFILL=1` is also enabled.
 
 Repair internals are documented in
 [`docs/repair/README.md`](docs/repair/README.md), and the automerge state
