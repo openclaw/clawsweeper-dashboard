@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T13:24:44.916Z",
+  "generated_at": "2026-06-14T13:25:03.533Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T10:24:42.766Z",
+  "since": "2026-06-14T10:25:03.051Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     92899
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4701881730
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -36,16 +38,16 @@
       "comment_version_key": "4700935398:2026-06-14T13:24:39Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/92899#issuecomment-4700935398",
       "repo": "openclaw/openclaw",
-      "issue_number": 92899,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-14T06:34:38Z",
-      "comment_updated_at": "2026-06-14T13:24:39Z",
+      "issue_number": 92975,
+      "author": "qingminglong",
+      "author_id": 34085845,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-14T13:23:18Z",
+      "comment_updated_at": "2026-06-14T13:23:18Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,124 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix compaction timeout partial progress",
-        "body": "## Summary\n\n- Preserve completed chunk summaries when a later compaction chunk times out, so timeout recovery can reuse partial progress instead of falling back to a generic “summary unavailable” note and restarting from chunk 1 on the next attempt.\n- Preserve cooperative partial progress through the outer `compactWithSafetyTimeout()` wall-clock timeout path by allowing the canceled native compaction to settle with its cancellation-produced result before the timeout error wins the race.\n- Remove the old `src/node-host/with-timeout.ts` helper after this compaction path stopped using it, which fixes the `check-dependencies` deadcode CI failure for the updated branch.\n- Keep caller abort cancellation semantics intact: non-timeout aborts still do not get converted into successful partial summaries.\n- Surface compaction timeout details in the preflight failure reply, including the existing `agents.defaults.compaction.timeoutSeconds` knob, while generic non-verbose compaction failures still hide details.\n\nFixes #92043\n\n## Maintainer-ready notes\n\n- **Why it matters / User impact:** Users with large transcripts can hit the default compaction wall-clock timeout after some chunks already summarized successfully. Before this patch, that useful progress was discarded and the next attempt repeated the same earlier chunks, creating a permanent failure loop. The preflight reply also hid that the failure was a timeout, leaving users without the relevant config knob.\n- **Fix classification:** Root-cause reliability fix for compaction timeout progress reuse and timeout failure copy.\n- **Maintainer-ready confidence:** High for the local source/runtime surface covered here. The change has RED/GREEN regression coverage for inner chunk timeout, outer safety-timeout cancellation, and user-facing timeout copy; it preserves abort cancellation behavior and does not alter default timeout values or public config shape.\n- **Root cause:** The root source was split across two timeout boundaries. `summarizeChunks()` discarded completed chunk summaries on timeout-shaped failures, and the outer `compactWithSafetyTimeout()` could reject with its wall-clock timeout before a cooperating native compaction returned the partial result it produced during timeout cancellation.\n- **Why this is root-cause fix:** This changes the owners that enforce the partial-progress invariant: `src/agents/compaction.ts` carries partial summaries from inner chunk failures, while `src/agents/embedded-agent-runner/compaction-safety-timeout.ts` prevents the outer timeout race from discarding a cancellation-produced result. The copy change stays at the preflight compaction failure formatter.\n- **What did NOT change:** Chunk planning, model retry policy, compaction timeout defaults, persistent session storage, provider routing, public config shape, and unrelated compaction behavior are unchanged and out of scope.\n- **Architecture / source-of-truth check:** `src/agents/compaction.ts` remains the source-of-truth owner for summary partial-progress behavior, `src/agents/embedded-agent-runner/compaction-safety-timeout.ts` owns the native compaction wall-clock race, and `src/auto-reply/reply/agent-runner-execution.ts` remains the source-of-truth owner for preflight agent-run failure copy.\n- **Patch quality notes:** Timeout recovery is bounded to cooperative cancellation settlement at the timeout boundary. Non-timeout aborts still reject promptly, non-settling compactions still reject with `Compaction timed out`, and the default 180s timeout is unchanged.\n- **Target test file:** `src/agents/compaction-partial-summary.test.ts`, `src/agents/embedded-agent-runner.compaction-safety-timeout.test.ts`, and `src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts`.\n- **Scenario locked in:** Regression test scenarios: a two-chunk compaction where chunk 1 succeeds and chunk 2 throws `TimeoutError` must return the chunk 1 summary plus a `[Partial summary: ...]` marker; a compaction canceled by outer timeout and immediately resolving with progress must return that progress instead of `Compaction timed out`; a preflight compaction timeout must surface the timeout reason and config guidance.\n- **Why this is the smallest reliable guardrail:** The regression tests exercise the source owner boundaries directly and keep existing abort/timeout tests in place so timeout recovery cannot convert user cancellation or hung compaction into success.\n- **Out of scope:** This PR does not change the default 180s timeout, add persistent checkpoint storage, change the shape/default of `agents.defaults.compaction.timeoutSeconds`, alter compaction chunk planning, or change model/provider retry policy.\n\n## Root Cause\n\n`src/agents/compaction.ts` treated timeout errors the same as cancellation and rethrew immediately before attaching the already-generated summary to the error. `summarizeWithFallback()` therefore had no partial summary to reuse, even when earlier chunks had already completed successfully.\n\nThe outer safety timeout added a second loss path: `compactWithSafetyTimeout()` raced native compaction against a timeout rejection. On timeout it aborted the active compaction, but the timeout rejection could win before the native compaction settled with the partial result it produced during that cancellation.\n\nSeparately, `buildPreflightCompactionFailureText()` hid the preflight compaction reason unless verbose details were enabled. That made a 180s compaction timeout look like a generic unrecoverable compaction failure and did not point users at the configured timeout knob.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Later chunk timeout and outer wall-clock safety timeout no longer discard already-generated compaction summary progress; preflight compaction timeout replies now show the timeout reason and `agents.defaults.compaction.timeoutSeconds` guidance.\n- **Real environment tested:** Local Linux OpenClaw worktree at `/media/vdc/code/ai/aispace/openclaw-worktrees/issue-92043`, branch `feat/issue-92043`.\n- **Exact steps or command run after this patch:**\n\n```bash\ncd /media/vdc/code/ai/aispace/openclaw-worktrees/issue-92043 && OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs src/agents/embedded-agent-runner.compaction-safety-timeout.test.ts -t \"preserves cooperative partial progress produced by timeout cancellation\"\n```\n\n```bash\ncd /media/vdc/code/ai/aispace/openclaw-worktrees/issue-92043 && OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs src/agents/embedded-agent-runner.compaction-safety-timeout.test.ts src/agents/compaction-partial-summary.test.ts\n```\n\n```bash\ncd /media/vdc/code/ai/aispace/openclaw-worktrees/issue-92043 && node scripts/run-tsgo.mjs -p tsconfig.core.json --noEmit\n```\n\n```bash\ncd /media/vdc/code/ai/aispace/openclaw-worktrees/issue-92043 && OPENCLAW_LOCAL_CHECK=0 pnpm deadcode:dependencies && OPENCLAW_LOCAL_CHECK=0 pnpm deadcode:unused-files && OPENCLAW_LOCAL_CHECK=0 pnpm deadcode:report:ci:ts-unused\n```\n\n```bash\ncd /media/vdc/code/ai/aispace/openclaw-worktrees/issue-92043 && ./node_modules/.bin/oxfmt --check --threads=1 src/agents/embedded-agent-runner/compaction-safety-timeout.ts src/agents/embedded-agent-runner.compaction-safety-timeout.test.ts\n```\n\n```bash\ngit -C /media/vdc/code/ai/aispace/openclaw-worktrees/issue-92043 diff --check\n```\n\n- **Evidence after fix:**\n\n```text\nTest Files  2 passed (2)\nTests  2 passed | 44 skipped (46)\n```\n\n```text\nTest Files  2 passed (2)\nTests  31 passed (31)\n[test] passed 1 Vitest shard in 21.85s\n```\n\n```text\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --noEmit exited 0 with no stdout/stderr output.\n```\n\n```text\n$ pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --dependencies --no-config-hints\n$ node scripts/check-deadcode-unused-files.mjs\n[deadcode] Knip unused-file allowlist matched 33 intentional entries.\n$ mkdir -p .artifacts/deadcode && pnpm deadcode:ts-unused > .artifacts/deadcode/ts-unused-exports.txt 2>&1 || true\n```\n\n```text\nAll matched files use the correct format.\nFinished in 37ms on 2 files using 1 threads.\n```\n\n```text\ngit diff --check exited 0 with no whitespace errors.\n```\n\n- **Observed result after fix:** A later timeout after chunk 1 completes returns the chunk 1 summary with a `[Partial summary: chunks 1-1 of 2 were summarized...]` marker instead of the generic unavailable summary. The outer safety-timeout regression resolves with `partial summary after chunk 1` when the timeout abort signal causes the compaction to settle with progress. The dependency deadcode shard passes after removing the now-unused old timeout helper. Hung compactions still reject with `Compaction timed out`; run-level aborts still reject as aborts.\n- **What was not tested:** No live external model provider, long-running 180s wall-clock gateway run, Desktop session, or external channel transport was exercised. The summary-progress regression is covered through production compaction fallback code with a mocked summarizer timeout seam and through the production safety-timeout wrapper with fake timers.\n\n## Regression Test Plan\n\n- `src/agents/compaction-partial-summary.test.ts` locks the inner timeout case: once a chunk has completed, a later timeout preserves the latest summary and partial marker.\n- `src/agents/embedded-agent-runner.compaction-safety-timeout.test.ts` locks the outer safety-timeout race: timeout cancellation can return cooperative partial progress before the timeout error wins.\n- The existing abort and hung-timeout tests remain green: non-timeout aborts still do not get converted into partial-success summaries, and non-settling compactions still reject with timeout.\n\n## Merge risk\n\n- **Risk labels considered:** session-state, reliability, user-facing copy, timeout handling.\n- **Risk explanation:** The behavior change is limited to compaction timeout errors after useful progress exists or when a cooperating compaction settles because of timeout cancellation. First-chunk failures still fall through to the existing generic fallback, hung compactions still time out, and non-timeout aborts still propagate as cancellation.\n- **Why acceptable:** Reusing completed chunk summaries makes repeated compaction attempts move forward instead of discarding progress. The copy change only reveals timeout reasons for compaction timeout failures; generic non-verbose compaction errors remain redacted.\n- **Out-of-scope boundary:** This PR does not change the default 180s timeout, add persistent checkpoint storage, alter compaction chunk planning, or change model/provider retry policy.\n",
-        "branch": "feat/issue-92043",
-        "head_sha": "e5c5305d35387ae21711d8cbcaeb80666ef2b2a9",
-        "author": "mushuiyu886",
-        "labels": [
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/compaction-partial-summary.test.ts",
-            "additions": 6,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/compaction.ts",
-            "additions": 5,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner.compaction-safety-timeout.test.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compaction-safety-timeout.ts",
-            "additions": 49,
-            "deletions": 43,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/node-host/with-timeout.test.ts",
-            "additions": 0,
-            "deletions": 23,
-            "changeType": "DELETED"
-          },
-          {
-            "path": "src/node-host/with-timeout.ts",
-            "additions": 0,
-            "deletions": 60,
-            "changeType": "DELETED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92899",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92899.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "SUCCESS": 134,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2458,
+    "total_ms": 1712,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 467
+        "ms": 470
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1668
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 298
+        "ms": 1230
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
