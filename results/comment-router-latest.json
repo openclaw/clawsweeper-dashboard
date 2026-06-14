@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T13:14:21.357Z",
+  "generated_at": "2026-06-14T13:15:12.253Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T10:14:19.287Z",
+  "since": "2026-06-14T10:15:11.699Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     92943
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4701529922
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,93 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "Refresh memory index state after external reindex",
-        "body": "## Summary\n\n- Problem: memory gateway/default managers could keep using an old sqlite handle after a CLI/status atomic reindex replaced the index file, so missing identity or dirty state could remain stuck until process restart. Search-first recovery could read the new DB but still keep stale dirty flags.\n- Solution: cached managers now detect when the on-disk sqlite file has been atomically replaced, reopen the DB handle, refresh schema/meta/vector state, and carry the replacement-refresh signal into identity dirty cleanup even when `search()` is the first observer.\n- Cleanup: opening a memory index also removes stale `*.sqlite.tmp-<uuid>` temp families older than 24 hours while preserving fresh temp files.\n- What did NOT change: semantic indexes are still protected when the configured embedding provider is unavailable; this does not force a semantic rebuild, change provider identity rules, or delete fresh/active temp files.\n- Why it matters / User impact: a gateway should recover from memory index repair/rebuild work performed by CLI/status flows without requiring a restart, and abandoned temp sqlite files should not accumulate indefinitely.\n- Fixes #91167\n- Fixes #90508\n\n## Real behavior proof\n- **Behavior or issue addressed:** This patch covers three local memory-index lifecycle failures: stale atomic reindex temp sqlite families left behind after interrupted rebuilds, a cached live/default manager continuing to report missing identity after a CLI-style manager atomically replaces the same sqlite index with a valid FTS-only index, and the search-first path where `manager.search()` is the first call after replacement.\n- **Real environment tested:** Local Linux worktree `/media/vdc/code/ai/aispace/openclaw-worktrees/issue-91167-90508`, branch `feat/issue-91167-90508`.\n- **Exact steps or command run after this patch:**\n\n```bash\ncd /media/vdc/code/ai/aispace/openclaw-worktrees/issue-91167-90508 && OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts -t \"clears stale dirty state when search first observes a cli atomic reindex replacement\"\n```\n\n```bash\ncd /media/vdc/code/ai/aispace/openclaw-worktrees/issue-91167-90508 && OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts\n```\n\n```bash\ncd /media/vdc/code/ai/aispace/openclaw-worktrees/issue-91167-90508 && ./node_modules/.bin/oxfmt --check --threads=1 extensions/memory-core/src/memory/manager.ts extensions/memory-core/src/memory/manager-sync-ops.ts extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts\n```\n\n```bash\ncd /media/vdc/code/ai/aispace/openclaw-worktrees/issue-91167-90508 && node scripts/run-tsgo.mjs -p tsconfig.extensions.json --noEmit\n```\n\n```bash\ngit -C /media/vdc/code/ai/aispace/openclaw-worktrees/issue-91167-90508 diff --check\n```\n\n- **Evidence after fix:** The deterministic local sqlite/runtime tests exercise the reported boundaries directly.\n\n```json\n{\n  \"staleTempCleanup\": \"index.sqlite.tmp-<uuid>, -wal, and -shm files older than 24h are removed when the manager opens; a fresh tmp file remains present\",\n  \"externalAtomicReindexRefresh\": \"default manager starts with missing identity, a cli manager force-sync atomically replaces index.sqlite, then the original cached manager status reports valid identity without restart\",\n  \"searchFirstRefresh\": \"default manager starts with missing identity, cli force-sync replaces index.sqlite, then the original manager.search('Alpha topic') returns results and the following status is valid/dirty=false\",\n  \"semanticProviderBoundary\": \"existing semantic chunks with provider unavailable still remain missing/dirty instead of being rebuilt as FTS-only\"\n}\n```\n\n```text\nTest Files  1 passed (1)\nTests  1 passed | 4 skipped (5)\n```\n\n```text\nTest Files  1 passed (1)\nTests  5 passed (5)\n[test] passed 1 Vitest shard in 18.96s\n```\n\n```text\nAll matched files use the correct format.\nFinished in 28ms on 2 files using 1 threads.\n```\n\n```text\nnode scripts/run-tsgo.mjs -p tsconfig.extensions.json --noEmit exited 0 with no stdout/stderr output.\n```\n\n```text\ngit diff --check exited 0 with no whitespace errors.\n```\n\n- **Observed result after fix:** The cached manager no longer stays stuck on the old missing-identity sqlite handle after a CLI atomic reindex publishes a valid replacement. If `search()` is the first call after replacement, the manager refreshes to the new DB, returns indexed results, and the subsequent status reports `indexIdentity: valid` with `dirty: false`. Stale temp families are cleaned while fresh temp files are preserved.\n- **What was not tested:** No live remote gateway, desktop app, QMD daemon, or multi-process long-running production gateway proof was run. This was continued under a local/source-level proof boundary after the public-contract/open-PR workflow blockers for #91167/#90508 were bypassed.\n\n## Regression Test Plan\n- **Target test file:** `extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts`.\n- **Scenario locked in:** A stale `index.sqlite.tmp-<uuid>` family older than 24 hours is removed on manager open while a fresh temp is preserved; a default manager with missing identity refreshes to valid after a CLI manager atomically replaces the sqlite file; the same replacement also clears stale dirty state when `search()` is the first post-replacement call.\n- **Why this is the smallest reliable guardrail:** The tests use real sqlite files, real manager cache semantics, real search, and the existing atomic reindex path rather than mocking the state transition.\n\n## Merge risk\n- **Risk labels considered:** public-contract related open PRs for #91167/#90508, local-only proof boundary, memory index lifecycle behavior.\n- **Risk explanation:** The patch changes manager lifecycle behavior around sqlite handle refresh and temp cleanup. The cleanup is constrained to temp names generated by the atomic reindex code and only when every file in the temp family is older than 24 hours.\n- **Why acceptable:** The refresh path only reopens when the main sqlite file identity changes on disk, preserves existing semantic-provider safety checks, and clears stale dirty state only when the manager previously had identity dirty state and the replacement index resolves as valid. A pending refresh marker only survives until the next identity refresh consumes it.\n\n## Root Cause\n- **Root cause:** Safe reindex publishes by replacing the sqlite file, but an already-cached manager keeps its existing sqlite handle and in-memory identity/dirty flags. `search()` could refresh the handle before `refreshIndexIdentityDirty()` ran, consuming the one-shot replacement signal and leaving stale dirty/retry state in memory.\n- **Why this is root-cause fix:** The cached manager now treats the on-disk sqlite file identity as the source-of-truth for whether its handle is stale, reopens when that identity changes, and carries that replacement signal until identity cleanup recomputes state from the replacement DB.\n- **Fix classification:** Root-cause reliability fix for memory index lifecycle refresh and stale temp cleanup.\n- **Maintainer-ready confidence:** High for the local sqlite/index lifecycle paths covered here. The patch is limited to manager open/refresh behavior and deterministic memory-core tests.\n- **Patch quality notes:** The diff adds a narrow temp-family sweep, a dev/ino based DB replacement check, a pending dirty-cleanup marker, and regression tests. It does not add sleeps, broaden provider compatibility, or relax semantic-index protection.\n- **Architecture / source-of-truth check:** The sqlite index file identity and `memory_index_meta_v1` remain the source of truth; the live manager now refreshes its in-memory view from that source instead of trusting stale process-local state.\n",
-        "branch": "feat/issue-91167-90508",
-        "head_sha": "715b1d271a2398078a890776d15372b197db1f32",
-        "author": "mushuiyu886",
-        "labels": [
-          "extensions: memory-core",
-          "size: M",
-          "proof: supplied",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
-            "additions": 68,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
-            "additions": 86,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.ts",
-            "additions": 68,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92943",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92943.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 157,
-          "counts": {
-            "SUCCESS": 128,
-            "SKIPPED": 29
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2358,
+    "total_ms": 1107,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 269
+        "ms": 542
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1786
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 278
+        "ms": 553
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
