@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T05:19:41.173Z",
+  "generated_at": "2026-06-14T05:19:03.514Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T02:19:40.736Z",
+  "since": "2026-06-14T02:19:01.415Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    74100
+    75786
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,18 +29,121 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:75786:4361187555:2026-05-31T04:59:33Z:clawsweeper_needs_human",
+      "comment_id": "4361187555",
+      "comment_version_key": "4361187555:2026-05-31T04:59:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75786#issuecomment-4361187555",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75786,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-01T19:24:21Z",
+      "comment_updated_at": "2026-05-31T04:59:33Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=78599151e8b0c92047c595943e930b9683b2cfc4)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +99, Tests +42. Total +141 across 3 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "78599151e8b0c92047c595943e930b9683b2cfc4",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(subagents): reconcile timed-out waits against child session state",
+        "body": "Fixes #75785.\n\n## Summary\n\nReconcile timed-out `agent.wait` results against the persisted child session state before announcing subagent completion.\n\nThis fixes a false-timeout path where the child run can finish successfully, but the parent-side completion handoff still reports `timed out` and falls back to a partial-progress stub.\n\n## Problem / Motivation\n\nThe announce flow currently trusts the immediate `agent.wait` timeout result. In the observed failure mode, that timeout can be stale relative to the child session store state. When that happens, the parent announces a timeout even though the child session has already completed successfully.\n\n## What Changed\n\n- `src/agents/subagent-announce-output.ts`\n  - `waitForSubagentRunOutcome(runId, timeoutMs, sessionKey?)` now optionally re-checks session-store state after a timeout\n  - added helpers to load and interpret the child session entry\n- `src/agents/subagent-announce.ts`\n  - pass `childSessionKey` into `waitForSubagentRunOutcome(...)`\n  - do the same for the immediate recheck path\n- `src/agents/subagent-announce.timeout.test.ts`\n  - adds a regression test covering a timed-out wait that should reconcile to persisted child success before announcing\n\n## Why this is the smallest reliable guardrail\n\nThe reconciliation only runs:\n- when `agent.wait` returns `timeout`\n- when the child session key is available\n- for a short bounded retry loop\n\nNormal successful and failed paths are unchanged.\n\n## User-visible / Behavior Changes\n\nParent sessions stop receiving false `timed out` completion events for already-finished child runs in this path.\n\n## Diagram\n\n```text\nBefore:\nchild finishes successfully -> agent.wait returns timeout -> parent announces timeout -> actual child result is replaced by partial progress\n\nAfter:\nchild finishes successfully -> agent.wait returns timeout -> announce flow rechecks child session state -> parent announces success -> child result is delivered\n```\n\n## Security Impact\n\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? No\n- New/changed network calls? No\n- Command/tool execution surface changed? No\n- Data access scope changed? No\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux 6.8\n- Runtime/container: npm global install\n- Model/provider: openai-codex/gpt-5.4\n- Integration/channel: subagent completion announce path\n- Relevant config: default subagent announce flow with completion handoff enabled\n\n### Steps\n\n1. Spawn a subagent that performs many tool calls and completes successfully.\n2. Let the child session reach a terminal successful state.\n3. Have the parent-side announce flow observe `agent.wait` return `timeout`.\n4. Compare the child session state with the parent completion event.\n\n### Expected\n\n- Parent completion announce resolves to child success and includes the child result.\n\n### Actual\n\n- Parent completion announce can resolve to timeout and replace the child result with a partial-progress stub.\n\n## Evidence\n\n- [x] Trace/log snippets\n- [ ] Failing test/log before + passing after\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\n## Human Verification\n\n- Verified scenarios:\n  - observed a child run with successful terminal state while the parent announce path still emitted a timeout result\n  - applied equivalent reconciliation logic locally in the installed build and confirmed it corrected the announce outcome for that bug path\n- Edge cases checked:\n  - no reconciliation path is used unless `agent.wait` returns `timeout`\n  - still falls back to original timeout result if the child session store is not terminal\n- What I did not verify:\n  - full upstream CI suite\n  - multi-provider or multi-channel coverage beyond the local reproduction path\n\n## Compatibility / Migration\n\n- Backward compatible? Yes\n- Config/env changes? No\n- Migration needed? No\n\n## Risks and Mitigations\n\n- Risk: session-store terminal state could be briefly stale in the opposite direction\n  - Mitigation: reconciliation runs only after a timeout and only upgrades the announce outcome when the child session entry is already terminal\n- Risk: additional small read on timeout path\n  - Mitigation: only occurs on timeout, with a short bounded retry loop\n",
+        "branch": "fix/subagent-timeout-reconcile-session-state",
+        "head_sha": "78599151e8b0c92047c595943e930b9683b2cfc4",
+        "author": "carlos-443-diaz",
+        "labels": [
+          "agents",
+          "stale",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-announce-output.ts",
+            "additions": 92,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce.timeout.test.ts",
+            "additions": 42,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce.ts",
+            "additions": 10,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75786",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75786.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 91,
+          "counts": {
+            "SUCCESS": 75,
+            "FAILURE": 1,
+            "SKIPPED": 14,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
     "total_ms": 770,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 425
+        "ms": 451
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1630
       },
       {
         "name": "classify_commands",
@@ -48,7 +151,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 334
+        "ms": 315
       },
       {
         "name": "append_ledger",
