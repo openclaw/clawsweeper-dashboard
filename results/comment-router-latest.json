@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T10:22:19.041Z",
+  "generated_at": "2026-06-14T10:24:43.071Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T07:22:14.873Z",
+  "since": "2026-06-14T07:24:41.202Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    88815
+    89039
   ],
-  "comment_ids": [
-    4701449945
-  ],
-  "status_comment_id": 4701450034,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 50,
+  "commands_seen": 14,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +31,180 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:88815:4701449945:2026-06-14T10:21:28Z:re_review",
-      "comment_id": "4701449945",
-      "comment_version_key": "4701449945:2026-06-14T10:21:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88815#issuecomment-4701449945",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89039:4591504568:2026-06-14T10:24:38Z:clawsweeper_auto_repair",
+      "comment_id": "4591504568",
+      "comment_version_key": "4591504568:2026-06-14T10:24:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4591504568",
       "repo": "openclaw/openclaw",
-      "issue_number": 88815,
-      "author": "anagnorisis2peripeteia",
-      "author_id": 129746152,
+      "issue_number": 89039,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-14T10:21:28Z",
-      "comment_updated_at": "2026-06-14T10:21:28Z",
-      "status_comment_id": 4701450034,
+      "comment_created_at": "2026-06-01T09:57:55Z",
+      "comment_updated_at": "2026-06-14T10:24:38Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=e6d8ca2c0230a5e2c77bb790cb174dc3bbd618bf)",
+      "review_summary": "The PR changes embedded session-lock steering, takeover error classification, OpenAI SDK retry option forwarding, and related regression coverage for session takeover during prompt-lock release.\n\nPR surface: Source +114, Tests +917. Total +1031 across 13 files.\n\nReproducibility: yes. at source/proof level: the linked issue and PR proof describe an organic session takeover during prompt-lock release, and the current code path clearly reclassifies that error. I did not run tests because this review is read-only.",
+      "review_followup": "- [P1] Needs contributor action for current-head real behavior proof and a maintainer-visible decision on the embedded retry default; do not queue automation while proof is insufficient.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "e6d8ca2c0230a5e2c77bb790cb174dc3bbd618bf",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: prevent silent message loss from EmbeddedAttemptSessionTakeoverError",
+        "body": "## Summary\n\nWhen the OpenAI SDK retried an `ECONNRESET` internally (default `maxRetries=2`), the session write lock was released during the retry window. Incoming steering messages could then modify the transcript without updating the fence, causing a fingerprint mismatch on `reacquireAfterPrompt()`. The resulting `EmbeddedAttemptSessionTakeoverError` was caught by `model-fallback.ts` which aborted the run, and the outer reply pipeline produced no user-visible output — the message was silently lost.\n\n## Root Cause Chain\n\n```\nAPI ECONNRESET\n  → OpenAI SDK default maxRetries=2, internal retry\n  → session write lock released during retry window\n  → incoming message arrives via queueHandle.queueMessage\n  → activeSession.steer writes directly (bypassing withOwnedSessionTranscriptWrites)\n  → transcript changes without updating fence\n  → original attempt reacquireAfterPrompt() fingerprint mismatch\n  → EmbeddedAttemptSessionTakeoverError thrown\n  → model-fallback.ts aborts the run\n  → outer layer hits generic failure branch\n  → assistantTexts/payloads never enter buildReplyPayloads()\n  → message silently lost (user sees generic error or nothing)\n```\n\n## Fix\n\nFive coordinated changes that address the bug at multiple layers:\n\n### 1. Wrap steering in `withOwnedSessionTranscriptWrites` (`attempt.ts`)\nSteering writes that arrive during prompt lock release now go through `withOwnedSessionTranscriptWrites`, keeping fence tracking consistent and preventing the fingerprint mismatch that triggers the takeover error.\n\n### 2. Dedicated error handler for takeover (`agent-runner-execution.ts`, `failover-error.ts`)\nAdded `isEmbeddedAttemptSessionTakeoverError()` export and a dedicated catch block in `runAgentTurnWithFallback`. Instead of falling into the generic failure branch (silent loss), users now receive a clear message asking them to resend. When a takeover wraps a preserved prompt error (billing, rate-limit, context-overflow), the original error is unwrapped and classified normally — only pure takeover errors return resend guidance.\n\n### 3. Scope SDK retry disable to embedded prompt lock path (`attempt.ts`, `attempt.session-lock.ts`)\nExtracted `installEmbeddedPromptRetryDefault` helper that wraps the session's `streamFn` with `{ maxRetries: 0, ...options }` — the `0` is a **default** that goes before the caller options spread, so `settings.retry.provider.maxRetries` (surfaced via `options.maxRetries` per the chain in `sdk.ts:360`) takes precedence when explicitly configured. Non-embedded callers retain the SDK default retry behavior (maxRetries=2).\n\n### 4. Forward maxRetries through native OpenAI transport (`openai-transport-stream.ts`)\n`buildOpenAISdkRequestOptions` previously accepted only `model` and `signal`, dropping the `maxRetries` injected by `installEmbeddedPromptRetryDefault`. Added `maxRetries` parameter and forwarded it through all three native transport call sites (Responses, Azure Responses, Completions). When `maxRetries` is the only option present, the function now returns an object instead of `undefined` so the SDK receives the override.\n\n### 5. Phase tracking in `EmbeddedAttemptSessionTakeoverError` (`attempt.session-lock.ts`)\nAdded a `phase` field (`prompt_reacquire`, `cleanup`, `write`, `fence_check`) for better diagnostics when this error does occur. Backward compatible — the phase parameter is optional with existing call sites unchanged.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Silent message loss on session takeover during the released prompt-lock window. When the OpenAI SDK retried an `ECONNRESET` internally, an incoming steering write changed the transcript without updating the fence, raising `EmbeddedAttemptSessionTakeoverError`, which `model-fallback.ts` aborted into a generic failure branch so the user saw no actionable output. After this fix the pure-takeover path returns explicit resend guidance, the SDK retry default is scoped to the embedded prompt-lock window (with configured `settings.retry.provider.maxRetries` taking precedence), and `maxRetries` is forwarded through the native OpenAI transport.\n- **Real environment tested**: Clean Docker container `node:24-bookworm` (Node.js `v24.16.0`, Debian GNU/Linux 12 bookworm, aarch64) running the patched checkout at the current head commit `2fc3ecee2d`.\n- **Exact steps or command run after this patch**: Built the patched checkout in the container and ran the affected suites plus a real-setup organic takeover test (real on-disk session file + real local `node:http` model server on an `openai-completions` baseUrl + real transport + real fence) and code-path verification, as captured in the v6 proof log below.\n- **Evidence after fix**: Copied live terminal output from the patched container at head `2fc3ecee2d` (full v6 log reproduced in the section below):\n\n```\n$ docker run --rm -v \"$PWD:/app\" -w /app node:24-bookworm bash /proof.sh\n=== PR #89039 Real Behavior Proof (v6, current head) ===\nEnvironment: Docker container, v24.16.0, aarch64, \"Debian GNU/Linux 12 (bookworm)\"\nCommit: 2fc3ecee2d\n--- A: Real-setup organic session-takeover proof (resend guidance) ---\n ✓ surfaces resend guidance after an organic EmbeddedAttemptSessionTakeoverError 1456ms\nAFTER-fix user-facing payload text (exact):\n⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.\nBEFORE-fix user-facing payload text (exact, parent 86150a3e51):\n⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.\n=== PROOF COMPLETE @ 2fc3ecee2d ===\n```\n- **Observed result after fix**: The organic session takeover now surfaces a specific, actionable resend message (the after-fix payload line above) instead of the generic non-actionable failure seen at the parent; the configured provider retry survives through `sdk.ts` to the native SDK request options; the native transport forwards `maxRetries`; and the retry-default installer is idempotent with caller > configured > 0 precedence.\n- **What was not tested**: No live multi-user deployment against a real upstream provider with an actual network-level `ECONNRESET` was run. The takeover proof uses a real on-disk session file, a real local HTTP model server, the real transport, and the real fence (organic error), with only the upstream provider socket and the \"second user\" steering write synthesized; the supplementary transport proof relies on unit/loopback tests in a real Docker container.\n\n### Current-head proof (commit `2fc3ecee2d`, Docker `node:24-bookworm`)\n\nRefreshed at the latest head, which adds the configured-provider-retry precedence. Run in a clean Docker container (`node:24-bookworm`, Node.js `v24.16.0`, Debian GNU/Linux 12 bookworm, aarch64):\n\n```\n=== PR #89039 Real Behavior Proof (v6, current head) ===\nEnvironment: Docker container, v24.16.0, aarch64, \"Debian GNU/Linux 12 (bookworm)\"\nCommit: 2fc3ecee2d\n\n--- A: Real-setup organic session-takeover proof (resend guidance) ---\n ✓ auto-reply  agent-runner-session-takeover.real.test.ts (1 test)\n   ✓ surfaces resend guidance after an organic EmbeddedAttemptSessionTakeoverError 1456ms\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n\n--- B: Embedded prompt retry default — idempotence + configured-override precedence ---\n Test Files  1 passed (1)\n      Tests  51 passed (51)\n\n--- C: Configured provider retry survives through sdk.ts to native SDK options ---\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n--- D: Transport forwards maxRetries (native OpenAI) + failover classification ---\n Test Files  1 passed (1)    Tests  83 passed (83)\n Test Files  1 passed (1)    Tests  241 passed (241)\n\n--- E: Code-path verification at current head ---\ninstallEmbeddedPromptRetryDefault accepts configured default:\n1088:  options?: { maxRetries?: number },\n1098:  const defaultMaxRetries = options?.maxRetries ?? 0;\nInstall site passes configured provider retry:\n3994:              maxRetries: settingsManager.getProviderRetrySettings().maxRetries,\n\n=== PROOF COMPLETE @ 2fc3ecee2d ===\n```\n\nThis confirms at the current head: the organic session-takeover path still yields visible resend guidance (A); the retry-default installer is idempotent and applies the configured-override precedence caller > configured > 0 (B); a configured `settings.retry.provider.maxRetries` survives through `sdk.ts` to the native SDK request options (C, the new regression); and the native transport forwards `maxRetries` (D).\n\n### Real session-takeover path (organic error, real transport + real fence)\n\nThis proof drives the actual user-visible takeover path end to end and captures the real user-facing reply, rather than relying only on focused unit tests. Committed as `src/auto-reply/reply/agent-runner-session-takeover.real.test.ts`.\n\n**What is real (not hand-built):**\n- A real on-disk session transcript file in a temp dir.\n- A real local `node:http` server as the model `baseUrl` (`api: openai-completions`) that announces in-flight, then blocks before finishing the SSE body.\n- The real `openai-completions` transport doing real HTTP I/O.\n- The real embedded prompt-lock controller + fence (`createEmbeddedAttemptSessionLockController`), wired through the real `installEmbeddedPromptRetryDefault` / `installPromptSubmissionLockRelease` helpers — the exact helpers `attempt.ts` uses in production.\n- The `EmbeddedAttemptSessionTakeoverError` is thrown **organically** by `assertSessionFileFence(\"prompt_reacquire\")` when a concurrent steering write changes the session-file fingerprint during the released-lock window — it is **not** constructed by hand.\n- The real `isNonProviderRuntimeCoordinationError` classification and the real `runAgentTurnWithFallback` catch branch producing the user-facing payload.\n\n**Mechanism (deterministic Promise handshakes, no sleeps):**\n1. A real temp session file is created with one session line.\n2. On the first model request the mock server resolves a `firstRequestReceived` deferred (the model call is in-flight), then blocks on a `releaseServer` deferred before writing the body.\n3. `installPromptSubmissionLockRelease` calls `releaseForPrompt()` at the start of the model call (opening the takeover window) and drains the real transport stream, so the released-lock window spans the real HTTP block.\n4. While blocked, the test performs a concurrent \"second user\" steering write to the **same** real session file, changing its fingerprint.\n5. `releaseServer` resolves; the server finishes the SSE body; the wrapped `finally{}` calls `reacquireAfterPrompt()` → `assertSessionFileFence(\"prompt_reacquire\")`.\n6. The fingerprint mismatch trips the fence → `EmbeddedAttemptSessionTakeoverError` thrown organically → real classification → real `runAgentTurnWithFallback` catch.\n\n**Before / after (run at this PR's parent `86150a3e51` in a separate worktree; the session-lock + fence code is byte-identical between parent and HEAD, so the organic error reproduces identically — the only difference is the runner's new catch branch):**\n\n```\nAFTER fix (HEAD) — vitest verbose\n RUN  v4.1.7\n ✓ |auto-reply| agent-runner-session-takeover.real.test.ts > surfaces resend guidance after an organic EmbeddedAttemptSessionTakeoverError 487ms\n Test Files  1 passed (1)\n      Tests  1 passed (1)\nAFTER-fix user-facing payload text (exact):\n⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.\n\nBEFORE fix (parent 86150a3e51, separate worktree) — vitest verbose\n RUN  v4.1.7\n ✓ |auto-reply| agent-runner-session-takeover.real.test.ts > BEFORE FIX: organic EmbeddedAttemptSessionTakeoverError yields no resend guidance 483ms\n Test Files  1 passed (1)\n      Tests  1 passed (1)\nBEFORE-fix user-facing payload text (exact):\n⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.\n```\n\n**What this proves:** an organic session takeover during a real released-lock model call produces, after this fix, a specific actionable resend message instead of the generic non-actionable failure the user saw before. Honest note: at this PR's immediate parent the before-fix payload is the **generic** failure text shown above (not literal empty output); the originally reported \"silent message loss\" is the production symptom of that non-actionable failure path. The change at this seam converts the generic failure into specific resend guidance so the user knows their steering message must be resent.\n\n### Supplementary: transport + retry-suppression proof (Docker `node:24-bookworm`)\n\n- **Behavior addressed**: Silent message loss when SDK retries race with session takeover → visible resend guidance for pure takeover, correct error classification for wrapped prompt errors, provider retry settings respected, maxRetries forwarded through native OpenAI transport\n- **Real environment tested**: Docker container (`node:24-bookworm`, Node.js `v24.16.0`, Debian GNU/Linux 12 bookworm, aarch64) running patched checkout at commit `80bbe803e2`\n- **Failing proof before fix**: On upstream/main, `buildOpenAISdkRequestOptions` only accepts `model` and `signal` — it drops `maxRetries`. Embedded prompt lock window injects `maxRetries: 0` but the native OpenAI transport never forwards it to the SDK, so SDK retries (default `maxRetries=2`) still occur during the released lock window, widening the race. Additionally, `queueMessage` steering writes bypass `withOwnedSessionTranscriptWrites`, causing fingerprint mismatch → `EmbeddedAttemptSessionTakeoverError` → generic failure branch → silent message loss.\n- **Exact steps and commands run after this patch**:\n\n```\n$ docker run --rm -e CI=true -v \"$(pwd):/app\" -w /app node:24-bookworm bash /proof.sh\n=== PR #89039 Real Behavior Proof (v5) ===\nEnvironment: Docker container, v24.16.0, aarch64, \"Debian GNU/Linux 12 (bookworm)\"\nCommit: 80bbe803e2\n\n--- Installing dependencies (pnpm) ---\ninstall exit: 0\nDone in 47s using pnpm v11.2.2\n\n--- Test 1: Native OpenAI transport forwards maxRetries ---\n Test Files  1 passed (1)\n Tests  241 passed (241)\n\n--- Test 2: Embedded prompt lock defaults + override ---\n Test Files  1 passed (1)\n Tests  48 passed (48)\n\n--- Test 3: Takeover error handling + unwrapping (agent-runner-execution) ---\n Test Files  1 passed (1)\n Tests  184 passed (184)\n\n--- Test 4: failover-error classification ---\n Test Files  1 passed (1)\n Tests  83 passed (83)\n\n--- Test 5: SDK transport paths (openai-completions + openai-responses-shared) ---\n Test Files  2 passed (2)\n Tests  32 passed (32)\n\n--- Test 6: Code path verification ---\nbuildOpenAISdkRequestOptions accepts+forwards maxRetries:\n1843:  maxRetries?: number,\n1844:): { signal?: AbortSignal; timeout?: number; maxRetries?: number } | undefined {\n1846:  if (timeout === undefined && !signal && maxRetries === undefined) {\n1852:    ...(maxRetries !== undefined ? { maxRetries } : {}),\n1940:          options?.maxRetries,\n2380:          options?.maxRetries,\n2614:          buildOpenAISdkRequestOptions(model, options?.signal, options?.maxRetries),\n\nEmbedded retry default (maxRetries:0 BEFORE options spread):\n1083:    return innerStreamFn(model, context, { maxRetries: 0, ...requestOptions });\n```\n\n- **Evidence after fix**: All 588 tests pass across the 6 affected test suites in a clean Docker environment.\n  - **Transport retry suppression proven end-to-end**: A loopback regression test in `openai-transport-stream.test.ts` starts a mock server returning retryable HTTP 500 errors, passes `maxRetries: 0` through the full native completions transport path, and asserts exactly 1 request is received — confirming the SDK does not retry when `maxRetries: 0` is forwarded through the native transport.\n  - Default SDK retry behavior preserved for non-embedded callers (no `maxRetries` in default request options).\n  - Embedded prompt lock window correctly injects `maxRetries: 0` as a default that configured `settings.retry.provider.maxRetries` can override.\n  - Native OpenAI transport (`buildOpenAISdkRequestOptions`) correctly forwards `maxRetries` to all 3 SDK call sites.\n  - Pure takeover errors produce visible resend guidance. Wrapped prompt errors are unwrapped and classified normally.\n- **What was not tested**: No live multi-user deployment against a real upstream provider with an actual network-level ECONNRESET was run. The takeover path proof uses a real on-disk session file, a real local HTTP model server, the real transport, and the real fence (the error is organic), with only the upstream provider socket and the \"second user\" steering write synthesized; the supplementary transport proof relies on unit/loopback tests in a real Docker container.\n\n## Tests\n\nAll affected test suites pass (Docker `node:24-bookworm`, aarch64):\n\n| Test File | Tests |\n|-----------|-------|\n| `agent-runner-session-takeover.real.test.ts` (real-setup takeover proof) | 1 |\n| `openai-transport-stream.test.ts` | 241 |\n| `attempt.session-lock.test.ts` | 48 |\n| `agent-runner-execution.test.ts` | 184 |\n| `failover-error.test.ts` | 83 |\n| `openai-completions.test.ts` + `openai-responses-shared.test.ts` | 32 |\n\nNew test coverage includes:\n- Real-setup organic session-takeover proof: real session file + real HTTP model server + real transport + real fence producing `EmbeddedAttemptSessionTakeoverError`, asserting the after-fix resend guidance (and its absence at the parent)\n- `buildOpenAISdkRequestOptions` forwards `maxRetries` when provided, omits when undefined\n- `maxRetries`-only call returns an object (not `undefined`)\n- Loopback end-to-end test: mock 500 server + `maxRetries: 0` → exactly 1 request (no SDK retry)\n- `installEmbeddedPromptRetryDefault` default behavior (no caller options → maxRetries:0)\n- Explicit `maxRetries` override preserved over embedded default\n- Takeover detection during owned steering writes\n- User-facing resend message for pure session takeover\n- Preserved prompt error unwrapping from cleanup takeover\n- Backward compatibility for `assertSessionFileFence` without phase parameter\n\n## Changed Files\n\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.ts`\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n- `src/agents/embedded-agent-runner/run/attempt.ts`\n- `src/agents/failover-error.ts`\n- `src/agents/failover-error.test.ts`\n- `src/agents/openai-transport-stream.ts`\n- `src/agents/openai-transport-stream.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.ts`\n- `src/auto-reply/reply/agent-runner-session-takeover.real.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.test.ts`\n- `src/llm/providers/openai-completions.ts`\n- `src/llm/providers/openai-completions.test.ts`\n- `src/llm/providers/openai-responses-shared.ts`\n- `src/llm/providers/openai-responses-shared.test.ts`\n\nFixes #87180\n\n\n\n\n",
+        "branch": "fix/session-takeover-silent-message-loss-87180",
+        "head_sha": "e6d8ca2c0230a5e2c77bb790cb174dc3bbd618bf",
+        "author": "jerry-xin",
+        "labels": [
+          "agents",
+          "size: XL",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
+            "additions": 172,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
+            "additions": 63,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/failover-error.test.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/failover-error.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 79,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 15,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sessions/sdk.test.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "additions": 67,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 37,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-session-takeover.real.test.ts",
+            "additions": 490,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/llm/providers/openai-completions.test.ts",
+            "additions": 32,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/openai-responses-shared.test.ts",
+            "additions": 44,
+            "deletions": 23,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89039",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89039.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 30,
+            "SUCCESS": 131,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4686453848:2026-06-12T01:12:57Z:re_review",
+      "comment_id": "4686453848",
+      "comment_version_key": "4686453848:2026-06-12T01:12:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4686453848",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T01:12:57Z",
+      "comment_updated_at": "2026-06-12T01:12:57Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,357 +221,104 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-14T10:22:19.678Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 88815
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-14T10:22:20.784Z",
-          "response_comment_id": "4701450034",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat: channel echo / session pinning",
-        "body": "## Pin-from-here: channel-agnostic turn mirroring\n\nA session can mirror its turns to other threads bound to the **same** session. You\nrun `/pin on` in a thread; from then on, when any other thread of that session\ndrives a turn, this thread receives it — rendered **natively through its own\nchannel's dispatch**, persisted as that channel's own turn.\n\n### Authorization (the rework)\n\nThe original revision let an operator add an echo target to an arbitrary chat id;\nthe maintainer flagged that as streaming session content to any chat. This revision\nremoves that surface entirely:\n\n- **`/pin`** is in-chat, opt-in, and binds only the session already bound to *this*\n  thread — every mirror recipient is, by construction, an already-authorized\n  participant of that session. There is no \"stream to an arbitrary chat id\" path.\n- Operator echo adds require a session participant (`targetMatchesSessionParticipant`),\n  fail-closed.\n\n### How the mirror renders — channel-agnostic, by reuse not reimplementation\n\nThe agent runs **once**; its parsed event stream is broadcast on the agent-event\nbus keyed by `runId`. For each pinned target, the core hands that target's **own\nchannel dispatch** a bus-sourced `replyResolver` (`createMirrorReplyResolver`) that\nreplays the origin run's stream instead of calling the model:\n\n- `dispatchInboundMessageWithDispatcher` already accepts a pluggable `replyResolver`.\n  `launchMirrorDispatch` (core, channel-agnostic) drives each target through its\n  registered mirror dispatcher with that resolver.\n- Telegram registers a thin `dispatchMirror` that synthesizes an inbound for the\n  pinned chat/thread and runs its **existing** `dispatchTelegramMessage` with the\n  resolver. So drafts, streaming, formatting, and persistence all follow **that\n  account's own config** — streaming-capable + on → the mirror streams; off → final\n  only. Nothing is forced; nothing is reimplemented per channel.\n- **Loop-safe by construction:** the `replyResolver` bypasses the agent-run path, so\n  a mirror turn never re-enters the mirror fan-out. The post-hoc final echo skips any\n  target a mirror turn rendered (handled-mark dedup) so there's no double delivery.\n\nThis replaces the earlier per-channel streaming-echo *renderer* (telegram-only,\nreimplemented rendering) with one small channel-agnostic mechanism that reuses each\nchannel's pipeline. **Net −894 LOC**: deletes `echo-renderer*`, `echo-streaming`,\n`streaming-progress-callbacks`, the `registerEchoRendererFactory` plugin-api\nplumbing, and the `plugin-sdk/channel-echo` subpath; adds a small core\nlauncher/registry (reusing the existing `echo-mirror-resolver`) plus a thin telegram\nadapter.\n\n### Real behavior proof (Telegram-desktop, mantis-equivalent)\n\n- **Behavior or issue addressed**: Pin-from-here mirrors a session turn into pinned target threads by re-running each target channel's own dispatch with a bus-sourced reply resolver, so the mirror renders + persists natively (streaming/verbose per that channel's own config) instead of a flat post-hoc echo.\n- **Real environment tested**: A real OpenClaw gateway built from this branch in a Linux crabbox with a desktop; a real Telegram bot + a real Telegram account on Telegram Desktop; a real `claude-cli` backend (`sonnet-4-6`/`opus-4-8`, live Anthropic API) with exec tools; the tdlib user-driver sending real messages. This recreates the Mantis telegram-desktop proof flow locally (same mechanism: telegram-desktop + user-driver + screen capture).\n- **Exact steps or command run after this patch**: Started the gateway from the built branch; in a Telegram thread sent `/new`, `/verbose on`, `/pin on`; then drove the same session from webchat (`chat.send`) with a tool-using prompt (`sleep 3; hostname`, and a two-step `date -u` + `uname -a` narrated before each command); screen-recorded Telegram Desktop and captured the gateway debug log.\n- **Evidence after fix**: Direct after-fix artifacts — mirror-render screenshot [`.proof/pin-from-here-mirror-dispatch.png`](https://raw.githubusercontent.com/anagnorisis2peripeteia/openclaw/proof/pin-from-here-evidence/.proof/pin-from-here-mirror-dispatch.png), multi-account screenshot [`.proof/pin-from-here-multiaccount.png`](https://raw.githubusercontent.com/anagnorisis2peripeteia/openclaw/proof/pin-from-here-evidence/.proof/pin-from-here-multiaccount.png), and the full **destination-revocation run + gateway log** [`.proof/pin-from-here-revocation.txt`](https://raw.githubusercontent.com/anagnorisis2peripeteia/openclaw/proof/pin-from-here-evidence/.proof/pin-from-here-revocation.txt). The revocation log shows the mirror deliver when enabled (`messageId=0` synthetic inbound + `outbound send ok chatId=…`), then `[outbound/echo] Echo delivery suppressed … (destination disabled/revoked)` after the group is disabled.\n- **Observed result after fix**: (a) Enabled group: the pinned Telegram thread receives the webchat-triggered turn's real reply, rendered natively (verbose `💬`+`🛠️` per the destination's config), exactly once. (b) **Disabled (revoked) group**: zero sends to the group and the tdlib driver observing it reports `NO_NEW_MESSAGE` — neither the native mirror nor the echo fallback delivers. Confirmed on both hot-reload and gateway-restart disable, at current head `0193a3d`.\n- **What was not tested**: Nothing material remains unproven on current head. **Destination revocation is now proven live** (and a real gap it surfaced is fixed — see *Destination revocation* below). Multi-account routing is also proven on current head — see below.\n\n#### Multi-account routing — current head (account-aware dispatch)\n\nTwo real Telegram accounts in one gateway: `default` = bot #2 in GID `-1003900553563`, `acct2` = bot #3 (`@jeeves_oc_acct2_bot`) in a separate forum group GID2 `-1004389798714` (bot #3 promoted admin; bot #2 is **not** a member of GID2). The echo target for GID2 is set with `accountId: acct2`, then a **webchat-origin** turn drives the session. Gateway debug log (`.proof/pin-from-here-multiaccount-log.txt`):\n\n```text\n[telegram] [acct2] starting provider (@jeeves_oc_acct2_bot)\n[telegram] [default] starting provider (@JeeevesOpenClawTelegram2bot)\nmessage received: channel=webchat ... sessionKey=agent:main:telegram:group:-1004389798714:topic:1\nmessage dispatch started:  channel=telegram ... source=replyResolver   ← the mirror\nmessage dispatch completed: channel=telegram ... source=replyResolver outcome=completed\n```\n\nThe webchat-origin turn mirrored into GID2 (`source=replyResolver` = the bus-sourced mirror), with **zero** `mirror: no dispatcher` fail-closed warnings (the acct2 dispatcher resolved). Because **bot #2 is not in GID2** (`getChatMember` → `chat not found`), a successful mirror delivery there could *only* be the **acct2** account (bot #3) — proving the mirror routes through the target's own account, not the first-registered/default one.\n\n#### Destination revocation — live proof (and a gap it caught, now fixed)\n\nProving this **live** (real Telegram `/pin` via the tdlib user-driver, not unit-only) surfaced a real gap the unit tests missed: the revocation gate only covered the **native mirror** (which re-runs the channel's inbound admission). The prompt / post-hoc **echo** path (`fireEchoDeliveries`) delivers through the *channel-agnostic* raw send, which has **no** admission gate — so a disabled pinned group kept receiving echoes, and when the mirror fan-out didn't fire (e.g. right after the channel restart that disabling a group triggers) the post-hoc echo leaked the conversation to the revoked destination.\n\n**Fix** (commit `083338a`): a per-channel **echo-admission predicate** (`channel-admission.ts`), registered per account exactly like the mirror dispatcher (last-wins, unregister on stop, **fail closed**). `fireEchoDeliveries` filters targets through it; telegram registers a predicate that reports group/topic-disabled from its live config. Now a disabled destination gets **neither** the native mirror **nor** the echo fallback.\n\n**Telegram DM denial** (commits `219810d`, `fbd5ee2`): the same gap existed for a pinned **DM**. Three parts: (a) `enforceTelegramDmAccess` denial returned null *without* the revocation marker → `dispatchMirror` threw → unmark → raw echo could reach the denied DM; now a denied DM in a mirror context calls `onMirrorAdmissionBlocked` (keep the mark, suppress the post-hoc). (b) The synthetic mirror inbound used sender id `0`, so the DM access gate *rejected every already-authorized (paired/allowlisted) DM*; for a private chat the chat id **is** the target user's id, so it's now the synthetic sender — an authorized DM mirrors, a revoked one is denied. (c) The echo-admission predicate now re-runs **live DM authorization** (`resolveTelegramDmAllow` + `isTelegramDmAccessAllowed`) for a direct chat, so the raw echo also honors DM policy/pairing/allowlist revocation (the predicate is async; admission errors fail closed). Unit-covered: `bot-message-context.mirror.test.ts` (DM-denial → `onMirrorAdmissionBlocked`), `channel-admission.test.ts` (async predicate + fail-closed), `echo.test.ts` (async suppression). **Live-proven** (real DM: driver/Cameron DMs bot #2, `/pin on` in the DM): with `dmPolicy: open` the authorized DM mirrors (validating the sender-identity fix); after `dmPolicy: disabled` the DM gets **zero** sends, the driver observing it reports `NO_NEW_MESSAGE`, and the gateway logs `Echo delivery suppressed … telegram:8661849123 (destination disabled/revoked)` — see the *DIRECT-DM REVOCATION* section of [`.proof/pin-from-here-revocation.txt`](https://raw.githubusercontent.com/anagnorisis2peripeteia/openclaw/proof/pin-from-here-evidence/.proof/pin-from-here-revocation.txt).\n\n**Registry ownership** (open maintainer decision): the mirror-dispatcher + echo-admission registries are global, caller-keyed, last-wins maps with no per-plugin ownership enforcement. They are exported from `openclaw/plugin-sdk/channel-outbound` and **only the bundled telegram channel uses them**. Whether to keep them as a public seam, hand them out through an owner-scoped registrar, or keep them internal is a maintainer API call — flagged explicitly in `docs/plugins/sdk-overview.md`. (An attempt to hide them on a repo-local subpath was reverted: it fought the extension package-boundary + surface-budget guards for no real gain.) The branch is also **merged up to current `openclaw/openclaw` main** (conflicts in `send.ts` / `agent-runner-execution.ts` resolved; a stale `plugin-sdk-surface-report` guard that main had deleted was dropped to match main).\n\n**Live proof** (single gateway; control then revocation; the group is a real forum supergroup, pinned via a genuine `/pin on` Telegram command):\n\n```text\n# CONTROL (group ENABLED): the mirror delivers\nmessage received: channel=telegram messageId=0 ... source=dispatchInboundMessage   ← native mirror\n[telegram] outbound send ok ... chatId=-1003900553563 messageId=404                 ← lands in the group\n\n# disable the group, then drive again:\n[reload] config hot reload applied (channels.telegram.groups.-1003900553563.enabled)\n[outbound/echo] Echo delivery suppressed for telegram:telegram:-1003900553563 (destination disabled/revoked)\n```\n\n- **Before the fix:** the driver observed `📱 [via webchat] …` arriving in the disabled group (+1 send).\n- **After the fix:** `sends-to-GID after revoke = control count (0 added)`, and the **tdlib driver observing the group reports `NO_NEW_MESSAGE`** — the disabled destination receives nothing. Confirmed on **both** revocation paths: config hot-reload **and** a full gateway restart. Unit coverage: `channel-admission.test.ts` (registry + fail-closed) and an `echo.test.ts` suppression case.\n\nFull redacted run + gateway log for both paths: [`.proof/pin-from-here-revocation.txt`](https://raw.githubusercontent.com/anagnorisis2peripeteia/openclaw/proof/pin-from-here-evidence/.proof/pin-from-here-revocation.txt).\n\nThe same run filmed in Telegram Desktop — the bot rendering into GID2 is **\"Jeeves OC Test Account 2\" (`@jeeves_oc_acct2_bot` = acct2)**, mirroring the webchat-origin turn (`📱 [via webchat] …`) and its reply natively:\n\n<img src=\"https://raw.githubusercontent.com/anagnorisis2peripeteia/openclaw/proof/pin-from-here-evidence/.proof/pin-from-here-multiaccount.png\" width=\"50%\" alt=\"webchat-origin turn mirrored into the second account's group (GID2) by bot #3 / acct2, in Telegram Desktop\">\n\nAccount-aware dispatch also fails closed on an **explicit account mismatch** (a target pinning a different account than the only registered one is never mirrored through the wrong account) — unit-regressed.\n\nRecreation of the Mantis telegram-desktop flow on a local patched crabbox: a real\ngateway built from this branch (current `openclaw/openclaw` main + this work),\nTelegram Desktop + the user-driver + screen capture, driven by a **real\n`claude-cli/claude-sonnet-4-6` backend with an exec tool call** (not a mock).\n\nA Telegram thread runs `/pin on`; webchat then drives the same session with a\ntool-using prompt (`sleep 3; hostname` — output not derivable from context). The\npinned thread renders the **webchat-origin turn's reply natively** — including the\nreal tool result — through telegram's own dispatch:\n\n1. `/verbose on` → \"⚙️ Verbose logging enabled.\"\n2. `/pin on` → **\"📌 Pinned. This thread will mirror turns from other threads of this session.\"**\n3. `📱 [via webchat] Use your exec (bash) tool to run … sleep 3; hostname …`\n4. The pinned thread receives the real reply: **\"The hostname is `crabbox-golden-crayfish-fa445ed1`.\"** — the actual box hostname, i.e. a real `hostname` exec run by the webchat-triggered turn, rendered natively in the pinned Telegram thread via the channel-agnostic mirror dispatch.\n\n<img src=\"https://raw.githubusercontent.com/anagnorisis2peripeteia/openclaw/proof/pin-from-here-evidence/.proof/pin-from-here-mirror-dispatch.png\" width=\"50%\" alt=\"the webchat-origin turn's reply rendered natively in the pinned Telegram thread via mirror-dispatch\">\n\nMechanism confirmed in the gateway log for the filmed run: `launchMirrorDispatch`\nfires for the webchat-origin turn (origin = webchat, telegram target not\nself-excluded, dispatcher found); the telegram `dispatchMirror` builds the synthetic\ninbound (`context=BUILT`) and runs `dispatchTelegramMessage` for the full turn\n(`message processed: channel=telegram messageId=0 … completed`); exactly one reply\nlands (post-hoc assistant echo skipped by the handled-mark, no duplicate).\n\n#### Riding the destination's verbose config\n\nBecause the mirror re-runs each target's own dispatch, it inherits *that*\naccount's streaming/verbose config rather than forcing anything. With the daily\ndriver's setup (`verboseDefault: on`, `streaming.mode: progress`, reasoning +\n`toolProgressDetail: raw`), a webchat-triggered turn renders the **full\ninterleaved durable record** in the pinned thread — assistant commentary (`💬`)\nand tool summaries (`🛠️`) as standalone messages, exactly as a native turn there\nwould (matching #91976):\n\n<img src=\"https://raw.githubusercontent.com/anagnorisis2peripeteia/openclaw/proof/pin-from-here-evidence/.proof/pin-from-here-verbose-mirror.png\" width=\"50%\" alt=\"webchat-origin turn rendering interleaved commentary and tool summaries natively in the pinned Telegram thread\">\n\nThis exercised a real gap: the CLI runner emits `stream:\"tool\"` events with both\n`phase:\"start\"` and `phase:\"result\"`, and the resolver was routing every tool\nevent to `onToolStart` — so the durable `🛠️` summaries (driven by `onToolResult`)\nwere dropped from the mirror while `💬` commentary still rendered. Fixed by running\nthe bus tool events through the same `createCliToolSummaryTracker` the native CLI\ndispatch uses, so the mirror's tool summaries are byte-identical, in both streaming\nmodes; the target dispatch still gates the actual send on verbose.\n\n### Public SDK contract\n\nThe mirror-dispatcher seam (`registerChannelMirrorDispatcher` /\n`unregisterChannelMirrorDispatcher` / `MirrorDispatcher`) is now **documented** as\na public `channel-outbound` contract in `docs/plugins/sdk-overview.md` (new\n*Channel mirror dispatcher* section): per-account registration, the last-wins\nreload lifecycle, and the account-match + destination-revocation behavior a\nchannel plugin must honor (the native dispatcher is the sole delivery authority,\nso it must run the channel's own admission/revocation path). The barrel export\npoints at that section. It stays on its neutral SDK subpath per the repo's\ninternal-module convention rather than being reached into as an internal — final\nacceptance of the public surface is the maintainers' call.\n\n### Tests + CI\n\n- `tsgo:core`: clean. Full `oxlint` shard gate (`run-oxlint-shards`): clean across\n  the PR surface (type-aware rules included).\n- The PR-relevant vitest matrix is green (`infra`, `auto-reply-*`, `gateway-core`/\n  `methods`, `commands`, `extension-telegram`, `hooks`, `plugin-sdk`): the\n  bus-sourced resolver (incl. the tool-summary replay), handled-mark dedup, and\n  `/pin` fan-out are covered. The `gateway-server` shard's auth/device-identity\n  failures are pre-existing and environmental — identical `15 failed | 92 passed`\n  on pristine `main` (merge-base `9827490`) in the same container.\n\n### AI assistance\n\nBuilt with AI assistance (Claude). The channel-agnostic design, implementation,\ntests, and the local telegram-desktop proof were produced with AI; the architecture\ndirection (mirror through each channel's own dispatch, ride its config) and review\nare the author's.\n\n\n\n\n\n\n\n\n\n",
-        "branch": "rfc/channel-echo",
-        "head_sha": "82fbc3aead194114f49586c17a9de5f6c0b2904b",
-        "author": "anagnorisis2peripeteia",
+        "title": "fix: prevent silent message loss from EmbeddedAttemptSessionTakeoverError",
+        "body": "## Summary\n\nWhen the OpenAI SDK retried an `ECONNRESET` internally (default `maxRetries=2`), the session write lock was released during the retry window. Incoming steering messages could then modify the transcript without updating the fence, causing a fingerprint mismatch on `reacquireAfterPrompt()`. The resulting `EmbeddedAttemptSessionTakeoverError` was caught by `model-fallback.ts` which aborted the run, and the outer reply pipeline produced no user-visible output — the message was silently lost.\n\n## Root Cause Chain\n\n```\nAPI ECONNRESET\n  → OpenAI SDK default maxRetries=2, internal retry\n  → session write lock released during retry window\n  → incoming message arrives via queueHandle.queueMessage\n  → activeSession.steer writes directly (bypassing withOwnedSessionTranscriptWrites)\n  → transcript changes without updating fence\n  → original attempt reacquireAfterPrompt() fingerprint mismatch\n  → EmbeddedAttemptSessionTakeoverError thrown\n  → model-fallback.ts aborts the run\n  → outer layer hits generic failure branch\n  → assistantTexts/payloads never enter buildReplyPayloads()\n  → message silently lost (user sees generic error or nothing)\n```\n\n## Fix\n\nFive coordinated changes that address the bug at multiple layers:\n\n### 1. Wrap steering in `withOwnedSessionTranscriptWrites` (`attempt.ts`)\nSteering writes that arrive during prompt lock release now go through `withOwnedSessionTranscriptWrites`, keeping fence tracking consistent and preventing the fingerprint mismatch that triggers the takeover error.\n\n### 2. Dedicated error handler for takeover (`agent-runner-execution.ts`, `failover-error.ts`)\nAdded `isEmbeddedAttemptSessionTakeoverError()` export and a dedicated catch block in `runAgentTurnWithFallback`. Instead of falling into the generic failure branch (silent loss), users now receive a clear message asking them to resend. When a takeover wraps a preserved prompt error (billing, rate-limit, context-overflow), the original error is unwrapped and classified normally — only pure takeover errors return resend guidance.\n\n### 3. Scope SDK retry disable to embedded prompt lock path (`attempt.ts`, `attempt.session-lock.ts`)\nExtracted `installEmbeddedPromptRetryDefault` helper that wraps the session's `streamFn` with `{ maxRetries: 0, ...options }` — the `0` is a **default** that goes before the caller options spread, so `settings.retry.provider.maxRetries` (surfaced via `options.maxRetries` per the chain in `sdk.ts:360`) takes precedence when explicitly configured. Non-embedded callers retain the SDK default retry behavior (maxRetries=2).\n\n### 4. Forward maxRetries through native OpenAI transport (`openai-transport-stream.ts`)\n`buildOpenAISdkRequestOptions` previously accepted only `model` and `signal`, dropping the `maxRetries` injected by `installEmbeddedPromptRetryDefault`. Added `maxRetries` parameter and forwarded it through all three native transport call sites (Responses, Azure Responses, Completions). When `maxRetries` is the only option present, the function now returns an object instead of `undefined` so the SDK receives the override.\n\n### 5. Phase tracking in `EmbeddedAttemptSessionTakeoverError` (`attempt.session-lock.ts`)\nAdded a `phase` field (`prompt_reacquire`, `cleanup`, `write`, `fence_check`) for better diagnostics when this error does occur. Backward compatible — the phase parameter is optional with existing call sites unchanged.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Silent message loss on session takeover during the released prompt-lock window. When the OpenAI SDK retried an `ECONNRESET` internally, an incoming steering write changed the transcript without updating the fence, raising `EmbeddedAttemptSessionTakeoverError`, which `model-fallback.ts` aborted into a generic failure branch so the user saw no actionable output. After this fix the pure-takeover path returns explicit resend guidance, the SDK retry default is scoped to the embedded prompt-lock window (with configured `settings.retry.provider.maxRetries` taking precedence), and `maxRetries` is forwarded through the native OpenAI transport.\n- **Real environment tested**: Clean Docker container `node:24-bookworm` (Node.js `v24.16.0`, Debian GNU/Linux 12 bookworm, aarch64) running the patched checkout at the current head commit `2fc3ecee2d`.\n- **Exact steps or command run after this patch**: Built the patched checkout in the container and ran the affected suites plus a real-setup organic takeover test (real on-disk session file + real local `node:http` model server on an `openai-completions` baseUrl + real transport + real fence) and code-path verification, as captured in the v6 proof log below.\n- **Evidence after fix**: Copied live terminal output from the patched container at head `2fc3ecee2d` (full v6 log reproduced in the section below):\n\n```\n$ docker run --rm -v \"$PWD:/app\" -w /app node:24-bookworm bash /proof.sh\n=== PR #89039 Real Behavior Proof (v6, current head) ===\nEnvironment: Docker container, v24.16.0, aarch64, \"Debian GNU/Linux 12 (bookworm)\"\nCommit: 2fc3ecee2d\n--- A: Real-setup organic session-takeover proof (resend guidance) ---\n ✓ surfaces resend guidance after an organic EmbeddedAttemptSessionTakeoverError 1456ms\nAFTER-fix user-facing payload text (exact):\n⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.\nBEFORE-fix user-facing payload text (exact, parent 86150a3e51):\n⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.\n=== PROOF COMPLETE @ 2fc3ecee2d ===\n```\n- **Observed result after fix**: The organic session takeover now surfaces a specific, actionable resend message (the after-fix payload line above) instead of the generic non-actionable failure seen at the parent; the configured provider retry survives through `sdk.ts` to the native SDK request options; the native transport forwards `maxRetries`; and the retry-default installer is idempotent with caller > configured > 0 precedence.\n- **What was not tested**: No live multi-user deployment against a real upstream provider with an actual network-level `ECONNRESET` was run. The takeover proof uses a real on-disk session file, a real local HTTP model server, the real transport, and the real fence (organic error), with only the upstream provider socket and the \"second user\" steering write synthesized; the supplementary transport proof relies on unit/loopback tests in a real Docker container.\n\n### Current-head proof (commit `2fc3ecee2d`, Docker `node:24-bookworm`)\n\nRefreshed at the latest head, which adds the configured-provider-retry precedence. Run in a clean Docker container (`node:24-bookworm`, Node.js `v24.16.0`, Debian GNU/Linux 12 bookworm, aarch64):\n\n```\n=== PR #89039 Real Behavior Proof (v6, current head) ===\nEnvironment: Docker container, v24.16.0, aarch64, \"Debian GNU/Linux 12 (bookworm)\"\nCommit: 2fc3ecee2d\n\n--- A: Real-setup organic session-takeover proof (resend guidance) ---\n ✓ auto-reply  agent-runner-session-takeover.real.test.ts (1 test)\n   ✓ surfaces resend guidance after an organic EmbeddedAttemptSessionTakeoverError 1456ms\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n\n--- B: Embedded prompt retry default — idempotence + configured-override precedence ---\n Test Files  1 passed (1)\n      Tests  51 passed (51)\n\n--- C: Configured provider retry survives through sdk.ts to native SDK options ---\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n--- D: Transport forwards maxRetries (native OpenAI) + failover classification ---\n Test Files  1 passed (1)    Tests  83 passed (83)\n Test Files  1 passed (1)    Tests  241 passed (241)\n\n--- E: Code-path verification at current head ---\ninstallEmbeddedPromptRetryDefault accepts configured default:\n1088:  options?: { maxRetries?: number },\n1098:  const defaultMaxRetries = options?.maxRetries ?? 0;\nInstall site passes configured provider retry:\n3994:              maxRetries: settingsManager.getProviderRetrySettings().maxRetries,\n\n=== PROOF COMPLETE @ 2fc3ecee2d ===\n```\n\nThis confirms at the current head: the organic session-takeover path still yields visible resend guidance (A); the retry-default installer is idempotent and applies the configured-override precedence caller > configured > 0 (B); a configured `settings.retry.provider.maxRetries` survives through `sdk.ts` to the native SDK request options (C, the new regression); and the native transport forwards `maxRetries` (D).\n\n### Real session-takeover path (organic error, real transport + real fence)\n\nThis proof drives the actual user-visible takeover path end to end and captures the real user-facing reply, rather than relying only on focused unit tests. Committed as `src/auto-reply/reply/agent-runner-session-takeover.real.test.ts`.\n\n**What is real (not hand-built):**\n- A real on-disk session transcript file in a temp dir.\n- A real local `node:http` server as the model `baseUrl` (`api: openai-completions`) that announces in-flight, then blocks before finishing the SSE body.\n- The real `openai-completions` transport doing real HTTP I/O.\n- The real embedded prompt-lock controller + fence (`createEmbeddedAttemptSessionLockController`), wired through the real `installEmbeddedPromptRetryDefault` / `installPromptSubmissionLockRelease` helpers — the exact helpers `attempt.ts` uses in production.\n- The `EmbeddedAttemptSessionTakeoverError` is thrown **organically** by `assertSessionFileFence(\"prompt_reacquire\")` when a concurrent steering write changes the session-file fingerprint during the released-lock window — it is **not** constructed by hand.\n- The real `isNonProviderRuntimeCoordinationError` classification and the real `runAgentTurnWithFallback` catch branch producing the user-facing payload.\n\n**Mechanism (deterministic Promise handshakes, no sleeps):**\n1. A real temp session file is created with one session line.\n2. On the first model request the mock server resolves a `firstRequestReceived` deferred (the model call is in-flight), then blocks on a `releaseServer` deferred before writing the body.\n3. `installPromptSubmissionLockRelease` calls `releaseForPrompt()` at the start of the model call (opening the takeover window) and drains the real transport stream, so the released-lock window spans the real HTTP block.\n4. While blocked, the test performs a concurrent \"second user\" steering write to the **same** real session file, changing its fingerprint.\n5. `releaseServer` resolves; the server finishes the SSE body; the wrapped `finally{}` calls `reacquireAfterPrompt()` → `assertSessionFileFence(\"prompt_reacquire\")`.\n6. The fingerprint mismatch trips the fence → `EmbeddedAttemptSessionTakeoverError` thrown organically → real classification → real `runAgentTurnWithFallback` catch.\n\n**Before / after (run at this PR's parent `86150a3e51` in a separate worktree; the session-lock + fence code is byte-identical between parent and HEAD, so the organic error reproduces identically — the only difference is the runner's new catch branch):**\n\n```\nAFTER fix (HEAD) — vitest verbose\n RUN  v4.1.7\n ✓ |auto-reply| agent-runner-session-takeover.real.test.ts > surfaces resend guidance after an organic EmbeddedAttemptSessionTakeoverError 487ms\n Test Files  1 passed (1)\n      Tests  1 passed (1)\nAFTER-fix user-facing payload text (exact):\n⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.\n\nBEFORE fix (parent 86150a3e51, separate worktree) — vitest verbose\n RUN  v4.1.7\n ✓ |auto-reply| agent-runner-session-takeover.real.test.ts > BEFORE FIX: organic EmbeddedAttemptSessionTakeoverError yields no resend guidance 483ms\n Test Files  1 passed (1)\n      Tests  1 passed (1)\nBEFORE-fix user-facing payload text (exact):\n⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.\n```\n\n**What this proves:** an organic session takeover during a real released-lock model call produces, after this fix, a specific actionable resend message instead of the generic non-actionable failure the user saw before. Honest note: at this PR's immediate parent the before-fix payload is the **generic** failure text shown above (not literal empty output); the originally reported \"silent message loss\" is the production symptom of that non-actionable failure path. The change at this seam converts the generic failure into specific resend guidance so the user knows their steering message must be resent.\n\n### Supplementary: transport + retry-suppression proof (Docker `node:24-bookworm`)\n\n- **Behavior addressed**: Silent message loss when SDK retries race with session takeover → visible resend guidance for pure takeover, correct error classification for wrapped prompt errors, provider retry settings respected, maxRetries forwarded through native OpenAI transport\n- **Real environment tested**: Docker container (`node:24-bookworm`, Node.js `v24.16.0`, Debian GNU/Linux 12 bookworm, aarch64) running patched checkout at commit `80bbe803e2`\n- **Failing proof before fix**: On upstream/main, `buildOpenAISdkRequestOptions` only accepts `model` and `signal` — it drops `maxRetries`. Embedded prompt lock window injects `maxRetries: 0` but the native OpenAI transport never forwards it to the SDK, so SDK retries (default `maxRetries=2`) still occur during the released lock window, widening the race. Additionally, `queueMessage` steering writes bypass `withOwnedSessionTranscriptWrites`, causing fingerprint mismatch → `EmbeddedAttemptSessionTakeoverError` → generic failure branch → silent message loss.\n- **Exact steps and commands run after this patch**:\n\n```\n$ docker run --rm -e CI=true -v \"$(pwd):/app\" -w /app node:24-bookworm bash /proof.sh\n=== PR #89039 Real Behavior Proof (v5) ===\nEnvironment: Docker container, v24.16.0, aarch64, \"Debian GNU/Linux 12 (bookworm)\"\nCommit: 80bbe803e2\n\n--- Installing dependencies (pnpm) ---\ninstall exit: 0\nDone in 47s using pnpm v11.2.2\n\n--- Test 1: Native OpenAI transport forwards maxRetries ---\n Test Files  1 passed (1)\n Tests  241 passed (241)\n\n--- Test 2: Embedded prompt lock defaults + override ---\n Test Files  1 passed (1)\n Tests  48 passed (48)\n\n--- Test 3: Takeover error handling + unwrapping (agent-runner-execution) ---\n Test Files  1 passed (1)\n Tests  184 passed (184)\n\n--- Test 4: failover-error classification ---\n Test Files  1 passed (1)\n Tests  83 passed (83)\n\n--- Test 5: SDK transport paths (openai-completions + openai-responses-shared) ---\n Test Files  2 passed (2)\n Tests  32 passed (32)\n\n--- Test 6: Code path verification ---\nbuildOpenAISdkRequestOptions accepts+forwards maxRetries:\n1843:  maxRetries?: number,\n1844:): { signal?: AbortSignal; timeout?: number; maxRetries?: number } | undefined {\n1846:  if (timeout === undefined && !signal && maxRetries === undefined) {\n1852:    ...(maxRetries !== undefined ? { maxRetries } : {}),\n1940:          options?.maxRetries,\n2380:          options?.maxRetries,\n2614:          buildOpenAISdkRequestOptions(model, options?.signal, options?.maxRetries),\n\nEmbedded retry default (maxRetries:0 BEFORE options spread):\n1083:    return innerStreamFn(model, context, { maxRetries: 0, ...requestOptions });\n```\n\n- **Evidence after fix**: All 588 tests pass across the 6 affected test suites in a clean Docker environment.\n  - **Transport retry suppression proven end-to-end**: A loopback regression test in `openai-transport-stream.test.ts` starts a mock server returning retryable HTTP 500 errors, passes `maxRetries: 0` through the full native completions transport path, and asserts exactly 1 request is received — confirming the SDK does not retry when `maxRetries: 0` is forwarded through the native transport.\n  - Default SDK retry behavior preserved for non-embedded callers (no `maxRetries` in default request options).\n  - Embedded prompt lock window correctly injects `maxRetries: 0` as a default that configured `settings.retry.provider.maxRetries` can override.\n  - Native OpenAI transport (`buildOpenAISdkRequestOptions`) correctly forwards `maxRetries` to all 3 SDK call sites.\n  - Pure takeover errors produce visible resend guidance. Wrapped prompt errors are unwrapped and classified normally.\n- **What was not tested**: No live multi-user deployment against a real upstream provider with an actual network-level ECONNRESET was run. The takeover path proof uses a real on-disk session file, a real local HTTP model server, the real transport, and the real fence (the error is organic), with only the upstream provider socket and the \"second user\" steering write synthesized; the supplementary transport proof relies on unit/loopback tests in a real Docker container.\n\n## Tests\n\nAll affected test suites pass (Docker `node:24-bookworm`, aarch64):\n\n| Test File | Tests |\n|-----------|-------|\n| `agent-runner-session-takeover.real.test.ts` (real-setup takeover proof) | 1 |\n| `openai-transport-stream.test.ts` | 241 |\n| `attempt.session-lock.test.ts` | 48 |\n| `agent-runner-execution.test.ts` | 184 |\n| `failover-error.test.ts` | 83 |\n| `openai-completions.test.ts` + `openai-responses-shared.test.ts` | 32 |\n\nNew test coverage includes:\n- Real-setup organic session-takeover proof: real session file + real HTTP model server + real transport + real fence producing `EmbeddedAttemptSessionTakeoverError`, asserting the after-fix resend guidance (and its absence at the parent)\n- `buildOpenAISdkRequestOptions` forwards `maxRetries` when provided, omits when undefined\n- `maxRetries`-only call returns an object (not `undefined`)\n- Loopback end-to-end test: mock 500 server + `maxRetries: 0` → exactly 1 request (no SDK retry)\n- `installEmbeddedPromptRetryDefault` default behavior (no caller options → maxRetries:0)\n- Explicit `maxRetries` override preserved over embedded default\n- Takeover detection during owned steering writes\n- User-facing resend message for pure session takeover\n- Preserved prompt error unwrapping from cleanup takeover\n- Backward compatibility for `assertSessionFileFence` without phase parameter\n\n## Changed Files\n\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.ts`\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n- `src/agents/embedded-agent-runner/run/attempt.ts`\n- `src/agents/failover-error.ts`\n- `src/agents/failover-error.test.ts`\n- `src/agents/openai-transport-stream.ts`\n- `src/agents/openai-transport-stream.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.ts`\n- `src/auto-reply/reply/agent-runner-session-takeover.real.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.test.ts`\n- `src/llm/providers/openai-completions.ts`\n- `src/llm/providers/openai-completions.test.ts`\n- `src/llm/providers/openai-responses-shared.ts`\n- `src/llm/providers/openai-responses-shared.test.ts`\n\nFixes #87180\n\n\n\n\n",
+        "branch": "fix/session-takeover-silent-message-loss-87180",
+        "head_sha": "e6d8ca2c0230a5e2c77bb790cb174dc3bbd618bf",
+        "author": "jerry-xin",
         "labels": [
-          "docs",
-          "channel: telegram",
-          "app: web-ui",
-          "gateway",
-          "cli",
-          "scripts",
-          "commands",
+          "agents",
           "size: XL",
-          "triage: refactor-only",
           "proof: supplied",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🦐 gold shrimp",
+          "P1",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 security-boundary",
-          "status: ⏳ waiting on author"
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-            "additions": 50,
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
+            "additions": 172,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "docs/plugins/sdk-overview.md",
-            "additions": 30,
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
+            "additions": 63,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/failover-error.test.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/failover-error.ts",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/bot-core.ts",
-            "additions": 77,
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 79,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/bot-message-context.mirror.test.ts",
-            "additions": 111,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-context.ts",
-            "additions": 35,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-context.types.ts",
+            "path": "src/agents/openai-transport-stream.ts",
             "additions": 15,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sessions/sdk.test.ts",
+            "additions": 54,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/bot-message-dispatch.ts",
-            "additions": 16,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message.ts",
-            "additions": 119,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/client-options.ts",
-            "additions": 93,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/telegram/src/send.ts",
-            "additions": 3,
-            "deletions": 92,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "package.json",
-            "additions": 0,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/index.ts",
-            "additions": 5,
+            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "additions": 67,
             "deletions": 0,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/protocol-schemas.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/sessions.test.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/sessions.ts",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/types.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/e2e/telegram-user-crabbox-proof.ts",
-            "additions": 45,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/plugin-sdk-surface-report.mjs",
-            "additions": 0,
-            "deletions": 287,
-            "changeType": "DELETED"
           },
           {
             "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 50,
-            "deletions": 0,
+            "additions": 37,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/commands-handlers.runtime.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/commands-pin.test.ts",
-            "additions": 122,
+            "path": "src/auto-reply/reply/agent-runner-session-takeover.real.test.ts",
+            "additions": 490,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/auto-reply/reply/commands-pin.ts",
-            "additions": 138,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/templating.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/program/register.status-health-sessions.ts",
-            "additions": 102,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/sessions-echo.ts",
-            "additions": 235,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/sessions/types.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/methods/core-descriptors.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.send-user-echo.test.ts",
-            "additions": 188,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.ts",
-            "additions": 78,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/sessions.ts",
-            "additions": 183,
+            "path": "src/llm/providers/openai-completions.test.ts",
+            "additions": 32,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-startup-post-attach.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/internal-hooks.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/message-hook-mappers.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/message-hook-mappers.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-admission.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/outbound/channel-admission.ts",
-            "additions": 105,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/outbound/echo-hook.test.ts",
-            "additions": 66,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/outbound/echo-hook.ts",
-            "additions": 138,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/outbound/echo-mirror-resolver.test.ts",
-            "additions": 241,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/outbound/echo-mirror-resolver.ts",
-            "additions": 280,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/outbound/echo.test.ts",
-            "additions": 547,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/outbound/echo.ts",
-            "additions": 207,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/outbound/mirror-dispatch.test.ts",
-            "additions": 191,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/outbound/mirror-dispatch.ts",
-            "additions": 300,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-outbound-internal.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-outbound.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/reply-runtime.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/registry.runtime-config.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/session-entry-slot-keys.ts",
-            "additions": 1,
-            "deletions": 0,
+            "path": "src/llm/providers/openai-responses-shared.test.ts",
+            "additions": 44,
+            "deletions": 23,
             "changeType": "MODIFIED"
           }
         ],
@@ -420,57 +327,450 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88815",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88815.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89039",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89039.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 162,
+          "total": 164,
           "counts": {
-            "SUCCESS": 145,
-            "SKIPPED": 14,
-            "FAILURE": 1,
-            "IN_PROGRESS": 1,
+            "CANCELLED": 2,
+            "SKIPPED": 30,
+            "SUCCESS": 131,
             "NEUTRAL": 1
           },
           "blockers": [
-            "checks-node-core-fast:FAILURE",
-            "Critical Quality (mcp-process-runtime-boundary):IN_PROGRESS"
+            "Real behavior proof:CANCELLED"
           ],
-          "pending": [
-            "Critical Quality (mcp-process-runtime-boundary):IN_PROGRESS"
-          ],
+          "pending": [],
           "terminalBlockers": [
-            "checks-node-core-fast:FAILURE"
+            "Real behavior proof:CANCELLED"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4663167274:2026-06-09T19:12:35Z:re_review",
+      "comment_id": "4663167274",
+      "comment_version_key": "4663167274:2026-06-09T19:12:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4663167274",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-09T19:12:35Z",
+      "comment_updated_at": "2026-06-09T19:12:35Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4660080893:2026-06-09T13:13:43Z:re_review",
+      "comment_id": "4660080893",
+      "comment_version_key": "4660080893:2026-06-09T13:13:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4660080893",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-09T13:13:43Z",
+      "comment_updated_at": "2026-06-09T13:13:43Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4657182969:2026-06-09T07:16:02Z:re_review",
+      "comment_id": "4657182969",
+      "comment_version_key": "4657182969:2026-06-09T07:16:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4657182969",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-09T07:16:02Z",
+      "comment_updated_at": "2026-06-09T07:16:02Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4644242214:2026-06-07T22:06:07Z:re_review",
+      "comment_id": "4644242214",
+      "comment_version_key": "4644242214:2026-06-07T22:06:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4644242214",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-07T22:06:07Z",
+      "comment_updated_at": "2026-06-07T22:06:07Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4624947959:2026-06-04T18:19:23Z:re_review",
+      "comment_id": "4624947959",
+      "comment_version_key": "4624947959:2026-06-04T18:19:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4624947959",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-04T18:19:23Z",
+      "comment_updated_at": "2026-06-04T18:19:23Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4623136398:2026-06-04T14:33:56Z:re_review",
+      "comment_id": "4623136398",
+      "comment_version_key": "4623136398:2026-06-04T14:33:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4623136398",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-04T14:33:56Z",
+      "comment_updated_at": "2026-06-04T14:33:56Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4621395951:2026-06-04T10:43:55Z:re_review",
+      "comment_id": "4621395951",
+      "comment_version_key": "4621395951:2026-06-04T10:43:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4621395951",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-04T10:43:55Z",
+      "comment_updated_at": "2026-06-04T10:43:55Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4620110665:2026-06-04T07:49:16Z:re_review",
+      "comment_id": "4620110665",
+      "comment_version_key": "4620110665:2026-06-04T07:49:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4620110665",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-04T07:49:16Z",
+      "comment_updated_at": "2026-06-04T07:49:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4617210147:2026-06-03T22:23:12Z:re_review",
+      "comment_id": "4617210147",
+      "comment_version_key": "4617210147:2026-06-03T22:23:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4617210147",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T22:23:12Z",
+      "comment_updated_at": "2026-06-03T22:23:12Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4601902843:2026-06-02T11:25:13Z:re_review",
+      "comment_id": "4601902843",
+      "comment_version_key": "4601902843:2026-06-02T11:25:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4601902843",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T11:25:13Z",
+      "comment_updated_at": "2026-06-02T11:25:13Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4601546681:2026-06-02T10:36:48Z:re_review",
+      "comment_id": "4601546681",
+      "comment_version_key": "4601546681:2026-06-02T10:36:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4601546681",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T10:36:48Z",
+      "comment_updated_at": "2026-06-02T10:36:48Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4601071690:2026-06-02T09:35:31Z:re_review",
+      "comment_id": "4601071690",
+      "comment_version_key": "4601071690:2026-06-02T09:35:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4601071690",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T09:35:31Z",
+      "comment_updated_at": "2026-06-02T09:35:31Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6359,
+    "total_ms": 4791,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1924
+        "ms": 280
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2232
+        "ms": 1572
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 2178
+        "ms": 2909
       },
       {
         "name": "append_ledger",
