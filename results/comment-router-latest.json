@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T05:14:47.005Z",
+  "generated_at": "2026-06-14T05:14:48.405Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T02:14:44.921Z",
+  "since": "2026-06-14T02:14:48.102Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    74529
+    74722
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,191 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:74529:4346303132:2026-06-14T05:14:26Z:clawsweeper_needs_human",
-      "comment_id": "4346303132",
-      "comment_version_key": "4346303132:2026-06-14T05:14:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/74529#issuecomment-4346303132",
-      "repo": "openclaw/openclaw",
-      "issue_number": 74529,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-29T18:10:01Z",
-      "comment_updated_at": "2026-06-14T05:14:26Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=dffc2fe79e5b2106243a5450d74d096512346851)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "dffc2fe79e5b2106243a5450d74d096512346851",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(matrix): rewrite /keys/upload OTK ID-collision 400 to a synthetic 200",
-        "body": "# Rewrite /keys/upload OTK ID-collision 400 to a synthetic 200\n\n## What this PR does\n\nUnblocks Matrix E2EE bootstrap on accounts where `matrix-rust-sdk` regenerates a one-time-key with an ID it has already published. Before this change, the OTK upload deterministically 400s with `signed_curve25519:<id> already exists`, `requestWithRetry` does not retry 4xx, and `bootstrapCrossSigning()` fails — every affected account is stuck in plaintext-only.\n\nThis change adds a tiny, narrowly-scoped rewrite at the `fetchFn` boundary:\n\n- If a `POST` to a URL ending `/keys/upload` returns HTTP 400 and the body matches `/(?:signed_curve25519|curve25519):[A-Za-z0-9_-]+ already exists/i`, the response is rewritten to `200 {\"one_time_key_counts\":{}}`.\n- The empty `one_time_key_counts` signals to the rust SDK's outgoing-request loop that it should mint **fresh** OTK IDs and re-upload them on the next tick. Semantically the swallow is correct — the colliding key is genuinely already on the server.\n- Anything else — non-collision 400 bodies, 400s on other endpoints (`/keys/query`, `/keys/device_signing/upload`), non-POST methods — passes through unchanged.\n- Logs once per host so the workaround is observable but not noisy.\n\nThis is a transport-layer mitigation only. The long-term fix belongs in `matrix-rust-sdk` (OlmMachine OTK ID generation/tracking — likely the ID counter is seeded from persisted state without advancing past previously-published-but-not-yet-claimed IDs). I'll file the upstream rust-sdk issue separately and reference it once the workaround lands.\n\n## Where the change lives\n\n### `extensions/matrix/src/matrix/sdk/keys-upload-collision.ts` (new, ~55 lines)\n\nPure helpers. No I/O.\n- `isKeysUploadCollision400({url, method, status, body})` — strictly gated: status === 400 AND method === POST AND `URL(url).pathname` ends with `/keys/upload` AND body matches the collision regex.\n- `synthesizeKeysUploadCollisionResponse(url)` — builds `new Response('{\"one_time_key_counts\":{}}', { status: 200, ... })` with a `content-type: application/json` header and `response.url` set to the original request URL.\n\n### `extensions/matrix/src/matrix/sdk/transport.ts`\n\nInside `createMatrixGuardedFetch`, after the response body is buffered:\n1. Decode the body as UTF-8 (non-fatal).\n2. Check the matcher.\n3. On match, log once via a module-scoped `Set<string>` keyed by URL host, and return the synthetic 200.\n4. Otherwise fall through to `buildBufferedResponse`.\n\nThe check is inside `createMatrixGuardedFetch` (not `performMatrixRequest`) so it scopes to the matrix-js-sdk `fetchFn` path only — the higher-level `MatrixAuthedHttpClient.requestJson` semantics are untouched.\n\n## Tests\n\n`extensions/matrix/src/matrix/sdk/keys-upload-collision.test.ts` (new, 9 tests):\n- collision body returns true on 400 POST /keys/upload\n- matches both `signed_curve25519` and bare `curve25519`\n- rejects non-400 statuses\n- rejects non-POST methods\n- rejects other paths (`/keys/query`, `/keys/device_signing/upload`)\n- rejects non-collision 400 bodies\n- handles malformed URLs\n- handles non-JSON bodies\n- synthesized response is 200 with the correct shape and URL\n\n`extensions/matrix/src/matrix/sdk/transport.test.ts` (4 new tests on `createMatrixGuardedFetch`):\n- collision 400 → caller observes 200 with `{\"one_time_key_counts\":{}}`\n- consecutive collisions both synthesize 200\n- non-collision 400 (`M_FORBIDDEN`) on `/keys/upload` passes through unchanged\n- collision-shaped 400 on `/keys/query` passes through unchanged\n\n`pnpm test:extension matrix` — 118 test files green, 0 failed.\n\n## What this PR explicitly does **not** do\n\n- Does **not** modify `matrix-rust-sdk` or `matrix-js-sdk`. The workaround is openclaw-only.\n- Does **not** rewrite any other 4xx response. The matcher is intentionally narrow.\n- Does **not** silence the failure — the warn-once log surfaces the synthesis on each affected host.\n- Does **not** address the cross-signing UIA / MAS-reset surface, which is the companion change in the MSC3967 PR (filed separately).\n\n## Verified end-to-end\n\nConfirmed on `matrix.thepolycule.ca` (Synapse 1.145.0+ess.1, MAS-fronted): the same account that previously wedged on `/keys/upload` retries now completes cross-signing bootstrap idempotently. Re-running `openclaw matrix encryption setup` against an already-bootstrapped account no longer 400s.\n\n## AI-assisted disclosure\n\nThis change was authored with AI assistance (Claude). The author reviewed every line, ran `pnpm test:extension matrix` locally, and verified the fix end-to-end against a MAS-fronted Synapse 1.145.0+ess.1 deployment.\n",
-        "branch": "fix/matrix-otk-upload-collision",
-        "head_sha": "dffc2fe79e5b2106243a5450d74d096512346851",
-        "author": "nklock",
-        "labels": [
-          "channel: matrix",
-          "stale",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/matrix/CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/sdk/keys-upload-collision.test.ts",
-            "additions": 137,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/sdk/keys-upload-collision.ts",
-            "additions": 58,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/sdk/transport.test.ts",
-            "additions": 105,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/sdk/transport.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/cli/hooks.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bootstrap-cache.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
-            "additions": 99,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.ts",
-            "additions": 30,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/bundled/README.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/bundled/bootstrap-extra-files/HOOK.md",
-            "additions": 7,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
-            "additions": 140,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/bundled/bootstrap-extra-files/handler.ts",
-            "additions": 34,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-74529",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-74529.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 81,
-          "counts": {
-            "SUCCESS": 65,
-            "FAILURE": 3,
-            "SKIPPED": 13
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-agentic-control-plane:FAILURE",
-            "checks-node-core:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-agentic-control-plane:FAILURE",
-            "checks-node-core:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2415,
+    "total_ms": 521,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 445
+        "ms": 292
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1624
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 319
+        "ms": 218
       },
       {
         "name": "append_ledger",
