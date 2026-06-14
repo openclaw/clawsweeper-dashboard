@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T16:05:51.607Z",
+  "generated_at": "2026-06-14T16:06:00.579Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T13:05:49.601Z",
+  "since": "2026-06-14T13:05:58.189Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    92996
+    93009
   ],
-  "comment_ids": [
-    4702299463
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,26 +29,210 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93009:4702250245:2026-06-14T16:05:54Z:clawsweeper_needs_human",
+      "comment_id": "4702250245",
+      "comment_version_key": "4702250245:2026-06-14T16:05:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93009#issuecomment-4702250245",
+      "repo": "openclaw/openclaw",
+      "issue_number": 93009,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-14T15:47:20Z",
+      "comment_updated_at": "2026-06-14T16:05:54Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Contributor or maintainer follow-up is needed because the patch must be reworked for the normalized-wrapper path and external real-environment proof cannot be supplied by automation.; Needs attention: The diff touches the before_tool_call policy boundary and can leave approval, veto, audit, or trusted-policy hooks evaluating tool calls with stale runtime context.; Review finding: [P1] Handle normalized wrappe... (sha=3726dcb0d2f9f8327511875c92c63648c09958a4)",
+      "review_summary": "The PR changes `wrapToolWithBeforeToolCallHook` to unwrap and rewrap already wrapped tools when source metadata is present, and adds a focused e2e regression test for direct rewrapping.\n\nPR surface: Source +11, Tests +38. Total +49 across 2 files.\n\nReproducibility: yes. from source: an already wrapped tool that passes through `normalizeToolParameters` can retain the enumerable wrapper marker while losing source/context metadata, then reach the PR's fallback path. I did not run the live cron or isolated-agent scenario in this read-only review.",
+      "review_followup": "- [P1] Contributor or maintainer follow-up is needed because the patch must be reworked for the normalized-wrapper path and external real-environment proof cannot be supplied by automation.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "3726dcb0d2f9f8327511875c92c63648c09958a4",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): make wrapToolWithBeforeToolCallHook idempotent to prevent double hook execution (fixes #92973)",
+        "body": "### Summary\n\n- **Problem**: `wrapToolWithBeforeToolCallHook` is not idempotent — when called on an already-wrapped tool (e.g. after `normalizeToolParameters` constructs a fresh tool via `{...tool, parameters}`), the hook executes twice per invocation because each wrapper layer calls `runBeforeToolCallHook` before delegating to the inner `execute`.\n- **Root Cause**: `createOpenClawCodingTools` runs `normalizeToolParameters` then unconditionally calls `wrapToolWithBeforeToolCallHook` on every tool. Tools that were already wrapped from a prior context (shared tool registry, cron/isolated-agent spawns) get double-wrapped. Other call sites guard with `isToolWrappedWithBeforeToolCallHook` but `wrapToolWithBeforeToolCallHook` itself has no self-guard.\n- **Fix**: When `wrapToolWithBeforeToolCallHook` receives an already-wrapped tool, unwrap it to the source tool (stored at `BEFORE_TOOL_CALL_SOURCE_TOOL`) and re-wrap with the current context. This ensures before_tool_call plugins, loop detection, diagnostics, and derived-path policy are attributed to the correct agent/session/run/workspace — while still preventing double-execution of the hook.\n- **What changed**:\n  - `src/agents/agent-tools.before-tool-call.ts` — idempotency guard that unwraps source tool and re-wraps with current context (+12 lines)\n  - `src/agents/agent-tools.before-tool-call.e2e.test.ts` — focused regression test: validates context refresh on re-wrap and single hook execution (+28 lines)\n- **What did NOT change (scope boundary)**:\n  - `normalizeToolParameters` — object spread correctly copies enumerable Symbol properties; the core issue is the unconditional wrap, not the spread behavior\n  - Individual call sites (`createOpenClawCodingTools`, `openclaw-tools.ts`, etc.) — the self-guard covers them all\n  - `rewrapToolWithBeforeToolCallHook` — still available for explicit re-wrap use cases; the guard delegates to source-tool extraction internally\n\n### Reproduction\n\n1. Register a `before_tool_call` plugin hook that logs each invocation\n2. Trigger a cron or isolated-agent run that calls `createOpenClawCodingTools`\n3. Observe that `normalizeToolParameters` + unconditional `wrapToolWithBeforeToolCallHook` double-wraps any tool already carrying a `BEFORE_TOOL_CALL_WRAPPED` marker\n4. **Before this PR**: the hook fires twice per tool call (~4% of calls, clustered around cron/isolated-agent spawns)\n5. **After this PR**: `wrapToolWithBeforeToolCallHook(alreadyWrapped, newContext)` unwraps to the source tool and re-wraps with the new context — the hook fires exactly once\n\n### Real behavior proof\n\n**Behavior or issue addressed (92973)**: `before_tool_call` plugin hooks executing twice per tool invocation when tools pass through `normalizeToolParameters` then `wrapToolWithBeforeToolCallHook` — the fix makes `wrapToolWithBeforeToolCallHook` safe for already-wrapped tools by unwrapping to the source and re-wrapping with the current context, so hooks fire exactly once and are attributed to the correct run.\n\n**Real environment tested**: Linux, Node 22 — Vitest with `node scripts/run-vitest.mjs` against `src/agents/agent-tools.before-tool-call.e2e.test.ts`, `src/agents/agent-tools.before-tool-call.integration.e2e.test.ts`, `src/agents/agent-tools.before-tool-call.embedded-mode.test.ts`, `src/agents/agent-tools.schema.test.ts`\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/agents/agent-tools.before-tool-call.e2e.test.ts src/agents/agent-tools.before-tool-call.integration.e2e.test.ts src/agents/agent-tools.before-tool-call.embedded-mode.test.ts src/agents/agent-tools.schema.test.ts`\n\n**Evidence after fix**:\n```text\nRUN  v4.1.7\n\nTest Files  4 passed (4)\n     Tests  126 passed (126)\n  Duration  24.84s\n\nRegression test \"re-wraps an already-wrapped tool with the new context\ninstead of returning it unchanged\":\n  - isToolWrappedWithBeforeToolCallHook(wrappedOnce) → true\n  - isToolWrappedWithBeforeToolCallHook(reWrapped) → true\n  - reWrapped !== wrappedOnce (fresh wrapper, not stale reference) → true\n  - execute called exactly once (not twice) → true\nAll 126 tests pass with no regressions.\n```\n\n**Observed result after fix**: When `wrapToolWithBeforeToolCallHook` receives an already-wrapped tool, it extracts the source tool via `BEFORE_TOOL_CALL_SOURCE_TOOL` and re-wraps it with the current context. The resulting wrapper carries the new run/session/workspace context, and the hook fires exactly once when executed. The regression test confirms: a tool wrapped with `runId: \"initial-run\"` then re-wrapped with `runId: \"new-run\"` produces a fresh wrapper that executes the underlying tool exactly once.\n\n**What was not tested**: Live cron/isolated-agent end-to-end spawn with a real `before_tool_call` plugin was not driven in this environment (requires a configured plugin + cron schedule + real provider).\n\n**Repro confirmation**: Before the patch, `wrapToolWithBeforeToolCallHook(wrappedOnce, newCtx)` returns `wrappedOnce` unchanged with stale context. After the patch, it returns a fresh wrapper built from the source tool with `newCtx`. The new regression test proves: `reWrapped !== wrappedOnce` (fresh wrapper), `isToolWrappedWithBeforeToolCallHook(reWrapped)` is true (still wrapped), and `execute` is called exactly once.\n\n### Risk / Mitigation\n\n- **Risk**: Re-wrapping an already-wrapped tool discards the previous context, which is the intended behavior — the caller passed a new `ctx` explicitly.\n  **Mitigation**: If a caller wants to preserve the previous context, they should not call `wrapToolWithBeforeToolCallHook` again. The guard only activates when a new call is made; existing single-wrap paths are unaffected.\n\n- **Risk**: Edge case where `BEFORE_TOOL_CALL_SOURCE_TOOL` is somehow missing on a wrapped tool.\n  **Mitigation**: The guard falls back to returning the tool unchanged (same as the `rewrapToolWithBeforeToolCallHook` fallback), which preserves existing behavior for that degenerate case.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] agents\n- [x] plugin-sdk (before_tool_call hook infrastructure)\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/agents/agent-tools.before-tool-call.e2e.test.ts`\n- `node scripts/run-vitest.mjs src/agents/agent-tools.before-tool-call.integration.e2e.test.ts`\n- `node scripts/run-vitest.mjs src/agents/agent-tools.before-tool-call.embedded-mode.test.ts`\n- `node scripts/run-vitest.mjs src/agents/agent-tools.schema.test.ts`\n\n### Review Findings Addressed\n\n- **[P1] Change the fix so already wrapped tools are rebuilt or deduped with the current hook context instead of returned unchanged**: ✅ Fixed — the idempotency guard now extracts the source tool via `BEFORE_TOOL_CALL_SOURCE_TOOL` and re-wraps with the passed `ctx`, so the wrapper carries the correct agent/session/run/workspace context.\n- **[P1] Add focused regression coverage for normalized already-wrapped tools proving the hook fires once with the new run/session context**: ✅ Added — new test \"re-wraps an already-wrapped tool with the new context instead of returning it unchanged\" validates context refresh (`reWrapped !== wrappedOnce`), continued wrap marker presence, and single execution of the underlying tool.\n- **Provide redacted real behavior proof from a plugin hook run, preferably the cron or isolated-agent path from the linked issue**: Live cron/isolated-agent end-to-end requires a configured plugin + cron schedule + real provider, which is not available in this headless Linux environment. The focused regression test proves the code-level behavior.\n\n### Linked Issue/PR\n\nFixes #92973\n",
+        "branch": "fix/issue-92973-idempotent-hook-wrap",
+        "head_sha": "3726dcb0d2f9f8327511875c92c63648c09958a4",
+        "author": "zenglingbiao",
+        "labels": [
+          "agents",
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/agent-tools.before-tool-call.e2e.test.ts",
+            "additions": 38,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.before-tool-call.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93009",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93009.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 163,
+          "counts": {
+            "SUCCESS": 133,
+            "SKIPPED": 29,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:93009:4702284143:2026-06-14T15:59:08Z:re_review",
+      "comment_id": "4702284143",
+      "comment_version_key": "4702284143:2026-06-14T15:59:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93009#issuecomment-4702284143",
+      "repo": "openclaw/openclaw",
+      "issue_number": 93009,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-14T15:59:08Z",
+      "comment_updated_at": "2026-06-14T15:59:08Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): make wrapToolWithBeforeToolCallHook idempotent to prevent double hook execution (fixes #92973)",
+        "body": "### Summary\n\n- **Problem**: `wrapToolWithBeforeToolCallHook` is not idempotent — when called on an already-wrapped tool (e.g. after `normalizeToolParameters` constructs a fresh tool via `{...tool, parameters}`), the hook executes twice per invocation because each wrapper layer calls `runBeforeToolCallHook` before delegating to the inner `execute`.\n- **Root Cause**: `createOpenClawCodingTools` runs `normalizeToolParameters` then unconditionally calls `wrapToolWithBeforeToolCallHook` on every tool. Tools that were already wrapped from a prior context (shared tool registry, cron/isolated-agent spawns) get double-wrapped. Other call sites guard with `isToolWrappedWithBeforeToolCallHook` but `wrapToolWithBeforeToolCallHook` itself has no self-guard.\n- **Fix**: When `wrapToolWithBeforeToolCallHook` receives an already-wrapped tool, unwrap it to the source tool (stored at `BEFORE_TOOL_CALL_SOURCE_TOOL`) and re-wrap with the current context. This ensures before_tool_call plugins, loop detection, diagnostics, and derived-path policy are attributed to the correct agent/session/run/workspace — while still preventing double-execution of the hook.\n- **What changed**:\n  - `src/agents/agent-tools.before-tool-call.ts` — idempotency guard that unwraps source tool and re-wraps with current context (+12 lines)\n  - `src/agents/agent-tools.before-tool-call.e2e.test.ts` — focused regression test: validates context refresh on re-wrap and single hook execution (+28 lines)\n- **What did NOT change (scope boundary)**:\n  - `normalizeToolParameters` — object spread correctly copies enumerable Symbol properties; the core issue is the unconditional wrap, not the spread behavior\n  - Individual call sites (`createOpenClawCodingTools`, `openclaw-tools.ts`, etc.) — the self-guard covers them all\n  - `rewrapToolWithBeforeToolCallHook` — still available for explicit re-wrap use cases; the guard delegates to source-tool extraction internally\n\n### Reproduction\n\n1. Register a `before_tool_call` plugin hook that logs each invocation\n2. Trigger a cron or isolated-agent run that calls `createOpenClawCodingTools`\n3. Observe that `normalizeToolParameters` + unconditional `wrapToolWithBeforeToolCallHook` double-wraps any tool already carrying a `BEFORE_TOOL_CALL_WRAPPED` marker\n4. **Before this PR**: the hook fires twice per tool call (~4% of calls, clustered around cron/isolated-agent spawns)\n5. **After this PR**: `wrapToolWithBeforeToolCallHook(alreadyWrapped, newContext)` unwraps to the source tool and re-wraps with the new context — the hook fires exactly once\n\n### Real behavior proof\n\n**Behavior or issue addressed (92973)**: `before_tool_call` plugin hooks executing twice per tool invocation when tools pass through `normalizeToolParameters` then `wrapToolWithBeforeToolCallHook` — the fix makes `wrapToolWithBeforeToolCallHook` safe for already-wrapped tools by unwrapping to the source and re-wrapping with the current context, so hooks fire exactly once and are attributed to the correct run.\n\n**Real environment tested**: Linux, Node 22 — Vitest with `node scripts/run-vitest.mjs` against `src/agents/agent-tools.before-tool-call.e2e.test.ts`, `src/agents/agent-tools.before-tool-call.integration.e2e.test.ts`, `src/agents/agent-tools.before-tool-call.embedded-mode.test.ts`, `src/agents/agent-tools.schema.test.ts`\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/agents/agent-tools.before-tool-call.e2e.test.ts src/agents/agent-tools.before-tool-call.integration.e2e.test.ts src/agents/agent-tools.before-tool-call.embedded-mode.test.ts src/agents/agent-tools.schema.test.ts`\n\n**Evidence after fix**:\n```text\nRUN  v4.1.7\n\nTest Files  4 passed (4)\n     Tests  126 passed (126)\n  Duration  24.84s\n\nRegression test \"re-wraps an already-wrapped tool with the new context\ninstead of returning it unchanged\":\n  - isToolWrappedWithBeforeToolCallHook(wrappedOnce) → true\n  - isToolWrappedWithBeforeToolCallHook(reWrapped) → true\n  - reWrapped !== wrappedOnce (fresh wrapper, not stale reference) → true\n  - execute called exactly once (not twice) → true\nAll 126 tests pass with no regressions.\n```\n\n**Observed result after fix**: When `wrapToolWithBeforeToolCallHook` receives an already-wrapped tool, it extracts the source tool via `BEFORE_TOOL_CALL_SOURCE_TOOL` and re-wraps it with the current context. The resulting wrapper carries the new run/session/workspace context, and the hook fires exactly once when executed. The regression test confirms: a tool wrapped with `runId: \"initial-run\"` then re-wrapped with `runId: \"new-run\"` produces a fresh wrapper that executes the underlying tool exactly once.\n\n**What was not tested**: Live cron/isolated-agent end-to-end spawn with a real `before_tool_call` plugin was not driven in this environment (requires a configured plugin + cron schedule + real provider).\n\n**Repro confirmation**: Before the patch, `wrapToolWithBeforeToolCallHook(wrappedOnce, newCtx)` returns `wrappedOnce` unchanged with stale context. After the patch, it returns a fresh wrapper built from the source tool with `newCtx`. The new regression test proves: `reWrapped !== wrappedOnce` (fresh wrapper), `isToolWrappedWithBeforeToolCallHook(reWrapped)` is true (still wrapped), and `execute` is called exactly once.\n\n### Risk / Mitigation\n\n- **Risk**: Re-wrapping an already-wrapped tool discards the previous context, which is the intended behavior — the caller passed a new `ctx` explicitly.\n  **Mitigation**: If a caller wants to preserve the previous context, they should not call `wrapToolWithBeforeToolCallHook` again. The guard only activates when a new call is made; existing single-wrap paths are unaffected.\n\n- **Risk**: Edge case where `BEFORE_TOOL_CALL_SOURCE_TOOL` is somehow missing on a wrapped tool.\n  **Mitigation**: The guard falls back to returning the tool unchanged (same as the `rewrapToolWithBeforeToolCallHook` fallback), which preserves existing behavior for that degenerate case.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] agents\n- [x] plugin-sdk (before_tool_call hook infrastructure)\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/agents/agent-tools.before-tool-call.e2e.test.ts`\n- `node scripts/run-vitest.mjs src/agents/agent-tools.before-tool-call.integration.e2e.test.ts`\n- `node scripts/run-vitest.mjs src/agents/agent-tools.before-tool-call.embedded-mode.test.ts`\n- `node scripts/run-vitest.mjs src/agents/agent-tools.schema.test.ts`\n\n### Review Findings Addressed\n\n- **[P1] Change the fix so already wrapped tools are rebuilt or deduped with the current hook context instead of returned unchanged**: ✅ Fixed — the idempotency guard now extracts the source tool via `BEFORE_TOOL_CALL_SOURCE_TOOL` and re-wraps with the passed `ctx`, so the wrapper carries the correct agent/session/run/workspace context.\n- **[P1] Add focused regression coverage for normalized already-wrapped tools proving the hook fires once with the new run/session context**: ✅ Added — new test \"re-wraps an already-wrapped tool with the new context instead of returning it unchanged\" validates context refresh (`reWrapped !== wrappedOnce`), continued wrap marker presence, and single execution of the underlying tool.\n- **Provide redacted real behavior proof from a plugin hook run, preferably the cron or isolated-agent path from the linked issue**: Live cron/isolated-agent end-to-end requires a configured plugin + cron schedule + real provider, which is not available in this headless Linux environment. The focused regression test proves the code-level behavior.\n\n### Linked Issue/PR\n\nFixes #92973\n",
+        "branch": "fix/issue-92973-idempotent-hook-wrap",
+        "head_sha": "3726dcb0d2f9f8327511875c92c63648c09958a4",
+        "author": "zenglingbiao",
+        "labels": [
+          "agents",
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/agent-tools.before-tool-call.e2e.test.ts",
+            "additions": 38,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.before-tool-call.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93009",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93009.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 163,
+          "counts": {
+            "SUCCESS": 133,
+            "SKIPPED": 29,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2257,
+    "total_ms": 2711,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1996
+        "ms": 407
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1973
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 251
+        "ms": 316
       },
       {
         "name": "append_ledger",
