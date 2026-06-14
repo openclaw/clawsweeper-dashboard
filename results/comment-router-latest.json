@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T14:31:42.718Z",
+  "generated_at": "2026-06-14T14:32:06.170Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T11:31:42.453Z",
+  "since": "2026-06-14T11:32:01.087Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    92985
+    69059
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4357717368
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +31,123 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:69059:4357717368:2026-06-14T14:31:02Z:clawsweeper_auto_repair",
+      "comment_id": "4357717368",
+      "comment_version_key": "4357717368:2026-06-14T14:31:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/69059#issuecomment-4357717368",
+      "repo": "openclaw/openclaw",
+      "issue_number": 69059,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-01T03:55:47Z",
+      "comment_updated_at": "2026-06-14T14:31:02Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=5e8e95ec71834cac88b45152726078f1cafd35ec)",
+      "review_summary": "The PR adds a Windows sqlite-vec retry without the `.dll` suffix, focused loader tests, and a release changelog entry.\n\nPR surface: Source +30, Tests +80, Docs +1. Total +111 across 3 files.\n\nReproducibility: no. high-confidence maintainer-run reproduction is available in this read-only review. Source inspection plus the contributor's copied Windows terminal proof make the reported `.dll` load failure plausible, but the review did not run Windows live proof.",
+      "review_followup": "- [P2] The remaining repair is narrow and mechanical: rebase the Windows retry into the current sqlite-vec loader while preserving main's fallback and verification behavior.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "5e8e95ec71834cac88b45152726078f1cafd35ec",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: retry sqlite-vec load without .dll suffix on Windows",
+        "body": "## Summary\n\nFixes #68892.\n\nOn Windows, `node:sqlite`'s `DatabaseSync.loadExtension()` may require the shared-library path **without** the platform suffix so SQLite can append it automatically — the same convention already used on Linux (`.so`) and macOS (`.dylib`). When the `sqlite-vec` package's bundled `load()` call fails on Windows and the auto-resolved extension path ends with `.dll`, the loader now retries by stripping the suffix before calling `db.loadExtension()` directly.\n\n### Root cause\n\n`sqlite-vec.load(db)` resolves the bundled `vec0.dll` path via `getLoadablePath()` and passes it to `db.loadExtension()`. On some Windows Node.js builds, `loadExtension('path/to/vec0.dll')` fails because SQLite tries to open `vec0.dll` as-is; passing `'path/to/vec0'` (no suffix) allows SQLite to append `.dll` itself, matching its normal extension-loading convention.\n\n### Change\n\nApplied to `packages/memory-host-sdk/src/host/sqlite-vec.ts`:\n\n```\n// Before — no fallback when sqliteVec.load(db) fails on Windows\nsqliteVec.load(params.db);\n\n// After — retry without .dll suffix on Windows if the first attempt fails;\n// return the suffixless path so subsequent reloads stay stable\ntry {\n  sqliteVec.load(params.db);\n} catch (firstErr) {\n  if (process.platform === \"win32\" && extensionPath.toLowerCase().endsWith(\".dll\")) {\n    try {\n      params.db.loadExtension(extensionPath.slice(0, -4));\n      loadedPath = suffixlessPath;           // persist for callers\n    } catch (retryErr) {\n      throw new Error(                       // chain both errors\n        `sqlite-vec: both load attempts failed…`, { cause: firstErr });\n    }\n  } else {\n    throw firstErr;\n  }\n}\n```\n\nUser-supplied `extensionPath` overrides are checked first (before importing `sqlite-vec`) and passed through unchanged — callers who already pin a working path are unaffected.\n\n## Test plan\n\n* On Windows with `sqlite-vec-windows-x64` installed: `npx openclaw memory index` succeeds and logs no `sqlite-vec unavailable` warning\n* On Windows: `openclaw doctor` shows vector search as available\n* On macOS / Linux: existing sqlite-vec behaviour unchanged (first load attempt succeeds, fallback never reached)\n* If a user-supplied `extensionPath` is set: it is used as-is with no suffix stripping\n\n## Real behavior proof\n\n**Behavior or issue addressed:** On Windows, `sqlite-vec` memory vector search failed with \"sqlite-vec unavailable\" because `DatabaseSync.loadExtension(\"path/vec0.dll\")` fails on some Node.js 22 Windows builds; SQLite requires the path without the `.dll` suffix so it can append the suffix itself.\n\n**Real environment tested:** Windows 11 22H2, Node.js 22.4.0 x64, `sqlite-vec-windows-x64` 0.1.9, `openclaw` gateway local install.\n\n**Exact steps or command run after fix:**\n\n```powershell\n# Start the gateway with memory indexing enabled\nopenclaw start\n\n# Trigger a memory index to exercise the sqlite-vec load path\nopenclaw memory index\n\n# Check that vector search is available in the doctor output\nopenclaw doctor\n```\n\n**Evidence after fix:**\n\nTerminal capture — before and after:\n\n```\n# --- before patch ---\nPS C:\\Users\\dev> openclaw memory index\n[memory] sqlite-vec unavailable: Cannot open library vec0.dll: The specified module could not be found.\n[memory] Falling back to full-text search only.\n\n# --- after patch ---\nPS C:\\Users\\dev> openclaw memory index\n[memory] sqlite-vec loaded: C:\\...\\sqlite-vec\\vec0\n[memory] Vector index built: 1420 chunks embedded.\n\nPS C:\\Users\\dev> openclaw doctor\n✔  Memory / vector search    sqlite-vec 0.1.9 loaded (C:\\...\\vec0)\n```\n\n**Observed result after fix:** `openclaw memory index` completes without the \"sqlite-vec unavailable\" warning, the vector index is built, and `openclaw doctor` reports vector search as available.\n\n**What was not tested:** ARM64 Windows; Node.js 20 on Windows (only 22 tested).",
+        "branch": "fix/sqlite-vec-windows-dll-load",
+        "head_sha": "5e8e95ec71834cac88b45152726078f1cafd35ec",
+        "author": "justincache",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/sqlite-vec.test.ts",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/sqlite-vec.ts",
+            "additions": 32,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-69059",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-69059.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 113,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 83,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 422,
+    "total_ms": 5305,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 254
+        "ms": 2445
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2624
       },
       {
         "name": "classify_commands",
@@ -48,7 +155,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 158
+        "ms": 207
       },
       {
         "name": "append_ledger",
