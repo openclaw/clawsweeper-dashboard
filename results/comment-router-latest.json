@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T05:16:37.295Z",
+  "generated_at": "2026-06-14T05:16:39.504Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T02:16:36.144Z",
+  "since": "2026-06-14T02:16:39.241Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    75256
+    75498
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 6,
-  "commands_seen": 1,
+  "scanned_comments": 4,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,207 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:75256:4355993985:2026-06-14T05:16:02Z:clawsweeper_needs_human",
-      "comment_id": "4355993985",
-      "comment_version_key": "4355993985:2026-06-14T05:16:02Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/75256#issuecomment-4355993985",
-      "repo": "openclaw/openclaw",
-      "issue_number": 75256,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-30T20:39:36Z",
-      "comment_updated_at": "2026-06-14T05:16:02Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=dbcdd8da533777a6a44d34f327e29efbef7cf624)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "dbcdd8da533777a6a44d34f327e29efbef7cf624",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(mattermost): add streaming.mode='block' to split draft preview at turn boundaries",
-        "body": "## Related\n\nCloses #75252\n\n## Problem\n\nThe Mattermost streaming draft preview (introduced in #47838) uses a single editable post for the whole turn. Every phase transition — thinking → tool status → partial reply → next tool → final reply — calls `updateMattermostPost` on the **same post**, completely replacing its content.\n\nFrom the user's perspective: content they started reading disappears at every transition. By the time the final reply lands, the channel contains no record of thinking, tool calls, or intermediate partial output. It is functionally equivalent to the agent deleting messages mid-conversation.\n\nThe Discord adapter solved the same problem years ago with a `streaming.mode` config and a `forceNewMessage()` call at turn boundaries. Mattermost got the edit-in-place mechanics from #47838 but never got the corresponding boundary-split option.\n\n## Fix\n\nAdd `streaming.mode: \"partial\" | \"block\"` to Mattermost account config:\n\n- **`\"partial\"`** (default) — preserves existing edit-in-place behavior so nothing breaks for users who like the current feel\n- **`\"block\"`** — new behavior: at each turn boundary (`onAssistantMessageStart`, `onReasoningEnd`, `onToolStart`), the current preview post is frozen and a new one is created for the next phase\n\nThe boundary logic is extracted into a tested `createMattermostDraftPreviewBoundaryController()` helper in `draft-stream.ts` that holds the \"did we just stream something?\" gate, so `forceNewMessage()` is never called twice in a row without content between (which would produce empty preview posts).\n\n## Usage\n\n```json\n{\n  \"channels\": {\n    \"mattermost\": {\n      \"streaming\": {\n        \"mode\": \"block\"\n      }\n    }\n  }\n}\n```\n\nPer-account override also works:\n\n```json\n{\n  \"channels\": {\n    \"mattermost\": {\n      \"streaming\": { \"mode\": \"partial\" },\n      \"accounts\": {\n        \"ops\": {\n          \"streaming\": { \"mode\": \"block\" }\n        }\n      }\n    }\n  }\n}\n```\n\n## What changes\n\n### `extensions/mattermost/src/types.ts`\n- `MattermostPreviewStreamMode = \"partial\" | \"block\"`\n- `MattermostStreamingConfig = { mode?: MattermostPreviewStreamMode }`\n- `streaming?: MattermostStreamingConfig` added to `MattermostAccountConfig`\n\n### `extensions/mattermost/src/config-schema-core.ts`\n- `MattermostPreviewStreamModeSchema` and `MattermostStreamingSchema` Zod schemas\n- `streaming` field added to `MattermostAccountSchemaBase`\n\n### `extensions/mattermost/src/mattermost/accounts.ts`\n- `resolveMattermostPreviewStreamMode()` — resolves effective mode from merged account config\n- `previewStreamMode: MattermostPreviewStreamMode` added to `ResolvedMattermostAccount`\n\n### `extensions/mattermost/src/mattermost/draft-stream.ts`\n- `MattermostDraftPreviewBoundaryController` type\n- `createMattermostDraftPreviewBoundaryController()` — encapsulates the \"only split when there is something to split\" guard and the `onSplit` reset hook\n\n### `extensions/mattermost/src/mattermost/monitor.ts`\n- Imports and constructs the boundary controller from `account.previewStreamMode`\n- `onAssistantMessageStart`, `onReasoningEnd`, `onToolStart` hooks call `previewBoundary.signalBoundary()` before their update\n- `updateDraftFromPartial` calls `previewBoundary.markStreamedContent()` after each draft update\n\n### Tests\n- `draft-stream.test.ts`: 8 unit tests for `createMattermostDraftPreviewBoundaryController`\n- `accounts.test.ts`: 7 unit tests for `resolveMattermostPreviewStreamMode` and its exposure via `resolveMattermostAccount`\n- `config-schema.test.ts`: 5 schema validation tests (`\"block\"`, `\"partial\"`, per-account override, unknown mode rejection, unknown property rejection)\n- `monitor.inbound-system-event.test.ts`: updated mock to include `createMattermostDraftPreviewBoundaryController` (the test mocks the whole `draft-stream.js` module; without this the test hung at 120 s)\n\n**387/387 tests pass.**\n\n## Scope\n\n- Mattermost adapter only; Discord, Telegram, Slack, Matrix paths are not affected\n- Default `\"partial\"` is backward-compatible; no config migration required\n- `\"off\"` (disable preview entirely) is intentionally out of scope for this PR — use `blockStreaming: true` for now; a follow-up can unify that surface\n\n## Reproduction of original bug\n\n1. Mattermost DM with any agent that runs tool calls (e.g. file reads or shell commands)\n2. Watch the preview post in real-time\n3. Observe: `Thinking…` is replaced by partial text, partial text is replaced by `Running \\`tool\\`…`, tool status is replaced by next partial, etc.\n4. With `streaming.mode: \"block\"`: each phase creates a new post; prior content stays in the channel\n",
-        "branch": "fix/mattermost-preview-no-overwrite-75252",
-        "head_sha": "dbcdd8da533777a6a44d34f327e29efbef7cf624",
-        "author": "katyaclawd",
-        "labels": [
-          "docs",
-          "channel: mattermost",
-          "stale",
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/channels/mattermost.md",
-            "additions": 12,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/concepts/streaming.md",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/config-schema-core.ts",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/config-schema.test.ts",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/accounts.test.ts",
-            "additions": 146,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/accounts.ts",
-            "additions": 59,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/draft-stream.test.ts",
-            "additions": 279,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/draft-stream.ts",
-            "additions": 214,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/monitor.ts",
-            "additions": 78,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/types.ts",
-            "additions": 51,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/get-reply-options.types.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/bundled-channel-config-metadata.generated.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-75256",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75256.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 12,
-          "counts": {
-            "FAILURE": 1,
-            "CANCELLED": 1,
-            "SKIPPED": 8,
-            "SUCCESS": 2
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "target is not open"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1340,
+    "total_ms": 451,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 298
+        "ms": 252
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 837
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 180
+        "ms": 188
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
