@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-14T15:07:29.292Z",
+  "generated_at": "2026-06-14T15:09:07.412Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T12:07:25.717Z",
+  "since": "2026-06-14T12:09:07.179Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    92996
+    92997
   ],
-  "comment_ids": [
-    4702117460
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,128 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92996:4702117460:2026-06-14T15:06:25Z:clawsweeper_auto_repair",
-      "comment_id": "4702117460",
-      "comment_version_key": "4702117460:2026-06-14T15:06:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92996#issuecomment-4702117460",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92996,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-14T14:59:51Z",
-      "comment_updated_at": "2026-06-14T15:06:25Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=c21c97c0e36fe1a1c98fd3dd84c0e2bbe8d92194)",
-      "review_summary": "The PR tightens the route-first `status` and `health` parsers so present invalid `--timeout` values defer to Commander validation, with regression coverage.\n\nPR surface: Source +14, Tests +20. Total +34 across 2 files.\n\nReproducibility: yes. Source inspection shows current main treats invalid present route-first `--timeout` values as absent, while the registered Commander path rejects provided invalid timeouts.",
-      "review_followup": "- [P2] Queue a narrow repair for the type-narrowing blocker; no broader product or security decision is needed for the code fix.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "c21c97c0e36fe1a1c98fd3dd84c0e2bbe8d92194",
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cli): reject present-but-invalid --timeout on status/health fast path",
-        "body": "## Summary\n\n`openclaw status` and `openclaw health` have a route-first fast path (`parseStatusRouteArgs` / `parseHealthRouteArgs` in `src/cli/program/route-args.ts`) that skips full Commander startup. Its `--timeout` guard was `if (getPositiveIntFlagValue(...) === null) return null`, which only catches a **missing** value. A **present-but-invalid** value (`0`, negative, non-numeric, unit-suffixed like `5s`) makes `getPositiveIntFlagValue` return `undefined` — indistinguishable from \"flag absent\" — so the fast path silently accepts it and runs with the default 10s timeout, exiting 0. The full Commander path rejects the same input with `--timeout must be a positive integer (milliseconds)` and a non-zero exit. Same command, same argument, two different behaviors / exit codes (a script that checks the exit code would read failure as success).\n\nThis mirrors the bug PR #84901 fixed for `openclaw tasks audit --limit` **in this same file** — `parseTasksAuditRouteArgs` already uses the correct guard (`raw !== undefined && parsed === undefined → return null`); `status`/`health` were the sibling parsers it didn't touch. It is the same \"CLI numeric option silently accepts invalid value\" class as the merged #92490.\n\n## What changed\n\n- `parseHealthRouteArgs` and `parseStatusRouteArgs` now probe the raw `--timeout` token with `getFlagValue` first: a present-but-invalid value returns `null`, deferring to Commander so it raises the same validation error and non-zero exit as the full path. Missing-value and absent-flag behavior is unchanged.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** `openclaw status --timeout 0` (and negative / non-numeric / `5s`) was silently accepted on the route-first fast path and run with the default timeout (exit 0), instead of being rejected like the full Commander path.\n- **Real environment tested:** local OpenClaw built from source (origin/main @ef47dd610c8) on Linux, driven through the real CLI via `node scripts/run-node.mjs` (tsx) and the repo Vitest wrapper `node scripts/run-vitest.mjs`.\n- **Exact steps or command run after this patch:** `node scripts/run-node.mjs status --timeout 0`; `node scripts/run-node.mjs health --timeout nope`; `node scripts/run-vitest.mjs src/cli/program/route-args.test.ts`.\n- **Evidence after fix (terminal capture):**\n  ```\n  $ node scripts/run-node.mjs status --timeout 0\n  --timeout must be a positive integer (milliseconds)\n  (exit 1)\n\n  $ node scripts/run-node.mjs health --timeout nope\n  --timeout must be a positive integer (milliseconds)\n  (exit 1)\n\n  $ node scripts/run-vitest.mjs src/cli/program/route-args.test.ts\n   Test Files  1 passed (1)\n        Tests  6 passed (6)\n  ```\n- **Observed result after fix:** `status`/`health` with a present-but-invalid `--timeout` now exit 1 with the Commander validation error (matching the full command path); a valid `--timeout 5000` still parses on the fast path; omitting `--timeout` still uses the fast path with the default.\n- **What was not tested:** route-first numeric flags other than `--timeout` (out of scope); the change is localized to the two status-family parsers.\n- **Negative control:** reverting `route-args.ts` to the `=== null`-only guard (origin/main HEAD) and re-running the suite fails exactly on the new `parseStatusRouteArgs([...,\"status\",\"--timeout\",\"0\"]).toBeNull()` assertion (`1 failed | 5 passed`), confirming the test is not a tautology and the fix is required.\n\n## Tests and validation\n\n- `node scripts/run-vitest.mjs src/cli/program/route-args.test.ts` → 6 passed (added a regression test covering `0` / `-5` / `nope` / `5s` deferring to Commander on both `status` and `health`, plus valid-value and no-flag controls).\n- `oxfmt --write` clean on both changed files.\n\n## Risk checklist\n\n- User-visible behavior change? Yes — `status`/`health --timeout <invalid>` now errors with exit 1 instead of silently using the default, aligning the fast path with the full-command behavior.\n- Config/env/migration change? No.\n- Security/auth/secrets/network/tool-execution change? No.\n- Highest-risk area: accidentally rejecting a valid `--timeout` or breaking the no-flag fast path; covered by the valid-value (`5000`) and no-flag assertions in the regression test.\n",
-        "branch": "fix/cli-route-timeout-validation",
-        "head_sha": "c21c97c0e36fe1a1c98fd3dd84c0e2bbe8d92194",
-        "author": "alix-007",
-        "labels": [
-          "cli",
-          "size: XS",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/cli/program/route-args.test.ts",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/program/route-args.ts",
-            "additions": 16,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92996",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92996.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 165,
-          "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 31,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3870,
+    "total_ms": 378,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1160
+        "ms": 221
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2400
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 286
+        "ms": 146
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
