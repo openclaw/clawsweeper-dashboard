@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T11:17:29.541Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-15T11:17:34.687Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-15T08:17:27.856Z",
+  "since": "2026-06-15T08:17:34.334Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    93216
+    1551
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,191 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93216:4705839863:2026-06-15T11:17:24Z:clawsweeper_needs_human",
-      "comment_id": "4705839863",
-      "comment_version_key": "4705839863:2026-06-15T11:17:24Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93216#issuecomment-4705839863",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93216,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-15T08:08:33Z",
-      "comment_updated_at": "2026-06-15T11:17:24Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] Human author/owner revision is needed for Telegram retained-overflow semantics and the SDK/internal opt-out boundary; this draft maintainer PR should stay open for review rather than cleanup close.; Needs attention: Needs attention because a safety/DLP-capable message_sending cancel or rewrite can still leave retained Telegram streamed overflow content visible.; Review finding: [P1] Handle retained streamed c... (sha=a6fb9eff1c8cdf6b7085c323557872f8db5f220f)",
-      "review_summary": "The branch composes `message_sending` into configured dispatcher `beforeDeliver` hooks, adds Telegram delivery-time opt-outs, and gates Telegram streamed preview-finalized replies with focused tests.\n\nPR surface: Source +250, Tests +364. Total +614 across 7 files.\n\nReproducibility: yes. from source inspection. Current main’s configured `beforeDeliver` branch excludes `buildMessageSendingBeforeDeliver`, and PR-head retained overflow behavior is traceable through draft-stream retained previews plus a final gate that only has the current message id.",
-      "review_followup": "- [P2] Human author/owner revision is needed for Telegram retained-overflow semantics and the SDK/internal opt-out boundary; this draft maintainer PR should stay open for review rather than cleanup close.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "a6fb9eff1c8cdf6b7085c323557872f8db5f220f",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(plugins): run message_sending on all channel agent-reply deliveries (#92374)",
-        "body": "## Summary\n\nFixes #92374. The `message_sending` plugin hook was silently **bypassed** whenever a channel supplied its own `dispatcherOptions.beforeDeliver`.\n\nThe dispatcher composed the canonical `buildMessageSendingBeforeDeliver` gate only into the **global** `beforeDeliver` path. The **configured** path (used when a channel passes `beforeDeliver`) replaced it entirely:\n\n```ts\n// before\nconst configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver\n  ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver) // <- message_sending dropped\n  : globalBeforeDeliver;\n```\n\nConsequences on `main`:\n- **Discord** (real transform `beforeDeliver`) delivered agent replies without ever running `message_sending`.\n- **Telegram** (no-op `beforeDeliver`) likewise never ran it through the seam, and its **streamed \"preview-finalized\" replies** were never gated at all — they commit by editing the live draft and never traverse `deliverReplies` (where Telegram runs the hook for normal sends).\n\nSo plugin authors could not scan / rewrite / cancel agent replies on these channels.\n\n## Why not the obvious one-liner?\n\nSeveral existing PRs simply add `buildMessageSendingBeforeDeliver` to the configured branch. That cleanly fixes Discord but **double-runs** the hook on Telegram (which already runs `message_sending` in `deliverReplies`), and it still **doesn't gate the streaming path**. Routing Telegram through the dispatcher seam instead would run `message_sending` **per streamed block** rather than per message — a granularity + exactly-once regression, since `beforeDeliver` runs per-kind (tool/block/final).\n\n## The fix (3 parts) — preserves exactly-once + per-message semantics\n\n**Part 1 — dispatcher seam** (`src/auto-reply/dispatch.ts`, `reply-dispatcher.ts`)\nCompose `message_sending` into **both** the global and the channel-configured `beforeDeliver` branches. Add a `runsMessageSendingAtDelivery` opt-out flag for channels that own the hook at delivery time, so it never double-runs.\n\n**Part 2 — Telegram opt-out** (`bot-message-dispatch.ts`, `bot-native-commands.ts`)\nTelegram sets `runsMessageSendingAtDelivery: true` on both dispatch paths, since it runs `message_sending` itself via `deliverReplies` + the streaming finalizer.\n\n**Part 3 — Telegram streaming finalizer** (`bot-message-dispatch.ts`)\nRun `message_sending` in `emitPreviewFinalizedHook` — the single chokepoint every preview-finalized answer funnels through:\n- **scan / pass-through** -> hook runs, message untouched\n- **cancel** -> delete the already-streamed message\n- **rewrite** -> edit the message in place (buttons preserved by omission)\n\nDownstream `message_sent` emit / prompt-context record / transcript mirror use the gated content.\n\n### Net result: `message_sending` runs **exactly once per outbound agent message** on every channel\n\n| Path | Where message_sending runs |\n|------|----------------------------|\n| Discord / generic configured `beforeDeliver` | dispatcher seam (Part 1) |\n| Telegram non-streamed sends | `deliverReplies` (existing) |\n| Telegram streamed / preview-finalized | `emitPreviewFinalizedHook` (Part 3) |\n| Telegram durable (media/fallback) | durable batch (existing) |\n\n## Known, documented limitations\n- Streamed content is shown incrementally before the post-commit gate runs, so a cancel/rewrite visibly *flashes* the original text before it is removed/edited. This is inherent to live streaming.\n- A cancel deletes the message after `markDelivered()` has already run; acceptable for streamed replies.\n\n## Tests\n- `src/auto-reply/dispatch.test.ts`: `message_sending` now composes with a channel-configured `beforeDeliver`; `runsMessageSendingAtDelivery` opt-out; cancel/veto short-circuit.\n- `extensions/telegram/src/bot-message-dispatch.test.ts`: streamed preview-finalized runs the hook with correct context (`to`/`accountId`/`conversationId`/`threadId`); cancel deletes the message; rewrite edits it in place and propagates to downstream context; no-op when no `message_sending` hook is registered.\n\n### Verification\n- `tsgo` core + extensions + core-test + extensions-test: clean\n- `dispatch.test.ts`: 21 passed\n- `bot-message-dispatch.test.ts`: 124 passed (incl. 4 new), `lane-delivery.test.ts` + related: green together\n\n(Pre-existing, unrelated flakes in `bot-message-context.body.test.ts` and `bot.test.ts` reproduce on `main` without these changes.)\n",
-        "branch": "ak/issue-92374-message-sending-exactly-once",
-        "head_sha": "a6fb9eff1c8cdf6b7085c323557872f8db5f220f",
-        "author": "amknight",
-        "labels": [
-          "channel: telegram",
-          "maintainer",
-          "size: L",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof",
-          "proof: 🎥 video"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.test.ts",
-            "additions": 188,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.ts",
-            "additions": 130,
-            "deletions": 31,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-native-commands.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/lane-delivery-text-deliverer.ts",
-            "additions": 174,
-            "deletions": 61,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/lane-delivery.test.ts",
-            "additions": 75,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/dispatch.test.ts",
-            "additions": 109,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/dispatch.ts",
-            "additions": 34,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 15,
-        "additions": 502,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93216",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93216.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 50,
-          "gatingTotal": 45,
-          "counts": {
-            "SUCCESS": 6,
-            "SKIPPED": 44
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:93216:4707217328:2026-06-15T11:01:26Z:re_review",
-      "comment_id": "4707217328",
-      "comment_version_key": "4707217328:2026-06-15T11:01:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93216#issuecomment-4707217328",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93216,
-      "author": "amknight",
-      "author_id": 15041791,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-06-15T11:01:26Z",
-      "comment_updated_at": "2026-06-15T11:01:26Z",
-      "status_comment_id": null,
-      "trigger": "slash",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2836,
+    "total_ms": 650,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 310
+        "ms": 343
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1359
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1139
+        "ms": 297
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
