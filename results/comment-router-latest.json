@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T02:54:08.189Z",
+  "generated_at": "2026-06-15T02:54:45.822Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T23:54:06.218Z",
+  "since": "2026-06-14T23:54:43.448Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    88908
+    92153
   ],
   "comment_ids": [
-    4704081104
+    4704083560
   ],
-  "status_comment_id": 4704081230,
+  "status_comment_id": 4704083682,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 1,
   "trusted_bots": [
@@ -33,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88908:4589575955:2026-06-15T02:54:03Z:clawsweeper_needs_human",
-      "comment_id": "4589575955",
-      "comment_version_key": "4589575955:2026-06-15T02:54:03Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88908#issuecomment-4589575955",
+      "idempotency_key": "comment-router:openclaw/openclaw:92153:4704083560:2026-06-15T02:53:53Z:re_review",
+      "comment_id": "4704083560",
+      "comment_version_key": "4704083560:2026-06-15T02:53:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92153#issuecomment-4704083560",
       "repo": "openclaw/openclaw",
-      "issue_number": 88908,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 92153,
+      "author": "Pandah97",
+      "author_id": 80405497,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T04:31:56Z",
-      "comment_updated_at": "2026-06-15T02:54:03Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "comment_created_at": "2026-06-15T02:53:53Z",
+      "comment_updated_at": "2026-06-15T02:53:53Z",
+      "status_comment_id": 4704083682,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -67,91 +67,41 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-06-15T02:54:02.022Z",
+          "dispatched_at": "2026-06-15T02:54:46.446Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 93111
+          "item_number": 92153
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-06-15T02:54:03.026Z",
-          "response_comment_id": "4704081230",
+          "commented_at": "2026-06-15T02:54:48.180Z",
+          "response_comment_id": "4679949055",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): force exit on zombie shutdown + 503 healthz during shutdown",
-        "body": "## Summary\n\nOn rh-bot.lan at 2026-05-31 21:31 a gateway PID (71842) logged `[shutdown] completed cleanly in 5ms`, but the node process never exited. It held port 18789 for 2h13m. Every subsequent launchd-spawned gateway then took the lock-recovery path: probe `/healthz`, see 200 from the zombie, log `gateway already running under launchd; existing gateway is healthy, leaving it in control`, and exit 0. launchd's `KeepAlive.SuccessfulExit=false` kept new gateways down. The bot was offline for about 2h13m until manual `kill -9` plus `launchctl kickstart -k`.\n\nThe original SIGKILL of the parent process is the separate root cause documented in memory `project_rh_bot_isolated_session_sigkill.md` (`openclaw isolated-session` spawn pattern). This PR fixes the second-order defenses that should have prevented the zombie from blocking restart, not the SIGKILL itself.\n\n## Layer 1: force exit after every clean shutdown\n\n`src/gateway/server-close.ts:738` already logs `shutdown completed cleanly in Xms`, but a stray handle (HTTP keep-alive, telegram fetch, plugin native handle) can keep the event loop alive after every owned subsystem closed. `src/cli/gateway-cli/run-loop.ts:382` has an existing `armForceExitTimer(SHUTDOWN_TIMEOUT_MS)` safety net, but it only arms for `runAcceptedRequest` (signal-driven), not for the `closeOnStartupFailure` path in `src/gateway/server.impl.ts:1059`. That gap is exactly the rh-bot incident shape.\n\nThis PR adds `armGatewayPostShutdownExitWatchdog` in `server-close.ts`. After \"completed cleanly\" is logged, an unref'd `setTimeout` is armed (default 5_000ms, configurable via `OPENCLAW_GATEWAY_POST_SHUTDOWN_EXIT_TIMEOUT_MS`). When it fires:\n- emit a structured `shutdownLog.warn` with the active-handle constructor summary (via `process._getActiveHandles` or `getActiveResourcesInfo`)\n- record the `gateway.shutdown.zombie_detected` restart trace event for OTel/Loki\n- call `process.exit(0)`\n\nBecause the timer is unref'd, a healthy natural exit always wins. The watchdog only fires when something else holds the loop open. The injected callback shape (`armPostShutdownExitWatchdog` parameter on `createGatewayCloseHandler`) keeps vitest workers from killing themselves during the suite.\n\n## Layer 2: 503 on /healthz during shutdown, plus tighter preflight\n\nThe deployed `handleGatewayProbeRequest` in `src/gateway/server-http.ts` returns 200 unconditionally for `/healthz`. A zombie still holding its HTTP listener therefore answers 200, and `probeGatewayHealthz` in `src/cli/gateway-cli/run.ts:369` accepts it as healthy (success criterion was `statusCode < 500`). The lock-recovery loop then logs `gateway already running under launchd; existing gateway is healthy, leaving it in control` and returns void to the supervisor, which respawns nothing.\n\nThis PR adds a module-level shutting-down flag in `server-close.ts`, flipped to `shutting_down` at the start of the close handler (before any await). `handleGatewayProbeRequest` consults that flag via injectable `getShuttingDown` accessor (defaults to `isGatewayShuttingDown`). When live probes (`/health`, `/healthz`) run while shutting down, they return 503 with body `{ \"live\": false, \"phase\": \"shutting_down\" }`. A `gateway.healthz.shutting_down_response` warn log fires once per shutdown sequence so the cascade is queryable in Loki without spamming.\n\n`probeGatewayHealthz` is tightened to accept only `statusCode === 200`. The previous `< 500` admitted the new 503 (and any 4xx misconfig), defeating the layer 2 purpose. The lock-recovery loop now also emits `gateway.preflight.zombie_detected` (warn log plus restart trace event) when the lock is held but the probe is unhealthy, so subsequent supervisor cycles can be correlated.\n\nThe flag resets at the start of `startGatewayServer` so the in-process restart path returns to a `running` state before `/healthz` starts answering 200 again.\n\n## OTel / Loki instrumentation\n\nAll four events emit via the existing `gatewayLog`/`shutdownLog`/`gatewayProbeLog` subsystems plus `recordGatewayRestartTrace`:\n\n- `gateway.shutdown.zombie_detected` (Layer 1 trace) when the post-shutdown watchdog fires\n- `gateway.healthz.shutting_down_response` (Layer 2 warn log) when /healthz returns 503 during shutdown\n- `gateway.preflight.zombie_detected` (Layer 2 warn log + trace) when supervised lock recovery sees a held lock but an unhealthy probe\n- the existing `restart.close.total` trace already covers clean-path shutdown completion\n\nNo new export plumbing is needed; the existing diagnostics-otel / Loki shipper consumes these events.\n\n## Verification\n\nLocal Vitest with the patch applied:\n\n```\n$ node scripts/run-vitest.mjs run src/gateway/server-close.test.ts src/gateway/server-http.probe.test.ts src/gateway/probe.close-drain.test.ts src/gateway/server.preauth-hardening.test.ts src/cli/gateway-cli/run.supervised-lock.test.ts\nTest Files  4 passed (4)\n     Tests  59 passed (59)\nTest Files  1 passed (1)\n     Tests  10 passed (10)\n```\n\n`pnpm build` clean. `node scripts/run-oxlint-shards.mjs --only=core --threads=4` clean. `node scripts/check-dynamic-import-warts.mjs` shows only the pre-existing `mcp-cli.ts` advisory, unchanged by this PR.\n\n## Real behavior proof\n\nBehavior addressed: gateway zombie shutdown that left rh-bot offline 2h13m on 2026-05-31. With this PR the watchdog forces `process.exit(0)` so launchd reaps the PID, and `/healthz` returns 503 during shutdown so the next supervisor cycle does not defer to a draining instance.\n\nReal environment tested: live deployed openclaw gateway on rh-bot.lan, build SHA 23804e610c (incident reproducer). The deployed bundle is the exact code that exhibited the bug; the proof script exercises both the deployed predicate and the patched predicate against real HTTP servers, plus the watchdog state machine.\n\nExact steps or command run after this patch:\n\n```\nscp /tmp/proof-zombie-amittell.mjs alexm@rh-bot.lan:/tmp/proof-zombie-amittell.mjs\nssh alexm@rh-bot.lan 'cd /tmp && node proof-zombie-amittell.mjs'\nssh alexm@rh-bot.lan 'curl -s -o /dev/null -w \"%{http_code}\\n\" http://127.0.0.1:18789/healthz'\n```\n\nEvidence after fix:\n\n```\n== gateway zombie-shutdown fix proof ==\nhost: rh-bot.lan\nnode: v25.8.2\ndate: 2026-06-01T04:28:32.289Z\n\n[PASS] case1 deployed handler returns 200 mid-shutdown so old preflight defers to zombie :: accepted=true\n[PASS] case2 patched predicate (=== 200) rejects 503 as unhealthy :: accepted=false\n[PASS] case3 patched predicate accepts a healthy 200 response :: accepted=true\n[PASS] case4 watchdog calls exitProcess(0) after timeout :: exited=true; warnMessages=1\n[PASS] case4 watchdog warn log names the timeout in ms :: gateway shutdown completed but node process still alive after 50ms; forcing process.exit(0)\n[PASS] case5 cancelling the watchdog prevents the forced exit :: exited=false\n[PASS] case6a healthz returns 200 ok:true when running :: {\"statusCode\":200,\"body\":{\"ok\":true,\"status\":\"live\"}}\n[PASS] case6b healthz returns 503 live:false phase:shutting_down when shutdown started :: {\"statusCode\":503,\"body\":{\"live\":false,\"phase\":\"shutting_down\"}}\n\nPROOF SUMMARY  passed=8  failed=0\n```\n\nLive deployed gateway healthz hit (confirms the case 1 handler shape the proof script reproduces):\n\n```\n$ curl -s -w \"status=%{http_code}\\n\" http://127.0.0.1:18789/healthz\nstatus=200\n{\"ok\":true,\"status\":\"live\"}\n```\n\nObserved result after fix: case 1 confirms the deployed handler shape responsible for the incident. Cases 2 and 3 confirm the patched probe predicate. Cases 4 and 5 confirm the watchdog forces exit on the deployed Node runtime and stops cleanly when cancelled. Cases 6a and 6b confirm the healthz state machine returns the canonical 200 ok body when running and the 503 `{ live: false, phase: \"shutting_down\" }` body the moment the shutdown flag is set.\n\nWhat was not tested: a true end-to-end shutdown of a real OpenClaw gateway on rh-bot with the new bundle (requires deployment of this branch); the long-running TCP keepalive vs telegram-fetch handle-leak scenario, which the watchdog handles by design (any stray handle keeps the loop alive past the watchdog timeout, and the watchdog forces exit regardless of the specific handle source).\n",
-        "branch": "fix/gateway-shutdown-zombie-exit",
-        "head_sha": "d0092c4c22f6a568f7b29d4ee54f42cb39478385",
-        "author": "amittell",
+        "title": "#92067: fix(telegram): honor ingest config before unaddressed-group-media skip",
+        "body": "## Summary\n\nHonor group/topic `ingest` config before the unaddressed-group-media skip check, so plugins with `ingest: true` receive media-bearing messages in addition to text messages.\n\n## Root Cause\n\n`shouldSkipMediaDownloadForUnaddressedMentionGroup` returned `true` for un-addressed group/topic media **before** the `message:received` ingest hook fired. A plugin with `channels.telegram.groups[<id>].ingest: true` therefore received text messages but never media-bearing ones — the skip won before ingest was consulted.\n\n## Changes\n\n- `extensions/telegram/src/bot-handlers.runtime.ts`: Added ingest config check before the mention-skip decision. When `topicConfig?.ingest` or `groupConfig?.ingest` is `true`, the media skip is bypassed, allowing the ingest hook to fire.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Honor group/topic `ingest` config before the unaddressed-group-media skip, so explicitly ingest-enabled groups/topics receive media-bearing messages.\n\n**Real environment tested:**\n- OS: Linux 4.19.112-2.el8.x86_64\n- Runtime: Node.js v22.19.0\n- Setup: Local source checkout at `main`\n\n**Exact steps or command run after this patch:**\n```\nnode /tmp/repro-92067.mjs\npnpm test -- --run extensions/telegram/src/bot-handlers.runtime.test.ts\n```\n\n**Evidence after fix:**\n```\n$ node /tmp/repro-92067.mjs\n=== Issue #92067: Honor ingest config before unaddressed-group-media skip ===\n\nTest: Group with ingest=true, no mention\n  Before fix -> skipMedia=true (media silently dropped)\n  After fix  -> skipMedia=false (kept)\n  FIX CHANGED BEHAVIOR\n\nTest: Topic with ingest=true, group with ingest=false, no mention\n  Before fix -> skipMedia=true (media silently dropped)\n  After fix  -> skipMedia=false (kept)\n  FIX CHANGED BEHAVIOR\n\nTest: Group without ingest, no mention (default behavior unchanged)\n  Before fix -> skipMedia=true (media silently dropped)\n  After fix  -> skipMedia=true (media dropped)\n  Behavior unchanged (expected)\n\nTest: Group with ingest=false, no mention\n  Before fix -> skipMedia=true (media silently dropped)\n  After fix  -> skipMedia=true (media dropped)\n  Behavior unchanged (expected)\n\nTest: Group with ingest=true, has mention (mention check also passes)\n  Before fix -> skipMedia=false (kept)\n  After fix  -> skipMedia=false (kept)\n  Behavior unchanged (expected)\n```\n\n**Observed result after fix:** The repro script confirms ingest-enabled groups/topics no longer have their media silently dropped. Groups without ingest config behave identically to before the fix. All 4 existing tests pass.\n\n**What was not tested:** End-to-end Telegram bot connectivity (requires actual bot token); other group types beyond the forum supergroup scenario described in the issue.\n\n## Regression Test Plan\n\n- [x] `pnpm test -- --run extensions/telegram/src/bot-handlers.runtime.test.ts` passes (4/4)\n- [x] Change is minimal (4 lines added) and targeted\n- [x] Default behavior is unchanged when `ingest` is not configured\n\n---\n\n*AI-assisted: built with Claude Code*",
+        "branch": "fix/issue-92067-telegram-ingest-media-skip",
+        "head_sha": "d4d14df6c662c8b00e05de12290cbe29e9619aca",
+        "author": "pandah97",
         "labels": [
-          "gateway",
-          "cli",
-          "size: L",
+          "channel: telegram",
+          "size: XS",
           "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/cli/gateway-cli/run.supervised-lock.test.ts",
-            "additions": 101,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run.ts",
-            "additions": 39,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/gateway-shutdown-state.ts",
-            "additions": 60,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-close.test.ts",
-            "additions": 121,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-close.ts",
-            "additions": 143,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-http.probe.test.ts",
-            "additions": 141,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-http.ts",
-            "additions": 55,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-state.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 8,
+            "path": "extensions/telegram/src/bot-handlers.runtime.ts",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -161,8 +111,8 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88908",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88908.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92153",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92153.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -170,21 +120,18 @@
         "checks": {
           "total": 162,
           "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 28,
-            "FAILURE": 2,
+            "SUCCESS": 130,
+            "SKIPPED": 26,
+            "FAILURE": 1,
             "NEUTRAL": 1
           },
           "blockers": [
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
+            "Run agentic native Telegram proof:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
+            "Run agentic native Telegram proof:FAILURE"
           ],
-          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -195,15 +142,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2215,
+    "total_ms": 5178,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 239
+        "ms": 430
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1717
+        "ms": 1928
       },
       {
         "name": "classify_commands",
@@ -211,7 +158,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 234
+        "ms": 2791
       },
       {
         "name": "append_ledger",
