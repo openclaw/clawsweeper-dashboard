@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T11:58:58.903Z",
-  "repo": "openclaw/crabbox",
+  "generated_at": "2026-06-15T12:01:17.897Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-15T08:58:56.899Z",
+  "since": "2026-06-15T09:01:15.512Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    367
+    92945
   ],
-  "comment_ids": [
-    4707673920
-  ],
-  "status_comment_id": 4707674375,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 13,
+  "commands_seen": 6,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +31,108 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/crabbox:367:4707673920:2026-06-15T11:58:00Z:re_review",
-      "comment_id": "4707673920",
-      "comment_version_key": "4707673920:2026-06-15T11:58:00Z",
-      "comment_url": "https://github.com/openclaw/crabbox/pull/367#issuecomment-4707673920",
-      "repo": "openclaw/crabbox",
-      "target_branch": "main",
-      "issue_number": 367,
-      "author": "anagnorisis2peripeteia",
-      "author_id": 129746152,
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92945:4701546257:2026-06-15T12:01:12Z:clawsweeper_needs_human",
+      "comment_id": "4701546257",
+      "comment_version_key": "4701546257:2026-06-15T12:01:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92945#issuecomment-4701546257",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92945,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-15T11:58:00Z",
-      "comment_updated_at": "2026-06-15T11:58:00Z",
-      "status_comment_id": 4707674375,
+      "comment_created_at": "2026-06-14T11:04:47Z",
+      "comment_updated_at": "2026-06-15T12:01:12Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Contributor-side current-head Telegram proof is still needed; no ClawSweeper repair lane is appropriate until the real setup evidence exists.; Cleared: No concrete security or supply-chain concern was found in this one-file Telegram runtime change. (sha=fc8d986a078780271a7825817c78229353a8c2c1)",
+      "review_summary": "The PR changes Telegram native command-menu sync so a matching process-local command hash is only honored after `getMyCommands()` confirms the default, group, and localized command scopes are non-empty.\n\nPR surface: Source +52. Total +52 across 1 file.\n\nReproducibility: yes. from source inspection: current main can return on a same-process cached hash before checking Telegram remote command state. I did not run a live Telegram reproduction in this read-only review.",
+      "review_followup": "- [P1] Contributor-side current-head Telegram proof is still needed; no ClawSweeper repair lane is appropriate until the real setup evidence exists.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "fc8d986a078780271a7825817c78229353a8c2c1",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "#92944: Telegram commands can remain empty after interrupted sync due to stale local command hash",
+        "body": "## Summary\n\nVerify remote Telegram command state via `getMyCommands()` before skipping command sync based on the local hash cache. This prevents the bot menu from staying empty when the remote state was cleared but the local hash still matches.\n\n## Root Cause\n\nIn `extensions/telegram/src/bot-native-command-menu.ts`, `syncTelegramMenuCommands()` skipped sync when the cached hash matched — without checking whether the remote Telegram commands had been cleared by an interrupted sync or gateway restart.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Before skipping sync, call `getMyCommands()` to verify remote state. If remote is empty, proceed with re-sync. On API errors, also fall through to re-sync.\n\n- **Real environment tested**: Linux 4.19.112-2.el8.x86_64 (x64), Node.js v22.22.0. Source-level verification.\n\n- **Exact steps or command run after this patch**:\n  1. Gateway restart with hash cache present but remote commands cleared\n  2. `getMyCommands()` returns empty list\n  3. Sync proceeds despite matching local hash\n  4. Commands are re-registered\n\n- **Evidence after fix**:\n```diff\ndiff --git a/extensions/telegram/src/bot-native-command-menu.ts b/extensions/telegram/src/bot-native-command-menu.ts\nindex 52a8267b27..e22b5a19d9 100644\n--- a/extensions/telegram/src/bot-native-command-menu.ts\n+++ b/extensions/telegram/src/bot-native-command-menu.ts\n@@ -505,8 +505,22 @@ export function syncTelegramMenuCommands(params: {\n     const currentHash = hashCommandList(commandsToRegister);\n     const cachedHash = readCachedCommandHash(accountId, botIdentity);\n     if (cachedHash === currentHash) {\n-      logVerbose(\"telegram: command menu unchanged; skipping sync\");\n-      return;\n+      // The local hash matches, but the remote Telegram state may have been\n+      // cleared (e.g. after an interrupted sync or gateway restart).  Verify\n+      // with getMyCommands before skipping — if remote is empty we must\n+      // re-register.  See #92944.\n+      try {\n+        const remoteCommands = await bot.api.getMyCommands();\n+        if (remoteCommands && remoteCommands.length > 0) {\n+          logVerbose(\"telegram: command menu unchanged; skipping sync\");\n+          return;\n+        }\n+        logVerbose(\"telegram: command menu hash matches but remote is empty; re-syncing\");\n+      } catch {\n+        // If getMyCommands fails (network, rate limit, etc.), fall through to\n+        // re-sync rather than trusting the stale hash.\n+        logVerbose(\"telegram: getMyCommands failed; re-syncing command menu\");\n+      }\n     }\n \n     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.\n\n```\n\n- **Observed result after fix**: Hash match + remote non-empty → sync skipped (preserved). Hash match + remote empty → sync proceeds (fixed). Hash match + API error → sync proceeds (fail-safe). Hash mismatch unchanged.\n\n- **What was not tested**: Live Telegram bot. Source-level verification.\n\n## Regression Test Plan\n\n- [ ] Hash match + remote non-empty → skip\n- [ ] Hash match + remote empty → sync\n- [ ] API error → sync (fail-safe)\n- [ ] 16 lines, one file\n\n---\n\n*AI-assisted: built with Claude Code*\n",
+        "branch": "fix/issue-92944-telegram-command-hash",
+        "head_sha": "fc8d986a078780271a7825817c78229353a8c2c1",
+        "author": "zhiqiang26",
+        "labels": [
+          "channel: telegram",
+          "size: S",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof",
+          "proof: 🎥 video"
+        ],
+        "files": [
+          {
+            "path": "extensions/telegram/src/bot-native-command-menu.ts",
+            "additions": 54,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 54,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92945",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92945.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 155,
+          "gatingTotal": 150,
+          "counts": {
+            "SUCCESS": 131,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92945:4707616589:2026-06-15T11:51:32Z:re_review",
+      "comment_id": "4707616589",
+      "comment_version_key": "4707616589:2026-06-15T11:51:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92945#issuecomment-4707616589",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92945,
+      "author": "zhiqiang26",
+      "author_id": 31802073,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-15T11:51:32Z",
+      "comment_updated_at": "2026-06-15T11:51:32Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,219 +149,55 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-15T11:59:00.020Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 367
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-15T11:59:01.309Z",
-          "response_comment_id": "4707674375",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat(providers): add Phala confidential TDX CVM SSH-lease provider",
-        "body": "## Summary\n\nAdds `phala` as a Linux-only `ProviderKindSSHLease` provider that leases a Phala Cloud /\n**dstack confidential Intel TDX CVM**, and — before trusting it — **verifies a genuine\nhardware TDX attestation** that binds the box to the exact code crabbox deployed. Every\nother instance provider leases a plain VM; this one leases a hardware enclave **and proves\nit**. Adapted structurally from `internal/providers/namespaceinstance`, then corrected\nagainst the real `phala`/dstack contract discovered by running it end-to-end on live TDX\nhardware.\n\n## Attestation is the gate (not deferred)\n\nAfter the CVM is reachable, `Acquire` fetches the dstack guest-agent attestation over SSH\n(`/var/run/tappd.sock` → `Tappd.Info` → `app_cert` + `tcb_info`) and verifies, against the\n**app id of the CVM it just deployed**:\n\n1. **RTMR replay** — recompute RTMR0..3 as the SHA-384 fold of the `tcb_info` event log and\n   require they equal the hardware registers. The measurement is genuine and unforgeable; a\n   single tampered event breaks it.\n2. **Quote ↔ measurement** — extract the Intel TDX quote embedded in `app_cert` (X.509 ext\n   OID `1.3.6.1.4.1.62397.1.1`) and require its TD-report MRTD/RTMRs equal `tcb_info`.\n3. **DCAP signature** — `verify.TdxQuote` (`go-tdx-guest`) chains the quote to the **Intel\n   SGX/TDX Root CA**: genuine Intel silicon, not an emulator.\n4. **Identity binding** — the RTMR3 event log's `app-id` must equal the deployed CVM's app\n   id, so the attested enclave is *our* deployment.\n\nOn failure the just-created CVM is **destroyed** (never leaked) and the lease is refused. On\nsuccess the verified `app-id`/`compose-hash`/`rtmr3` are surfaced in lease labels\n(`attested=true`). Gate defaults **on** (`--phala-skip-attestation` to opt out); untrusted\nrepo config may only *tighten* it. Verification is pure-Go (`go-tdx-guest`); the DCAP step\nreaches Intel PCS at runtime (documented host dependency).\n\n## Live proof — real Intel TDX hardware (funded account)\n\nEnd-to-end `crabbox run --provider phala` (no `--keep` → auto-release):\n\n```\nprovisioning provider=phala lease=cbx_bbfab33501f7 slug=attest-… instance_type=tdx.small\nwaiting for …:22 phala cvm ssh ssh-auth… (TLS gateway)\nWARN: Using embedded Intel certificate for TDX attestation root of trust   (DCAP verify)\nattested phala_cvm=ea6874fd… app_id=ea6874fd… compose_hash=fe3df84a… rtmr3=72da6a69…\nprovisioned … state=ready            ← only AFTER attestation passed\nsync complete in 14.8s ; ATTESTED_WORKLOAD_RAN ; exit=0\nreleasing … ✓ CVM crabbox-cbx-bbfab33501f7 deleted successfully   (final CVM count = 0)\n```\n\nThe measurement is bound dynamically: the verified `app_id`/`compose_hash` are this\ndeployment's, not a constant. A separate run with a different compose produced a different\n`rtmr3`, and the gate matched each correctly. The committed unit tests run against a **real\nattestation captured off live TDX silicon** (`testdata/real_attestation_info.json`,\n`real_tdx_quote.bin`): RTMR replay match + mutation-breaks, quote↔tcb_info MRTD/RTMR\nequality, app-id binding (+ wrong-id rejection), and an opt-in network DCAP test\n(`CRABBOX_TDX_DCAP_NETWORK_TEST=1`) that chains the real quote to Intel.\n\n## Real-contract corrections (found by running it live, not by inspection)\n\nThe first live runs failed in five distinct ways the adapted-from-namespace code never\nanticipated; each is fixed and pinned by a test using the **real** CLI shapes:\n\n- **deploy output** prints a leading `Provisioning CVM …` line before the JSON; ids span\n  snake_case (`app_id`, deploy/get) and camelCase (`appId`, list).\n- **`cvms list` omits labels and puts the name under `cvmName`** — ownership is anchored on\n  the **local lease claim by cloud-id**, with `cvms get` (which has the name) used to\n  corroborate the name/lease before any destructive op.\n- **dev-os guest is an immutable appliance** (read-only squashfs root, no package manager,\n  no egress) that already ships rsync/tar/python3 but not git → bootstrap requires only the\n  rsync-sync essentials; work root defaults to the writable `/var/volatile/crabbox` (the old\n  `/work` sat on the read-only root and failed at sync).\n- **SSH is via the dstack TLS gateway** (`<appId>-22.<gateway-domain>:443`, tunneled with\n  `openssl s_client`), and the gateway host is cached in the claim so connections skip a\n  per-connection `cvms get`.\n\n## Security hardening\n\n- **TLS server auth (MITM fix):** the gateway tunnel now passes `-verify_return_error` +\n  `-verify_hostname` (SSH host-key checking is necessarily off for a fresh per-lease CVM, so\n  TLS is the only server authentication; previously it enforced nothing).\n- **Destructive-op safety:** both `ReleaseLease` and `Cleanup` require a matching local claim\n  **and** `cvms get` name corroboration, so a foreign `crabbox-*`-named CVM (or an app-id\n  reused after teardown) is never deleted; a transient/false \"not found\" no longer drops the\n  claim+key and orphans a live billing CVM.\n- No API key is ever passed as a flag (stored `phala` auth only).\n\n## Review\n\nRan a multi-dimension AI adversarial review (ownership-safety, dstack-integration,\ngo-quality, security, test-quality, integration-consistency), each finding independently\nverify-checked. **13 confirmed findings, all addressed** — the two P1s (Cleanup name\ncorroboration; the TLS MITM above), the orphan-on-false-not-found P2s, the docs/marker P3s,\nand the missing-coverage gaps (ReleaseLease positive-destroy is now mutation-checked; Acquire\nrollback-destroy tested).\n\n## Known limitation / honest gaps\n\n- **`status --wait`**: the generic 4-second SSH readiness probe is too tight for a cold\n  TLS-gateway SSH connect, so `crabbox status --wait` can time out even though the box is up\n  (the lease→run→release path is unaffected and proven above). The right fix is a provider\n  `Status` method that reports readiness from CVM state rather than a live probe — a small,\n  bounded follow-up I'd rather land separately than rush here.\n- Adds `go-tdx-guest` (+ protobuf/logger transitive deps) and a runtime Intel-PCS dependency\n  for the DCAP step. Justified for a confidential provider; the full network DCAP test is\n  opt-in to keep CI deterministic.\n- Direct-only (no coordinator/broker); Linux-only; only `tdx.small` exercised live.\n\n## AI assistance\n\nBuilt and reviewed with AI assistance (Claude). The verification recipe (RTMR replay, quote\nextraction, DCAP) was derived by pulling and verifying a real quote off live hardware before\nwriting the Go, and the live proofs above were captured on a funded Phala account.\n",
-        "branch": "feat/phala-provider",
-        "head_sha": "42129fd38ee9ca5dc991f4ccfe2cb70e491fd992",
-        "author": "anagnorisis2peripeteia",
+        "title": "#92944: Telegram commands can remain empty after interrupted sync due to stale local command hash",
+        "body": "## Summary\n\nVerify remote Telegram command state via `getMyCommands()` before skipping command sync based on the local hash cache. This prevents the bot menu from staying empty when the remote state was cleared but the local hash still matches.\n\n## Root Cause\n\nIn `extensions/telegram/src/bot-native-command-menu.ts`, `syncTelegramMenuCommands()` skipped sync when the cached hash matched — without checking whether the remote Telegram commands had been cleared by an interrupted sync or gateway restart.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Before skipping sync, call `getMyCommands()` to verify remote state. If remote is empty, proceed with re-sync. On API errors, also fall through to re-sync.\n\n- **Real environment tested**: Linux 4.19.112-2.el8.x86_64 (x64), Node.js v22.22.0. Source-level verification.\n\n- **Exact steps or command run after this patch**:\n  1. Gateway restart with hash cache present but remote commands cleared\n  2. `getMyCommands()` returns empty list\n  3. Sync proceeds despite matching local hash\n  4. Commands are re-registered\n\n- **Evidence after fix**:\n```diff\ndiff --git a/extensions/telegram/src/bot-native-command-menu.ts b/extensions/telegram/src/bot-native-command-menu.ts\nindex 52a8267b27..e22b5a19d9 100644\n--- a/extensions/telegram/src/bot-native-command-menu.ts\n+++ b/extensions/telegram/src/bot-native-command-menu.ts\n@@ -505,8 +505,22 @@ export function syncTelegramMenuCommands(params: {\n     const currentHash = hashCommandList(commandsToRegister);\n     const cachedHash = readCachedCommandHash(accountId, botIdentity);\n     if (cachedHash === currentHash) {\n-      logVerbose(\"telegram: command menu unchanged; skipping sync\");\n-      return;\n+      // The local hash matches, but the remote Telegram state may have been\n+      // cleared (e.g. after an interrupted sync or gateway restart).  Verify\n+      // with getMyCommands before skipping — if remote is empty we must\n+      // re-register.  See #92944.\n+      try {\n+        const remoteCommands = await bot.api.getMyCommands();\n+        if (remoteCommands && remoteCommands.length > 0) {\n+          logVerbose(\"telegram: command menu unchanged; skipping sync\");\n+          return;\n+        }\n+        logVerbose(\"telegram: command menu hash matches but remote is empty; re-syncing\");\n+      } catch {\n+        // If getMyCommands fails (network, rate limit, etc.), fall through to\n+        // re-sync rather than trusting the stale hash.\n+        logVerbose(\"telegram: getMyCommands failed; re-syncing command menu\");\n+      }\n     }\n \n     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.\n\n```\n\n- **Observed result after fix**: Hash match + remote non-empty → sync skipped (preserved). Hash match + remote empty → sync proceeds (fixed). Hash match + API error → sync proceeds (fail-safe). Hash mismatch unchanged.\n\n- **What was not tested**: Live Telegram bot. Source-level verification.\n\n## Regression Test Plan\n\n- [ ] Hash match + remote non-empty → skip\n- [ ] Hash match + remote empty → sync\n- [ ] API error → sync (fail-safe)\n- [ ] 16 lines, one file\n\n---\n\n*AI-assisted: built with Claude Code*\n",
+        "branch": "fix/issue-92944-telegram-command-hash",
+        "head_sha": "fc8d986a078780271a7825817c78229353a8c2c1",
+        "author": "zhiqiang26",
         "labels": [
-          "rating: 🧂 unranked krab",
+          "channel: telegram",
+          "size: S",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
           "P2",
-          "merge-risk: 🚨 security-boundary",
-          "proof: sufficient",
-          "status: ⏳ waiting on author",
-          "feature: ✨ showcase",
-          "merge-risk: 🚨 availability"
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof",
+          "proof: 🎥 video"
         ],
         "files": [
           {
-            "path": "docs/features/configuration.md",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/providers/README.md",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/providers/phala.md",
-            "additions": 117,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "docs/providers/provider-metadata.json",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "go.mod",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "go.sum",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/app.go",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/claim.go",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/config.go",
-            "additions": 69,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/phala_config_test.go",
-            "additions": 131,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/cli/phala_proxy.go",
-            "additions": 234,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/cli/phala_proxy_test.go",
-            "additions": 393,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/cli/ssh.go",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/providers/all/all.go",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/providers/phala/attestation.go",
-            "additions": 421,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/phala/attestation_test.go",
-            "additions": 269,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/phala/backend.go",
-            "additions": 1640,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/phala/backend_test.go",
-            "additions": 2074,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/phala/default-compose.yml",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/phala/flags.go",
-            "additions": 81,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/phala/provider.go",
-            "additions": 99,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/phala/testdata/real_attestation_info.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/phala/testdata/real_tdx_quote.bin",
-            "additions": 0,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scripts/live-phala-smoke.sh",
-            "additions": 182,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scripts/live-phala-smoke.test.js",
-            "additions": 187,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scripts/live-smoke.sh",
-            "additions": 14,
-            "deletions": 0,
+            "path": "extensions/telegram/src/bot-native-command-menu.ts",
+            "additions": 54,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 26,
-        "additions": 5975,
-        "deletions": 1,
+        "changedFiles": 1,
+        "additions": 54,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-crabbox-367",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-367.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92945",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92945.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 6,
-          "gatingTotal": 6,
+          "total": 155,
+          "gatingTotal": 150,
           "counts": {
-            "SUCCESS": 6
+            "SUCCESS": 131,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
@@ -283,20 +206,157 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92945:4707437777:2026-06-15T11:26:37Z:re_review",
+      "comment_id": "4707437777",
+      "comment_version_key": "4707437777:2026-06-15T11:26:37Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92945#issuecomment-4707437777",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92945,
+      "author": "zhiqiang26",
+      "author_id": 31802073,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-15T11:26:37Z",
+      "comment_updated_at": "2026-06-15T11:26:37Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92945:4703656689:2026-06-15T00:50:31Z:re_review",
+      "comment_id": "4703656689",
+      "comment_version_key": "4703656689:2026-06-15T00:50:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92945#issuecomment-4703656689",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92945,
+      "author": "zhiqiang26",
+      "author_id": 31802073,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-15T00:50:31Z",
+      "comment_updated_at": "2026-06-15T00:50:31Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92945:4702338779:2026-06-14T16:20:40Z:re_review",
+      "comment_id": "4702338779",
+      "comment_version_key": "4702338779:2026-06-14T16:20:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92945#issuecomment-4702338779",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92945,
+      "author": "zhiqiang26",
+      "author_id": 31802073,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-14T16:20:40Z",
+      "comment_updated_at": "2026-06-14T16:20:40Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92945:4702269855:2026-06-14T15:53:16Z:re_review",
+      "comment_id": "4702269855",
+      "comment_version_key": "4702269855:2026-06-14T15:53:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92945#issuecomment-4702269855",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92945,
+      "author": "zhiqiang26",
+      "author_id": 31802073,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-14T15:53:16Z",
+      "comment_updated_at": "2026-06-14T15:53:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5218,
+    "total_ms": 4807,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 579
+        "ms": 406
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1409
+        "ms": 1963
       },
       {
         "name": "classify_commands",
@@ -304,7 +364,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3203
+        "ms": 2411
       },
       {
         "name": "append_ledger",
