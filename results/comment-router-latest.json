@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T08:26:44.397Z",
-  "repo": "openclaw/fs-safe",
+  "generated_at": "2026-06-15T08:26:55.487Z",
+  "repo": "openclaw/crabfleet",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-15T05:26:42.894Z",
+  "since": "2026-06-15T05:26:55.182Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    29
+    37
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,125 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/fs-safe:29:4704188784:2026-06-15T06:32:43Z:clawsweeper_auto_repair",
-      "comment_id": "4704188784",
-      "comment_version_key": "4704188784:2026-06-15T06:32:43Z",
-      "comment_url": "https://github.com/openclaw/fs-safe/pull/29#issuecomment-4704188784",
-      "repo": "openclaw/fs-safe",
-      "target_branch": null,
-      "issue_number": 29,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-15T03:18:51Z",
-      "comment_updated_at": "2026-06-15T06:32:43Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=8f8b7a5c53b2e224883403d224cb1d9cfcf71b91)",
-      "review_summary": "The branch adds `WalkDirectoryFailure` and `failedDirs` to both walk helpers, records `realpath`/`readdir` failures, adds unreadable-directory coverage, and updates README, walk docs, and CHANGELOG.\n\nReproducibility: yes. from source inspection: current main catches `realpath` and `readdir` failures in both walkers and returns without recording them. I did not run a chmod reproduction because this review is read-only, but the PR adds targeted tests for that path.",
-      "review_followup": "- [P2] Human maintainer/API-shape review is needed before merge; the mechanical cleanup is to remove the changelog hunk.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "8f8b7a5c53b2e224883403d224cb1d9cfcf71b91",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(walk): report unreadable directories in failedDirs",
-        "body": "## Summary\r\n\r\n`walkDirectory()` / `walkDirectorySync()` swallow `realpath`/`readdir` errors at **every** level — including the walk root — with a bare `catch { return; }`, then return a partial or empty `entries` list. A caller that reconciles destructive state from the listing (stale-row pruning, exported-corpus reconciliation, etc.) cannot tell a transient `EIO`/`EACCES`/`ESTALE` read failure from a genuinely empty directory, so a single blip looks like a mass deletion.\r\n\r\nThis adds **`WalkDirectoryResult.failedDirs`**: every directory the walk could not enumerate is recorded with its absolute `path`, root-relative `relativePath`, `depth`, and the thrown `error`. Callers can now classify a benign missing-directory race (`ENOENT`) versus a real read failure and skip destructive work when the scan was not authoritative.\r\n\r\nBehaviour is otherwise unchanged — unreadable directories are still skipped, and entries from the readable parts of the tree are still returned. The field is additive; existing consumers that ignore it are unaffected.\r\n\r\n```ts\r\ntype WalkDirectoryFailure = { path: string; relativePath: string; depth: number; error: unknown };\r\ntype WalkDirectoryResult = { entries; scannedEntryCount; truncated; failedDirs: WalkDirectoryFailure[] };\r\n```\r\n\r\n## Motivation\r\n\r\nOpenClaw's memory index treats a directory listing as the source of truth for destructive maintenance (stale-row pruning of its search index). Because `walkDirectory` swallows `realpath`/`readdir` errors, a transient `EIO`/`EACCES`/`ESTALE` blip currently yields an empty/partial listing that the prune treats as mass deletion — a live index-wipe hazard on `main`.\r\n\r\nA pending OpenClaw fix guards this by adding an explicit `readdir` probe on each scan root *before* walking it, but that costs a second full `readdir` per root on networked filesystems and still only covers the root, leaving sub-tree read failures invisible. With `failedDirs`, that fix can detect an incomplete scan straight from the walk result — no probe, one `readdir` per directory — and catch failures anywhere in the tree, not just at the root.\r\n\r\n## What changed\r\n\r\n- `src/walk.ts`: new `WalkDirectoryFailure` type and `failedDirs` on `WalkDirectoryResult`; both walkers record the `realpath`/`readdir` catch sites via a shared `recordFailedDir` helper. Symlink-target kind-resolution failures are intentionally **not** recorded (they are not directory-enumeration failures).\r\n- `test/new-primitives.test.ts`: unreadable sub-tree (readable siblings preserved + failure reported with `EACCES`), unreadable walk root (empty listing + reported), the synchronous walker, and the empty-`failedDirs` contract for a fully readable tree.\r\n- `docs/walk.md`, `README.md`: document `failedDirs` and the incomplete-vs-empty distinction for pruning callers.\r\n\r\n## Verification\r\n\r\nRun on macOS, Node 25, `pnpm check` (lint:file-size + lint:fs-boundary + build + test):\r\n\r\n- `pnpm check` — **green**: both lints pass, `tsc` builds clean, **412 passed | 3 skipped (415)** across 37 files.\r\n- New directory-walking tests: **6 passed** (4 new + 2 pre-existing), and confirmed RED first (each new test failed with `failedDirs` undefined before the implementation).\r\n",
-        "branch": "ak/walk-failed-dirs",
-        "head_sha": "178122f1532932491ca2dc384cf99d20295f5ebd",
-        "author": "amknight",
-        "labels": [
-          "rating: 🦐 gold shrimp",
-          "P2",
-          "status: ⏳ waiting on author",
-          "merge-risk: 🚨 compatibility"
-        ],
-        "files": [
-          {
-            "path": "README.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/walk.md",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/walk.ts",
-            "additions": 52,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/new-primitives.test.ts",
-            "additions": 118,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-fs-safe-29",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-fs-safe-29.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 12,
-          "gatingTotal": 11,
-          "counts": {
-            "SUCCESS": 12
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require an open issue or PR"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1843,
+    "total_ms": 490,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 414
+        "ms": 293
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1077
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 332
+        "ms": 185
       },
       {
         "name": "append_ledger",
