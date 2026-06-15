@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T02:52:07.561Z",
+  "generated_at": "2026-06-15T02:52:30.341Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T23:52:07.089Z",
+  "since": "2026-06-14T23:52:28.211Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    93122
+    85494
   ],
-  "comment_ids": [
-    4522985457
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
+  "scanned_comments": 4,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,58 +31,119 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:93122:4704074675:2026-06-15T02:51:05Z:re_review",
-      "comment_id": "4704074675",
-      "comment_version_key": "4704074675:2026-06-15T02:51:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93122#issuecomment-4704074675",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85494:4522307935:2026-06-15T02:52:21Z:clawsweeper_needs_human",
+      "comment_id": "4522307935",
+      "comment_version_key": "4522307935:2026-06-15T02:52:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85494#issuecomment-4522307935",
       "repo": "openclaw/openclaw",
-      "issue_number": 93122,
-      "author": "zhangqueping",
-      "author_id": 3436352,
+      "issue_number": 85494,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-15T02:51:05Z",
-      "comment_updated_at": "2026-06-15T02:51:05Z",
-      "status_comment_id": 4704074838,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "comment_created_at": "2026-05-22T19:53:50Z",
+      "comment_updated_at": "2026-06-15T02:52:21Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=6b2f429aedae10c607c067e4a7574e24ae02b737)",
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "3a20fa4e3d0cec6a195f1ce50f9766f90e771b10",
-      "finding_id": "review-feedback",
+      "expected_head_sha": "6b2f429aedae10c607c067e4a7574e24ae02b737",
+      "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(plugins): memoize resolvePackageJsonPath to stop per-turn realpath storm",
+        "body": "## Problem\n\nOn a multi-agent gateway, Slack-triggered turns intermittently wedge at `embedded_run:started` and never reach `model_call` (see #85251 — same `embedded_run` wedge).\n\nA CPU profile of the gateway under multi-agent load (8-min `--cpu-prof`, OpenClaw 2026.5.20) shows the main thread spending **~97s of an 8-minute window in *synchronous* filesystem syscalls — ~51s in `realpathSync` alone**. The dominant call stacks:\n\n```\nrealpathSync <- safeRealpathSync <- isPathInsideWithRealpath\n  <- resolvePackageJsonPath <- buildInstalledManifestRegistryIndexKey\nrealpathSync <- safeRealpathSync <- resolvePackageJsonPath\n  <- buildInstalledPluginIndexRecords\n```\n\n`resolveInstalledManifestRegistryIndexFingerprint()` (reached per-turn via `agents/models-config.ts`) and `buildInstalledPluginIndexRecords()` re-resolve **every installed plugin's `package.json` path on every turn**, and each `resolvePackageJsonPath()` call performs several synchronous `realpathSync` calls.\n\nUnder load this floods the event loop — the gateway's own `liveness warning` diagnostics show `eventLoopDelayMaxMs` up to **28s**. A multi-second event-loop freeze breaks the async `embedded_run:started → model_call` handoff, which is the wedge in #85251. It is gateway-level (runtime-agnostic), which is why it affects both the Codex and `claude-cli` runtimes.\n\n## Change\n\nMemoize the two `resolvePackageJsonPath()` functions (`manifest-registry-installed.ts` and `installed-plugin-index-record-builder.ts`). The installed-plugin filesystem layout is stable for the process lifetime, so resolving each `(rootDir, package.json path)` once is sufficient. The resolution logic itself is unchanged — only wrapped in a process-lifetime cache keyed on the stable input paths. This collapses the repeated per-turn `realpathSync` storm.\n\n## Notes / limitations\n\n- I could **not** build/run the full monorepo locally, so this has not been CI-verified on my side — please run the test suite. The change is a straightforward memoization of functions that are pure for the process lifetime.\n- This targets the two `resolvePackageJsonPath` hot paths (the largest chunk of the profile). The profile shows secondary synchronous-FS cost in `root-path`/`root-file` resolution and `discoverInDirectory` that is **not** addressed here.\n- If a plugin's existing `package.json` location can change without a gateway restart, the cache would need invalidation on that event. New plugins are unaffected (a new `rootDir` is simply a fresh cache key).\n\nRefs #85251.\n",
+        "branch": "fix/plugin-realpath-storm",
+        "head_sha": "6b2f429aedae10c607c067e4a7574e24ae02b737",
+        "author": "marcioadg",
+        "labels": [
+          "size: XS",
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/plugins/installed-plugin-index-record-builder.ts",
+            "additions": 17,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/manifest-registry-installed.ts",
+            "additions": 0,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85494",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85494.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 72,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 923,
+    "total_ms": 2469,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 459
+        "ms": 397
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1719
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 451
+        "ms": 328
       },
       {
         "name": "append_ledger",
