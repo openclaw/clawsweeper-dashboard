@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T13:10:43.640Z",
-  "repo": "steipete/summarize",
+  "generated_at": "2026-06-15T13:10:55.662Z",
+  "repo": "steipete/vox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-15T10:10:43.279Z",
+  "since": "2026-06-15T10:10:54.115Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    305
+    13
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,30 +29,374 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:steipete/vox:13:4707812677:2026-06-15T13:10:50Z:clawsweeper_auto_repair",
+      "comment_id": "4707812677",
+      "comment_version_key": "4707812677:2026-06-15T13:10:50Z",
+      "comment_url": "https://github.com/steipete/vox/pull/13#issuecomment-4707812677",
+      "repo": "steipete/vox",
+      "target_branch": null,
+      "issue_number": 13,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-15T12:15:19Z",
+      "comment_updated_at": "2026-06-15T13:10:50Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=f7aba5aff9b5bb7f929214195ca0b4c1588f1e9e)",
+      "review_summary": "The PR adds VOX_AGENT_TIMEOUT_MS, per-query HTTP/subprocess agent timeouts, query_agent error recovery, and timeout/sanitization regression tests.\n\nReproducibility: yes. from source inspection: current main awaits query_agent without a timeout or error recovery, so a stalled subprocess or HTTP agent can leave the call unresolved. I did not run the live path because this review is read-only.",
+      "review_followup": "- [P2] The remaining action is maintainer judgment on the upgrade behavior, not a safe automated code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "f7aba5aff9b5bb7f929214195ca0b4c1588f1e9e",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agent): add configurable timeout for query_agent calls",
+        "body": "## Summary\n\n- `query_agent` calls (HTTP or subprocess agent) could hang indefinitely if the agent never responds, leaving the call stuck.\n- Adds `VOX_AGENT_TIMEOUT_MS` (default `10000`) to bound every `query_agent` call.\n- On timeout (or any other agent error), `handleResponseDone` now sends an error `function_call_output` plus a `response.create` so the model can recover and tell the caller something went wrong, instead of leaving the conversation hanging.\n- `createHttpAgentClient` previously shared a single `AbortController` across all queries on a client; once one query timed out and aborted it, every subsequent query on that client would fail immediately. Reworked to use a per-query `AbortController`, so a timeout on one `query_agent` call doesn't break later calls in the same conversation.\n- `createSubprocessAgentClient` gets a per-request timer that rejects and cleans up the pending map entry without killing the child process.\n- **Sanitization (addresses review feedback):** non-OK HTTP agent responses previously sent their raw response body straight to the model in `function_call_output`. `AgentError` now separates a generic model-facing `message` (\"Agent request failed\") from a `detail` string that's written only to the call's `events.jsonl` log, so internal error bodies (stack traces, connection strings, etc.) never reach the model or caller.\n\n## Real behavior proof\n\nRan the actual `vox serve` process against a fake Realtime backend (`ws://127.0.0.1:8083`, a small `ws` stand-in) and a real Twilio-shaped caller socket, with two scenarios:\n\n**Scenario A — stalled subprocess agent (`VOX_AGENT_CMD='node -e \"process.stdin.resume()\"'`, `VOX_AGENT_TIMEOUT_MS=2000`)**\n\nRealtime stand-in log:\n```\n12:46:24.417Z provider: <- session.update {...}\n12:46:24.719Z provider: -> response.done (query_agent function_call)\n12:46:26.721Z provider: <- conversation.item.create {\"type\":\"conversation.item.create\",\"item\":{\"type\":\"function_call_output\",\"call_id\":\"call_timeout_demo\",\"output\":\"{\\\"ok\\\":false,\\\"error\\\":\\\"Agent query timed out after 2000ms\\\"}\"}}\n12:46:26.721Z provider: <- response.create {\"type\":\"response.create\"}\n```\n`events.jsonl`:\n```json\n{\"t\":\"2026-06-15T12:46:26.721Z\",\"source\":\"vox\",\"payload\":{\"type\":\"tool.error\",\"error\":\"Agent query timed out after 2000ms\"}}\n```\nThe query timed out after ~2s (as configured) and the model received both the error output and a follow-up `response.create` — the call kept going instead of hanging.\n\n**Scenario B — broken HTTP agent (`VOX_AGENT_URL` pointing at a server returning `500` with a body containing a fake DB connection string)**\n\nRealtime stand-in log:\n```\n12:47:22.591Z provider: -> response.done (query_agent function_call)\n12:47:22.620Z provider: <- conversation.item.create {\"type\":\"conversation.item.create\",\"item\":{\"type\":\"function_call_output\",\"call_id\":\"call_timeout_demo\",\"output\":\"{\\\"ok\\\":false,\\\"error\\\":\\\"Agent request failed\\\"}\"}}\n12:47:22.620Z provider: <- response.create {\"type\":\"response.create\"}\n```\n`events.jsonl`:\n```json\n{\"t\":\"2026-06-15T12:47:22.620Z\",\"source\":\"vox\",\"payload\":{\"type\":\"tool.error\",\"error\":\"Agent HTTP 500: internal error: db connection string postgres://user:secret123@db.internal/prod\"}}\n```\nThe model only ever sees `\"Agent request failed\"` — the response body (including the fake credential) is confined to the server-side `events.jsonl` log.\n\n## Test plan\n\n- [x] `pnpm run lint`\n- [x] `pnpm run typecheck`\n- [x] `pnpm test` — 53/53 passing, including:\n  - `test/server-agent-timeout.test.ts` — stalled subprocess agent produces an error `function_call_output` + `response.create`; HTTP agent failure sends a generic error to the model while logging the full response body\n  - `test/agent.test.ts` — subprocess timeout, HTTP timeout, HTTP client recovers on the next query after a prior timeout, and HTTP failures are surfaced via `AgentError` with a sanitized message\n  - `test/config.test.ts` — `VOX_AGENT_TIMEOUT_MS` defaults/parses/validates\n- [x] `pnpm run build`\n\n## Notes for maintainers\n\n- The `10000`ms default timeout changes existing behavior for installs relying on (previously) unbounded agent calls. Flagging this for explicit sign-off — happy to adjust the default or add a way to opt out of the timeout if that's preferred.\n",
+        "branch": "fix/agent-query-timeout",
+        "head_sha": "f7aba5aff9b5bb7f929214195ca0b4c1588f1e9e",
+        "author": "joevenner",
+        "labels": [
+          "P2",
+          "proof: sufficient",
+          "rating: 🦐 gold shrimp",
+          "status: ⏳ waiting on author",
+          "merge-risk: 🚨 compatibility"
+        ],
+        "files": [
+          {
+            "path": ".env.example",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agent.ts",
+            "additions": 61,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/server.ts",
+            "additions": 30,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/simulate.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/agent.test.ts",
+            "additions": 79,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/config.test.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/server-agent-timeout.test.ts",
+            "additions": 189,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/server-openai-disconnect.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/server-teardown.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/server-truncate.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/server.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/simulate.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 13,
+        "additions": 417,
+        "deletions": 30,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-steipete-vox-13",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-vox-13.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 3,
+          "gatingTotal": 3,
+          "counts": {
+            "FAILURE": 2,
+            "SUCCESS": 1
+          },
+          "blockers": [
+            "test (22):FAILURE",
+            "test (24):FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "test (22):FAILURE",
+            "test (24):FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:steipete/vox:13:4708204643:2026-06-15T13:04:23Z:re_review",
+      "comment_id": "4708204643",
+      "comment_version_key": "4708204643:2026-06-15T13:04:23Z",
+      "comment_url": "https://github.com/steipete/vox/pull/13#issuecomment-4708204643",
+      "repo": "steipete/vox",
+      "target_branch": null,
+      "issue_number": 13,
+      "author": "joeVenner",
+      "author_id": 61122897,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-15T13:04:23Z",
+      "comment_updated_at": "2026-06-15T13:04:23Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-15T13:10:56.871Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 13
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-15T13:10:58.379Z",
+          "response_comment_id": "4708204983",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agent): add configurable timeout for query_agent calls",
+        "body": "## Summary\n\n- `query_agent` calls (HTTP or subprocess agent) could hang indefinitely if the agent never responds, leaving the call stuck.\n- Adds `VOX_AGENT_TIMEOUT_MS` (default `10000`) to bound every `query_agent` call.\n- On timeout (or any other agent error), `handleResponseDone` now sends an error `function_call_output` plus a `response.create` so the model can recover and tell the caller something went wrong, instead of leaving the conversation hanging.\n- `createHttpAgentClient` previously shared a single `AbortController` across all queries on a client; once one query timed out and aborted it, every subsequent query on that client would fail immediately. Reworked to use a per-query `AbortController`, so a timeout on one `query_agent` call doesn't break later calls in the same conversation.\n- `createSubprocessAgentClient` gets a per-request timer that rejects and cleans up the pending map entry without killing the child process.\n- **Sanitization (addresses review feedback):** non-OK HTTP agent responses previously sent their raw response body straight to the model in `function_call_output`. `AgentError` now separates a generic model-facing `message` (\"Agent request failed\") from a `detail` string that's written only to the call's `events.jsonl` log, so internal error bodies (stack traces, connection strings, etc.) never reach the model or caller.\n\n## Real behavior proof\n\nRan the actual `vox serve` process against a fake Realtime backend (`ws://127.0.0.1:8083`, a small `ws` stand-in) and a real Twilio-shaped caller socket, with two scenarios:\n\n**Scenario A — stalled subprocess agent (`VOX_AGENT_CMD='node -e \"process.stdin.resume()\"'`, `VOX_AGENT_TIMEOUT_MS=2000`)**\n\nRealtime stand-in log:\n```\n12:46:24.417Z provider: <- session.update {...}\n12:46:24.719Z provider: -> response.done (query_agent function_call)\n12:46:26.721Z provider: <- conversation.item.create {\"type\":\"conversation.item.create\",\"item\":{\"type\":\"function_call_output\",\"call_id\":\"call_timeout_demo\",\"output\":\"{\\\"ok\\\":false,\\\"error\\\":\\\"Agent query timed out after 2000ms\\\"}\"}}\n12:46:26.721Z provider: <- response.create {\"type\":\"response.create\"}\n```\n`events.jsonl`:\n```json\n{\"t\":\"2026-06-15T12:46:26.721Z\",\"source\":\"vox\",\"payload\":{\"type\":\"tool.error\",\"error\":\"Agent query timed out after 2000ms\"}}\n```\nThe query timed out after ~2s (as configured) and the model received both the error output and a follow-up `response.create` — the call kept going instead of hanging.\n\n**Scenario B — broken HTTP agent (`VOX_AGENT_URL` pointing at a server returning `500` with a body containing a fake DB connection string)**\n\nRealtime stand-in log:\n```\n12:47:22.591Z provider: -> response.done (query_agent function_call)\n12:47:22.620Z provider: <- conversation.item.create {\"type\":\"conversation.item.create\",\"item\":{\"type\":\"function_call_output\",\"call_id\":\"call_timeout_demo\",\"output\":\"{\\\"ok\\\":false,\\\"error\\\":\\\"Agent request failed\\\"}\"}}\n12:47:22.620Z provider: <- response.create {\"type\":\"response.create\"}\n```\n`events.jsonl`:\n```json\n{\"t\":\"2026-06-15T12:47:22.620Z\",\"source\":\"vox\",\"payload\":{\"type\":\"tool.error\",\"error\":\"Agent HTTP 500: internal error: db connection string postgres://user:secret123@db.internal/prod\"}}\n```\nThe model only ever sees `\"Agent request failed\"` — the response body (including the fake credential) is confined to the server-side `events.jsonl` log.\n\n## Test plan\n\n- [x] `pnpm run lint`\n- [x] `pnpm run typecheck`\n- [x] `pnpm test` — 53/53 passing, including:\n  - `test/server-agent-timeout.test.ts` — stalled subprocess agent produces an error `function_call_output` + `response.create`; HTTP agent failure sends a generic error to the model while logging the full response body\n  - `test/agent.test.ts` — subprocess timeout, HTTP timeout, HTTP client recovers on the next query after a prior timeout, and HTTP failures are surfaced via `AgentError` with a sanitized message\n  - `test/config.test.ts` — `VOX_AGENT_TIMEOUT_MS` defaults/parses/validates\n- [x] `pnpm run build`\n\n## Notes for maintainers\n\n- The `10000`ms default timeout changes existing behavior for installs relying on (previously) unbounded agent calls. Flagging this for explicit sign-off — happy to adjust the default or add a way to opt out of the timeout if that's preferred.\n",
+        "branch": "fix/agent-query-timeout",
+        "head_sha": "f7aba5aff9b5bb7f929214195ca0b4c1588f1e9e",
+        "author": "joevenner",
+        "labels": [
+          "P2",
+          "proof: sufficient",
+          "rating: 🦐 gold shrimp",
+          "status: ⏳ waiting on author",
+          "merge-risk: 🚨 compatibility"
+        ],
+        "files": [
+          {
+            "path": ".env.example",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agent.ts",
+            "additions": 61,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/server.ts",
+            "additions": 30,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/simulate.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/agent.test.ts",
+            "additions": 79,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/config.test.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/server-agent-timeout.test.ts",
+            "additions": 189,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/server-openai-disconnect.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/server-teardown.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/server-truncate.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/server.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/simulate.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 13,
+        "additions": 417,
+        "deletions": 30,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-steipete-vox-13",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-vox-13.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 3,
+          "gatingTotal": 3,
+          "counts": {
+            "FAILURE": 2,
+            "SUCCESS": 1
+          },
+          "blockers": [
+            "test (22):FAILURE",
+            "test (24):FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "test (22):FAILURE",
+            "test (24):FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 607,
+    "total_ms": 5062,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 350
+        "ms": 476
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1055
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 246
+        "ms": 3502
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
