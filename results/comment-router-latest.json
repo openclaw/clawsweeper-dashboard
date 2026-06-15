@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T11:01:38.418Z",
+  "generated_at": "2026-06-15T11:01:50.629Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-15T08:01:35.464Z",
+  "since": "2026-06-15T08:01:48.583Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    91957
+    89214
   ],
   "comment_ids": [
-    4707198499
+    4596239261
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,80 +33,84 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:91957:4707198499:2026-06-15T10:59:21Z:re_review",
-      "comment_id": "4707198499",
-      "comment_version_key": "4707198499:2026-06-15T10:59:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91957#issuecomment-4707198499",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89214:4596239261:2026-06-15T11:00:45Z:clawsweeper_auto_repair",
+      "comment_id": "4596239261",
+      "comment_version_key": "4596239261:2026-06-15T11:00:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89214#issuecomment-4596239261",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 91957,
-      "author": "amknight",
-      "author_id": 15041791,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-06-15T10:59:21Z",
-      "comment_updated_at": "2026-06-15T10:59:21Z",
+      "issue_number": 89214,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-01T20:27:18Z",
+      "comment_updated_at": "2026-06-15T11:00:45Z",
       "status_comment_id": null,
-      "trigger": "slash",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=8dad90fe96080b1148458e3194d519753f308268)",
+      "review_summary": "The PR adds optional WhatsApp watchdog timing config at channel/account scope, documents it, and passes configured values into the existing WhatsApp Web monitor tuning object.\n\nPR surface: Source +61, Tests +57, Docs +14. Total +132 across 5 files.\n\nReproducibility: yes. source inspection gives a high-confidence path: current main passes no watchdog fields to `monitorWebChannel`, while the monitor already falls back to hardcoded defaults. I did not run a live WhatsApp gateway repro in this read-only review.",
+      "review_followup": "- [P1] The remaining blockers are concrete file-level repairs on a maintainer-modifiable PR branch, plus a rebase because live GitHub reports the branch as conflicting.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "8dad90fe96080b1148458e3194d519753f308268",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "perf(sessions): share one enumeration across archive retention sweeps",
-        "body": "## Summary\n\nEvery non-warn session-store save runs archived-transcript retention cleanup, and reset-archive retention **defaults on** (`resolveResetArchiveRetentionMs` falls back to `pruneAfterMs` when unset). So `saveSessionStoreUnlocked` invoked `cleanupArchivedSessionTranscripts` twice back-to-back — reason `\"deleted\"`, then reason `\"reset\"` — and each call performed its own full `readdir` of the per-agent sessions directory. Session-store saves happen per agent turn, which means active agents paid **two full directory enumerations per turn** by default.\n\nA production NFSv4.1 profile (Node trace of an active agent) captured exactly this signature: scans of `agents/main/sessions` in back-to-back pairs (inter-scan gaps of +0.00s), 3.4–3.8s per scan (~100 entries, with the NFS server amplifying each READDIR into per-entry metadata reads), each pair immediately preceding the `sessions.json` store write — ~21.7s of directory enumeration inside a 27-second active window. The pairs also serialize against transcript-append lock traffic on the same directory (lock open/unlink stalls of 2.6–3.5s while a scan is in flight).\n\nThe fix makes retention rules share one listing:\n\n- `cleanupArchivedSessionTranscripts` now accepts `rules: Array<{ reason, olderThanMs }>` and applies every rule from a **single `readdir` per directory**. An archive filename carries exactly one `.{reason}.{timestamp}` suffix, so per-entry matching is first-match.\n- Store maintenance passes both reasons in one call (one enumeration per save instead of two). The cron session reaper migrates to the same shape.\n- Invalid rules are dropped up front; a call with no valid rules never lists.\n- Rider in the same hot-path family: the disk-budget sweep's `readSessionsDirFiles` stat'd every session file **serially**; stats now run with bounded concurrency (8), so a budget sweep no longer serializes ~N per-file latency round trips on networked filesystems.\n\nBehavior is otherwise preserved: identical removal semantics per reason/threshold, same `removed`/`scanned` accounting, all callers migrated in this change.\n\nRelated work on the other enumeration sources the same investigation surfaced: #91091 (destructive sweeps must not act on failed enumerations) and #91841 (memory delta syncs stop full-scanning). This PR removes the store-save scan-pair source the trace actually captured.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/gateway/session-transcript-files.fs.archive-cleanup.test.ts src/gateway/session-transcript-files.fs.archive-events.test.ts src/config/sessions/disk-budget.test.ts src/config/sessions/store.pruning.integration.test.ts src/commands/sessions-cleanup.test.ts` — all 3 Vitest shards passed.\n- `pnpm tsgo:core`, `pnpm tsgo:core:test`, `node scripts/run-oxlint.mjs` on touched files — clean.\n- New tests prove: multiple rules served by a single `readdir` (spy-counted); per-rule age thresholds applied independently; archives whose reason has no rule are preserved; invalid rules dropped with no listing at all.\n- Not run here: a live NFS re-trace. The profile's own verification protocol applies directly — the back-to-back scan pairs preceding each `sessions.json` write should become single scans.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "ak/session-disk-budget-sweep",
-        "head_sha": "26ff3ebbe361674ce23ec8c721595e54584248c8",
-        "author": "amknight",
+        "title": "whatsapp: expose connection watchdog tuning in account config",
+        "body": "## Summary\n\nAdds optional `channels.whatsapp.watchdog.*` (and per-account override at `channels.whatsapp.accounts.<id>.watchdog.*`) to the WhatsApp channel config schema, plumbed through to the existing `WebMonitorTuning` parameter of `monitorWebChannel`.\n\nFixes #89210. Significantly reduces the rate at which #89115 fires for operators whose use pattern is idle-prone.\n\n## Background\n\nThe `WebMonitorTuning` type at `extensions/whatsapp/src/auto-reply/types.ts:36-50` already includes the three knobs the connection watchdog reads. The gateway caller at `extensions/whatsapp/src/channel.ts:316` constructs the `tuning` object with only `{statusSink, accountId, channelRuntime}`, so the receivers fall back to internal defaults:\n\n| Knob | Internal default | Meaning |\n|---|---|---|\n| `transportTimeoutMs` | 300_000 (5 min) | WebSocket silent (no ping/pong) |\n| `messageTimeoutMs`   | 1_800_000 (30 min) | No app messages in/out |\n| `watchdogCheckMs`    | 60_000 (1 min) | Evaluation interval |\n\nWhen `connection.openedAfterRecentInbound === true` (basically any active chat session per `connection-controller.ts:385`), the app-silence trigger uses `messageTimeoutMs * 1`. Otherwise `messageTimeoutMs * 4`.\n\nFor deployments whose use pattern includes hour-long idle gaps between user-initiated turns (personal assistants, on-call bots, infrequent-message workloads), the 30-min default recycles the WhatsApp Web socket on a regular cadence during idle. Any in-flight dispatch that races the abort window leaves `pendingFinalDelivery` stuck on the session — the upstream dispatch race documented in #89115. The race fires roughly as often as the watchdog cycles.\n\nThis PR doesn't touch the watchdog mechanism. It only adds the config plumbing so operators can move the trigger out of their normal idle window.\n\n## Changes\n\n| File | What |\n|---|---|\n| `src/config/zod-schema.providers-whatsapp.ts` | Add `WhatsAppWatchdogSchema` + include in `buildWhatsAppCommonShape` so both channel-root and per-account paths accept it |\n| `extensions/whatsapp/src/channel.ts` | Read `account.watchdog` in `startAccount` and spread defined fields into the `tuning` arg of `monitorWebChannel` |\n| `extensions/whatsapp/src/accounts.ts` | Add `watchdog?: WhatsAppAccountConfig[\"watchdog\"]` to `ResolvedWhatsAppAccount` + return from the resolver (added in 8dad90fe — the static-type plumbing pair to the zod-inferred type) |\n| `docs/channels/whatsapp.md` | New bullet under \"Runtime model\" with a JSON5 example. Includes explicit precedence note: per-account overrides channel-level, same as `dmHistoryLimit` / `mediaMaxMb` |\n| `src/config/zod-schema.providers-whatsapp.test.ts` | 4 new cases: channel-level, account-level, strict-reject extras, reject non-positive values |\n\n## Design notes\n\n- **All three fields optional.** Unset preserves existing behavior — no operator action required on upgrade.\n- **`.int().positive()`.** Rejects 0 and negative. An explicit \"disable the watchdog\" would also disable the transport-dead check, which is the genuinely-useful safety belt. Operators who want the WebSocket-level check but a very lenient app-silence cap can set `messageTimeoutMs` to a large value (e.g., 8h, 24h).\n- **`.strict()`.** Surfaces typos in the config; consistent with adjacent schemas (`WhatsAppAckReactionSchema`, `WhatsAppPluginHooksSchema`).\n- **Spread pattern in `channel.ts`.** Only spreads fields that are `!== undefined` so an empty `watchdog: {}` and an absent `watchdog` both behave identically (receiver applies its own internal defaults).\n- **Channel-root and per-account.** Lives in `buildWhatsAppCommonShape` so both levels accept it; the existing config-merge surface handles precedence (account overrides channel) the same as `dmHistoryLimit` and the other common keys.\n\n## Real behavior proof\n\nProduction setup: single-tenant `openclaw 2026.5.28` gateway in Docker, single WhatsApp account, run as a personal assistant with hour-long idle gaps between user turns.\n\n**Before** — 30-min cycle observed under default `messageTimeoutMs`. Container logs `2026-06-01T17:53:37Z` and `T18:23:40Z` (exactly 30 min apart):\n\n```\n17:53:37 [whatsapp] watchdog timeout (app-silent) - restarting connection\n17:53:37 [whatsapp] Web connection closed (status 499). Retry 1/12 in 2.04s… (status=499)\n18:23:40 [whatsapp] watchdog timeout (app-silent) - restarting connection\n18:23:40 [whatsapp] Web connection closed (status 499). Retry 1/12 in 2.01s… (status=499)\n```\n\nEach disconnect raced the in-flight dispatch and left at least one `pendingFinalDelivery` stuck on either the `openclaw` or `research` agent session (the upstream race in #89115). User-visible: agent \"went silent.\" Our local cron-watchdog auto-flushed the stuck flag after detection, but real time between question and answer regularly hit 2h.\n\n**Bridge** — patched `messageTimeoutMs` default to 28_800_000 (8h) in the bundled `monitor-*.js` to validate `tuning.messageTimeoutMs` flows where this PR expects it to flow:\n\n```dockerfile\nRUN sed -i 's|messageTimeoutMs = tuning.messageTimeoutMs ?? 1800 \\* 1e3|messageTimeoutMs = tuning.messageTimeoutMs ?? 28800 * 1e3|' \\\n    /usr/local/lib/node_modules/@openclaw/whatsapp/dist/monitor-*.js\n```\n\nThe OC gateway loads plugins from the user-local search path `/home/node/.openclaw/npm/node_modules/@openclaw/whatsapp/` BEFORE the bundled `/usr/local/lib/...` path, so we also patch the user-local copy at entrypoint runtime (node user has write access there).\n\n**After** — entrypoint log `2026-06-02T09:29:22Z`:\n\n```\n[2026-06-02T09:29:22+00:00] [whatsapp-patch] OK: already patched (8h) in bundled (/usr/local/lib/node_modules/@openclaw/whatsapp/dist/monitor-Ccph7Y8M.js)\n[2026-06-02T09:29:22+00:00] [whatsapp-patch] applied 30min → 8h at runtime in user-npm (PRIMARY load path) (/home/node/.openclaw/npm/node_modules/@openclaw/whatsapp/dist/monitor-C5_C_RGJ.js)\n```\n\nFile contents post-fix:\n\n```\n$ grep messageTimeoutMs /home/node/.openclaw/npm/node_modules/@openclaw/whatsapp/dist/monitor-C5_C_RGJ.js\nconst messageTimeoutMs = tuning.messageTimeoutMs ?? 28800 * 1e3;\n$ grep messageTimeoutMs /usr/local/lib/node_modules/@openclaw/whatsapp/dist/monitor-Ccph7Y8M.js\nconst messageTimeoutMs = tuning.messageTimeoutMs ?? 28800 * 1e3;\n```\n\nLive container — zero `watchdog timeout (app-silent)` events since 09:29 UTC:\n\n```\n$ sudo docker logs docker-clawdbot-gateway-1 --since 09:29 2>&1 | grep -c \"watchdog timeout\"\n0\n```\n\nFor reference, before the dual-path patch, the same container reliably logged the `(app-silent)` line every 30 min during chat sessions and every 2h overnight (the `appSilenceTimeoutMs = messageTimeoutMs * 4` fallback). After the dual-path patch, none.\n\nWith this PR landed, the bridge above (sed against bundled dist files in two locations) goes away and is replaced by a single config block in `openclaw.json`:\n\n```json5\n{\n  channels: {\n    whatsapp: {\n      watchdog: {\n        messageTimeoutMs: 28800000,\n      },\n    },\n  },\n}\n```\n\n## Test plan\n\n- [x] `pnpm test src/config/zod-schema.providers-whatsapp.test.ts` — 4 new tests pass alongside existing 11\n- [x] `pnpm tsc --noEmit` — type-check (`account.watchdog` propagates from schema to `WhatsAppAccountConfig` via the existing `OpenClawConfig` inference chain; static `ResolvedWhatsAppAccount` updated in `8dad90fe`)\n- [x] `pnpm format:docs:check` — passes after `oxfmt --write` on `docs/channels/whatsapp.md`\n- [x] Manual: production patched `monitor-*.js` to 8h, observed absence of `watchdog timeout (app-silent)` log line across multiple chat sessions and idle periods (see Real behavior proof section above)\n\nI haven't run the full local suite — happy to fix anything reviewers flag.\n",
+        "branch": "whatsapp-watchdog-config-exposure",
+        "head_sha": "8dad90fe96080b1148458e3194d519753f308268",
+        "author": "danashburn",
         "labels": [
-          "gateway",
-          "maintainer",
-          "size: M",
-          "rating: 🌊 off-meta tidepool"
+          "docs",
+          "channel: whatsapp-web",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/config/sessions/disk-budget.ts",
-            "additions": 26,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store.ts",
-            "additions": 10,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/session-reaper.ts",
-            "additions": 1,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-transcript-files.fs.archive-cleanup.test.ts",
-            "additions": 104,
+            "path": "docs/channels/whatsapp.md",
+            "additions": 14,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/session-transcript-files.fs.ts",
-            "additions": 30,
-            "deletions": 18,
+            "path": "extensions/whatsapp/src/accounts.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/channel.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.providers-whatsapp.test.ts",
+            "additions": 57,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.providers-whatsapp.ts",
+            "additions": 43,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
@@ -115,42 +119,61 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91957",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91957.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89214",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89214.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 163,
-          "gatingTotal": 158,
+          "total": 166,
+          "gatingTotal": 161,
           "counts": {
+            "FAILURE": 8,
             "SUCCESS": 131,
-            "SKIPPED": 31,
+            "SKIPPED": 26,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "Scan changed paths (precise):FAILURE",
+            "Real behavior proof:FAILURE",
+            "checks-fast-contracts-channels-a:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "Scan changed paths (precise):FAILURE",
+            "Real behavior proof:FAILURE",
+            "checks-fast-contracts-channels-a:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": true,
+      "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3270,
+    "total_ms": 2227,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 692
+        "ms": 511
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2247
+        "ms": 1522
       },
       {
         "name": "classify_commands",
@@ -158,7 +181,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 316
+        "ms": 169
       },
       {
         "name": "append_ledger",
