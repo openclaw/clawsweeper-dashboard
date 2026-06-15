@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T04:00:42.101Z",
-  "repo": "openclaw/crabbox",
+  "generated_at": "2026-06-15T04:00:58.269Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-15T01:00:41.704Z",
+  "since": "2026-06-15T01:00:56.187Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    368
+    86733
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4539446608
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +31,268 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86733:4539446608:2026-06-15T03:59:57Z:clawsweeper_auto_repair",
+      "comment_id": "4539446608",
+      "comment_version_key": "4539446608:2026-06-15T03:59:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86733#issuecomment-4539446608",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86733,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T02:47:24Z",
+      "comment_updated_at": "2026-06-15T03:59:57Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=d0131f293e7f938dfb343c819bd8f6ebd3f4b595)",
+      "review_summary": "The PR makes main-session wake-now cron system events use the existing 60-minute safety timeout and adds timeout-policy unit coverage, while the current net diff also modifies unrelated plugin, agent, script, and UI files.\n\nPR surface: Source -3, Tests +16, Other +2. Total +15 across 26 files.\n\nReproducibility: yes. at source level: current main applies the generic system-event timeout before the main wake-now path awaits runHeartbeatOnce. The PR body also supplies after-fix live output from the resolver and wrapper seam, though I did not run tests in this read-only review.",
+      "review_followup": "- [P2] A repair worker can mechanically rebuild the branch as a narrow cron-only patch; maintainers still need to own the intentional availability tradeoff before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "d0131f293e7f938dfb343c819bd8f6ebd3f4b595",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): extend main system event timeout",
+        "body": "## Linked context\n\nCloses #50621.\n\n## Summary\n\n- Extend the cron outer watchdog only for main-session `systemEvent` jobs with `wakeMode: \"now\"`.\n- Preserve the existing 10-minute default for other `systemEvent` jobs, including `wakeMode: \"next-heartbeat\"`.\n- Preserve existing `agentTurn.timeoutSeconds` behavior and the existing 60-minute safety ceiling for agent-turn jobs without an explicit timeout.\n\n## AI assistance disclosure\n\nI used Codex to inspect the issue, related closed PRs, existing cron source, tests, and validation output, then to draft and verify this patch. I reviewed and understand the affected path: cron resolves the job timeout in `src/cron/service/timeout-policy.ts`, `executeJobCoreWithTimeout` applies that watchdog in `src/cron/service/timer.ts`, and main-session wake-now system events block while awaiting `runHeartbeatOnce`.\n\n## Real behavior proof\n\nBehavior addressed: A blocking main-session cron `systemEvent` with `wakeMode: \"now\"` no longer uses the generic 10-minute job timeout while cron is waiting for `runHeartbeatOnce`; the next-heartbeat systemEvent path remains on the generic timeout.\n\nReal environment tested: Local OpenClaw workspace on the rebased branch using the real cron timeout resolver and `executeJobCoreWithTimeout` path with isolated fake cron dependencies and no live credentials.\n\nExact steps or command run after this patch:\n\n```bash\npnpm exec tsx .artifacts/issue-50621/runtime-proof.ts\n```\n\nEvidence after fix:\n\n```text\nissue_50621_runtime_proof\ntarget_job=sessionTarget:main payload:systemEvent wakeMode:now\ndefault_system_event_timeout_ms=600000\nagent_turn_safety_timeout_ms=3600000\nresolved_target_timeout_ms=3600000\nresolved_next_heartbeat_timeout_ms=600000\nwatchdog_delay_ms=3600000\nsettled_after_default_window=false\nrun_heartbeat_once_calls=1\nfinal_status=ok\nfinal_summary=long main-session task\nproof_passed=true\nproof_status=0\n```\n\nObserved result after fix: The target main-session wake-now systemEvent resolved to the 60-minute safety ceiling, did not settle after the old 10-minute window, called `runHeartbeatOnce` once, and completed successfully after the heartbeat promise resolved. A main-session next-heartbeat systemEvent still resolved to the 10-minute default.\n\nWhat was not tested: A live provider/model run was not exercised; the proof isolates the cron watchdog path rather than spending credentials or model time.\n\n## Root Cause\n\n`resolveCronJobTimeoutMs` treated every `systemEvent` job as generic cron work, so it returned `DEFAULT_JOB_TIMEOUT_MS` even when the main-session wake-now path synchronously awaited `runHeartbeatOnce`. That made a long but valid main-session heartbeat run fail around the generic cron watchdog window even though the underlying work was running in the main session.\n\n## Dependency contract / source proof\n\nNo external dependency behavior is changed. The relevant internal contracts are:\n\n- `src/cron/types.ts`: `timeoutSeconds` belongs to `agentTurn` payloads, not `systemEvent` payloads.\n- `src/cron/service/jobs.ts`: main-session jobs are `systemEvent` payloads; isolated/current/session target jobs are `agentTurn` payloads.\n- `src/cron/service/timer.ts`: `executeJobCoreWithTimeout` wraps the actual run using `resolveCronJobTimeoutMs`, and the blocking main-session path awaits `runHeartbeatOnce` only for `wakeMode: \"now\"`.\n\n## Regression Test Plan\n\n- `src/cron/service/timeout-policy.test.ts` covers the exact policy split:\n  - main `systemEvent` + `wakeMode: \"now\"` uses `AGENT_TURN_SAFETY_TIMEOUT_MS`.\n  - main `systemEvent` + `wakeMode: \"next-heartbeat\"` keeps `DEFAULT_JOB_TIMEOUT_MS`.\n  - existing agent-turn explicit/no-timeout behavior remains unchanged.\n- `src/cron/service/timer.regression.test.ts` covers the real wrapper path by keeping `runHeartbeatOnce` pending past the old default timeout and confirming the job does not complete early.\n\n## Security Impact\n\nNo credential, network, auth, or permission behavior changes. The patch only adjusts a local cron watchdog ceiling for one already-supported blocking runtime path.\n\n## Human Verification\n\nI reviewed the affected cron timeout path, the main-session wake-now execution path, the related issue discussion, and closed reference PRs before accepting the final patch shape.\n\n## CODEOWNERS / owner review\n\nThe touched files are not matched by `.github/CODEOWNERS`. Nearby cron owner rules exist for `src/cron/stagger.ts` and `src/cron/service/jobs.ts`, but this patch does not touch either file.\n\n## Changelog\n\nContributor PR: no `CHANGELOG.md` entry added.\n\n## Review conversations\n\nReference issue/PR review checked before implementation:\n\n- Issue #50621 and duplicate #70325.\n- Closed narrow attempts #50670, #50698, and #50723.\n- Closed broader/configurable watchdog attempt #83066 as a shape to avoid.\n- No open PR currently linked to or substantially addressing #50621 was found.\n\n## Risks\n\n- Main-session wake-now cron jobs can occupy the cron run slot longer than before, up to the existing 60-minute safety ceiling.\n\n## Behavior tradeoffs\n\n- This keeps bounded failure behavior instead of removing the timeout or making all systemEvent jobs unbounded.\n- It gives the blocking path the same ceiling already used for agent-turn-style long work while leaving enqueue-only systemEvent modes short.\n\n## Scope boundaries\n\n- Does not change `wakeMode: \"next-heartbeat\"` behavior.\n- Does not add configuration.\n- Does not make all `systemEvent` jobs unbounded or long-running.\n- Does not change `agentTurn.timeoutSeconds`, including `timeoutSeconds <= 0`.\n- Does not change heartbeat scheduling, delivery, or provider/model timeout behavior.\n\n## Validation\n\n```bash\nnode scripts/run-vitest.mjs src/cron/service/timeout-policy.test.ts src/cron/service/timer.regression.test.ts src/cron/service.runs-one-shot-main-job-disables-it.test.ts\n```\n\nPassed: 3 files, 58 tests.\n\n```bash\nOPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree pnpm check:changed\n```\n\nPassed: changed lanes `core`, `coreTests`.\n\n```bash\ncodex review --base origin/main\n```\n\nPassed: \"The timeout policy change is narrowly scoped to main-session wake-now systemEvent jobs and is covered by focused policy and regression tests. I did not identify a correctness regression in the changed code.\"\n",
+        "branch": "codex/50621-cron-systemevent-timeout",
+        "head_sha": "d0131f293e7f938dfb343c819bd8f6ebd3f4b595",
+        "author": "ferminquant",
+        "labels": [
+          "channel: telegram",
+          "channel: whatsapp-web",
+          "app: web-ui",
+          "extensions: memory-core",
+          "cli",
+          "scripts",
+          "commands",
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.test.ts",
+            "additions": 8,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-db-probe.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-db.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-fts-state.test.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-search.ts",
+            "additions": 2,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/microsoft-foundry/index.test.ts",
+            "additions": 1,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/lane-delivery-text-deliverer.ts",
+            "additions": 11,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/lane-delivery.test.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/state-migrations.ts",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/auto-reply.web-auto-reply.connection-and-logging.e2e.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/pnpm-runner.mjs",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-approval-followup.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/reliability.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/sandbox-skills.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-gateway-tool.test.ts",
+            "additions": 5,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sandbox/workspace-mounts.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.ts",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/cron-cli/shared.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-config-flow.test.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timeout-policy.test.ts",
+            "additions": 23,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timeout-policy.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media-understanding/attachments.cache.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/exec.ts",
+            "additions": 1,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/shared/anthropic-model-contract.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/vite.config.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86733",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86733.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 165,
+          "counts": {
+            "SUCCESS": 137,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 723,
+    "total_ms": 2299,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 386
+        "ms": 506
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1562
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 326
+        "ms": 204
       },
       {
         "name": "append_ledger",
