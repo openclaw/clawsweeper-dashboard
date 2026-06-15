@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T04:34:31.842Z",
+  "generated_at": "2026-06-15T04:35:05.744Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-15T01:34:27.575Z",
+  "since": "2026-06-15T01:35:05.316Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    89045
+    93162
   ],
-  "comment_ids": [
-    4704581010
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,219 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89045:4704581010:2026-06-15T04:32:18Z:re_review",
-      "comment_id": "4704581010",
-      "comment_version_key": "4704581010:2026-06-15T04:32:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89045#issuecomment-4704581010",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89045,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-15T04:32:18Z",
-      "comment_updated_at": "2026-06-15T04:32:18Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: recover terminal session status on visible inbound turns",
-        "body": "## Summary\n\nFixes #86827 — group chat sessions stuck in `failed` status silently drop all subsequent messages.\n\nWhen a group chat session enters a terminal status (`failed`, `timeout`, or `killed`), the reply dispatch path returns a successful no-op (`queuedFinal: false`, zero dispatch counts) without starting an AI turn or delivering any user-visible error. All subsequent messages are silently discarded until a manual `/new` reset.\n\n## Root Cause\n\nThree independent mechanisms conspire to create the silent drop:\n\n1. **Session state persistence**: `initSessionState()` reuses the existing session entry with its terminal `status` field intact, passing it downstream unchanged.\n2. **Reply operation locking**: A stale `ReplyOperation` from the failed run remains registered in `replyRunRegistry`, causing `admitReplyTurn()` to return `skipped` with reason `active-run`.\n3. **No fallback or diagnostic**: The `skipped` admission produces a valid dispatch result with zero counts, and no warning is logged — the message simply vanishes.\n\n## Changes\n\n### 1. Auto-recover terminal sessions (`session.ts`)\n\nWhen a **visible** (non-cron/heartbeat) inbound message hits a session with recoverable terminal status, automatically clear the stale lifecycle fields (`status`, `startedAt`, `endedAt`, `runtimeMs`, `abortedLastRun`) while **preserving the `sessionId` and transcript continuity** — no session rotation.\n\n### 2. Clear stale reply operations with race guard (`dispatch-from-config.ts`)\n\nWhen `admitReplyTurn()` returns `skipped` with reason `active-run` but the persisted session is in terminal status, force-clear the stale reply operation via `forceClearReplyRunBySessionId()` and retry admission **once**. This breaks the deadlock without risking infinite retry loops.\n\n**Concurrent recovery guard**: After a recovery turn clears the proven stale leftover and admits its own fresh operation, it is marked with a `terminalRecovery` flag. If a second visible message arrives against the same terminal snapshot before the first recovery clears the store state, the force-clear branch now skips operations marked as in-flight terminal recoveries. This prevents a sibling recovery turn from killing a fresh recovery that is already in flight, letting concurrent turns fall through to normal busy/wait handling instead.\n\n### 3. Agent API path (`agent.ts`)\n\nMirror the same terminal recovery logic in the agent API dispatch path so agent API requests also clear terminal state for visible requests.\n\n### 4. Diagnostics (`kernel.ts`, `types.ts`)\n\nAdd a structured warning log when a visible channel turn dispatch completes with `queuedFinal: false` and zero tool/block/final counts — a sentinel for future silent message drops. Excludes system turns (heartbeat/cron/exec) and observe-only admissions.\n\n## Real behavior proof\n\nCaptured by driving the **real** runtime modules (`dispatchReplyFromConfig`, `initSessionState`, `reply-run-registry`) with verbose logging on, **no vitest and no module mocks** — only the production parameters the Gateway supplies plus a real on-disk JSON session store. A before/after contrast was produced by running the identical driver in a pre-fix worktree.\n\n- **Behavior or issue addressed**: A group-chat session left in a terminal lifecycle status (`failed`/`timeout`/`killed`) silently drops every later message — the stale lifecycle entry plus a leftover \"active\" reply operation block turn admission, so a subsequent visible inbound message gets no AI turn and no reply (#86827).\n- **Real environment tested**: Compiled branch source at HEAD `ac52eb0b24`; macOS 15.3.1 (Darwin 24.3.0, arm64), Node `v24.10.0`. Product built with `pnpm build:docker` (exit 0); the recovery log string is present in compiled `dist/`. Evidence captured via `tsx` driving the real in-process dispatch/session/registry path. Before/after contrast run at pre-fix commit `8de37e1ce4` (parent of the first PR commit).\n- **Failing proof before fix** (`8de37e1ce4`, identical driver + input): real `dispatchReplyFromConfig()` for a visible group turn on a `status=\"failed\"` session with a stale running reply op —\n  ```\n  [dispatch] registered stale running reply op; isActive=true\n  [dispatch] calling REAL dispatchReplyFromConfig() for visible group turn on terminal session ...\n  [dispatch] dispatch TIMED-OUT (no reply within 8s): visible turn stuck behind the stale terminal reply op -> SILENT DROP\n  [dispatch] stale op result after dispatch = null\n  [dispatch] registry isActive after dispatch = true\n  ```\n  And real `initSessionState()` against an on-disk store: `RESULT: STILL-TERMINAL — session entry remains status=failed after a visible inbound turn`.\n- **Exact steps or command run after this patch**:\n  ```\n  NODE_OPTIONS=--max-old-space-size=8192 pnpm build:docker\n  export OPENCLAW_HOME=$(mktemp -d) OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 \\\n         OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_PROVIDERS=1 OPENCLAW_SKIP_CRON=1\n  node_modules/.bin/tsx ./_dispatch_driver.mts   # drives real dispatchReplyFromConfig()\n  node_modules/.bin/tsx ./_proof_driver.mts      # drives real initSessionState() + registry\n  ```\n  The driver seeds a real session store with a terminal `failed` group entry, registers a real stale running reply operation, then calls the real `dispatchReplyFromConfig()` for a visible inbound group message.\n- **Evidence after fix (`ac52eb0b24`)**: copied live console output from running the real in-process driver `node_modules/.bin/tsx ./_dispatch_driver.mts` (drives the production `dispatchReplyFromConfig()`); redacted runtime log:\n  ```\n  [dispatch] registered stale running reply op; isActive=true\n  [dispatch] calling REAL dispatchReplyFromConfig() for visible group turn on terminal session ...\n  dispatch-from-config: cleared stale active reply operation for terminal session agent:main:telegram:group:<redacted>\n  [dispatch] dispatch returned: {\"queuedFinal\":true,\"counts\":{\"tool\":0,\"block\":0,\"final\":1}}\n  [dispatch] stale op result after dispatch = {\"kind\":\"failed\",\"code\":\"run_failed\"}\n  [dispatch] registry isActive after dispatch = false\n  ```\n  Real session lifecycle: `initSessionState -> isNewSession=false sessionId=<same> abortedLastRun=false`, and `AFTER turn -> status=undefined ... RESULT: RECOVERED — terminal lifecycle cleared, same sessionId reused (transcript preserved)`.\n- **Observed result after fix**: A visible inbound message to a terminal session (1) emits the new recovery log, (2) force-fails the stale leftover op and frees the registry (`isActive=false`), (3) produces a real queued reply (`queuedFinal:true, counts.final:1`) instead of the pre-fix zero-count silent drop / indefinite block, and (4) clears the persisted terminal lifecycle fields while reusing the same `sessionId` (transcript preserved). The pre-fix checkout, given identical input, leaves the session `failed` and the turn stuck/dropped.\n- **What was not tested**: The full Docker image build failed at the `pnpm install --frozen-lockfile` layer due to transient npm-registry CDN errors fetching optional native packages (network, not OOM and not code), so no end-to-end live channel socket round-trip was performed; the proof drives the real in-process dispatch/session/registry runtime that a channel turn funnels into. The `agent.ts` Gateway RPC path and the `kernel.ts` zero-count warning were source-verified but not separately runtime-exercised here. Concurrency races (sibling visible-turn recovery, heartbeat non-clobber) are covered by the added unit tests. Architecture: arm64 (macOS) only; CI truth is Linux x64 Node 24.\n\n## Tests\n\n- **session.test.ts**: Verify failed group sessions recover without rotating the transcript\n- **dispatch-from-config.test.ts**: Verify stale active reply operations are cleared for terminal sessions and admission is retried; verify two concurrent visible turns against the same terminal snapshot do not kill each other's recovery operations\n- **agent.test.ts**: Verify terminal failed agent API sessions recover without session rotation; updated existing failed-session tests to verify terminal state clearing\n- **kernel.test.ts**: Verify zero-count visible dispatch warning is emitted\n- **agent-runner-execution.test.ts / agent-runner-memory.test.ts**: Updated mock `ReplyOperation` stubs with new `terminalRecovery` field and `markTerminalRecovery` method\n\nAll focused tests pass across 2 Vitest shards (512 cases).\n\n\n",
-        "branch": "fix/86827-failed-session-silent-drop",
-        "head_sha": "436a08dd0337b8f97ed39a47bcd54627d9784371",
-        "author": "jerry-xin",
-        "labels": [
-          "gateway",
-          "size: L",
-          "proof: supplied",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.test.ts",
-            "additions": 371,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 60,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.test.ts",
-            "additions": 59,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 48,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/turn/kernel.test.ts",
-            "additions": 102,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/turn/kernel.ts",
-            "additions": 57,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/turn/types.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent.test.ts",
-            "additions": 57,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent.ts",
-            "additions": 19,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89045",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89045.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 158,
-          "counts": {
-            "SUCCESS": 116,
-            "SKIPPED": 22,
-            "IN_PROGRESS": 19,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-tooling:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-agents-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "pending": [
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-tooling:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-agents-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4486,
+    "total_ms": 732,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2232
+        "ms": 417
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2021
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 219
+        "ms": 305
       },
       {
         "name": "append_ledger",
