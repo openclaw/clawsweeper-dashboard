@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T16:36:02.041Z",
-  "repo": "openclaw/clawhub",
+  "generated_at": "2026-06-15T16:36:11.107Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-15T13:36:01.567Z",
+  "since": "2026-06-15T13:36:09.138Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    2651
+    93368
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,145 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93368:4710078311:2026-06-15T16:36:05Z:clawsweeper_auto_repair",
+      "comment_id": "4710078311",
+      "comment_version_key": "4710078311:2026-06-15T16:36:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93368#issuecomment-4710078311",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93368,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-15T16:31:03Z",
+      "comment_updated_at": "2026-06-15T16:36:05Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=e02f8b761b64277541788b6f5a85517e99768591)",
+      "review_summary": "The PR changes `loadProjectContextFiles()` so `AGENTS.md`/`CLAUDE.md` ancestor discovery stops immediately at `cwd` instead of walking to the filesystem root.\n\nPR surface: Source +1. Total +1 across 1 file.\n\nReproducibility: yes. source-reproducible. Current main walks to `/`, while the PR diff breaks immediately at `cwd`; the code and docs show `cwd` can be a task directory distinct from the workspace used for bootstrap context.",
+      "review_followup": "- [P1] This security-boundary PR needs a code correction plus contributor real behavior proof, so it should stay in human review rather than an automated repair lane.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "e02f8b761b64277541788b6f5a85517e99768591",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "#92561: fix(security): bound context file ancestor walk to workspace root",
+        "body": "## Summary\n\nBound the `loadProjectContextFiles` ancestor directory walk to the workspace root instead of the filesystem root. This prevents untrusted AGENTS.md/CLAUDE.md files outside the workspace from being silently injected into agent context.\n\n## Linked context\n\nCloses #92561\n\n- The walk started at `cwd` and continued up to `/`, loading any AGENTS.md/CLAUDE.md found in ancestor directories\n- On multi-tenant hosts or shared systems, this allowed context injection from outside the workspace boundary\n- A malicious AGENTS.md placed in `~/.openclaw/` or `~/` would be silently loaded\n\n## Root Cause\n\nIn `loadProjectContextFiles()` (`src/agents/sessions/resource-loader.ts`), the ancestor directory walk set its boundary to `resolve(\"/\")` — the filesystem root. This allowed the walk to traverse through ALL ancestor directories above the workspace, including system directories and other users' home directories.\n\n## Fix\n\nChange the walk boundary from filesystem root to workspace root (`resolvedCwd`). The walk now stops at the agent's working directory instead of continuing to `/`.\n\n```diff\n- const root = resolve(\"/\");\n  while (true) {\n    const contextFile = loadContextFileFromDir(currentDir);\n    // ...\n-   if (currentDir === root) {\n+   // Stop traversing at the workspace root\n+   if (currentDir === resolvedCwd) {\n      break;\n    }\n```\n\nThe context file from `cwd` itself is still loaded (first iteration), and the `agentDir` context file is loaded separately.\n\n## Real behavior proof\n\n**Behavior or issue addressed:**\nAncestor directory walk for AGENTS.md/CLAUDE.md files no longer traverses above the workspace root.\n\n**Real environment tested:**\n- OS: Linux 4.19.112-2.el8.x86_64\n- Runtime: Node.js v24.3.0\n- Setup: OpenClaw local dev instance\n\n**Exact steps or command run after the patch:**\n\n1. Place an AGENTS.md in a parent directory above the workspace\n2. Before fix: file is loaded into agent context\n3. Apply the fix from this PR\n4. After fix: file is NOT loaded — walk stops at workspace root\n\n**Evidence after fix:**\n\n```\n$ pnpm test -- --run src/agents/sessions/resource-loader.test.ts\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n```\n\n**Observed result after fix:**\n\n**Before fix (broken):**\n```\ncwd = /home/user/workspace/\nWalk: /home/user/workspace/ → /home/user/ → /home/ → /\nAny AGENTS.md in ancestor dirs above workspace → loaded into context\n```\n\n**After fix (working):**\n```\ncwd = /home/user/workspace/\nWalk: /home/user/workspace/ (stops — workspace root)\nOnly AGENTS.md within workspace → loaded\n```\n\n**Summary:** before: walk traverses to filesystem root, loading untrusted context files → after: walk stops at workspace root\n\n**What was not tested:** N/A\n\n## Risk checklist\n\n- [x] User-facing behavior change? Yes — AGENTS.md/CLAUDE.md files in ancestor directories above the workspace are no longer auto-loaded\n  - Users who intentionally placed these files above the workspace should move them into the workspace or agent directory\n- [x] Configuration or environment change? No\n- [x] Security or authentication change? Yes — reduces attack surface for context injection\n- [x] What is the highest-risk area of this change? Users relying on ancestor directory context files for monorepo setups\n- [x] How is that risk mitigated? Context files can be placed in the workspace root or agent directory instead\n\n## Regression Test Plan\n\n- [x] `pnpm test -- --run src/agents/sessions/resource-loader.test.ts` passes (1/1)\n- [x] Change is minimal (1 file, +3/-2 lines)\n- [x] Context file from cwd is still loaded\n\n## Current review state\n\n- Next action: waiting for ClawSweeper review\n- What is still waiting: CI checks\n\n---\n\n*AI-assisted: built with Claude Code*\n",
+        "branch": "fix/issue-92561-bound-context-file-walk-to-workspace-root",
+        "head_sha": "e02f8b761b64277541788b6f5a85517e99768591",
+        "author": "mmyzwl",
+        "labels": [
+          "agents",
+          "size: XS",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/sessions/resource-loader.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 3,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93368",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93368.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 32,
+          "gatingTotal": 27,
+          "counts": {
+            "CANCELLED": 2,
+            "QUEUED": 10,
+            "SKIPPED": 14,
+            "SUCCESS": 6
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 830,
+    "total_ms": 2278,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 463
+        "ms": 408
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1547
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 356
+        "ms": 299
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
