@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T00:22:42.294Z",
+  "generated_at": "2026-06-15T00:22:58.985Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T21:22:41.744Z",
+  "since": "2026-06-14T21:22:56.677Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    91988
+    83698
   ],
-  "comment_ids": [
-    4703562328
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 4,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,21 +31,120 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:91988:4703562328:2026-06-15T00:20:46Z:re_review",
-      "comment_id": "4703562328",
-      "comment_version_key": "4703562328:2026-06-15T00:20:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91988#issuecomment-4703562328",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83698:4479911906:2026-06-15T00:22:53Z:clawsweeper_needs_human",
+      "comment_id": "4479911906",
+      "comment_version_key": "4479911906:2026-06-15T00:22:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83698#issuecomment-4479911906",
       "repo": "openclaw/openclaw",
-      "issue_number": 91988,
-      "author": "LiuwqGit",
-      "author_id": 7065327,
+      "issue_number": 83698,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-15T00:20:46Z",
-      "comment_updated_at": "2026-06-15T00:20:46Z",
+      "comment_created_at": "2026-05-18T16:55:52Z",
+      "comment_updated_at": "2026-06-15T00:22:53Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] Human maintainer review is the right next action because no narrow automated repair is needed; the open question is accepting the scoped availability fix and empty-diff config.apply behavior.; Cleared: The diff only touches gateway config restart logic and tests, with no dependency, workflow, package, permission, or secret-handling changes. (sha=c48ac4772f1dee494fa23248535cf314c0890b95)",
+      "review_summary": "The PR adds an empty-changed-path guard to the gateway config restart helper and regression tests proving rejected config.patch/config.apply calls do not schedule SIGUSR1 or mutate the config hash.\n\nPR surface: Source +26, Tests +132. Total +158 across 2 files.\n\nReproducibility: Do we have a high-confidence way to reproduce the issue? No for the full production zombie-draining incident; current main source shows most rejected config.patch/config.apply paths return before commit and restart scheduling. The narrower empty-changed-path helper behavior is source-reproducible, and the PR proof exercises that invariant after the patch.",
+      "review_followup": "- [P2] Human maintainer review is the right next action because no narrow automated repair is needed; the open question is accepting the scoped availability fix and empty-diff config.apply behavior.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "c48ac4772f1dee494fa23248535cf314c0890b95",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): rejected config.patch/apply never queues SIGUSR1 restart",
+        "body": "## Summary\n\nPins the invariant that a **rejected** `config.patch` / `config.apply` RPC never schedules a gateway SIGUSR1 restart, with both a structural guard and regression tests. Filed in response to a downstream incident where a long-running gateway ended up in a permanent \"draining for restart\" zombie state after two consecutive rejected `config.patch`/`config.apply` calls.\n\n## Reproduction\n\nInside a long-running gateway:\n\n1. A control-plane caller invokes `config.patch` to inject `channels.slack.*` tokens.\n2. Gateway rejects: `gateway config.patch cannot change protected config paths: channels.slack.botToken, channels.slack.appToken, ...`\n3. Caller retries with `config.apply` (full file). Gateway rejects again with the same protected-paths error.\n4. **Despite both patches being rejected**, the reload manager logged `config change requires gateway restart (channels.slack) — deferring until N operation(s), R reply(ies), E embedded run(s) complete` and queued two SIGUSR1s ~2s apart.\n5. The second SIGUSR1 arrived during the in-process restart window (after `ready` but before `starting channels and sidecars` finished). From that moment forward every model call returned `Gateway is draining for restart; new tasks are not accepted`. State persisted for ~75 minutes until recovery via process restart.\n\n## Diagnosis\n\nReading the current gateway code, the reload manager already only acts on *successfully-applied* writes:\n- The chokidar file-watcher path reads the on-disk snapshot via `readSnapshot()`.\n- The in-process write path goes through `notifyRuntimeConfigWriteListeners`, which fires *only* after `replaceConfigFile` commits.\n\nAnd `config.ts:configHandlers[\"config.patch\"]` and `[\"config.apply\"]` both validate (parseConfigJson5 → applyMergePatch → restoreRedactedValues → validateConfigObjectWithPlugins → ensureResolvableSecretRefsOrRespond → diffConfigPaths) **before** calling `commitGatewayConfigWrite` and `resolveGatewayConfigRestartWriteResult`. Any rejection branch calls `respond(false, ..., errorShape(...))` and returns without writing.\n\nSo the structural invariant *holds today* — but it's enforced by control flow alone, not by a structural guard, and the observed correlation between rejected patches and a queued restart was nowhere covered by regression tests. The most likely actual mechanism in the incident is a separate successful `replaceConfigFile` write racing alongside the two rejected ones, which is a legitimate restart trigger but was temporally indistinguishable in the logs from the rejected patches.\n\nThis PR locks the rejection-no-restart invariant in place so a future refactor can't break it.\n\n## Changes\n\n### `src/gateway/server-methods/config-write-flow.ts`\n\n`resolveGatewayConfigRestartWriteResult` now short-circuits when `changedPaths.length === 0`:\n- Refuses to write the restart sentinel.\n- Refuses to call `scheduleGatewaySigusr1Restart`.\n- Logs an audit warning with the control-plane actor.\n\nCallers (`config.patch` and `config.apply` handlers in `config.ts`) only invoke this helper after `commitGatewayConfigWrite` succeeds and a non-empty `changedPaths` is computed, so this guard is a defense-in-depth backstop, not a behavior change in any current code path.\n\n### `src/gateway/server.config-patch.test.ts`\n\nNew regression suite `gateway rejected config writes do not queue restart` spies on `scheduleGatewaySigusr1Restart` via `vi.spyOn(restartModule, ...)` and asserts no call happens when:\n\n- `config.patch` is rejected for invalid JSON (parse failure)\n- `config.patch` is rejected for `raw=null` (non-object)\n- `config.patch` is rejected for SecretRef resolution failure\n- `config.apply` is rejected for invalid raw (parse failure)\n- `config.apply` is rejected for SecretRef resolution failure\n- **Two rejected patches arrive consecutively** — direct replay of the incident scenario (config.patch rejected → config.apply rejected, neither queues a restart)\n\nEach test also asserts the on-disk config hash is unchanged across the rejection.\n\n## Acceptance criteria\n\n- [x] Rejected `config.patch`/`config.apply` calls do not trigger reload evaluation or restart queue → covered by 6 regression tests\n- [x] Reload manager only acts on successfully-applied config diffs → already enforced (reload reads disk / subscribes to post-commit notifications); now also backed by the `changedPaths.length === 0` guard\n- [x] Regression test: rejected protected-path patch → no reload, no restart, gateway state unchanged → covered (the agent-side `assertGatewayConfigMutationAllowed` protected-paths guard is already covered by `src/agents/openclaw-gateway-tool.test.ts`; this PR adds the server-side rejection coverage)\n- [ ] **Stretch:** detect & coalesce duplicate SIGUSR1 arriving during the in-process restart window — **not included in this PR**, see Out of scope below\n\n## Test results\n\n```\npnpm vitest --config test/vitest/vitest.gateway-server.config.ts\n  src/gateway/server.config-patch.test.ts\n    gateway rejected config writes do not queue restart\n      ✓ does not schedule SIGUSR1 when config.patch is rejected for invalid JSON\n      ✓ does not schedule SIGUSR1 when config.patch is rejected for non-object raw\n      ✓ does not schedule SIGUSR1 when config.patch is rejected for SecretRef resolution failure\n      ✓ does not schedule SIGUSR1 when config.apply is rejected for invalid raw\n      ✓ does not schedule SIGUSR1 when config.apply is rejected for SecretRef resolution failure\n      ✓ does not schedule SIGUSR1 when two rejected patches arrive consecutively\n```\n\nFull `vitest.gateway-server` config: **1045 passing**, 1 pre-existing failure in `gateway config methods > returns noop for config.patch when config is unchanged` (asserts `res.payload?.noop` is `true` but server returns `noop` differently; verified on `main` at the current HEAD). Not introduced by this PR.\n\nFull `vitest.gateway-methods`: **831 passing**.  \nFull `vitest.gateway-core`: **1938 passing** (includes all `config-reload.test.ts` and `server-reload-handlers.test.ts`).  \n`src/agents/openclaw-gateway-tool.test.ts`: **26 passing × 2 projects** (existing agent-side protected-path coverage unchanged).  \n`src/infra/infra-runtime.test.ts`: **27 passing** (existing SIGUSR1 coalescing coverage unchanged).\n\n## Out of scope\n\n**Coalescing duplicate SIGUSR1 arriving during in-process restart startup window** — `scheduleGatewaySigusr1Restart` in `src/infra/restart.ts` already coalesces against `pendingRestartTimer`/`hasUnconsumedRestartSignal`, but `run-loop.ts` resets `shuttingDown=false` when a new lifecycle iteration begins, which is what let the second SIGUSR1 from the original incident race into the new lifecycle's startup window. Fixing this requires deeper changes to the run-loop's signal acceptance window and warrants a separate PR with its own test plan.\n",
+        "branch": "fix/gateway-reject-no-reload",
+        "head_sha": "c48ac4772f1dee494fa23248535cf314c0890b95",
+        "author": "adapepper",
+        "labels": [
+          "gateway",
+          "size: S",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-methods/config-write-flow.ts",
+            "additions": 26,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.config-patch.test.ts",
+            "additions": 133,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83698",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83698.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 71,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-control-plane-runtime:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-control-plane-runtime:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83698:4672135207:2026-06-10T16:17:12Z:freeform_assist",
+      "comment_id": "4672135207",
+      "comment_version_key": "4672135207:2026-06-10T16:17:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83698#issuecomment-4672135207",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83698,
+      "author": "gregstiehl",
+      "author_id": 9805822,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-10T16:17:12Z",
+      "comment_updated_at": "2026-06-10T16:17:12Z",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "command": "— adding the requested real-behavior proof. the pr body's \"test results\" section ran the regression suite via `pnpm vitest`, which (as clawsweeper rightly flagged) is unit-level and doesn't satisfy the proof gate on its own. this comment is a real-environment capture that exercises the rebased production helper against an on-disk fixture directory and observes the rejection-no-restart invariant end-to-end. (body edit isn't an option from my account; wayne / maintainers, ping me if you'd rather have the body amended.) ### behavior or issue addressed a downstream incident left a long-running openclaw gateway in a permanent `gateway is draining for restart; new tasks are not accepted` zombie state after two consecutive **rejected** `config.patch` / `config.apply` calls. this pr pins the invariant that rejected control-plane writes never write a restart sentinel and never call `schedulegatewaysigusr1restart`, via a structural `changedpaths.length === 0` guard in `resolvegatewayconfigrestartwriteresult` plus six regression tests. ### real environment tested pr head `c48ac4772f` exercised via `scripts/proof-83698.ts`, a tsx harness that imports the **production** `resolvegatewayconfigrestartwriteresult` from `src/gateway/server-methods/config-write-flow.ts` and the production `resolverestartsentinelpath` from `src/infra/restart-sentinel.ts`, then calls the helper directly against a real on-disk `openclaw_state_dir` (`/tmp/openclaw-proof-83698-state-*`, created via `fs.mkdtempsync`). real node 22 (`node v22.22.2`, `linux 6.8.0-110-generic x64`), real filesystem (`writejson` produces a real `restart-sentinel.json` on the positive path; absence is verified by `fs.existssync`), real `createsubsystemlogger(\"gateway\")` wrapped to capture warn/info/error lines so the audit log assertion is byte-for-byte from the production logger. `schedulegatewaysigusr1restart` is the real exported function from `src/infra/restart.ts`; it returns a `scheduledrestart` object whose underlying timer is cancelled by the harness before exit so the proof doesn't leave a queued sigusr1 in the process. ### exact steps or command run after this patch ```bash cd ~/work/openclaw git checkout fix/gateway-reject-no-reload # head c48ac4772f git log -1 --oneline # c48ac4772f fix(gateway): rejected config.patch/apply never queues sigusr1 restart pnpm install --frozen-lockfile # pnpm 11.1.0 ./node_modules/.bin/tsx scripts/proof-83698.ts # runs four scenarios + structural invariant checks ``` ### evidence after fix **test 1 — rejected `config.patch` (`changedpaths: []`) → guard fires:** ``` [gateway] config.patch restart skipped actor=proof-83698 device=proof-device ip=127.0.0.1 conn=proof-conn (no changed paths; rejected or no-op write) returned restart === undefined: pass returned sentinelpath === null: pass disk sentinel absent: pass audit warning logged with actor info: pass ``` **test 2a — successful `config.patch` in hybrid mode (production default) → sentinel on disk, no direct sigusr1:** ``` returned restart === undefined: pass (hybrid mode defers sigusr1 to file watcher) returned sentinelpath !== null: pass disk sentinel written: pass disk sentinel payload (excerpt): { \"kind\": \"config-patch\", \"status\": \"ok\", \"ts\": 1781108163242, \"sessionkey\": \"control:proof-83698\", \"message\": \"successful-patch-hybrid\", \"doctorhint\": \"run: openclaw doctor --non-interactive\", \"stats\": { \"mode\": \"config.patch\", \"root\": \"/tmp/proof-83698-config.json\" } } ``` **test 2b — successful `config.patch` with `gateway.reload.mode=off` → sentinel on disk and direct sigusr1 scheduled** (the code path most analogous to the original incident — a long-running gateway receiving sigusr1 directly): ``` returned restart !== undefined: pass restart.mode: signal restart.delayms: 2000 restart.coalesced: false returned sentinelpath !== null: pass disk sentinel written: pass ``` **test 3 — rejected `config.apply` (`changedpaths: []`) → guard fires (same invariant for the `.apply` rpc):** ``` [gateway] config.apply restart skipped actor=proof-83698 device=proof-device ip=127.0.0.1 conn=proof-conn (no changed paths; rejected or no-op write) returned restart === undefined: pass returned sentinelpath === null: pass disk sentinel absent: pass audit warning logged with actor info: pass ``` **test 4 — incident replay: two consecutive rejected patches** (the actual scenario from the original incident report — `config.patch` rejected for protected paths, caller retries with `config.apply`, both rejected): ``` [gateway] config.patch restart skipped actor=proof-83698 device=proof-device ip=127.0.0.1 conn=proof-conn (no changed paths; rejected or no-op write) [gateway] config.apply restart skipped actor=proof-83698 device=proof-device ip=127.0.0.1 conn=proof-conn (no changed paths; rejected or no-op write) first call (config.patch) restart === undefined: pass first call (config.patch) sentinelpath === null: pass second call (config.apply) restart === undefined: pass second call (config.apply) sentinelpath === null: pass disk sentinel absent after both: pass both audit warnings captured (two skipped lines): pass ``` summary across all five sub-tests: ```json { \"test1_rejected_patch\": { \"restart_undefined\": true, \"sentinel_path_null\": true, \"disk_sentinel_absent_after\": true, \"audit_warning_logged\": true }, \"test2a_successful_patch_hybrid\": { \"restart_deferred_to_watcher\": true, \"sentinel_path_returned\": true, \"disk_sentinel_written\": true }, \"test2b_successful_patch_reload_off\": { \"restart_directly_scheduled\": true, \"sentinel_path_returned\": true, \"disk_sentinel_written\": true }, \"test3_rejected_apply\": { \"restart_undefined\": true, \"sentinel_path_null\": true, \"disk_sentinel_absent_after\": true, \"audit_warning_logged\": true }, \"test4_incident_replay\": { \"first_restart_undefined\": true, \"first_sentinel_path_null\": true, \"second_restart_undefined\": true, \"second_sentinel_path_null\": true, \"disk_sentinel_absent_after_both\": true, \"both_audit_warnings_logged\": true } } all invariants hold: yes ``` ### observed result after fix - the structural `changedpaths.length === 0` guard fires for both `config.patch` and `config.apply` rejected-path replays. the helper short-circuits before `trywriterestartsentinelpayload` and before `schedulegatewaysigusr1restart` — verified disk-side (`/tmp/.../restart-sentinel.json` does not exist) and structurally (the returned `restart` is `undefined` and `sentinelpath` is `null`). - the audit warning lands on the real `createsubsystemlogger(\"gateway\")` with the full actor identity (`actor=proof-83698 device=proof-device ip=127.0.0.1 conn=proof-conn`) plus the `(no changed paths; rejected or no-op write)` reason. future-you grepping `gateway logs` after a suspected restart will see the skipped-restart trail. - the guard is narrowly scoped: with `changedpaths: [\"channels.slack.bottoken\"]` (a real path that the reload plan flags `restartgateway: true`) the helper writes a populated `restart-sentinel.json` to disk in both **hybrid** (default — file watcher owns sigusr1) and **off** (helper schedules sigusr1 directly) reload modes. the guard does not regress the positive path. - replay of the original incident scenario (rejected `config.patch` followed by rejected `config.apply`) leaves the state directory clean: zero sentinel files, zero queued restarts, two audit-warning lines. the gateway cannot enter the \"draining for restart\" zombie state from this code path. ### what was not tested - a real end-to-end rpc trip from a control-plane client through `confighandlers[\"config.patch\"]` over a real gateway socket. the pr's own 6 unit tests in `src/gateway/server.config-patch.test.ts` already cover the rpc handler with `vi.spyon(restartmodule, \"schedulegatewaysigusr1restart\")` and assert zero invocations across all six rejection scenarios — this proof captures the structural backstop that those tests guard. - coalescing/dedup of sigusr1 arriving during the in-process restart startup window (`run-loop.ts` resets `shuttingdown` when the new lifecycle begins). the pr explicitly calls this out as out-of-scope — needs a separate pr with its own test plan since it lives in `src/infra/restart.ts` / `src/infra/run-loop.ts`, not the config write flow. - a real `pnpm build` of the gateway binary. the 2 gb cgroup of the sandbox capturing this proof oom-killed the full build; the rebased helper was verified instead via direct module import through `tsx`, which is the same typescript that `pnpm build` would have bundled. the production code path being tested (helper → restart sentinel writer → sigusr1 scheduler) is identical in both modes. ### test plan tick-down (on head `c48ac4772f`) - [x] `src/gateway/server-methods/config-write-flow.ts` — structural `changedpaths.length === 0` guard at line 259 fires for both `config.patch` and `config.apply` - [x] `src/gateway/server.config-patch.test.ts` — 6 regression tests pass (unchanged from pr body) - [x] real-behavior end-to-end against the rebased helper (this comment): **17 of 17 sub-invariants pass** - [x] production positive path (sentinel write + sigusr1 schedule with non-empty `changedpaths`) unchanged — tests 2a + 2b prove no regression cc @steipete @vincentkoc — happy to commit `scripts/proof-83698.ts` to the branch if you'd prefer a reusable harness over a one-shot artifact. the mergeable status is currently `mergeable` against `upstream/main` at `7cb2571a99`.",
+      "intent": "freeform_assist",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -57,34 +154,101 @@
       "repair_reason": null,
       "review_summary": null,
       "review_followup": null,
-      "freeform_prompt": null,
+      "freeform_prompt": "— adding the requested real-behavior proof. The PR body's \"Test results\" section ran the regression suite via `pnpm vitest`, which (as ClawSweeper rightly flagged) is unit-level and doesn't satisfy the proof gate on its own. This comment is a real-environment capture that exercises the rebased production helper against an on-disk fixture directory and observes the rejection-no-restart invariant end-to-end. (Body edit isn't an option from my account; Wayne / maintainers, ping me if you'd rather have the body amended.) ### Behavior or issue addressed A downstream incident left a long-running OpenClaw gateway in a permanent `Gateway is draining for restart; new tasks are not accepted` zombie state after two consecutive **rejected** `config.patch` / `config.apply` calls. This PR pins the invariant that rejected control-plane writes never write a restart sentinel and never call `scheduleGatewaySigusr1Restart`, via a structural `changedPaths.length === 0` guard in `resolveGatewayConfigRestartWriteResult` plus six regression tests. ### Real environment tested PR HEAD `c48ac4772f` exercised via `scripts/proof-83698.ts`, a tsx harness that imports the **production** `resolveGatewayConfigRestartWriteResult` from `src/gateway/server-methods/config-write-flow.ts` and the production `resolveRestartSentinelPath` from `src/infra/restart-sentinel.ts`, then calls the helper directly against a real on-disk `OPENCLAW_STATE_DIR` (`/tmp/openclaw-proof-83698-state-*`, created via `fs.mkdtempSync`). Real Node 22 (`node v22.22.2`, `Linux 6.8.0-110-generic x64`), real filesystem (`writeJson` produces a real `restart-sentinel.json` on the positive path; absence is verified by `fs.existsSync`), real `createSubsystemLogger(\"gateway\")` wrapped to capture warn/info/error lines so the audit log assertion is byte-for-byte from the production logger. `scheduleGatewaySigusr1Restart` is the real exported function from `src/infra/restart.ts`; it returns a `ScheduledRestart` object whose underlying timer is cancelled by the harness before exit so the proof doesn't leave a queued SIGUSR1 in the process. ### Exact steps or command run after this patch ```bash cd ~/work/openclaw git checkout fix/gateway-reject-no-reload # HEAD c48ac4772f git log -1 --oneline # c48ac4772f fix(gateway): rejected config.patch/apply never queues SIGUSR1 restart pnpm install --frozen-lockfile # pnpm 11.1.0 ./node_modules/.bin/tsx scripts/proof-83698.ts # runs four scenarios + structural invariant checks ``` ### Evidence after fix **Test 1 — rejected `config.patch` (`changedPaths: []`) → guard fires:** ``` [gateway] config.patch restart skipped actor=proof-83698 device=proof-device ip=127.0.0.1 conn=proof-conn (no changed paths; rejected or no-op write) returned restart === undefined: PASS returned sentinelPath === null: PASS disk sentinel absent: PASS audit warning logged with actor info: PASS ``` **Test 2a — successful `config.patch` in HYBRID mode (production default) → sentinel on disk, no direct SIGUSR1:** ``` returned restart === undefined: PASS (hybrid mode defers SIGUSR1 to file watcher) returned sentinelPath !== null: PASS disk sentinel written: PASS disk sentinel payload (excerpt): { \"kind\": \"config-patch\", \"status\": \"ok\", \"ts\": 1781108163242, \"sessionKey\": \"control:proof-83698\", \"message\": \"successful-patch-hybrid\", \"doctorHint\": \"Run: openclaw doctor --non-interactive\", \"stats\": { \"mode\": \"config.patch\", \"root\": \"/tmp/proof-83698-config.json\" } } ``` **Test 2b — successful `config.patch` with `gateway.reload.mode=off` → sentinel on disk AND direct SIGUSR1 scheduled** (the code path most analogous to the original incident — a long-running gateway receiving SIGUSR1 directly): ``` returned restart !== undefined: PASS restart.mode: signal restart.delayMs: 2000 restart.coalesced: false returned sentinelPath !== null: PASS disk sentinel written: PASS ``` **Test 3 — rejected `config.apply` (`changedPaths: []`) → guard fires (same invariant for the `.apply` RPC):** ``` [gateway] config.apply restart skipped actor=proof-83698 device=proof-device ip=127.0.0.1 conn=proof-conn (no changed paths; rejected or no-op write) returned restart === undefined: PASS returned sentinelPath === null: PASS disk sentinel absent: PASS audit warning logged with actor info: PASS ``` **Test 4 — incident replay: two consecutive rejected patches** (the actual scenario from the original incident report — `config.patch` rejected for protected paths, caller retries with `config.apply`, both rejected): ``` [gateway] config.patch restart skipped actor=proof-83698 device=proof-device ip=127.0.0.1 conn=proof-conn (no changed paths; rejected or no-op write) [gateway] config.apply restart skipped actor=proof-83698 device=proof-device ip=127.0.0.1 conn=proof-conn (no changed paths; rejected or no-op write) first call (config.patch) restart === undefined: PASS first call (config.patch) sentinelPath === null: PASS second call (config.apply) restart === undefined: PASS second call (config.apply) sentinelPath === null: PASS disk sentinel absent after both: PASS both audit warnings captured (two skipped lines): PASS ``` Summary across all five sub-tests: ```json { \"test1_rejected_patch\": { \"restart_undefined\": true, \"sentinel_path_null\": true, \"disk_sentinel_absent_after\": true, \"audit_warning_logged\": true }, \"test2a_successful_patch_hybrid\": { \"restart_deferred_to_watcher\": true, \"sentinel_path_returned\": true, \"disk_sentinel_written\": true }, \"test2b_successful_patch_reload_off\": { \"restart_directly_scheduled\": true, \"sentinel_path_returned\": true, \"disk_sentinel_written\": true }, \"test3_rejected_apply\": { \"restart_undefined\": true, \"sentinel_path_null\": true, \"disk_sentinel_absent_after\": true, \"audit_warning_logged\": true }, \"test4_incident_replay\": { \"first_restart_undefined\": true, \"first_sentinel_path_null\": true, \"second_restart_undefined\": true, \"second_sentinel_path_null\": true, \"disk_sentinel_absent_after_both\": true, \"both_audit_warnings_logged\": true } } ALL INVARIANTS HOLD: yes ``` ### Observed result after fix - The structural `changedPaths.length === 0` guard fires for both `config.patch` and `config.apply` rejected-path replays. The helper short-circuits BEFORE `tryWriteRestartSentinelPayload` and BEFORE `scheduleGatewaySigusr1Restart` — verified disk-side (`/tmp/.../restart-sentinel.json` does not exist) AND structurally (the returned `restart` is `undefined` and `sentinelPath` is `null`). - The audit warning lands on the real `createSubsystemLogger(\"gateway\")` with the full actor identity (`actor=proof-83698 device=proof-device ip=127.0.0.1 conn=proof-conn`) plus the `(no changed paths; rejected or no-op write)` reason. Future-you grepping `gateway logs` after a suspected restart will see the skipped-restart trail. - The guard is narrowly scoped: with `changedPaths: [\"channels.slack.botToken\"]` (a real path that the reload plan flags `restartGateway: true`) the helper writes a populated `restart-sentinel.json` to disk in both **HYBRID** (default — file watcher owns SIGUSR1) and **OFF** (helper schedules SIGUSR1 directly) reload modes. The guard does NOT regress the positive path. - Replay of the original incident scenario (rejected `config.patch` followed by rejected `config.apply`) leaves the state directory clean: zero sentinel files, zero queued restarts, two audit-warning lines. The gateway cannot enter the \"draining for restart\" zombie state from this code path. ### What was not tested - A real end-to-end RPC trip from a control-plane client through `configHandlers[\"config.patch\"]` over a real gateway socket. The PR's own 6 unit tests in `src/gateway/server.config-patch.test.ts` already cover the RPC handler with `vi.spyOn(restartModule, \"scheduleGatewaySigusr1Restart\")` and assert zero invocations across all six rejection scenarios — this proof captures the structural backstop that those tests guard. - Coalescing/dedup of SIGUSR1 arriving during the in-process restart startup window (`run-loop.ts` resets `shuttingDown` when the new lifecycle begins). The PR explicitly calls this out as out-of-scope — needs a separate PR with its own test plan since it lives in `src/infra/restart.ts` / `src/infra/run-loop.ts`, not the config write flow. - A real `pnpm build` of the gateway binary. The 2 GB cgroup of the sandbox capturing this proof OOM-killed the full build; the rebased helper was verified instead via direct module import through `tsx`, which is the same TypeScript that `pnpm build` would have bundled. The production code path being tested (helper → restart sentinel writer → SIGUSR1 scheduler) is identical in both modes. ### Test plan tick-down (on HEAD `c48ac4772f`) - [x] `src/gateway/server-methods/config-write-flow.ts` — structural `changedPaths.length === 0` guard at line 259 fires for both `config.patch` and `config.apply` - [x] `src/gateway/server.config-patch.test.ts` — 6 regression tests pass (unchanged from PR body) - [x] Real-behavior end-to-end against the rebased helper (this comment): **17 of 17 sub-invariants PASS** - [x] Production positive path (sentinel write + SIGUSR1 schedule with non-empty `changedPaths`) unchanged — Tests 2a + 2b prove no regression cc @steipete @vincentkoc — happy to commit `scripts/proof-83698.ts` to the branch if you'd prefer a reusable harness over a one-shot artifact. The mergeable status is currently `MERGEABLE` against `upstream/main` at `7cb2571a99`.",
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): rejected config.patch/apply never queues SIGUSR1 restart",
+        "body": "## Summary\n\nPins the invariant that a **rejected** `config.patch` / `config.apply` RPC never schedules a gateway SIGUSR1 restart, with both a structural guard and regression tests. Filed in response to a downstream incident where a long-running gateway ended up in a permanent \"draining for restart\" zombie state after two consecutive rejected `config.patch`/`config.apply` calls.\n\n## Reproduction\n\nInside a long-running gateway:\n\n1. A control-plane caller invokes `config.patch` to inject `channels.slack.*` tokens.\n2. Gateway rejects: `gateway config.patch cannot change protected config paths: channels.slack.botToken, channels.slack.appToken, ...`\n3. Caller retries with `config.apply` (full file). Gateway rejects again with the same protected-paths error.\n4. **Despite both patches being rejected**, the reload manager logged `config change requires gateway restart (channels.slack) — deferring until N operation(s), R reply(ies), E embedded run(s) complete` and queued two SIGUSR1s ~2s apart.\n5. The second SIGUSR1 arrived during the in-process restart window (after `ready` but before `starting channels and sidecars` finished). From that moment forward every model call returned `Gateway is draining for restart; new tasks are not accepted`. State persisted for ~75 minutes until recovery via process restart.\n\n## Diagnosis\n\nReading the current gateway code, the reload manager already only acts on *successfully-applied* writes:\n- The chokidar file-watcher path reads the on-disk snapshot via `readSnapshot()`.\n- The in-process write path goes through `notifyRuntimeConfigWriteListeners`, which fires *only* after `replaceConfigFile` commits.\n\nAnd `config.ts:configHandlers[\"config.patch\"]` and `[\"config.apply\"]` both validate (parseConfigJson5 → applyMergePatch → restoreRedactedValues → validateConfigObjectWithPlugins → ensureResolvableSecretRefsOrRespond → diffConfigPaths) **before** calling `commitGatewayConfigWrite` and `resolveGatewayConfigRestartWriteResult`. Any rejection branch calls `respond(false, ..., errorShape(...))` and returns without writing.\n\nSo the structural invariant *holds today* — but it's enforced by control flow alone, not by a structural guard, and the observed correlation between rejected patches and a queued restart was nowhere covered by regression tests. The most likely actual mechanism in the incident is a separate successful `replaceConfigFile` write racing alongside the two rejected ones, which is a legitimate restart trigger but was temporally indistinguishable in the logs from the rejected patches.\n\nThis PR locks the rejection-no-restart invariant in place so a future refactor can't break it.\n\n## Changes\n\n### `src/gateway/server-methods/config-write-flow.ts`\n\n`resolveGatewayConfigRestartWriteResult` now short-circuits when `changedPaths.length === 0`:\n- Refuses to write the restart sentinel.\n- Refuses to call `scheduleGatewaySigusr1Restart`.\n- Logs an audit warning with the control-plane actor.\n\nCallers (`config.patch` and `config.apply` handlers in `config.ts`) only invoke this helper after `commitGatewayConfigWrite` succeeds and a non-empty `changedPaths` is computed, so this guard is a defense-in-depth backstop, not a behavior change in any current code path.\n\n### `src/gateway/server.config-patch.test.ts`\n\nNew regression suite `gateway rejected config writes do not queue restart` spies on `scheduleGatewaySigusr1Restart` via `vi.spyOn(restartModule, ...)` and asserts no call happens when:\n\n- `config.patch` is rejected for invalid JSON (parse failure)\n- `config.patch` is rejected for `raw=null` (non-object)\n- `config.patch` is rejected for SecretRef resolution failure\n- `config.apply` is rejected for invalid raw (parse failure)\n- `config.apply` is rejected for SecretRef resolution failure\n- **Two rejected patches arrive consecutively** — direct replay of the incident scenario (config.patch rejected → config.apply rejected, neither queues a restart)\n\nEach test also asserts the on-disk config hash is unchanged across the rejection.\n\n## Acceptance criteria\n\n- [x] Rejected `config.patch`/`config.apply` calls do not trigger reload evaluation or restart queue → covered by 6 regression tests\n- [x] Reload manager only acts on successfully-applied config diffs → already enforced (reload reads disk / subscribes to post-commit notifications); now also backed by the `changedPaths.length === 0` guard\n- [x] Regression test: rejected protected-path patch → no reload, no restart, gateway state unchanged → covered (the agent-side `assertGatewayConfigMutationAllowed` protected-paths guard is already covered by `src/agents/openclaw-gateway-tool.test.ts`; this PR adds the server-side rejection coverage)\n- [ ] **Stretch:** detect & coalesce duplicate SIGUSR1 arriving during the in-process restart window — **not included in this PR**, see Out of scope below\n\n## Test results\n\n```\npnpm vitest --config test/vitest/vitest.gateway-server.config.ts\n  src/gateway/server.config-patch.test.ts\n    gateway rejected config writes do not queue restart\n      ✓ does not schedule SIGUSR1 when config.patch is rejected for invalid JSON\n      ✓ does not schedule SIGUSR1 when config.patch is rejected for non-object raw\n      ✓ does not schedule SIGUSR1 when config.patch is rejected for SecretRef resolution failure\n      ✓ does not schedule SIGUSR1 when config.apply is rejected for invalid raw\n      ✓ does not schedule SIGUSR1 when config.apply is rejected for SecretRef resolution failure\n      ✓ does not schedule SIGUSR1 when two rejected patches arrive consecutively\n```\n\nFull `vitest.gateway-server` config: **1045 passing**, 1 pre-existing failure in `gateway config methods > returns noop for config.patch when config is unchanged` (asserts `res.payload?.noop` is `true` but server returns `noop` differently; verified on `main` at the current HEAD). Not introduced by this PR.\n\nFull `vitest.gateway-methods`: **831 passing**.  \nFull `vitest.gateway-core`: **1938 passing** (includes all `config-reload.test.ts` and `server-reload-handlers.test.ts`).  \n`src/agents/openclaw-gateway-tool.test.ts`: **26 passing × 2 projects** (existing agent-side protected-path coverage unchanged).  \n`src/infra/infra-runtime.test.ts`: **27 passing** (existing SIGUSR1 coalescing coverage unchanged).\n\n## Out of scope\n\n**Coalescing duplicate SIGUSR1 arriving during in-process restart startup window** — `scheduleGatewaySigusr1Restart` in `src/infra/restart.ts` already coalesces against `pendingRestartTimer`/`hasUnconsumedRestartSignal`, but `run-loop.ts` resets `shuttingDown=false` when a new lifecycle iteration begins, which is what let the second SIGUSR1 from the original incident race into the new lifecycle's startup window. Fixing this requires deeper changes to the run-loop's signal acceptance window and warrants a separate PR with its own test plan.\n",
+        "branch": "fix/gateway-reject-no-reload",
+        "head_sha": "c48ac4772f1dee494fa23248535cf314c0890b95",
+        "author": "adapepper",
+        "labels": [
+          "gateway",
+          "size: S",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-methods/config-write-flow.ts",
+            "additions": 26,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.config-patch.test.ts",
+            "additions": 133,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83698",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83698.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 71,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-control-plane-runtime:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-control-plane-runtime:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "author association NONE and repository permission read are not allowed"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1967,
+    "total_ms": 2605,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 538
+        "ms": 339
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1945
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 5
       },
       {
         "name": "execute_commands",
-        "ms": 1416
+        "ms": 281
       },
       {
         "name": "append_ledger",
