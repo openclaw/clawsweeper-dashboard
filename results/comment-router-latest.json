@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T01:21:20.267Z",
+  "generated_at": "2026-06-15T01:21:31.694Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-14T22:21:17.600Z",
+  "since": "2026-06-14T22:21:29.496Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    90412
+    91784
   ],
   "comment_ids": [
-    4703758282
+    4703762279
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4703762412,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 3,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:90412:4703758282:2026-06-15T01:19:24Z:re_review",
-      "comment_id": "4703758282",
-      "comment_version_key": "4703758282:2026-06-15T01:19:24Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90412#issuecomment-4703758282",
+      "idempotency_key": "comment-router:openclaw/openclaw:91784:4703762279:2026-06-15T01:20:44Z:re_review",
+      "comment_id": "4703762279",
+      "comment_version_key": "4703762279:2026-06-15T01:20:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91784#issuecomment-4703762279",
       "repo": "openclaw/openclaw",
-      "issue_number": 90412,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-15T01:19:24Z",
-      "comment_updated_at": "2026-06-15T01:19:24Z",
-      "status_comment_id": null,
-      "trigger": "mention",
+      "issue_number": 91784,
+      "author": "jesse-merhi",
+      "author_id": 79823012,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-06-15T01:20:44Z",
+      "comment_updated_at": "2026-06-15T01:20:44Z",
+      "status_comment_id": 4703762412,
+      "trigger": "slash",
       "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
@@ -61,43 +61,54 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-15T01:21:32.409Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 91784
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-15T01:21:34.357Z",
+          "response_comment_id": "4703732762",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(sessions): cache warm transcript reads to avoid per-turn re-parse",
-        "body": "## Summary\n\nFixes #83943.\n\nThe session resource loader re-parsed the entire transcript on every warm turn. `loadEntriesFromFile` ran `readFileSync` + line-by-line `JSON.parse` over the whole JSONL each time `SessionManager.open` was called, so the per-warm-turn cost grew O(n) with transcript length. The reporter measured the session-resource-loader stage climbing from ~14.5s → 31.5s → 42.3s across consecutive warm turns of a single session, eventually tripping a WebSocket timeout.\n\n## What changed\n\n**`src/agents/sessions/session-manager.ts`** — add a bounded (max 8) snapshot-keyed cache for `loadEntriesFromFile`. The cache key is a high-resolution file snapshot (`dev`/`ino`/`size` + nanosecond `mtime`/`ctime` via `statSync({ bigint: true })`); a warm open whose snapshot still matches returns the cached entries without re-reading or re-parsing the file. Only current-version (v3) transcripts are cached — older versions still go through migration with fresh mutable entries, so cache hits never share objects that migrate. Cached entries are deep-frozen and handed out as a shallow array copy (`.slice()`), so callers cannot mutate the cached prefix and manager appends land on a separate array, while avoiding a per-open deep clone. Appends update the cache incrementally; the cache invalidates when the file snapshot changes (external replace / another writer). Adds `syncSnapshotAfterHeaderRewrite()` so an out-of-band transcript rewrite can refresh the manager snapshot/cache (see follow-up below).\n\n**`src/agents/embedded-agent-runner/session-manager-init.ts`** — after `prepareSessionManagerForRun` rewrites the on-disk header (the recovered-header and normalization branches), call `syncSnapshotAfterHeaderRewrite()` so the manager's snapshot/cache match the rewritten file before the first append.\n\n**`src/agents/sessions/session-manager.test.ts`** — 9 tests: warm reuse without re-parse, append without stale readback, cache invalidation on external file replacement, invalidation when another writer appends before this manager persists, old-version transcripts still migrating while bypassing the cache, embedded header normalization without re-parse, and (new) keeping the warm cache across an embedded prepare-plus-append so the next warm open does not reparse.\n\n## Real behavior proof\n\n**Behavior addressed:** `loadEntriesFromFile` no longer re-parses the whole transcript on every warm `SessionManager.open`. Warm opens of an unchanged current-version session reuse cached entries, eliminating the per-warm-turn O(n) re-parse cost, while session correctness (no stale or shared-mutation, cache invalidation on external change) is preserved.\n\n**Real environment tested:** Local worktree of `origin/main` at base `ca9249e357291890125a5a801a5681defbc816ff` with this patch applied, Node v22.22.0. Drove the real exported `loadEntriesFromFile` via `node --import tsx` — the actual production loader, no mocks. `JSON.parse` call count measured by wrapping the global parse around the loop.\n\n**Exact steps or command run after this patch:**\n```\n# Real production loader, 4000-entry transcript, 12 warm opens:\nnode --import tsx ./proof-83943.mts\n# Baseline measured by git-stashing this patch and re-running the same harness.\n\n# Regression suite:\nnode scripts/run-vitest.mjs run src/agents/sessions/session-manager.test.ts\n```\n\n**Evidence after fix:** Real output driving the production `loadEntriesFromFile` over a 4000-entry transcript, 12 warm opens:\n```\n# AFTER (this patch):\ntranscript entries = 4000 (+1 session header), warm opens = 12\nentries returned per open = 4001 (correctness: stable across opens)\nJSON.parse calls = 4001\nwall time = 45.0ms\n\n# BASELINE (origin/main, this patch stashed):\nJSON.parse calls = 48012\nwall time = 198.0ms\n```\n\n**Observed result after fix:** `JSON.parse` calls drop from 48012 (12 × full re-parse) to 4001 (one initial parse; the 11 warm hits do zero parsing) — a 91.7% reduction — and wall time drops from 198.0ms to 45.0ms (~4.4× faster). Every open still returns all 4001 entries, so correctness is preserved.\n\n**What was not tested:** No live end-to-end Windows + Feishu + MiniMax reproduction of the original ~42s stall (that environment is unavailable); the change is in the deterministic transcript loader, exercised directly with the real exported function and disk readback. This PR addresses only the per-warm-turn transcript-growth subpath, not the constant `reload()` baseline cost discussed in #82536.\n\n## Follow-up: embedded prepare-plus-append cache gap (code-review finding)\n\nCode review found that the embedded runner's `prepareSessionManagerForRun` rewrites the transcript header *after* `SessionManager.open`, leaving the cached `sessionFileSnapshot` describing the pre-rewrite file. The first append then took the snapshot-mismatch branch in `rememberAppendedSessionEntry`, dropped the cache, and the next warm embedded turn reparsed the whole transcript — so the warm cache did not survive the embedded path.\n\n**Fix:** the header rewrite now calls `syncSnapshotAfterHeaderRewrite()`, which refreshes the snapshot and cache from the rewritten file, so the first append stays on the incremental cache path.\n\n**Proof (real `SessionManager` + real on-disk transcript, `JSON.parse` readback):** new regression `keeps the warm cache after prepareSessionManagerForRun rewrites then appends` drives the real `SessionManager.open` → `prepareSessionManagerForRun` (real header rewrite to disk) → `appendMessage` (real append to disk) → another warm `SessionManager.open`, counting global `JSON.parse`:\n```\n# WITH FIX:\nnode scripts/run-vitest.mjs src/agents/sessions/session-manager.test.ts\nTests  9 passed (9)\n# the new test asserts JSON.parse calls == 0 on the warm open after prepare+append\n\n# NEGATIVE CONTROL (git-stash the session-manager-init.ts sync calls):\nTests  1 failed | 8 passed (9)\n# the new test fails: the post-rewrite append drops the cache, so the next warm open reparses (JSON.parse > 0)\n```\n\n## Validation (supplemental)\n\n- `node scripts/run-vitest.mjs run src/agents/sessions/session-manager.test.ts` → `Tests 9 passed (9)`\n- negative control (stash the embedded sync calls) → the new embedded-cache test fails, the other 8 pass — proves the fix is required and the test is not a tautology\n- `tsgo:core` / `tsgo:core:test` → no new errors in changed files; `oxfmt` → clean\n",
-        "branch": "alix/fix-83943",
-        "head_sha": "a4a8b1335b843ff432ef01bf3b41521d545ddcac",
-        "author": "alix-007",
+        "title": "fix(voice-call): require realtime websocket path boundary",
+        "body": "Summary:\n- Tightens realtime voice WebSocket upgrade routing so same-prefix sibling paths are not routed to the realtime handler.\n- Previously, `/voice/stream/realtime-evil/token` matched `/voice/stream/realtime` because the matcher used raw `startsWith(pattern)` matching.\n- The matcher now accepts only the exact configured path or a real slash-delimited child path under it.\n- Preserves the existing root `realtime.streamPath=\"/\"` behavior so root child paths such as `/token` still route to the realtime handler.\n- Keeps the regression proof in `extensions/voice-call/src/webhook.test.ts`, exercising the real `VoiceCallWebhookServer` upgrade listener rather than a private matcher.\n\nValidation:\n- `node scripts/run-vitest.mjs run extensions/voice-call/src/webhook.test.ts`\n  - 42 passed\n- `node scripts/run-vitest.mjs run extensions/voice-call/src/webhook.test.ts extensions/voice-call/src/webhook/realtime-handler.test.ts`\n  - 61 passed\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/voice-call/src/webhook.ts extensions/voice-call/src/webhook.test.ts`\n  - passed\n- `./node_modules/.bin/oxfmt --check --threads=1 extensions/voice-call/src/webhook.ts extensions/voice-call/src/webhook.test.ts`\n  - passed\n- `git diff --check`\n  - passed\n\n## Real behavior proof\n\nBehavior addressed: Realtime voice WebSocket upgrade routing accepted same-prefix sibling paths such as `/voice/stream/realtime-evil/token` for a configured realtime stream path of `/voice/stream/realtime`.\n\nReal environment tested: Local OpenClaw checkout on macOS with Node, running the real `VoiceCallWebhookServer` on an ephemeral localhost TCP port through the webhook regression harness.\n\nExact steps or command run after this patch: `node scripts/run-vitest.mjs run extensions/voice-call/src/webhook.test.ts`\n\nEvidence after fix: Terminal output from the post-fix local run showed the webhook regression file passing against the real bound server path, including the realtime WebSocket upgrade routing cases:\n```text\nnode scripts/run-vitest.mjs run extensions/voice-call/src/webhook.test.ts\n\nextensions/voice-call/src/webhook.test.ts\n  VoiceCallWebhookServer realtime WebSocket routing\n    ✓ does not route sibling paths through the realtime stream handler\n    ✓ routes root stream child paths through the realtime stream handler\n\nTest Files  1 passed (1)\nTests       42 passed (42)\n```\n\nObserved result after fix: `/voice/stream/realtime/token` reached the realtime handler and returned the test handler's 401 response. `/voice/stream/realtime-extra/token` did not increase the realtime handler call count. With `realtime.streamPath=\"/\"`, `/token` still reached the realtime handler.\n\nWhat was not tested: External telephony-provider infrastructure and remote reverse-proxy ingress were not exercised; this proof is limited to the local OpenClaw webhook server route boundary and WebSocket upgrade dispatch.\n",
+        "branch": "fix/voice-call-realtime-ws-path-boundary",
+        "head_sha": "45e6698d553e29ea6db10e797f4ae460af3a6c8f",
+        "author": "jason-allen-oneal",
         "labels": [
-          "agents",
-          "size: L",
+          "channel: voice-call",
+          "size: S",
           "proof: supplied",
           "proof: sufficient",
-          "P1",
+          "P2",
           "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 compatibility",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/session-manager-init.ts",
-            "additions": 3,
+            "path": "extensions/voice-call/src/webhook.test.ts",
+            "additions": 139,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/sessions/session-manager.test.ts",
-            "additions": 388,
+            "path": "extensions/voice-call/src/webhook.ts",
+            "additions": 12,
             "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/session-manager.ts",
-            "additions": 234,
-            "deletions": 7,
             "changeType": "MODIFIED"
           }
         ],
@@ -106,18 +117,17 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90412",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90412.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91784",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91784.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 165,
+          "total": 159,
           "counts": {
-            "SUCCESS": 135,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
+            "SUCCESS": 128,
+            "SKIPPED": 31
           },
           "blockers": [],
           "pending": [],
@@ -125,22 +135,21 @@
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2852,
+    "total_ms": 5366,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 445
+        "ms": 520
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2209
+        "ms": 1667
       },
       {
         "name": "classify_commands",
@@ -148,7 +157,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 185
+        "ms": 3159
       },
       {
         "name": "append_ledger",
