@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T11:00:28.281Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-15T11:00:31.642Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-15T08:00:25.772Z",
+  "since": "2026-06-15T08:00:30.364Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    91957
+    395
   ],
   "comment_ids": [
     4707198499
@@ -33,34 +33,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:91957:4707198499:2026-06-15T10:59:21Z:re_review",
-      "comment_id": "4707198499",
-      "comment_version_key": "4707198499:2026-06-15T10:59:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91957#issuecomment-4707198499",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 91957,
-      "author": "amknight",
-      "author_id": 15041791,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-06-15T10:59:21Z",
-      "comment_updated_at": "2026-06-15T10:59:21Z",
-      "status_comment_id": 4707198871,
-      "trigger": "slash",
-      "command": "re-review",
-      "intent": "re_review",
+      "idempotency_key": "clawsweeper-repair:openclaw/crabbox:395:4707165675:2026-06-15T11:00:27Z:clawsweeper_auto_repair",
+      "comment_id": "4707165675",
+      "comment_version_key": "4707165675:2026-06-15T11:00:27Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/395#issuecomment-4707165675",
+      "repo": "openclaw/crabbox",
+      "target_branch": null,
+      "issue_number": 395,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-15T10:55:36Z",
+      "comment_updated_at": "2026-06-15T11:00:27Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=2d87fb5a15caa654cb6e318165d22db031822522)",
+      "review_summary": "The PR gates WebVNC bridge commands and egress diagnostic fields on manage access, updates portal rendering, and adds Worker regression coverage for use versus manage share viewers.\n\nReproducibility: yes. Source inspection on current main shows visibility-only WebVNC and egress status paths returning manage-only diagnostics to `use` share viewers; I did not run Worker tests because this review is read-only.",
+      "review_followup": "- [P1] Contributor action is needed for real behavior proof, and maintainers should review the security-sensitive redaction before merge.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "2d87fb5a15caa654cb6e318165d22db031822522",
       "finding_id": null,
       "status": "executed",
       "actions": [
@@ -84,39 +84,38 @@
       "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "perf(sessions): share one enumeration across archive retention sweeps",
-        "body": "## Summary\n\nEvery non-warn session-store save runs archived-transcript retention cleanup, and reset-archive retention **defaults on** (`resolveResetArchiveRetentionMs` falls back to `pruneAfterMs` when unset). So `saveSessionStoreUnlocked` invoked `cleanupArchivedSessionTranscripts` twice back-to-back — reason `\"deleted\"`, then reason `\"reset\"` — and each call performed its own full `readdir` of the per-agent sessions directory. Session-store saves happen per agent turn, which means active agents paid **two full directory enumerations per turn** by default.\n\nA production NFSv4.1 profile (Node trace of an active agent) captured exactly this signature: scans of `agents/main/sessions` in back-to-back pairs (inter-scan gaps of +0.00s), 3.4–3.8s per scan (~100 entries, with the NFS server amplifying each READDIR into per-entry metadata reads), each pair immediately preceding the `sessions.json` store write — ~21.7s of directory enumeration inside a 27-second active window. The pairs also serialize against transcript-append lock traffic on the same directory (lock open/unlink stalls of 2.6–3.5s while a scan is in flight).\n\nThe fix makes retention rules share one listing:\n\n- `cleanupArchivedSessionTranscripts` now accepts `rules: Array<{ reason, olderThanMs }>` and applies every rule from a **single `readdir` per directory**. An archive filename carries exactly one `.{reason}.{timestamp}` suffix, so per-entry matching is first-match.\n- Store maintenance passes both reasons in one call (one enumeration per save instead of two). The cron session reaper migrates to the same shape.\n- Invalid rules are dropped up front; a call with no valid rules never lists.\n- Rider in the same hot-path family: the disk-budget sweep's `readSessionsDirFiles` stat'd every session file **serially**; stats now run with bounded concurrency (8), so a budget sweep no longer serializes ~N per-file latency round trips on networked filesystems.\n\nBehavior is otherwise preserved: identical removal semantics per reason/threshold, same `removed`/`scanned` accounting, all callers migrated in this change.\n\nRelated work on the other enumeration sources the same investigation surfaced: #91091 (destructive sweeps must not act on failed enumerations) and #91841 (memory delta syncs stop full-scanning). This PR removes the store-save scan-pair source the trace actually captured.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/gateway/session-transcript-files.fs.archive-cleanup.test.ts src/gateway/session-transcript-files.fs.archive-events.test.ts src/config/sessions/disk-budget.test.ts src/config/sessions/store.pruning.integration.test.ts src/commands/sessions-cleanup.test.ts` — all 3 Vitest shards passed.\n- `pnpm tsgo:core`, `pnpm tsgo:core:test`, `node scripts/run-oxlint.mjs` on touched files — clean.\n- New tests prove: multiple rules served by a single `readdir` (spy-counted); per-rule age thresholds applied independently; archives whose reason has no rule are preserved; invalid rules dropped with no listing at all.\n- Not run here: a live NFS re-trace. The profile's own verification protocol applies directly — the back-to-back scan pairs preceding each `sessions.json` write should become single scans.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "ak/session-disk-budget-sweep",
-        "head_sha": "26ff3ebbe361674ce23ec8c721595e54584248c8",
-        "author": "amknight",
+        "title": "fix: redact shared lease bridge diagnostics",
+        "body": "## Summary\n\n- hide WebVNC bridge commands from `use` share viewers across lease, VNC, viewer-error, and dedicated-host portal surfaces\n- redact egress session identifiers, profile, allowlist, and timestamps for `use` viewers while preserving connection-state visibility\n- retain full diagnostics for owners, `manage` shares, and admins\n- add focused authorization regressions and changelog coverage\n\nFixes https://github.com/openclaw/crabbox/issues/384\n\n## Verification\n\n- `npm test --prefix worker` (609 tests passed)\n- `npm run format:check --prefix worker`\n- `npm run lint --prefix worker`\n- `npm run check --prefix worker`\n- `npm run check:node --prefix worker`\n- `npm run build --prefix worker`\n- `.agents/skills/autoreview/scripts/autoreview --mode local --stream-engine-output --parallel-tests 'npm test --prefix worker'` (clean; no accepted/actionable findings)",
+        "branch": "fix/share-viewer-diagnostic-redaction",
+        "head_sha": "2d87fb5a15caa654cb6e318165d22db031822522",
+        "author": "steipete",
         "labels": [
-          "gateway",
-          "maintainer",
-          "size: M",
-          "rating: 🌊 off-meta tidepool"
+          "status: 📣 needs proof",
+          "P2",
+          "rating: 🦪 silver shellfish"
         ],
         "files": [
           {
-            "path": "src/config/sessions/disk-budget.ts",
-            "additions": 26,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store.ts",
-            "additions": 10,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/session-reaper.ts",
+            "path": "CHANGELOG.md",
             "additions": 1,
-            "deletions": 2,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/session-transcript-files.fs.archive-cleanup.test.ts",
-            "additions": 104,
+            "path": "worker/src/fleet.ts",
+            "additions": 25,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "worker/src/portal.ts",
+            "additions": 24,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "worker/test/fleet.test.ts",
+            "additions": 126,
             "deletions": 0,
             "changeType": "ADDED"
           },
@@ -132,41 +131,47 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91957",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91957.md",
+        "automerge_cluster_id": "automerge-openclaw-crabbox-395",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-395.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 163,
-          "gatingTotal": 158,
+          "total": 11,
+          "gatingTotal": 11,
           "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
+            "IN_PROGRESS": 2,
+            "SUCCESS": 9
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "Go:IN_PROGRESS",
+            "Release Check:IN_PROGRESS"
+          ],
+          "pending": [
+            "Go:IN_PROGRESS",
+            "Release Check:IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4974,
+    "total_ms": 1485,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 488
+        "ms": 266
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2005
+        "ms": 999
       },
       {
         "name": "classify_commands",
@@ -174,7 +179,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2453
+        "ms": 196
       },
       {
         "name": "append_ledger",
