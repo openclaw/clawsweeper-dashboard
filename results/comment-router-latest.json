@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-15T14:25:20.643Z",
+  "generated_at": "2026-06-15T14:25:38.495Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-15T11:25:20.275Z",
+  "since": "2026-06-15T11:25:36.652Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    93312
+    93249
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,151 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93249:4706866041:2026-06-15T14:25:33Z:clawsweeper_needs_human",
+      "comment_id": "4706866041",
+      "comment_version_key": "4706866041:2026-06-15T14:25:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93249#issuecomment-4706866041",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93249,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-15T10:15:36Z",
+      "comment_updated_at": "2026-06-15T14:25:33Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] A narrow repair can make the live Telegram proof harness explicit-target only without changing the runtime fix.; Needs attention: The runtime fix does not broaden auth, but the new live proof script has an implicit Telegram chat targeting risk.; Review finding: [P2] Require an explicit Telegram proof chat — proof/telegram-edit-vs-send-proof.ts:217-229 (sha=729634c0429512ce85fdbf64323d6d02b8a66f6b)",
+      "review_summary": "The PR adds Telegram dispatch rotation for in-flight streamed answer preambles at tool boundaries, regression coverage, and an opt-in live Bot API proof harness.\n\nPR surface: Source +37, Tests +218, Docs +42, Other +338. Total +635 across 6 files.\n\nReproducibility: yes. Current main lacks the unfinalized `onToolStart` rotation, and the PR body provides live Bot API before/after output showing the overwrite before the patch and two sends after it; I did not run the live harness in this read-only review.",
+      "review_followup": "- [P2] A narrow repair can make the live Telegram proof harness explicit-target only without changing the runtime fix.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "729634c0429512ce85fdbf64323d6d02b8a66f6b",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(telegram): rotate in-flight answer preamble at tool boundary",
+        "body": "## Summary\n\n- Fixes a Telegram bug where a streamed answer **preamble** is overwritten instead of preserved when a tool runs mid-stream. The model streams a short preamble (e.g. *\"Let me check the current state of that file.\"*), calls a tool, then resumes with post-tool text — and the post-tool text **edited the preamble bubble** instead of sending a new message, so earlier content vanished from the chat. (Voice/media were unaffected — a separate code path.)\n- Why now: this hits default Telegram deployments (partial streaming is the default) and silently drops assistant output mid-turn.\n- Root cause is an **async race** at the tool boundary in the streaming draft pipeline (`dispatchTelegramMessage` + `createTelegramDraftStream`): rotation to a new message was gated on the preamble's Bot API send already having completed. Under fast timing the tool boundary fires while that send is still in flight, the guard bails, and the resumed text edits the preamble.\n- Intended outcome: the preamble always becomes its own message and post-tool text starts a fresh one, at any timing.\n- Out of scope: non-streaming and \"progress\" streaming modes, and media/voice replies (separate, already-correct paths).\n- Reviewers should focus on `rotateInFlightAnswerPreambleForToolBoundary` and the await-then-rotate ordering in `rotateLaneForNewMessage` → `stream.stop()` → `loop.flush()`.\n\n### Fix\n\n`rotateInFlightAnswerPreambleForToolBoundary` now rotates on **intent** — a preamble partial was emitted (`hasStreamedMessage`) — not on send-ack. It no longer requires `stream.messageId()` to be a number. `rotateAnswerLaneForNewMessage → rotateLaneForNewMessage → stream.stop() → loop.flush()` **awaits the in-flight preamble send** (`draft-stream-loop.ts`: `if (inFlightPromise) await inFlightPromise`) before `forceNewMessage()`, so the preamble is committed to its own message and the resumed text starts fresh — it can never fall through to an edit.\n\n## Linked context\n\nCloses #\n\nRelated #88682, Related #80294\n\nThis is the pre-existing near-miss to call out:\n\n- **#88682** (\"Preserve Telegram streamed text blocks between tool calls\") added `rotateFinalizedStream`, which rotates across a tool boundary **only for a lane already finalized** (`if (!lane.stream || !lane.finalized) return;`). It fixed the finalized-preamble case and stopped short of the in-flight (unfinalized) preamble.\n- **#80294** (\"keep verbose tool results separate from final answers\") added `prepareAnswerLaneForToolProgress`, which rotates **only when tool progress actually renders** — suppressed in partial streaming.\n- The first commit of this PR added a tool-boundary rotation but gated it on send-ack, so it fixed only the slow path; the follow-up commit corrects the async race by rotating on intent. The reported bug was raised privately by @csillag with a live Telegram client; there is no public issue.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: Telegram in-flight answer preamble was overwritten by post-tool text (the bot edited its previous message instead of sending a new one) when a tool runs mid-stream.\n- Real environment tested: Live Telegram Bot API — a dedicated throwaway bot posting to a private chat (real network, real message ids), driven through the real `dispatchTelegramMessage` + `createTelegramDraftStream` by the opt-in harness `proof/telegram-edit-vs-send-proof.ts`. Token and chat id redacted.\n- Exact steps or command run after this patch:\n\n```\n# fast: tool fires while the preamble send is still in flight (the failing case)\nTG_BOT_TOKEN=<redacted> TG_CHAT_ID=<redacted> TOOL_DELAY_MS=0 \\\n  node --import tsx proof/telegram-edit-vs-send-proof.ts postfix-fast\n# delayed (~2.5s): preamble send acks first\nTG_BOT_TOKEN=<redacted> TG_CHAT_ID=<redacted> TOOL_DELAY_MS=2500 \\\n  node --import tsx proof/telegram-edit-vs-send-proof.ts postfix-delayed\n```\n\n- Evidence after fix (copied live Bot API terminal output):\n\n```\n# post-fix FAST\nsendMessage      message_id=7  text=\"Let me check the current state of that file.\"\nsendMessage      message_id=8  text=\"Done — the stale version was already removed earlier.\"\nSUMMARY sends=2 edits=0 preamblePreserved=true\n\n# post-fix DELAYED\nsendMessage      message_id=9   text=\"Let me check the current state of that file.\"\nsendMessage      message_id=10  text=\"Done — the stale version was already removed earlier.\"\nSUMMARY sends=2 edits=0 preamblePreserved=true\n```\n\n- Observed result after fix: two separate messages — the preamble is preserved and the post-tool text is a new message — at BOTH timings, fast included. Before the fix, the same live run (reverted tree, fast timing) produced one send plus one edit on the same message id, overwriting the preamble:\n\n```\n# pre-fix FAST (control)\nsendMessage      message_id=11  text=\"Let me check the current state of that file.\"\neditMessageText  message_id=11  text=\"Done — the stale version was already removed earlier.\"\nSUMMARY sends=1 edits=1 preamblePreserved=false\n```\n\n- What was not tested: non-streaming and \"progress\" streaming modes, and media/voice replies (separate paths); load/concurrency beyond the reproduced turn.\n- Proof limitations or environment constraints: run against a throwaway bot in a private chat (token + chat id redacted). The harness replays the runtime's assistant-event sequence (preamble → tool → resume) deterministically, but drives the real dispatch + draft stream + live Bot API — not a mocked transport. It is opt-in and no-ops without a token, so it never runs in CI.\n- Before evidence (optional but encouraged): see the \"pre-fix FAST (control)\" capture above.\n\n## Tests and validation\n\n- Commands: `node scripts/run-vitest.mjs run extensions/telegram` (full Telegram suite), the targeted dispatch/lane suites, `pnpm tsgo:extensions` + `pnpm tsgo:extensions:test`, plus the live harness commands above.\n- Regression coverage: added dispatch-level real-stream coverage for the in-flight preamble across a tool boundary (plus a fresh-boundary control and the deliverer-level contract test), and the opt-in live harness for the async race a unit test cannot catch.\n- What failed before: on the reverted tree the in-flight repro and the live fast-timing run overwrite the preamble (`sends=1 edits=1`).\n- Supplemental unit/type results: targeted suites green (165); full Telegram suite 2085 pass with 3 unrelated pre-existing/flaky failures (2 sticker-description timeouts; 1 model-callback-list test that passes in isolation on both trees); typechecks clean. These are supplemental — the real proof is above.\n\n## Risk checklist\n\n- Did user-visible behavior change? Yes — Telegram now sends a separate message for resumed post-tool text instead of overwriting the preamble.\n- Did config, environment, or migration behavior change? No.\n- Did security, auth, secrets, network, or tool execution behavior change? No — only outbound message rotation logic.\n- Highest-risk area: over-rotating could split a single logical message into two.\n- How is that risk mitigated: rotation fires only when a preamble was actually streamed and not finalized, defers to the existing tool-progress rotation to avoid double-rotation, and is covered by unit tests plus live proof at both timings.\n\n## Current review state\n\n- Next action: maintainer review.\n- Waiting on: review. Draft status is managed by the author.\n- Addressed: reworked the initial send-ack-gated fix after live proof exposed an async race (now rotates on intent), and added the opt-in live harness as durable real-behavior evidence.\n\n---\n*Authored by Sancho Panza, an AI squire acting on behalf of @csillag.*\n",
+        "branch": "fix/tg-edit-vs-send-master",
+        "head_sha": "729634c0429512ce85fdbf64323d6d02b8a66f6b",
+        "author": "sancho-csillag",
+        "labels": [
+          "channel: telegram",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/telegram/src/bot-message-dispatch.test.ts",
+            "additions": 110,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-message-dispatch.ts",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/lane-delivery.consecutive-messages.repro.test.ts",
+            "additions": 108,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "proof/.gitignore",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "proof/README.md",
+            "additions": 42,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "proof/telegram-edit-vs-send-proof.ts",
+            "additions": 337,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 635,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93249",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93249.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 15,
+          "gatingTotal": 10,
+          "counts": {
+            "SUCCESS": 5,
+            "SKIPPED": 10
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 695,
+    "total_ms": 2058,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 357
+        "ms": 325
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1505
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 328
+        "ms": 204
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
