@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T19:17:46.858Z",
+  "generated_at": "2026-06-16T19:18:26.436Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T16:17:46.322Z",
+  "since": "2026-06-16T16:18:23.287Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    89039
+    93749
   ],
-  "comment_ids": [
-    4722544446
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,26 +29,121 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93749:4722498575:2026-06-16T19:18:19Z:clawsweeper_needs_human",
+      "comment_id": "4722498575",
+      "comment_version_key": "4722498575:2026-06-16T19:18:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93749#issuecomment-4722498575",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93749,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-16T19:12:32Z",
+      "comment_updated_at": "2026-06-16T19:18:19Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=1ea2eb18585cdcbca222b29285905e3f3cea5697)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "1ea2eb18585cdcbca222b29285905e3f3cea5697",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(compaction): ignore stale persisted totalTokens in preflight gate",
+        "body": "## Summary\n\n`runPreflightCompactionIfNeeded` decides whether to compact by taking the `Math.max` of three token estimates: the transcript-usage projection, the fresh persisted total, and a raw persisted total (`stalePersistedPromptTokens`). The first two respect the session freshness flag, but the third reads `entry.totalTokens` directly with no `totalTokensFresh` check:\n\n```ts\nconst stalePersistedPromptTokens = hasPersistedTotalTokens\n  ? Math.floor(persistedTotalTokens)\n  : undefined;\n```\n\nWhen a compaction completes without a `tokensAfter` figure, `incrementCompactionCount` (src/auto-reply/reply/session-updates.ts:310) sets `totalTokensFresh = false` but deliberately keeps the old large `totalTokens`. `resolveFreshSessionTotalTokens` (src/config/sessions/types.ts:629) returns `undefined` in that state by design, so `freshProjectedTokenCount` correctly drops out, but the raw `stalePersistedPromptTokens` still feeds the `Math.max` gate. The stale large value then overrides the small fresh transcript estimate and force-fires another preflight compaction on a session that is actually small, producing an unnecessary (lossy, user-visible) summarization and a \"compacting\" stall on the next turn.\n\nThis is the persisted-total leg of the same symptom tracked in #81178. PR #81916 bounds the transcript-usage leg (`usageProjectedTokenCount` / snapshot tail bytes); it does not touch `stalePersistedPromptTokens`, so even with #81916 merged the stale persisted total still trips the gate. It is also the opposite direction of the rejected #82919, which wanted `resolveFreshSessionTotalTokens` to return stale values; this change instead keeps the existing freshness contract and extends it to the one consumer that bypassed it.\n\n## Fix\n\n```ts\nconst stalePersistedPromptTokens =\n  hasPersistedTotalTokens && entry.totalTokensFresh !== false\n    ? Math.floor(persistedTotalTokens)\n    : undefined;\n```\n\nThe fresh-large path is unaffected: when `totalTokensFresh` is `true` or absent, the persisted total still counts, so a genuinely large session still compacts.\n\n## Real behavior proof\n\nBehavior addressed: after a compaction that reports no `tokensAfter` (`totalTokensFresh = false`, large `totalTokens` retained), the next preflight check must not force another compaction when the real active transcript is small. A genuinely large fresh session must still compact.\n\nReal environment tested: local OpenClaw source runtime at `origin/main` head `617c9d4b7f`, Linux, Node 22. A standalone `node --import tsx` script drove the real `runPreflightCompactionIfNeeded` path against a real temporary JSONL transcript and session store; the compaction dependency was instrumented only to count whether the runtime attempted compaction.\n\nExact steps or command run after this patch: ran the proof script twice, once with the source fix reverted (`git stash`) and once with it applied, each invoking `runPreflightCompactionIfNeeded` with `totalTokens=200000`, a ~2KB transcript, and a 100000-token context window, for both `totalTokensFresh: false` (stale) and `totalTokensFresh: true` (fresh).\n\nEvidence after fix (copied terminal output):\n\n```\n===== BEFORE FIX (origin/main behavior) =====\nSTALE (post-compaction, tokensAfter omitted): totalTokens=200000 totalTokensFresh=false small-transcript=~2KB -> compactAttempts=1\nFRESH (genuinely large session)             : totalTokens=200000 totalTokensFresh=true small-transcript=~2KB -> compactAttempts=1\nstale-case compactAttempts = 1 (want 0: small session must NOT re-compact)\nRESULT: FAIL\n\n===== AFTER FIX =====\nSTALE (post-compaction, tokensAfter omitted): totalTokens=200000 totalTokensFresh=false small-transcript=~2KB -> compactAttempts=0\nFRESH (genuinely large session)             : totalTokens=200000 totalTokensFresh=true small-transcript=~2KB -> compactAttempts=1\nstale-case compactAttempts = 0 (want 0)\nfresh-case compactAttempts = 1 (want 1)\nRESULT: PASS\n```\n\nObserved result after fix: the stale small session no longer compacts; the fresh large session still compacts.\n\nRegression test: `src/auto-reply/reply/agent-runner-memory.preflight-stale-tokens.test.ts`. Case A (large but stale total, small transcript) fails before the fix and passes after; Case B (large fresh total) confirms the gate still fires. Run with `node scripts/run-vitest.mjs`.\n\nWhat was not tested: no full `pnpm check` / build run (memory-constrained box). Scope is one expression in a single decision path; existing colocated suites were run as regression coverage.\n",
+        "branch": "fix/preflight-stale-persisted-totaltokens",
+        "head_sha": "1ea2eb18585cdcbca222b29285905e3f3cea5697",
+        "author": "yetval",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.preflight-stale-tokens.test.ts",
+            "additions": 144,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 148,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93749",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93749.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 168,
+          "gatingTotal": 163,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 135,
+            "SKIPPED": 31,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 737,
+    "total_ms": 3504,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 525
+        "ms": 410
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2730
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 202
+        "ms": 349
       },
       {
         "name": "append_ledger",
