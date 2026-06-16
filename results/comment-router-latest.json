@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T11:11:04.335Z",
+  "generated_at": "2026-06-16T11:12:07.745Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T08:10:59.817Z",
+  "since": "2026-06-16T08:12:07.279Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4718094374
   ],
-  "status_comment_id": 4718094692,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4718094374:2026-06-16T11:10:00Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/93394#issuecomment-4718094374",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 93394,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-16T11:10:00Z",
       "comment_updated_at": "2026-06-16T11:10:00Z",
-      "status_comment_id": 4718094692,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,124 +62,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-16T11:11:05.291Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 93394
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-16T11:11:07.951Z",
-          "response_comment_id": "4714603157",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(memory): abort orphaned qmd search subprocess when memory_search times out",
-        "body": "## Summary\n\nPR #91742 (\"abort orphaned embedding work when memory_search times out\") added an `AbortSignal` to `MemorySearchManager.search()` so that when the 15s `memory_search` tool deadline fires, in-flight embedding work is cancelled instead of running orphaned. That fix wired the signal through the **builtin** manager, but the **QMD** manager — the other backend behind the exact same `MemorySearchManager.search` interface — silently ignored it.\n\nWith the QMD backend, `memory_search` returns \"timed out after 15s\" to the agent after 15s, but the spawned `qmd query`/`qmd search` subprocess keeps running for the full QMD command timeout (`memory.qmd.limits.timeoutMs`, whose embed-heavy default was raised to 600s in PR #87572). So the orphaned-work leak that #91742 fixed for the builtin backend was still present for QMD users: the agent has already moved on, but a `qmd` process keeps churning for up to ~10 minutes.\n\n## What changed\n\n- `packages/memory-host-sdk/src/host/qmd-process.ts`: `runCliCommand` now accepts an optional `signal: AbortSignal`. When the signal aborts (or is already aborted on entry), the spawned child is `SIGKILL`ed immediately and the call rejects with the abort reason (preserving the caller's deadline message). Resolution/rejection is funneled through a single `settle()` guard so abort, timeout, `error`, and `close` cannot double-settle.\n- `extensions/memory-core/src/memory/qmd-manager.ts`: `QmdMemoryManager.search()` accepts `opts.signal` (matching the builtin manager and the `MemorySearchManager` interface added in #91742). It fast-fails if the signal is already aborted, and threads the signal through `runQmdSearch` → `runQmd` → `runCliCommand` across **all** direct-`qmd` subprocess search paths:\n  - the single-collection direct path and its `query` fallback, **and**\n  - the **grouped multi-collection path** `runQueryAcrossCollectionGroups` (plus its unsupported-option `query` fallback), which multi-collection or mixed memory/session configs route through.\n\n  The grouped helper previously called `runQmdSearch(args, command)` without the caller signal, so the central subprocess leak remained on that supported path (flagged in review). It now receives and forwards the same signal.\n\nWhen the caller's deadline fires, the qmd subprocess is killed on every supported search path instead of left orphaned. The optional mcporter bridge is short-circuited by the universal pre-flight abort guard before it spawns anything.\n\n## Real behavior proof (real runtime, outside tests)\n\n`runCliCommand` is the single spawn point for **all** qmd search subprocesses (single-collection and grouped), so proving abort kills the real child there covers every path that forwards the signal. Ran the **real exported `runCliCommand`** via `node --import tsx` against a real OS subprocess (PR head `6ee870e0ca`):\n\n```\n$ TSX_TSCONFIG_PATH=tsconfig.json node --import tsx ./abort-proof.mts\n[A] normal completion stdout: \"hello-from-child\"\n[B] child OS pid: 598162 alive before abort: true\n[B] runCliCommand rejected after 17 ms with: \"memory_search timed out after 15s\"\n[B] child pid 598162 alive AFTER abort: false\n\nRESULT: PASS - abort killed the real subprocess and rejected promptly (no orphan).\n```\n\nThe proof script spawns a child that records its own PID and `sleep 30`s, with `timeoutMs: 600_000` (mimicking the qmd embed timeout). It confirms via `process.kill(pid, 0)` that the real OS process is **alive before abort** and **dead after abort**, that `runCliCommand` rejects in **17ms** (not 600s) with the caller's deadline message, and that a no-signal short command still completes normally (Case A).\n\n**Grouped-path wiring (negative control):** the new grouped multi-collection abort regression drives `QmdMemoryManager.search({ signal })` through `runQueryAcrossCollectionGroups` (mixed memory/session sources) and asserts the spawned qmd child is `SIGKILL`ed when the caller aborts. Reverting *only* the grouped-path signal propagation makes that test fail, with the qmd child surviving the caller abort and dying only at the qmd command timeout:\n\n```\nAssertionError: expected [Function] to throw error including 'memory_search timed out after 15s'\n  but got 'qmd search test --json -n 4 -c workspace-main timed out after 4000ms'\n```\n\ni.e. without this fix the grouped qmd child is left running until the qmd command timeout (4000ms in the test) instead of being killed promptly — the exact leak this PR closes, now confirmed on the grouped path too.\n\n## Tests and validation\n\n- `packages/memory-host-sdk/src/host/qmd-process.test.ts`: `runCliCommand` kills the child with `SIGKILL` and rejects with the abort reason when the signal aborts mid-run; and rejects immediately without spawning when already aborted. 16/16 pass.\n- `extensions/memory-core/src/memory/qmd-manager.test.ts` (added grouped abort test → 3 abort tests total): single-collection **and** grouped multi-collection `qmd` searches both kill the in-flight subprocess (asserted via the child `kill(\"SIGKILL\")` spy) when the caller aborts, and reject before spawning when already aborted. `-t abort` → 3 passed / 132 total.\n- **Negative control**: reverting the grouped-path signal propagation makes the grouped abort test fail (child survives to the qmd command timeout), as shown above.\n- `node scripts/run-tsgo.mjs -p tsconfig.extensions.json` clean; memory-host-sdk typecheck passes.\n\n## Risk checklist\n\n- Behavior is unchanged when no `signal` is passed (all parameters/opts fields are optional; existing callers are unaffected).\n- `settle()` guard prevents double resolve/reject across abort/timeout/error/close; the abort listener is removed on settle to avoid leaks.\n- The abort reason prefers the caller-supplied error so the existing \"memory_search timed out after 15s\" message is preserved end to end.\n- No public API removed; only optional `signal` fields added. No config or schema changes.\n",
-        "branch": "fix/qmd-search-abort-orphaned",
-        "head_sha": "6ee870e0ca78d07f7ae6b5c3257822b51b6643e3",
-        "author": "alix-007",
-        "labels": [
-          "extensions: memory-core",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
-            "additions": 153,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
-            "additions": 38,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/memory-host-sdk/src/host/qmd-process.test.ts",
-            "additions": 40,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/memory-host-sdk/src/host/qmd-process.ts",
-            "additions": 73,
-            "deletions": 24,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 304,
-        "deletions": 29,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93394",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93394.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 168,
-          "gatingTotal": 163,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 137,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 8816,
+    "total_ms": 1863,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1903
+        "ms": 453
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2598
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 4284
+        "ms": 1397
       },
       {
         "name": "append_ledger",
