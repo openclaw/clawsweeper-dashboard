@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T09:31:16.867Z",
+  "generated_at": "2026-06-16T09:31:18.869Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T06:31:14.310Z",
+  "since": "2026-06-16T06:31:15.618Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    93234
+    93332
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4717005497
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,146 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93234:4706521256:2026-06-16T09:31:11Z:clawsweeper_needs_human",
-      "comment_id": "4706521256",
-      "comment_version_key": "4706521256:2026-06-16T09:31:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93234#issuecomment-4706521256",
+      "idempotency_key": "comment-router:openclaw/openclaw:93332:4717005497:2026-06-16T09:30:03Z:re_review",
+      "comment_id": "4717005497",
+      "comment_version_key": "4717005497:2026-06-16T09:30:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93332#issuecomment-4717005497",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 93234,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-15T09:34:57Z",
-      "comment_updated_at": "2026-06-16T09:31:11Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=930d6e80e65558958f312bf72e2f55c818f6ed4e)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +186, Tests +204. Total +390 across 4 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "930d6e80e65558958f312bf72e2f55c818f6ed4e",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(mattermost): backfill thread history only on first-sighting recovery",
-        "body": "## Summary\n\n- Backfill a Mattermost thread from the server **only on first-sighting recovery** (gateway restart / session clear), not on every empty pending-history window.\n- Fixes the regression flagged in review: ordinary active-thread follow-ups no longer rehydrate the whole server thread or add an awaited REST call to the inbound path.\n\n## Motivation\n\nCloses #93204.\n\nWhen the bot is re-mentioned inside an existing Mattermost thread after a gateway restart or session clear, the in-memory pending-history window is empty, so it replied without thread context. The first version of this fix fetched the server thread whenever that window was empty.\n\nAs [@clawsweeper correctly caught](https://github.com/openclaw/openclaw/pull/93234#issuecomment), the shared turn kernel clears the pending-history window after **every** successful dispatch (`src/channels/turn/kernel.ts` → `clearPendingHistoryAfterTurn`). So an empty window is also the **normal steady state** for an active thread — backfilling on a bare empty window therefore:\n\n1. rehydrated the full server thread on ordinary follow-up mentions, and\n2. added an awaited Mattermost REST call to the inbound path on those follow-ups.\n\n## The fix\n\nNew pure gate `shouldBackfillThreadFromServer` (in `thread-backfill.ts`) distinguishes recovery from steady state by **process lifetime**:\n\n- It tracks thread roots already serviced this process in a caller-owned `Set`.\n- The **first** empty-window sighting of a never-serviced root = genuine restart/session-clear recovery → backfill.\n- Any later empty window for an already-serviced root = the kernel's normal post-turn clear → **do not** backfill.\n- A root is marked serviced even when its window already had context, so a later kernel-cleared window can never re-trigger recovery.\n\n`monitor.ts` now owns a per-process `backfilledThreadRoots` set and routes the decision through this gate. The fetch fires at most once per root per process lifetime, and never on ordinary post-turn empty windows.\n\n## Verification\n\n- `npx vitest run --project extension-mattermost extensions/mattermost/src/mattermost/thread-backfill.test.ts` — 12 passed\n- `npx oxfmt --check` on the 3 changed files — clean\n- `tsc` on the extension introduces **no new errors** on the changed lines (the 6 pre-existing errors are unrelated SDK drift on this 267-commits-behind branch, present on `upstream/main` for the same files).\n\n## Real behavior proof\n\n- **Behavior addressed:** an active Mattermost thread, after the turn kernel clears its pending-history window post-turn, must NOT re-fetch and inject the full server thread on the next mention (the review's P1 regression). Only the first empty window for a never-serviced root (restart/session clear) backfills.\n- **Exact command run after the patch:**\n  ```\n  npx vitest run --project extension-mattermost \\\n    extensions/mattermost/src/mattermost/thread-backfill.test.ts --reporter=verbose\n  ```\n- **Captured output AFTER fix:**\n  ```\n  ✓  shouldBackfillThreadFromServer > backfills on the first empty-window sighting of a thread root (recovery) 0ms\n  ✓  shouldBackfillThreadFromServer > does NOT rehydrate an active thread whose window the kernel cleared post-turn 0ms\n  ✓  shouldBackfillThreadFromServer > does not backfill when the window already has in-memory context 0ms\n  ✓  shouldBackfillThreadFromServer > never backfills without a thread root or with history disabled 0ms\n  ✓  buildThreadBackfillEntries > maps thread posts in order, skipping the current post 62ms\n  ... (12 total)\n   Test Files  1 passed (1)\n        Tests  12 passed (12)\n  ```\n- **Regression test:** `shouldBackfillThreadFromServer > does NOT rehydrate an active thread whose window the kernel cleared post-turn` — it services a root once (recovery fires `true`), then asserts a second empty-window call for the same root returns `false`. It fails against the old bare-empty-window condition and passes with this fix.\n- **What was NOT tested here:** a fully live Mattermost server round-trip + monitor integration. The network boundary (`fetchMattermostThread`) is covered by its own mocked-fetch unit test; the recovery decision and the mapper are pure and unit-tested. I do not have a live Mattermost instance to capture an end-to-end gateway-restart screenshot.\n\n## Addressing the review P1s\n\n- **Gate backfill on recovery, not empty window** — done; first-sighting-per-process gate replaces the bare empty-window condition.\n- **Regression coverage for active thread + cleared window not rehydrating** — added (the test above).\n- **Awaited-REST-on-ordinary-replies risk** — eliminated; the fetch can fire at most once per root per process lifetime, never on normal follow-ups.\n",
-        "branch": "fix/93204-mattermost-thread-backfill",
-        "head_sha": "930d6e80e65558958f312bf72e2f55c818f6ed4e",
-        "author": "bartok9",
-        "labels": [
-          "channel: mattermost",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability"
-        ],
-        "files": [
-          {
-            "path": "extensions/mattermost/src/mattermost/client.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/monitor.ts",
-            "additions": 71,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/thread-backfill.test.ts",
-            "additions": 204,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/thread-backfill.ts",
-            "additions": 98,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 390,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93234",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93234.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "gatingTotal": 157,
-          "counts": {
-            "FAILURE": 10,
-            "SUCCESS": 120,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-fast:FAILURE",
-            "checks-node-core-src-security:FAILURE",
-            "checks-node-agentic-command-support:FAILURE",
-            "checks-node-agentic-commands-doctor-config-state:FAILURE",
-            "checks-node-agentic-gateway-methods:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-fast:FAILURE",
-            "checks-node-core-src-security:FAILURE",
-            "checks-node-agentic-command-support:FAILURE",
-            "checks-node-agentic-commands-doctor-config-state:FAILURE",
-            "checks-node-agentic-gateway-methods:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:93234:4716760487:2026-06-16T09:01:54Z:re_review",
-      "comment_id": "4716760487",
-      "comment_version_key": "4716760487:2026-06-16T09:01:54Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93234#issuecomment-4716760487",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93234,
-      "author": "Bartok9",
-      "author_id": 259807879,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-16T09:01:54Z",
-      "comment_updated_at": "2026-06-16T09:01:54Z",
+      "issue_number": 93332,
+      "author": "dolphinsboy",
+      "author_id": 4864391,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-16T09:30:03Z",
+      "comment_updated_at": "2026-06-16T09:30:03Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -188,125 +62,103 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(mattermost): backfill thread history only on first-sighting recovery",
-        "body": "## Summary\n\n- Backfill a Mattermost thread from the server **only on first-sighting recovery** (gateway restart / session clear), not on every empty pending-history window.\n- Fixes the regression flagged in review: ordinary active-thread follow-ups no longer rehydrate the whole server thread or add an awaited REST call to the inbound path.\n\n## Motivation\n\nCloses #93204.\n\nWhen the bot is re-mentioned inside an existing Mattermost thread after a gateway restart or session clear, the in-memory pending-history window is empty, so it replied without thread context. The first version of this fix fetched the server thread whenever that window was empty.\n\nAs [@clawsweeper correctly caught](https://github.com/openclaw/openclaw/pull/93234#issuecomment), the shared turn kernel clears the pending-history window after **every** successful dispatch (`src/channels/turn/kernel.ts` → `clearPendingHistoryAfterTurn`). So an empty window is also the **normal steady state** for an active thread — backfilling on a bare empty window therefore:\n\n1. rehydrated the full server thread on ordinary follow-up mentions, and\n2. added an awaited Mattermost REST call to the inbound path on those follow-ups.\n\n## The fix\n\nNew pure gate `shouldBackfillThreadFromServer` (in `thread-backfill.ts`) distinguishes recovery from steady state by **process lifetime**:\n\n- It tracks thread roots already serviced this process in a caller-owned `Set`.\n- The **first** empty-window sighting of a never-serviced root = genuine restart/session-clear recovery → backfill.\n- Any later empty window for an already-serviced root = the kernel's normal post-turn clear → **do not** backfill.\n- A root is marked serviced even when its window already had context, so a later kernel-cleared window can never re-trigger recovery.\n\n`monitor.ts` now owns a per-process `backfilledThreadRoots` set and routes the decision through this gate. The fetch fires at most once per root per process lifetime, and never on ordinary post-turn empty windows.\n\n## Verification\n\n- `npx vitest run --project extension-mattermost extensions/mattermost/src/mattermost/thread-backfill.test.ts` — 12 passed\n- `npx oxfmt --check` on the 3 changed files — clean\n- `tsc` on the extension introduces **no new errors** on the changed lines (the 6 pre-existing errors are unrelated SDK drift on this 267-commits-behind branch, present on `upstream/main` for the same files).\n\n## Real behavior proof\n\n- **Behavior addressed:** an active Mattermost thread, after the turn kernel clears its pending-history window post-turn, must NOT re-fetch and inject the full server thread on the next mention (the review's P1 regression). Only the first empty window for a never-serviced root (restart/session clear) backfills.\n- **Exact command run after the patch:**\n  ```\n  npx vitest run --project extension-mattermost \\\n    extensions/mattermost/src/mattermost/thread-backfill.test.ts --reporter=verbose\n  ```\n- **Captured output AFTER fix:**\n  ```\n  ✓  shouldBackfillThreadFromServer > backfills on the first empty-window sighting of a thread root (recovery) 0ms\n  ✓  shouldBackfillThreadFromServer > does NOT rehydrate an active thread whose window the kernel cleared post-turn 0ms\n  ✓  shouldBackfillThreadFromServer > does not backfill when the window already has in-memory context 0ms\n  ✓  shouldBackfillThreadFromServer > never backfills without a thread root or with history disabled 0ms\n  ✓  buildThreadBackfillEntries > maps thread posts in order, skipping the current post 62ms\n  ... (12 total)\n   Test Files  1 passed (1)\n        Tests  12 passed (12)\n  ```\n- **Regression test:** `shouldBackfillThreadFromServer > does NOT rehydrate an active thread whose window the kernel cleared post-turn` — it services a root once (recovery fires `true`), then asserts a second empty-window call for the same root returns `false`. It fails against the old bare-empty-window condition and passes with this fix.\n- **What was NOT tested here:** a fully live Mattermost server round-trip + monitor integration. The network boundary (`fetchMattermostThread`) is covered by its own mocked-fetch unit test; the recovery decision and the mapper are pure and unit-tested. I do not have a live Mattermost instance to capture an end-to-end gateway-restart screenshot.\n\n## Addressing the review P1s\n\n- **Gate backfill on recovery, not empty window** — done; first-sighting-per-process gate replaces the bare empty-window condition.\n- **Regression coverage for active thread + cleared window not rehydrating** — added (the test above).\n- **Awaited-REST-on-ordinary-replies risk** — eliminated; the fetch can fire at most once per root per process lifetime, never on normal follow-ups.\n",
-        "branch": "fix/93204-mattermost-thread-backfill",
-        "head_sha": "930d6e80e65558958f312bf72e2f55c818f6ed4e",
-        "author": "bartok9",
+        "title": "fix(agents): repair retained compaction tool-use pairs",
+        "body": "Fixes #93321\n\n## Summary\n\n- Repairs compaction history pruning before any budget-driven chunk drop so retained history cannot keep an assistant tool call without a matching tool result.\n- Adopts the repaired prune output in the production `compaction-safeguard` caller even when `droppedChunks === 0`, which was the missing caller boundary from the first review.\n- Reuses the existing `repairToolUseResultPairing()` transcript repair contract instead of adding provider-specific compaction logic.\n- Adds both helper-level and caller-level regressions for the no-prune dangling tool-use path.\n- Out of scope: changing provider adapters, replay policy, or compaction summary prompt behavior.\n\n## Linked context\n\nCloses #93321\n\nRelated: strict provider validation rejects compacted transcripts with `tool_use ids were found without tool_result blocks` when an assistant tool call survives without a result.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: Compaction history pruning could return repaired messages for a no-drop prune plan, but the production compaction-safeguard caller only adopted `pruned.messages` when `droppedChunks > 0`. In the timeout/no-drop case, the caller could still pass `assistant -> user` into summarization/replay and preserve a bare assistant `tool_use`.\n- Real environment tested: Local OpenClaw checkout on macOS, latest `origin/main` at `c1219d161d`, branch head `c7952f7ad4`.\n- Exact steps or command run after this patch:\n\n```console\n$ node scripts/run-vitest.mjs src/agents/agent-hooks/compaction-safeguard.test.ts -t \"uses repaired no-drop prune output for summarization\"\n$ node scripts/run-vitest.mjs src/agents/agent-hooks/compaction-safeguard.test.ts\n$ node scripts/run-vitest.mjs src/agents/compaction.test.ts src/agents/session-transcript-repair.test.ts\n$ OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false node scripts/check-changed.mjs --base origin/main\n$ git diff --check\n$ node scripts/check-no-conflict-markers.mjs\n$ node_modules/.bin/oxfmt --check --threads=1 src/agents/compaction-planning.ts src/agents/compaction.test.ts src/agents/agent-hooks/compaction-safeguard.ts src/agents/agent-hooks/compaction-safeguard.test.ts\n$ gitleaks protect --staged --redact\n```\n\n- Evidence after fix:\n\n```console\n$ node scripts/run-vitest.mjs src/agents/agent-hooks/compaction-safeguard.test.ts -t \"uses repaired no-drop prune output for summarization\"\nTest Files  2 passed (2)\nTests  2 passed | 190 skipped (192)\n\n$ node scripts/run-vitest.mjs src/agents/agent-hooks/compaction-safeguard.test.ts\nTest Files  1 passed (1)\nTests  96 passed (96)\n\n$ node scripts/run-vitest.mjs src/agents/compaction.test.ts src/agents/session-transcript-repair.test.ts\nTest Files  1 passed (1)\nTests  48 passed (48)\nTest Files  1 passed (1)\nTests  18 passed (18)\n\n$ OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false node scripts/check-changed.mjs --base origin/main\n[check:changed] lanes=core, coreTests\n[check:changed] src/agents/agent-hooks/compaction-safeguard.test.ts: core test\n[check:changed] src/agents/agent-hooks/compaction-safeguard.ts: core production\n[check:changed] src/agents/compaction-planning.ts: core production\n[check:changed] src/agents/compaction.test.ts: core test\n...\nDatabase-first legacy-store guard passed.\n...\nImport cycle check: 0 runtime value cycle(s).\n```\n\n`git diff --check`, conflict-marker check, targeted `oxfmt --check`, and staged `gitleaks protect --staged --redact` also exited 0.\n\n- Observed result after fix: The caller-level regression drives the real compaction-safeguard handler with a timeout-shaped assistant tool call and enough new-content pressure to request a prune plan, while the retained history itself needs no chunk drop. Before the caller fix, `summarizeInStages` received roles `assistant,user`. After the fix, it receives `assistant,toolResult,user`, with the synthesized `toolResult` matching `toolCallId: \"call-timeout\"` and `isError: true`.\n- What was not tested: No live Anthropic/Bedrock API call was made; the failure is covered at the local compaction-safeguard caller boundary that prepares the retained transcript before provider replay.\n- Proof limitations or environment constraints: This proof uses the actual compaction-safeguard extension handler with mocked auth and summarization output so no external model key or provider account is required. That is the narrow local boundary that creates or prevents the invalid retained transcript shape.\n- Before evidence (optional but encouraged): The new caller-level regression failed before the caller fix with this output:\n\n```console\nAssertionError: expected [ 'assistant', 'user' ] to deeply equal [ 'assistant', 'toolResult', 'user' ]\n```\n\nThe helper-level regression also failed on current `main` before the first patch:\n\n```console\nAssertionError: expected [ 'assistant', 'user' ] to deeply equal [ 'assistant', 'toolResult', 'user' ]\n```\n\n## Tests and validation\n\n- Added helper-level regression coverage in `src/agents/compaction.test.ts` for retained dangling tool-use repair when no chunks are pruned.\n- Added caller-level regression coverage in `src/agents/agent-hooks/compaction-safeguard.test.ts` proving the production compaction-safeguard handler adopts repaired no-drop prune output before summarization.\n- Passed focused caller regression test: `2` tests across the two selected Vitest shards.\n- Passed full compaction-safeguard suite: `96` tests.\n- Passed focused compaction and transcript repair tests: `18` + `48` tests.\n- Passed `check-changed --base origin/main` for core/coreTests changed lanes.\n- Passed formatting, whitespace/conflict-marker, and staged secret checks.\n\n## Duplicate audit\n\nImmediately before pushing the follow-up, I reran five live open-PR searches. Each query only returned this PR, `#93332`, and no separate open PR coverage:\n\n- `Fixes #93321`: only `#93332`\n- `#93321`: only `#93332`\n- `orphaned tool_use compaction`: only `#93332`\n- `tool_result blocks compaction`: only `#93332`\n- `compaction tool_use`: only `#93332`\n\n## CI note\n\nBefore the follow-up push, the only red check was `checks-node-agentic-commands-agent-channel`, timing out in `src/commands/agent.test.ts` at `does not forward agent-scoped to session selectors as delivery targets`. That test is outside this compaction diff. I reproduced the same local hang with:\n\n```console\n$ node scripts/run-vitest.mjs src/commands/agent.test.ts -t \"does not forward agent-scoped to session selectors as delivery targets\"\n```\n\nand interrupted it after it exceeded the CI timeout window. I did not change that unrelated command-delivery test in this PR.\n\n## Risk checklist\n\nDid user-visible behavior change? `Yes` - compaction now repairs retained dangling tool calls instead of preserving an invalid strict-provider transcript.\n\nDid config, environment, or migration behavior change? `No`\n\nDid security, auth, secrets, network, or tool execution behavior change? `No`\n\nWhat is the highest-risk area? Transcript repair can add a synthetic error tool result to retained compaction history.\n\nHow is that risk mitigated? The PR reuses the existing `repairToolUseResultPairing()` behavior already used by replay/session repair paths, adopts the repaired output at the production caller boundary, and covers both helper-level and caller-level no-drop behavior.\n\n## Current review state\n\nAddressed ClawSweeper's P1 review finding by adopting repaired zero-drop prune output in `compaction-safeguard` and adding caller-level regression coverage.\n\nNext action: fresh CI and ClawSweeper re-review.\n",
+        "branch": "wolf/compaction-drop-orphan-tool-use",
+        "head_sha": "c7952f7ad494e734cfe09630e55bb992f548c08c",
+        "author": "luoyanglang",
         "labels": [
-          "channel: mattermost",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability"
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/mattermost/src/mattermost/client.ts",
-            "additions": 17,
+            "path": "src/agents/agent-hooks/compaction-safeguard.test.ts",
+            "additions": 56,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/monitor.ts",
-            "additions": 71,
-            "deletions": 0,
+            "path": "src/agents/agent-hooks/compaction-safeguard.ts",
+            "additions": 2,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/thread-backfill.test.ts",
-            "additions": 204,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "src/agents/compaction-planning.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/thread-backfill.ts",
-            "additions": 98,
+            "path": "src/agents/compaction.test.ts",
+            "additions": 23,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 4,
-        "additions": 390,
-        "deletions": 0,
+        "additions": 85,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93234",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93234.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93332",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93332.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 162,
-          "gatingTotal": 157,
+          "total": 169,
+          "gatingTotal": 164,
           "counts": {
-            "FAILURE": 10,
-            "SUCCESS": 120,
+            "SUCCESS": 137,
             "SKIPPED": 31,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-fast:FAILURE",
-            "checks-node-core-src-security:FAILURE",
-            "checks-node-agentic-command-support:FAILURE",
-            "checks-node-agentic-commands-doctor-config-state:FAILURE",
-            "checks-node-agentic-gateway-methods:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-fast:FAILURE",
-            "checks-node-core-src-security:FAILURE",
-            "checks-node-agentic-command-support:FAILURE",
-            "checks-node-agentic-commands-doctor-config-state:FAILURE",
-            "checks-node-agentic-gateway-methods:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": false,
+      "reason": "author association NONE and repository permission read are not allowed"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2751,
+    "total_ms": 3495,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 328
+        "ms": 656
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2213
+        "ms": 2580
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 182
+        "ms": 245
       },
       {
         "name": "append_ledger",
