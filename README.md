@@ -63,7 +63,9 @@ Review prompts include compact related issue and PR context from explicit links,
 linked closing PRs, existing local ClawSweeper reports, optional gitcrawl
 clusters, and opt-in live GitHub issue search for exact event reviews. This is
 advisory context for duplicate/superseded reasoning, not a standalone close
-decision. See
+decision. Reviews also persist a typed, proposal-only root-cause assessment with
+same-repository URLs and at most one evidence-backed canonical item; it does not
+dispatch repair, suppress jobs, mutate siblings, close, or merge. See
 [`docs/related-issue-discovery.md`](docs/related-issue-discovery.md).
 
 For open issues with complete, current kept-open reviews, ClawSweeper also
@@ -277,7 +279,8 @@ The end-to-end session lifecycle is documented in
 [`docs/steerable-repair-automation.md`](docs/steerable-repair-automation.md).
 
 The optional triage dashboard page at `/triage` exposes ClawSweeper advisory
-issue labels as read-only maintainer views, backed by GitHub Search snapshots
+issue labels as read-only maintainer views, including local routing groups
+derived from existing `impact:*` labels. It is backed by GitHub Search snapshots
 instead of GitHub Project writes. See
 [`docs/triage-dashboard.md`](docs/triage-dashboard.md).
 
@@ -292,6 +295,12 @@ open PRs that remain blocked on `triage: needs-real-behavior-proof`. It uses
 comment-body cooldown markers, never closes PRs, and keeps scheduled operation
 behind default-off repository variables. See
 [`docs/proof-nudges.md`](docs/proof-nudges.md).
+
+The default-off unconfirmed product-direction policy can propose closure for a
+strictly bounded class of technically correct, well-proven external feature PRs
+that still lack maintainer-confirmed direction. Live maintainer signals and
+automation opt-ins veto apply. See
+[`docs/product-direction-close-policy.md`](docs/product-direction-close-policy.md).
 
 ## How It Works
 
@@ -603,7 +612,10 @@ repair/issue implementation lanes use 40% of `workers.max`, currently 51 live
 workers. Imported gitcrawl cluster repair allows 2 live workers by default.
 Exact-item review, repair, and issue implementation are priority work; normal
 review, hot intake, and commit review are background work and automatically
-yield when priority work is active.
+yield when priority work is active. Exact-item runs also wait for deterministic
+live Actions admission before Codex starts, with at most four concurrent exact
+reviews and no state-repository lease. Other lanes retain the existing global
+128-worker scheduling model.
 Use `workers.max` first when turning total Codex usage up or down; use
 `lanes.repair.cluster_max_live_runs` to tune the imported legacy cluster-repair
 lane separately, and individual environment overrides only for temporary
