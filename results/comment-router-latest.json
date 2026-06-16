@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T00:59:18.721Z",
+  "generated_at": "2026-06-16T01:01:18.487Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-15T21:59:18.171Z",
+  "since": "2026-06-15T22:01:16.062Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    93447
+    92945
   ],
   "comment_ids": [
-    4713870804
+    4713884469
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4713884740,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:93447:4713870804:2026-06-16T00:57:18Z:re_review",
-      "comment_id": "4713870804",
-      "comment_version_key": "4713870804:2026-06-16T00:57:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93447#issuecomment-4713870804",
+      "idempotency_key": "comment-router:openclaw/openclaw:92945:4713884469:2026-06-16T01:00:17Z:re_review",
+      "comment_id": "4713884469",
+      "comment_version_key": "4713884469:2026-06-16T01:00:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92945#issuecomment-4713884469",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93447,
-      "author": "MD-Mushfiqur123",
-      "author_id": 206438734,
+      "target_branch": "main",
+      "issue_number": 92945,
+      "author": "zhiqiang26",
+      "author_id": 31802073,
       "author_association": "NONE",
-      "comment_created_at": "2026-06-16T00:57:18Z",
-      "comment_updated_at": "2026-06-16T00:57:18Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-16T01:00:17Z",
+      "comment_updated_at": "2026-06-16T01:00:17Z",
+      "status_comment_id": 4713884740,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,34 +62,112 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-16T01:01:19.162Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 92945
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-16T01:01:21.569Z",
+          "response_comment_id": "4707966058",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "#92944: Telegram commands can remain empty after interrupted sync due to stale local command hash",
+        "body": "## Summary\n\nVerify remote Telegram command state via `getMyCommands()` before skipping command sync based on the local hash cache. This prevents the bot menu from staying empty when the remote state was cleared but the local hash still matches.\n\n## Root Cause\n\nIn `extensions/telegram/src/bot-native-command-menu.ts`, `syncTelegramMenuCommands()` skipped sync when the cached hash matched — without checking whether the remote Telegram commands had been cleared by an interrupted sync or gateway restart.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Before skipping sync, call `getMyCommands()` to verify remote state. If remote is empty, proceed with re-sync. On API errors, also fall through to re-sync.\n\n- **Real environment tested**: Linux 4.19.112-2.el8.x86_64 (x64), Node.js v22.22.0. Source-level verification.\n\n- **Exact steps or command run after this patch**:\n  1. Gateway restart with hash cache present but remote commands cleared\n  2. `getMyCommands()` returns empty list\n  3. Sync proceeds despite matching local hash\n  4. Commands are re-registered\n\n- **Evidence after fix**:\n```diff\ndiff --git a/extensions/telegram/src/bot-native-command-menu.ts b/extensions/telegram/src/bot-native-command-menu.ts\nindex 52a8267b27..e22b5a19d9 100644\n--- a/extensions/telegram/src/bot-native-command-menu.ts\n+++ b/extensions/telegram/src/bot-native-command-menu.ts\n@@ -505,8 +505,22 @@ export function syncTelegramMenuCommands(params: {\n     const currentHash = hashCommandList(commandsToRegister);\n     const cachedHash = readCachedCommandHash(accountId, botIdentity);\n     if (cachedHash === currentHash) {\n-      logVerbose(\"telegram: command menu unchanged; skipping sync\");\n-      return;\n+      // The local hash matches, but the remote Telegram state may have been\n+      // cleared (e.g. after an interrupted sync or gateway restart).  Verify\n+      // with getMyCommands before skipping — if remote is empty we must\n+      // re-register.  See #92944.\n+      try {\n+        const remoteCommands = await bot.api.getMyCommands();\n+        if (remoteCommands && remoteCommands.length > 0) {\n+          logVerbose(\"telegram: command menu unchanged; skipping sync\");\n+          return;\n+        }\n+        logVerbose(\"telegram: command menu hash matches but remote is empty; re-syncing\");\n+      } catch {\n+        // If getMyCommands fails (network, rate limit, etc.), fall through to\n+        // re-sync rather than trusting the stale hash.\n+        logVerbose(\"telegram: getMyCommands failed; re-syncing command menu\");\n+      }\n     }\n \n     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.\n\n```\n\n- **Observed result after fix**: Hash match + remote non-empty → sync skipped (preserved). Hash match + remote empty → sync proceeds (fixed). Hash match + API error → sync proceeds (fail-safe). Hash mismatch unchanged.\n\n- **What was not tested**: Live Telegram bot. Source-level verification.\n\n## Regression Test Plan\n\n- [ ] Hash match + remote non-empty → skip\n- [ ] Hash match + remote empty → sync\n- [ ] API error → sync (fail-safe)\n- [ ] 16 lines, one file\n\n---\n\n*AI-assisted: built with Claude Code*\n",
+        "branch": "fix/issue-92944-telegram-command-hash",
+        "head_sha": "ec6819dd59fc7ee80d5537498e52e13be8a711d1",
+        "author": "zhiqiang26",
+        "labels": [
+          "channel: telegram",
+          "size: S",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof",
+          "proof: 🎥 video"
+        ],
+        "files": [
+          {
+            "path": "extensions/telegram/src/bot-native-command-menu.test.ts",
+            "additions": 104,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-native-command-menu.ts",
+            "additions": 54,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 158,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92945",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92945.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 155,
+          "gatingTotal": 150,
+          "counts": {
+            "SUCCESS": 131,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2043,
+    "total_ms": 6022,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 537
+        "ms": 467
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1945
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1493
+        "ms": 3584
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 2
       }
     ]
   }
