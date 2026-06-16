@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T15:11:08.075Z",
+  "generated_at": "2026-06-16T15:11:26.705Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T12:11:04.004Z",
+  "since": "2026-06-16T12:11:23.566Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    93584
+    93675
   ],
   "comment_ids": [
-    4720291692
+    4720263508
   ],
-  "status_comment_id": 4720292323,
+  "status_comment_id": 4720295034,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:93584:4720291692:2026-06-16T15:10:03Z:re_review",
-      "comment_id": "4720291692",
-      "comment_version_key": "4720291692:2026-06-16T15:10:03Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93584#issuecomment-4720291692",
+      "idempotency_key": "comment-router:openclaw/openclaw:93675:4720263508:2026-06-16T15:07:02Z:re_review",
+      "comment_id": "4720263508",
+      "comment_version_key": "4720263508:2026-06-16T15:07:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93675#issuecomment-4720263508",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 93584,
-      "author": "dolphinsboy",
-      "author_id": 4864391,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-16T15:10:03Z",
-      "comment_updated_at": "2026-06-16T15:10:03Z",
-      "status_comment_id": 4720292323,
+      "issue_number": 93675,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-16T15:07:02Z",
+      "comment_updated_at": "2026-06-16T15:07:02Z",
+      "status_comment_id": 4720295034,
       "trigger": "mention",
-      "command": "review",
+      "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -62,107 +62,96 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-16T15:11:08.891Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 93584
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-16T15:11:12.125Z",
-          "response_comment_id": "4718069656",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): repair orphaned tool_use pairs on compaction prune path",
-        "body": "## Summary\n\nFixes #93321\n\nWhen a provider-side timeout aborts an assistant turn mid-flight, the session history can be left with a `toolCall` block that has no matching `toolResult`. On the next compaction cycle the broken pair is passed directly to the LLM summarizer, which forwards it to the provider and receives a `ValidationException` (Anthropic: *tool_use ids found without tool_result blocks*), permanently breaking the session until manually reset.\n\n## Root Cause\n\n`repairToolUseResultPairing()` was only called in two places:\n1. `splitPreservedRecentTurns()` — repairs the **no-drop** summarizable slice\n2. `compaction-safeguard.ts` drop path — repairs **dropped** messages (for the dropped-chunk summary)\n\nIt was **not** called on `pruned.messages` (the kept slice after chunk drops), so any orphaned `toolCall` surviving into the kept slice reached `summarizeInStages` and then the upstream provider uncleaned.\n\nAdditionally: `repairToolUseResultPairing()` with default options deliberately does **not** synthesize a missing `tool_result` for turns with `stopReason: \"aborted\"` — it preserves them as-is. The fix passes `{ erroredAssistantResultPolicy: \"drop\" }` to drop the entire aborted turn (including its unpaired `toolCall`), matching what already happens in the prompt-send sanitizer path.\n\n## Fix\n\n**`compaction-safeguard.ts`** — apply `repairToolUseResultPairing()` with `erroredAssistantResultPolicy: \"drop\"` to `pruned.messages` before assigning to `messagesToSummarize`:\n\n```diff\n- messagesToSummarize = pruned.messages;\n+ messagesToSummarize = repairToolUseResultPairing(pruned.messages, {\n+   erroredAssistantResultPolicy: \"drop\",\n+ }).messages;\n```\n\nAlso applied to the `splitPreservedRecentTurns` call site (line ~740) which previously used default options.\n\n**`compaction-planning.ts`** — apply the same option at both the entry point and the inner drop-loop repair call.\n\n## Real Session Evidence\n\n**Session ID:** `a7c86c90-f74b-41a9-980b-70a4c6fb8570`\n**OpenClaw version at time of incident:** 2026.5.28 (e932160)\n**Platform:** macOS arm64\n**Provider:** Anthropic claude-sonnet-4-6 via `anthropic-messages` API\n\n### Exact JSONL records from the broken session\n\n**L154 — orphaned assistant turn (aborted mid-flight):**\n```json\n{\n  \"type\": \"message\",\n  \"id\": \"f5809271\",\n  \"timestamp\": \"2026-06-15T09:04:13.833Z\",\n  \"message\": {\n    \"role\": \"assistant\",\n    \"content\": [\n      {\n        \"type\": \"toolCall\",\n        \"id\": \"toolu_c8b41a5a51b6469b8f2aa84c\",\n        \"name\": \"message\",\n        \"arguments\": { \"action\": \"send\", \"message\": \"[REDACTED]\" }\n      }\n    ]\n  }\n}\n```\n*(thinking block omitted for brevity; `stopReason` absent — turn was never completed)*\n\n**L155 — provider timeout event (63ms after L154):**\n```json\n{\n  \"type\": \"custom\",\n  \"customType\": \"openclaw:prompt-error\",\n  \"data\": {\n    \"runId\": \"5ea7792a-18bd-4a56-9903-d8441437de78\",\n    \"sessionId\": \"a7c86c90-f74b-41a9-980b-70a4c6fb8570\",\n    \"provider\": \"anthropic\",\n    \"model\": \"claude-sonnet-4-6\",\n    \"api\": \"anthropic-messages\",\n    \"error\": \"request timed out\"\n  },\n  \"timestamp\": \"2026-06-15T09:04:13.896Z\"\n}\n```\n\n**L157 — fallback gpt-5 turn with empty content (no `toolResult` for `toolu_c8b41a5a51b6469b8f2aa84c`):**\n```json\n{\n  \"type\": \"message\",\n  \"timestamp\": \"2026-06-15T09:04:14.281Z\",\n  \"message\": {\n    \"role\": \"assistant\",\n    \"content\": [],\n    \"api\": \"openai-completions\",\n    \"provider\": \"openai-gateway\",\n    \"model\": \"gpt-5\",\n    \"stopReason\": \"stop\"\n  }\n}\n```\n\n### Permanent failure — every subsequent turn for 8 hours:\n```\nL160  2026-06-15T09:36:56  assistant: [assistant turn failed before producing content]\nL162  2026-06-15T09:37:10  assistant: [assistant turn failed before producing content]\nL164  2026-06-15T09:52:59  assistant: [assistant turn failed before producing content]\nL166  2026-06-15T09:55:13  assistant: [assistant turn failed before producing content]\nL168  2026-06-15T09:57:57  assistant: [assistant turn failed before producing content]\nL170  2026-06-15T10:29:38  assistant: [assistant turn failed before producing content]\n```\nSession unresponsive from 09:04 until manual reset — confirmed `ValidationException: tool_use ids found without tool_result blocks` sent to Anthropic on every API call.\n\n### Why the fix resolves this\n\nWith `erroredAssistantResultPolicy: \"drop\"`, `repairToolUseResultPairing()` drops the entire aborted assistant turn at compaction time. The broken `toolCall id=toolu_c8b41a5a51b6469b8f2aa84c` is removed before the message sequence reaches `summarizeInStages` or the upstream provider. The next API call is valid and the session recovers.\n\nThis matches the existing behaviour in the prompt-send sanitizer (`compact-Bq9HNOed.js`) which already passes `erroredAssistantResultPolicy: \"drop\"` — the compaction path was the only place missing this guard.\n\n## After-Fix Replay — Real Session Data\n\n**Fix branch:** `642e2c1435` | **Run:** 2026-06-16T10:40:51Z | **Repo:** /Users/guosong/Desktop/Sina/Code/openclaw\n\nReal JSONL records from session `a7c86c90` fed into `pruneHistoryForContextShare()` on the fix branch:\n\n```\nInput:\n  [0] role=user    content=[这个问题帮我看看]\n  [1] role=assistant content=[thinking, toolCall:toolu_..._8f2aa84c]  ← ORPHANED\n  [2] role=assistant content=[]  model=gpt-5  stopReason=stop\n  [3] role=user    content=[xxxxx... 20000 chars]\n  [4] role=user    content=[xxxxx... 20000 chars]\n  [5] role=user    content=[xxxxx... 20000 chars]\n\nOutput (droppedChunks=2):\n  [0] role=user content=[xxxxx...]\n\nValidation:\n  Orphaned toolCall blocks remaining: 0\n  ✅ PASS: toolu_c8b41a5a51b6469b8f2aa84c dropped\n           — compaction would NOT send invalid transcript to provider\n```\n\nThe aborted turn is removed by `repairToolUseResultPairing({ erroredAssistantResultPolicy: \"drop\" })` before reaching `summarizeInStages` or the upstream provider.\n\n## Tests\n\n- **`compaction-safeguard.test.ts`**: `uses repaired no-drop prune output for summarization` — aborted turn with `stopReason: \"aborted\"` is dropped entirely; only the follow-up user message reaches `summarizeInStages`\n- **`compaction-safeguard.test.ts`**: `repairs orphaned tool_use in pruned.messages when chunks are dropped` — no unpaired `toolCall` reaches `summarizeInStages` on the drop path\n- All 194 existing tests pass\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Provider-side timeout aborts an assistant turn mid-flight leaving an orphaned `toolCall` block (no matching `toolResult`). On the next compaction cycle the broken pair is passed to the LLM summarizer and then to the provider, which returns `ValidationException: tool_use ids found without tool_result blocks`, permanently breaking the session. Observed in session `a7c86c90-f74b-41a9-980b-70a4c6fb8570` on 2026-06-15: session was unresponsive for 8 hours.\n\n- **Real environment tested:** macOS arm64, OpenClaw repo `/Users/guosong/Desktop/Sina/Code/openclaw`, fix branch `642e2c1435`, Node.js v23.11.0\n\n- **Exact steps or command run after this patch:**\n```\ncd /Users/guosong/Desktop/Sina/Code/openclaw\ngit checkout fix/93321-repair-orphaned-tool-use-on-compaction  # branch: 642e2c1435\nnode --import tsx -e \"\n  import { pruneHistoryForContextShare } from './src/agents/compaction-planning.js';\n  const msgs = [\n    { role: 'user', content: 'check cluster', timestamp: 1781514200000 },\n    { role: 'assistant', content: [{ type: 'toolCall', id: 'toolu_c8b41a5a51b6469b8f2aa84c', name: 'message', arguments: { action: 'send' } }], provider: 'anthropic', model: 'claude-sonnet-4-6', timestamp: 1781514253833 },\n    { role: 'assistant', content: [], provider: 'openai-gateway', model: 'gpt-5', stopReason: 'stop', timestamp: 1781514254223 },\n    { role: 'user', content: 'x'.repeat(20000), timestamp: 1781514300000 },\n    { role: 'user', content: 'x'.repeat(20000), timestamp: 1781514360000 },\n    { role: 'user', content: 'x'.repeat(20000), timestamp: 1781514420000 },\n  ];\n  const r = pruneHistoryForContextShare({ messages: msgs, maxContextTokens: 10000, maxHistoryShare: 0.5, parts: 2 });\n  const orphans = r.messages.flatMap(m => Array.isArray(m.content) ? m.content : []).filter(b => b.type === 'toolCall').filter(b => !r.messages.some(m => m.toolCallId === b.id));\n  console.log('droppedChunks:', r.droppedChunks);\n  console.log('kept messages:', r.messages.map(m => m.role));\n  console.log('orphaned toolCall blocks remaining:', orphans.length);\n  console.log(orphans.length === 0 ? 'PASS' : 'FAIL');\n\"\n```\n\n- **Evidence after fix:** Terminal output from fix branch running against real session data (session `a7c86c90`, toolCall `toolu_c8b41a5a51b6469b8f2aa84c` extracted from live JSONL):\n```\ndroppedChunks: 2\nkept messages: [ 'user' ]\norphaned toolCall blocks remaining: 0\nPASS\n```\n\n- **Observed result after fix:** The aborted assistant turn containing `toolu_c8b41a5a51b6469b8f2aa84c` is dropped by `repairToolUseResultPairing({ erroredAssistantResultPolicy: \"drop\" })` before reaching `summarizeInStages`. No orphaned `toolCall` blocks remain in the kept messages. The compaction call to the upstream provider would succeed, and the session would recover. This matches the existing behaviour in the prompt-send sanitizer path which already applies `erroredAssistantResultPolicy: \"drop\"`.\n\n- **What was not tested:** Full end-to-end compaction LLM call with live provider credentials; end-to-end session recovery after the compaction cycle completes. The fix operates at the message preparation layer; the after-fix terminal output above confirms the broken message sequence is repaired before it would reach any provider.\n",
-        "branch": "fix/93321-repair-orphaned-tool-use-on-compaction",
-        "head_sha": "642e2c1435d8d553219c9eccec575c0e928ce4ff",
-        "author": "dolphinsboy",
+        "title": "fix(msteams): add per-call topLevel override on send action for proactive new channel threads (fixes #93288)",
+        "body": "### Summary\n\n- **Problem**: When an agent needs to post a proactive new root post in a Microsoft Teams channel (e.g. warehouse warnings, broadcasts), there is no per-call way to force a top-level post. The `channels.msteams.replyStyle` setting is purely static per-team/per-channel config.\n- **Root Cause**: The shared message-action system already recognizes `topLevel` in `STANDARD_MESSAGE_ACTION_PARAM_KEYS`, but the msteams plugin never consumes it: the send action schema does not expose `topLevel`, and `resolveMSTeamsSendContext` resolves `replyStyle` exclusively from static config via `resolveMSTeamsProactiveReplyStyle()` with no per-call override slot.\n- **Fix**: Thread a `replyStyleOverride` parameter through the msteams send path — from the tool schema, through `handleAction`, into `sendMessageMSTeams` / `sendAdaptiveCardMSTeams`, and finally into `resolveMSTeamsSendContext` where it takes precedence over the statically-resolved `replyStyle` via `??` fallback.\n- **What changed**:\n  - `extensions/msteams/src/channel.ts` — add `send` to schema actions, add `topLevel` Boolean property; handle plain `send` in `handleAction` (no longer falling through to the default handler) with `replyStyleOverride: \"top-level\"` when `topLevel === true`; pass `replyStyleOverride` through the Adaptive Card send path.\n  - `extensions/msteams/src/send.ts` — add optional `replyStyleOverride` to `SendMSTeamsMessageParams` and `SendMSTeamsCardParams`; pass through to `resolveMSTeamsSendContext`.\n  - `extensions/msteams/src/send-context.ts` — add optional `replyStyleOverride` param; use `params.replyStyleOverride ?? resolveMSTeamsProactiveReplyStyle(...)` to honour the override.\n- **What did NOT change (scope boundary)**:\n  - Other channels (Slack, Mattermost, etc.) — they already have their own `topLevel` handling\n  - `poll`, `edit`, `delete` actions\n  - Static `replyStyle` config — unchanged; the override is per-call and falls back to config when omitted\n  - DMs / group chats — `topLevel` is documented as channel-only; the override is harmless if set on non-channel conversations but is effectively a no-op\n\n### Reproduction\n\n1. Configure msteams with `replyStyle: \"thread\"` (the correct default for @mention replies)\n2. From a DM/cron/skill, ask the agent to post a stand-alone announcement to a Teams channel\n3. **Before this PR**: the agent cannot express `topLevel: true` on the msteams send action (not in the tool schema), and even if it could, `resolveMSTeamsSendContext` would still use the static `replyStyle: \"thread\"` — the announcement lands as a reply under the last thread the bot interacted with\n4. **After this PR**: the agent sees `topLevel` as an available Boolean parameter on the msteams `send` action; when set to `true`, `replyStyle` is forced to `\"top-level\"`, producing a fresh root post without the `;messageid=` suffix on the conversation reference\n\n### Real behavior proof\n\n**Behavior or issue addressed (93288)**: Microsoft Teams proactive sends from the message tool can now carry a per-call `topLevel: true` override that forces a new root post instead of a thread reply. When omitted, behaviour is unchanged — the static `replyStyle` config still governs placement.\n\n**Real environment tested**: Linux, Node 22 — test runner with fake timers exercising `resolveMSTeamsSendContext`, `sendMessageMSTeams`, `sendAdaptiveCardMSTeams`, and the `handleAction` send path.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs extensions/msteams/src/send-context.test.ts extensions/msteams/src/send.test.ts extensions/msteams/src/channel.actions.test.ts extensions/msteams/src/outbound.test.ts`\n\n**Evidence after fix**:\n```text\n RUN  v4.1.8 /home/0668001395/openclawProject1\n\n Test Files  4 passed (4)\n      Tests  58 passed (58)\n   Start at  22:49:32\n   Duration  11.12s (transform 11.70s, setup 612ms, import 20.89s, tests 89ms, environment 0ms)\n```\n\n**Observed result after fix**: All 58 existing msteams send + action tests continue to pass with no changes to existing test expectations — the `replyStyleOverride` path is purely additive. The `topLevel` property appears in the tool schema only when msteams is enabled; send context resolution honours the override when present and falls back to static config resolution when omitted.\n\n**What was not tested**: Live Microsoft Teams tenant end-to-end send with `topLevel: true` was not driven in this review environment. The reporter (issue #93288) has independently verified the patch against version `2026.5.28` with end-to-end Teams tenant sends, confirming the agent invokes the message tool with `topLevel: true`, the send goes out without the `;messageid=` suffix, and surfaces as a fresh root post. Regression check: omitting `topLevel` leaves existing thread-reply behaviour intact.\n\n**Repro confirmation**: Before this patch, the msteams send action schema listed only `[\"unpin\"]` in its actions — the agent had no `topLevel` parameter available for `send`. After this patch, the schema includes `[\"send\", \"unpin\"]` with a `topLevel` Boolean property scoped to `send`, and the `handleAction` path for plain sends (previously falling through to `return null as never`) now directly calls `sendMessageMSTeams` with the `replyStyleOverride` derived from the `topLevel` param.\n\n### Risk / Mitigation\n\n- **Risk**: The plain `send` handler in `handleAction` now runs before the `return null` fallthrough, meaning it intercepts all msteams sends that previously fell through to the core default handler.\n  **Mitigation**: The new handler calls the same `sendMessageMSTeams` function and passes the same `resolveActionContent`, `mediaUrl`, `filename`, `mediaLocalRoots`, and `mediaReadFile` parameters that the core default handler would have passed. The only addition is `replyStyleOverride`. Text chunking (handled by the core path) is not needed for the typical Teams text limit.\n- **Risk**: `replyStyleOverride` is not type-checked at the call site beyond the existing `MSTeamsReplyStyle` union.\n  **Mitigation**: Only `\"top-level\"` is passed from known call sites (`handleAction`), and `resolveMSTeamsProactiveReplyStyle` already validates the config-derived value.\n\n### Change Type (select all)\n\n- [x] Bug fix (missing feature: per-call topLevel override for msteams proactive sends)\n\n### Scope (select all touched areas)\n\n- [x] `extensions/msteams` — channel plugin\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs extensions/msteams/src/send-context.test.ts`\n- `node scripts/run-vitest.mjs extensions/msteams/src/send.test.ts`\n- `node scripts/run-vitest.mjs extensions/msteams/src/channel.actions.test.ts`\n- `node scripts/run-vitest.mjs extensions/msteams/src/outbound.test.ts`\n- `node scripts/run-vitest.mjs src/infra/outbound/message-action-runner.threading.test.ts`\n\n### Review Findings Addressed\n\nN/A (initial submission)\n\n### Linked Issue/PR\n\nFixes #93288\n",
+        "branch": "fix/issue-93288-msteams-toplevel-override",
+        "head_sha": "65e7bcae96417a61e7a6584a1db56b59addcb419",
+        "author": "zenglingbiao",
         "labels": [
-          "agents",
+          "channel: msteams",
           "size: S",
           "proof: supplied"
         ],
         "files": [
           {
-            "path": "src/agents/agent-hooks/compaction-safeguard.test.ts",
-            "additions": 149,
-            "deletions": 0,
+            "path": "extensions/msteams/src/channel.ts",
+            "additions": 43,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/agent-hooks/compaction-safeguard.ts",
-            "additions": 12,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/compaction-planning.ts",
+            "path": "extensions/msteams/src/send-context.ts",
             "additions": 9,
-            "deletions": 2,
+            "deletions": 6,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/compaction.test.ts",
-            "additions": 23,
-            "deletions": 0,
+            "path": "extensions/msteams/src/send.ts",
+            "additions": 9,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 193,
-        "deletions": 4,
+        "changedFiles": 3,
+        "additions": 61,
+        "deletions": 10,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93584",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93584.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93675",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93675.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 168,
-          "gatingTotal": 163,
+          "total": 162,
+          "gatingTotal": 157,
           "counts": {
-            "SUCCESS": 135,
-            "SKIPPED": 32,
+            "SUCCESS": 126,
+            "SKIPPED": 31,
+            "FAILURE": 4,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "security-fast:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "security-fast:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 8750,
+    "total_ms": 3333,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 608
+        "ms": 517
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3449
+        "ms": 2609
       },
       {
         "name": "classify_commands",
@@ -170,11 +159,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 4667
+        "ms": 195
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
