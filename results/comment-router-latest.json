@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T04:39:57.208Z",
+  "generated_at": "2026-06-16T04:40:24.531Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T01:39:54.564Z",
+  "since": "2026-06-16T01:40:21.297Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89040
+    88504
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 52,
-  "commands_seen": 13,
+  "scanned_comments": 11,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89040:4591541970:2026-06-16T04:39:49Z:clawsweeper_needs_human",
-      "comment_id": "4591541970",
-      "comment_version_key": "4591541970:2026-06-16T04:39:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4591541970",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88504:4585534718:2026-06-16T04:40:17Z:clawsweeper_needs_human",
+      "comment_id": "4585534718",
+      "comment_version_key": "4585534718:2026-06-16T04:40:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88504#issuecomment-4585534718",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 89040,
+      "issue_number": 88504,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T10:02:20Z",
-      "comment_updated_at": "2026-06-16T04:39:49Z",
+      "comment_created_at": "2026-05-31T03:01:16Z",
+      "comment_updated_at": "2026-06-16T04:40:17Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,121 +53,636 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=c9f7509125fc659bfe602c7f3eee6f76440f9bfe)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +159, Tests +428. Total +587 across 9 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=62152bd98f77b4c82535f7d8fe288b3a93677132)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
       "review_followup": "- Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "c9f7509125fc659bfe602c7f3eee6f76440f9bfe",
+      "expected_head_sha": "62152bd98f77b4c82535f7d8fe288b3a93677132",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
-        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walker performs no directory pruning — it walks the full tree and returns every file matching the configured patterns, with no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`**\n- Add `yieldBetweenHandlers` option with `setImmediate` yield between hook handlers\n- Add per-handler timing instrumentation with handler index reporting\n- Log warnings for slow handlers exceeding 500ms threshold\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable `yieldBetweenHandlers` for `agent:bootstrap` hook triggers\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Support new async workspace file loading and timing callback interfaces\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — every matching file returned without an artificial cap (no directory pruning), and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — 3 new tests for yield-between-handlers ordering, handler timing reporting, and slow handler warning\n\nAll existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\nCloses #87509\n\n",
-        "branch": "fix/bootstrap-context-event-loop-stall",
-        "head_sha": "c9f7509125fc659bfe602c7f3eee6f76440f9bfe",
-        "author": "jerry-xin",
+        "title": "feat(memory): add multi-slot memory role architecture",
+        "body": "## Summary\n\nThis PR adds a purpose-specific memory role-slot contract so memory plugins can compose instead of replacing each other through one global `plugins.slots.memory` selector.\n\nWhat changes:\n\n- Adds canonical memory role slots: `memory.recall`, `memory.compaction`, `memory.capture`, `memory.dreaming`, and `memory.userModel`.\n- Keeps legacy `plugins.slots.memory` as a backward-compatible recall shorthand during an extended migration window.\n- Adds per-agent memory role-slot overrides under `agents.list[*].plugins.slots`, limited to memory roles plus legacy `memory`.\n- Wires role-slot selection through config schema/types/help/docs, plugin activation, gateway startup preloading, runtime memory resolution, skill publishing, validation, doctor repair/preview, uninstall cleanup, status diagnostics, and SDK-facing aliases.\n- Preserves the existing global `plugins.slots.contextEngine` path for LosslessClaw and other context-engine plugins.\n- Explicitly rejects unsupported per-agent `agents.list[*].plugins.slots.contextEngine` overrides, because agent-scoped context-engine semantics are out of scope for this PR.\n\nWhy this matters:\n\n- Advanced OpenClaw users are already operating layered memory stacks: factual recall, context compaction, auto-capture, dreaming/consolidation, and inferred user modeling are distinct concerns.\n- The previous single memory slot forced useful plugins into workarounds such as context-engine ownership, sidecars, or global replacement of the primary recall plugin.\n- This branch makes the config contract match the memory architecture users are trying to run while keeping the migration path conservative.\n\nIntended outcome:\n\n- `memory-core` can remain the factual recall owner while other plugins own capture, compaction, dreaming, or user-model roles.\n- Existing configs using `plugins.slots.memory` continue to work.\n- `openclaw doctor --fix` copies non-conflicting legacy `plugins.slots.memory` values into `plugins.slots[\"memory.recall\"]` but keeps the legacy key in place for plugin compatibility.\n- Plugin lifecycle and diagnostics treat role-slot-selected memory plugins as intentionally active across startup, validation, skill publishing, runtime resolution, and cleanup.\n\nOut of scope:\n\n- This does not replace or remove `plugins.slots.contextEngine`; LosslessClaw and other context engines continue to use the existing global `contextEngine` slot.\n- This does not add agent-scoped `contextEngine` semantics.\n- This does not implement the owner-provenance object shape proposed in #70823.\n- This does not require third-party plugins to implement every memory role immediately.\n\n## Linked context\n\nCloses #60572.\n\nDirectly related memory-composition requests and prior proposals:\n\n- #38874: supplementary/additive memory plugins alongside the primary memory slot.\n- #2306: earlier closed PR proposing stackable memory plugins.\n- #2080: earlier request for multiple simultaneous memory plugins and emerging memory architectures.\n- #77714: pluggable persistent memory backend demand.\n\nDreaming and memory-role separation context:\n\n- #85473: future protocol work for making dreaming implementable by non-`memory-core` memory plugins. This PR adds the `memory.dreaming` slot contract but does not implement that full protocol.\n- #63067 and #65411: prior work around keeping dreaming behavior available when another plugin owns the legacy memory slot.\n- #62275: previous selected-slot dreaming config behavior.\n\nRuntime/diagnostic slot handling context:\n\n- #76567 and #76495: configured memory-slot runtime checks should load/consult the selected memory plugin.\n- #78540: doctor/status memory diagnostics could misreport configured memory providers.\n- #76550: stale `plugins.slots.*` references could leave config unrecoverable until doctor cleanup was broadened.\n\nContext-engine compatibility context:\n\n- #77063, #77185, #76576, and #81843: context-engine registration and LosslessClaw-adjacent failures shaped the compatibility review for preserving the existing global `plugins.slots.contextEngine` behavior while rejecting unsupported per-agent `contextEngine` config.\n\nFuture API/RFC context:\n\n- #70823: future machine-readable slot ownership/provenance. This PR intentionally keeps scalar plugin IDs and solves the memory role composition layer first.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Exact-head full proof refresh for PR #88504 at `2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd`. This proof covers the current memory role-slot contract, per-agent `agents.list[].plugins.slots` overrides, legacy `plugins.slots.memory` compatibility, disabled `none` recall slots, doctor migration/repair behavior, role-slot-selected plugin activation/validation, upgrade behavior from the last public release, usable `github-copilot` provider auth across rollback/upgrade testing, exact-head gateway service install/restart, gateway service health, gateway-dispatched live agent execution, and the gateway-dispatched plugin subagent completion bookkeeping included in this branch.\n- Real environment tested: Dev-01 canonical checkout plus Orion/Nano-01 Linux rollback/upgrade test box. Nano was tested at PR head `2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd`, rolled back to public release `v2026.5.28`, then upgraded directly back to the same PR head. Runtime logs were redacted for private host, path, token, session, and network values.\n- Exact steps or command run after this patch: on Dev-01, ran the targeted gateway/plugin-subagent deterministic Vitest files that cover gateway runtime plugin dispatch, plugin subagent run registration/completion, and agent method tracking. On Nano, created a private auth backup before rollback, verified source CLI provider auth, ran five clean live `github-copilot` source CLI turns with fresh proof session keys, rolled back to `v2026.5.28`, captured release install/version/config/doctor/status/models behavior, upgraded back to PR head, reran PR install/version/config/doctor/status/models/slots/agents checks, verified post-upgrade live provider execution, force-reinstalled and restarted the gateway service from exact head, verified gateway status/health/stability, ran a live gateway-dispatched agent turn through the running exact-head service, then reran focused memory/runtime and doctor/legacy slot source tests plus conflict-marker and diff checks.\n- Evidence after fix (terminal capture, redacted runtime log, linked artifact, or copied live output): redacted Nano proof bundle id `proof-full-2b0d657729a3-20260604T025709Z`; private auth-backup SHA `eef060cae6f9f53141bdcbb5fb45960cb18c935a4d5e094599a9bac4fc62a1c3`; Dev-01 gateway/plugin-subagent artifact `.artifacts/proof-full-2b0d657-dev01-20260604T030012Z`; Nano host `Nano-01`; Node `v24.16.0`; pnpm `11.2.2`; exact head `2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd`.\n\n```text\nhead=2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd\nrelease_base=v2026.5.28 e93216080aa1f425d3ab127014603eba8e365b2d\nnano_proof_bundle=proof-full-2b0d657729a3-20260604T025709Z\nnano_auth_backup_sha256=eef060cae6f9f53141bdcbb5fb45960cb18c935a4d5e094599a9bac4fc62a1c3\ndev01_gateway_artifact=.artifacts/proof-full-2b0d657-dev01-20260604T030012Z\nupgrade_path=auth backup -> exact-head baseline -> release checkout/install/doctor/status/models -> PR checkout/install/config/doctor/status/models/slots/agents -> post-upgrade live provider turn -> exact-head gateway service force install/restart -> gateway live agent dispatch\n```\n\n```text\nDev-01 exact-head deterministic gateway/plugin-subagent gates:\n- src/gateway/server-plugins.subagent-ended-hook.test.ts\n- src/gateway/server-plugins.test.ts\n- src/gateway/server-methods/agent.test.ts\n- result: passed, 4 files, 337 tests\n- coverage focus: plugin runtime gateway dispatch scope, generated idempotency fallback, plugin_subagent tracking, plugin owner propagation, registry registration, completion bookkeeping, retry dedupe, and fallback behavior when registry persistence fails\n```\n\n```text\nNano auth-preserving rollback/upgrade matrix:\n- private auth backup before rollback: created, sha256 eef060cae6f9f53141bdcbb5fb45960cb18c935a4d5e094599a9bac4fc62a1c3\n- checkout v2026.5.28: passed\n- release pnpm install --frozen-lockfile: passed\n- release version: passed\n- release config validate against PR-era role-slot config: failed as expected because old release does not know future memory role-slot keys\n- release doctor --fix --non-interactive: passed\n- release status: passed\n- release models status: passed\n- checkout PR head 2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd: passed\n- PR pnpm install --frozen-lockfile: passed\n- PR version: passed\n- PR config validate: passed\n- PR doctor --fix --non-interactive: passed\n- PR status: passed\n- PR models status: passed; github-copilot provider auth status ok, missingProvidersInUse=[]\n- PR plugins.slots inspection: passed\n- PR agents.list inspection: passed\n- post-upgrade live main agent turn: passed, provider=github-copilot, model=gpt-5.4-mini\n```\n\n```text\nNano clean live source CLI github-copilot turns after re-auth:\n- main: exit=0, provider=github-copilot, model=gpt-5.4-mini, marker=OKM2B0D\n- honcho-agent: exit=0, provider=github-copilot, model=gpt-5.4-mini, marker=OKH2B0D\n- dreamer-agent: exit=0, provider=github-copilot, model=gpt-5.4-mini, marker=OKD2B0D\n- split-agent: exit=0, provider=github-copilot, model=gpt-5.4-mini, marker=OKS2B0D\n- disabled-recall-agent: exit=0, provider=github-copilot, model=gpt-5.4-mini, marker=OKN2B0D\n```\n\n```text\nNano exact-head gateway service proof:\n- gateway install --force: passed\n- gateway restart: passed\n- gateway status: passed; CLI version 2026.6.2, Gateway version 2026.6.2, runtime running, connectivity probe ok, capability write-capable, listening on loopback port 18789\n- gateway health: passed, OK\n- gateway stability: passed\n- gateway call agent --expect-final through running service: passed, status=ok, provider=github-copilot, model=gpt-5.4-mini, marker=LIVE_GATEWAY_AGENT_FORCE_2B0D\n```\n\n```text\nNano focused exact-head source gates after upgrade:\n- focused memory/plugin runtime Vitest: passed, 4 files, 245 tests\n- focused doctor/legacy slot Vitest: passed, 3 files, 81 tests\n- check-no-conflict-markers: passed\n- git diff --check: passed\n- final git status: clean for tracked files; only pre-existing generated `1/` build-output directories remained untracked from doctor/UI build paths\n```\n\n```text\npr_global_slot_matrix_verified:\n- plugins.slots.memory.recall = memory-core\n- plugins.slots.memory.dreaming = memory-core\n- plugins.slots.memory.userModel = openclaw-honcho\n- plugins.slots.contextEngine = lossless-claw\n\npr_agent_slot_matrix_verified:\n- main: no explicit per-agent memory override\n- honcho-agent: memory.recall = openclaw-honcho; memory.userModel = openclaw-honcho\n- dreamer-agent: memory.recall = memory-core; memory.dreaming = memory-core; memory.userModel = openclaw-honcho\n- split-agent: memory.recall = memory-core; memory.capture = active-memory; memory.userModel = openclaw-honcho\n- disabled-recall-agent: memory.recall = none; memory.capture = active-memory; memory.userModel = openclaw-honcho\n```\n\n- Observed result after fix: current PR head validates and doctors the intended memory role-slot matrix after direct upgrade from the last public release. Usable `github-copilot` auth survived rollback/upgrade testing and was confirmed by post-upgrade `models status` plus a live provider turn. Five clean source CLI agent turns and one exact-head gateway service-dispatched agent turn ran against `github-copilot/gpt-5.4-mini`. Gateway service proof required `gateway install --force`; a non-forced install left the already-installed `2026.6.1` unit in place, which was explicitly caught and corrected before claiming gateway proof.\n- What was not tested: maintainer taxonomy approval is still a review decision, not something this proof can self-certify. Opengrep was not installed locally on Nano, so changed-path scan coverage remains GitHub Actions evidence. Runtime proof logs were redacted to avoid private host, path, token, session, and network values.\n- Proof limitations or environment constraints: the old-release config validation failure is expected and captured as compatibility evidence for future PR-era slot keys; it is not a failed PR-head upgrade. The gateway service is loopback-bound on Nano and was tested through local gateway CLI calls.\n\n## Implementation notes\n\n- Adds `src/plugins/slot-resolution.ts` as the shared role-slot helper layer for canonical memory role keys, defaults, normalization, effective per-agent resolution, and configured selection collection.\n- Updates config schema/types/help/labels/docs for global and per-agent memory role slots.\n- Keeps `PluginSlotsConfig.contextEngine` for global plugin slots, and adds an agent-slot type/schema that omits `contextEngine`.\n- Updates doctor legacy memory-slot handling so `doctor --fix` canonicalizes to `memory.recall` while retaining legacy `memory` during the compatibility window.\n- Updates plugin loader/activation/startup resolution so explicit role-slot selections activate memory plugins without confusing default `memory-core` fallback with a user-selected plugin under restrictive allowlists.\n- Extends validation to report missing role-slot plugin refs and validate schemas for plugins selected only by non-recall or per-agent memory roles.\n- Extends skill publishing, status scanning, uninstall cleanup, memory runtime, dreaming, compaction provider, and SDK alias behavior to use the role-aware model.\n- Keeps memory runtime registrations addressable by plugin id, so runtime recall dispatch follows the resolved global or per-agent `memory.recall` owner.\n- Passes the session agent id into Pi embedded extension factory construction so safeguard compaction provider selection honors per-agent `memory.compaction` overrides in both normal session runs and manual/queued compaction paths.\n- Updates bundled memory plugin manifests/docs to describe role support and the recall shorthand migration.\n\n## Compatibility and risk\n\nBackward compatibility preserved:\n\n- Existing `plugins.slots.memory` configs continue to resolve as recall selection.\n- `doctor --fix` now keeps the legacy `plugins.slots.memory` key in place after copying to `memory.recall`, so third-party plugins that still read only the legacy key do not hit an immediate flag day.\n- The default recall plugin remains `memory-core` unless explicitly disabled or overridden.\n- `plugins.enabled = false`, denylist behavior, and explicit `plugins.entries.<id>.enabled = false` remain respected.\n- Global `plugins.slots.contextEngine` remains separate from memory roles and continues to select context engines such as LosslessClaw.\n\nCompatibility changes reviewers should inspect:\n\n- `memory.recall`, `memory.compaction`, `memory.capture`, `memory.dreaming`, and `memory.userModel` become durable public config keys after merge.\n- Per-agent plugin-slot overrides are memory-only. `agents.list[*].plugins.slots.contextEngine` is intentionally rejected until a future PR defines and implements agent-scoped context-engine semantics.\n- Legacy `plugins.slots.memory` is still deprecated as a canonical authoring target even though it remains supported and retained for compatibility.\n\nPrimary risks:\n\n- The public memory role taxonomy becomes API surface after merge, so naming and docs need maintainer signoff.\n- Role-gating mistakes could attach the wrong memory provider or suppress expected memory behavior; this PR adds focused coverage across loader, validation, startup, runtime, doctor, status, skill publishing, and cleanup surfaces.\n- Third-party plugins should eventually read `memory.recall`, but the retained legacy key avoids forcing that ecosystem update immediately.\n\n## Verification\n\nCurrent PR branch head:\n\n- `2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd` (`feat(memory): add multi-slot memory role architecture`)\n- Branch: `kklouzal:feat/multi-slot-memory-architecture`\n- Base target: `openclaw/openclaw:main`\n\nLatest exact-head proof gates:\n\n- Dev-01 failed CI shard local equivalent: passed, 6 files, 55 tests.\n- Dev-01 conflict-focused memory/plugin runtime Vitest: passed, 3 files, 65 tests, 127 skipped.\n- Dev-01 `pnpm check:test-types`: passed.\n- Dev-01 `pnpm format:check src/plugins/memory-runtime.ts`: passed.\n- Dev-01 `node scripts/check-no-conflict-markers.mjs`: passed.\n- Dev-01 `git diff --check`: passed.\n- Orion/Nano-01 rollback/upgrade matrix from `v2026.5.28` to PR head `2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd`: passed for release install/status/valid doctor-fix, expected old-release config rejection of future PR-era slot keys, PR install/config/status/plugins/models/agents/slots, focused runtime tests, focused doctor/legacy tests, conflict-marker check, and diff check.\n- Orion/Nano-01 live GitHub Copilot agent turn: attempted, blocked by current test-box source-runtime `github-copilot` auth absence; exact-head body proof does not claim live model-turn success for this refresh.\n\n",
+        "branch": "feat/multi-slot-memory-architecture",
+        "head_sha": "62152bd98f77b4c82535f7d8fe288b3a93677132",
+        "author": "kklouzal",
         "labels": [
+          "docs",
+          "gateway",
+          "extensions: memory-lancedb",
+          "cli",
+          "commands",
           "agents",
-          "size: L",
+          "size: XL",
+          "extensions: qa-lab",
+          "extensions: memory-wiki",
+          "plugin: migrate-hermes",
           "proof: supplied",
-          "P1",
+          "P2",
           "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability"
+          "merge-risk: 🚨 availability",
+          "feature: ✨ showcase"
         ],
         "files": [
           {
-            "path": "src/agents/bootstrap-files.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bootstrap-hooks.ts",
+            "path": "docs/cli/memory.md",
             "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 72,
-            "deletions": 41,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
-            "additions": 196,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.test.ts",
-            "additions": 102,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.ts",
-            "additions": 132,
-            "deletions": 41,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
-            "additions": 42,
+            "path": "docs/cli/plugins.md",
+            "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/hooks/internal-hooks.test.ts",
-            "additions": 89,
+            "path": "docs/cli/status.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/active-memory.md",
+            "additions": 38,
+            "deletions": 37,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/context-engine.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/configuration-reference.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/manifest.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/memory-lancedb.md",
+            "additions": 12,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/plugin.md",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/active-memory/index.test.ts",
+            "additions": 23,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/active-memory/index.ts",
+            "additions": 5,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/active-memory/openclaw.plugin.json",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-lancedb/openclaw.plugin.json",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/bridge.test.ts",
+            "additions": 54,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/hooks/internal-hooks.ts",
-            "additions": 30,
+            "path": "extensions/memory-wiki/src/bridge.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/migrate-hermes/config.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/migrate-hermes/provider.test.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-lab/src/live-transports/shared/live-gateway.runtime.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-lab/src/live-transports/shared/live-gateway.runtime.ts",
+            "additions": 2,
             "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-lab/src/qa-gateway-config.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-lab/src/qa-gateway-config.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-scope-config.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/extensions.test.ts",
+            "additions": 122,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/extensions.ts",
+            "additions": 12,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-delivery-state.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-lifecycle.ts",
+            "additions": 11,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-run-manager.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/system-prompt-config.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/system-prompt.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.ts",
+            "additions": 11,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/plugins-command-helpers.test.ts",
+            "additions": 46,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/plugins-install-persist.test.ts",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-memory-search.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/repair-sequencing.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/legacy-memory-slot.test.ts",
+            "additions": 138,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/doctor/shared/legacy-memory-slot.ts",
+            "additions": 199,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/doctor/shared/preview-warnings.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/release-configured-plugin-installs.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/release-configured-plugin-installs.ts",
+            "additions": 7,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/stale-plugin-config.test.ts",
+            "additions": 55,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/stale-plugin-config.ts",
+            "additions": 60,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/status.scan.shared.test.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/status.scan.shared.ts",
+            "additions": 15,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/config-misc.test.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/config.plugin-validation.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.quality.test.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.labels.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.agents.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.plugins.ts",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/validation.ts",
+            "additions": 78,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-runtime.ts",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.ts",
+            "additions": 13,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/context-engine/delegate.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.test.ts",
+            "additions": 11,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.ts",
+            "additions": 66,
+            "deletions": 29,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/doctor.test.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.plugin-node-capability-auth.test.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/tools-invoke-shared.ts",
+            "additions": 9,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/plugin-hooks.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/plugin-hooks.ts",
+            "additions": 27,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/memory-host-sdk/dreaming.test.ts",
+            "additions": 24,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/memory-host-sdk/dreaming.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/channel-plugin-ids.test.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/compaction-provider.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/config-activation-shared.ts",
+            "additions": 29,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/config-normalization-shared.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/config-policy.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/config-state.test.ts",
+            "additions": 69,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/config-state.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/effective-plugin-ids.test.ts",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/effective-plugin-ids.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/gateway-startup-plugin-ids.ts",
+            "additions": 123,
+            "deletions": 26,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/loader.test.ts",
+            "additions": 353,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/loader.ts",
+            "additions": 174,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/memory-runtime.test.ts",
+            "additions": 186,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/memory-runtime.ts",
+            "additions": 42,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/memory-state.test.ts",
+            "additions": 227,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/memory-state.ts",
+            "additions": 124,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/registry-types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/registry.ts",
+            "additions": 51,
+            "deletions": 51,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/slot-resolution.ts",
+            "additions": 238,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/plugins/slots.test.ts",
+            "additions": 258,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/slots.ts",
+            "additions": 148,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/uninstall.test.ts",
+            "additions": 89,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/uninstall.ts",
+            "additions": 39,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/update.test.ts",
+            "additions": 36,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/update.ts",
+            "additions": 88,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/skills/loading/plugin-skills.test.ts",
+            "additions": 67,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/skills/loading/plugin-skills.ts",
+            "additions": 25,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 9,
-        "additions": 673,
-        "deletions": 86,
+        "changedFiles": 93,
+        "additions": 4132,
+        "deletions": 445,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88504",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88504.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 164,
-          "gatingTotal": 159,
+          "total": 162,
+          "gatingTotal": 157,
           "counts": {
             "CANCELLED": 2,
-            "SKIPPED": 25,
-            "SUCCESS": 134,
-            "FAILURE": 2,
+            "SKIPPED": 17,
+            "SUCCESS": 139,
+            "FAILURE": 3,
             "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:CANCELLED",
             "checks-node-core-fast:FAILURE",
-            "check-lint:FAILURE"
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
             "Real behavior proof:CANCELLED",
             "checks-node-core-fast:FAILURE",
-            "check-lint:FAILURE"
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
           ],
           "externalBlockers": []
         }
@@ -177,18 +692,18 @@
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
     },
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4714209378:2026-06-16T02:12:53Z:re_review",
-      "comment_id": "4714209378",
-      "comment_version_key": "4714209378:2026-06-16T02:12:53Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4714209378",
+      "idempotency_key": "comment-router:openclaw/openclaw:88504:4618840420:2026-06-04T04:05:48Z:re_review",
+      "comment_id": "4618840420",
+      "comment_version_key": "4618840420:2026-06-04T04:05:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88504#issuecomment-4618840420",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-16T02:12:53Z",
-      "comment_updated_at": "2026-06-16T02:12:53Z",
+      "issue_number": 88504,
+      "author": "kklouzal",
+      "author_id": 2928845,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-04T04:05:48Z",
+      "comment_updated_at": "2026-06-04T04:05:48Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -208,394 +723,648 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4663196981:2026-06-09T19:16:41Z:re_review",
-      "comment_id": "4663196981",
-      "comment_version_key": "4663196981:2026-06-09T19:16:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4663196981",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-09T19:16:41Z",
-      "comment_updated_at": "2026-06-09T19:16:41Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4660098613:2026-06-09T13:15:47Z:re_review",
-      "comment_id": "4660098613",
-      "comment_version_key": "4660098613:2026-06-09T13:15:47Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4660098613",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-09T13:15:47Z",
-      "comment_updated_at": "2026-06-09T13:15:47Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4657208692:2026-06-09T07:19:48Z:re_review",
-      "comment_id": "4657208692",
-      "comment_version_key": "4657208692:2026-06-09T07:19:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4657208692",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-09T07:19:48Z",
-      "comment_updated_at": "2026-06-09T07:19:48Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4655991161:2026-06-09T04:06:21Z:re_review",
-      "comment_id": "4655991161",
-      "comment_version_key": "4655991161:2026-06-09T04:06:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4655991161",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-09T04:06:21Z",
-      "comment_updated_at": "2026-06-09T04:06:21Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4654028532:2026-06-08T22:17:15Z:re_review",
-      "comment_id": "4654028532",
-      "comment_version_key": "4654028532:2026-06-08T22:17:15Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4654028532",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-08T22:17:15Z",
-      "comment_updated_at": "2026-06-08T22:17:15Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4627542673:2026-06-05T02:16:33Z:re_review",
-      "comment_id": "4627542673",
-      "comment_version_key": "4627542673:2026-06-05T02:16:33Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4627542673",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-05T02:16:33Z",
-      "comment_updated_at": "2026-06-05T02:16:33Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4613872043:2026-06-03T15:12:30Z:re_review",
-      "comment_id": "4613872043",
-      "comment_version_key": "4613872043:2026-06-03T15:12:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4613872043",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T15:12:30Z",
-      "comment_updated_at": "2026-06-03T15:12:30Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4609780678:2026-06-03T06:44:35Z:re_review",
-      "comment_id": "4609780678",
-      "comment_version_key": "4609780678:2026-06-03T06:44:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4609780678",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T06:44:35Z",
-      "comment_updated_at": "2026-06-03T06:44:35Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4602422401:2026-06-02T12:35:00Z:re_review",
-      "comment_id": "4602422401",
-      "comment_version_key": "4602422401:2026-06-02T12:35:00Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4602422401",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T12:35:00Z",
-      "comment_updated_at": "2026-06-02T12:35:00Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4600478603:2026-06-02T08:45:25Z:re_review",
-      "comment_id": "4600478603",
-      "comment_version_key": "4600478603:2026-06-02T08:45:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4600478603",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T08:45:25Z",
-      "comment_updated_at": "2026-06-02T08:45:25Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4600442002:2026-06-02T08:42:31Z:re_review",
-      "comment_id": "4600442002",
-      "comment_version_key": "4600442002:2026-06-02T08:42:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4600442002",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T08:42:31Z",
-      "comment_updated_at": "2026-06-02T08:42:31Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(memory): add multi-slot memory role architecture",
+        "body": "## Summary\n\nThis PR adds a purpose-specific memory role-slot contract so memory plugins can compose instead of replacing each other through one global `plugins.slots.memory` selector.\n\nWhat changes:\n\n- Adds canonical memory role slots: `memory.recall`, `memory.compaction`, `memory.capture`, `memory.dreaming`, and `memory.userModel`.\n- Keeps legacy `plugins.slots.memory` as a backward-compatible recall shorthand during an extended migration window.\n- Adds per-agent memory role-slot overrides under `agents.list[*].plugins.slots`, limited to memory roles plus legacy `memory`.\n- Wires role-slot selection through config schema/types/help/docs, plugin activation, gateway startup preloading, runtime memory resolution, skill publishing, validation, doctor repair/preview, uninstall cleanup, status diagnostics, and SDK-facing aliases.\n- Preserves the existing global `plugins.slots.contextEngine` path for LosslessClaw and other context-engine plugins.\n- Explicitly rejects unsupported per-agent `agents.list[*].plugins.slots.contextEngine` overrides, because agent-scoped context-engine semantics are out of scope for this PR.\n\nWhy this matters:\n\n- Advanced OpenClaw users are already operating layered memory stacks: factual recall, context compaction, auto-capture, dreaming/consolidation, and inferred user modeling are distinct concerns.\n- The previous single memory slot forced useful plugins into workarounds such as context-engine ownership, sidecars, or global replacement of the primary recall plugin.\n- This branch makes the config contract match the memory architecture users are trying to run while keeping the migration path conservative.\n\nIntended outcome:\n\n- `memory-core` can remain the factual recall owner while other plugins own capture, compaction, dreaming, or user-model roles.\n- Existing configs using `plugins.slots.memory` continue to work.\n- `openclaw doctor --fix` copies non-conflicting legacy `plugins.slots.memory` values into `plugins.slots[\"memory.recall\"]` but keeps the legacy key in place for plugin compatibility.\n- Plugin lifecycle and diagnostics treat role-slot-selected memory plugins as intentionally active across startup, validation, skill publishing, runtime resolution, and cleanup.\n\nOut of scope:\n\n- This does not replace or remove `plugins.slots.contextEngine`; LosslessClaw and other context engines continue to use the existing global `contextEngine` slot.\n- This does not add agent-scoped `contextEngine` semantics.\n- This does not implement the owner-provenance object shape proposed in #70823.\n- This does not require third-party plugins to implement every memory role immediately.\n\n## Linked context\n\nCloses #60572.\n\nDirectly related memory-composition requests and prior proposals:\n\n- #38874: supplementary/additive memory plugins alongside the primary memory slot.\n- #2306: earlier closed PR proposing stackable memory plugins.\n- #2080: earlier request for multiple simultaneous memory plugins and emerging memory architectures.\n- #77714: pluggable persistent memory backend demand.\n\nDreaming and memory-role separation context:\n\n- #85473: future protocol work for making dreaming implementable by non-`memory-core` memory plugins. This PR adds the `memory.dreaming` slot contract but does not implement that full protocol.\n- #63067 and #65411: prior work around keeping dreaming behavior available when another plugin owns the legacy memory slot.\n- #62275: previous selected-slot dreaming config behavior.\n\nRuntime/diagnostic slot handling context:\n\n- #76567 and #76495: configured memory-slot runtime checks should load/consult the selected memory plugin.\n- #78540: doctor/status memory diagnostics could misreport configured memory providers.\n- #76550: stale `plugins.slots.*` references could leave config unrecoverable until doctor cleanup was broadened.\n\nContext-engine compatibility context:\n\n- #77063, #77185, #76576, and #81843: context-engine registration and LosslessClaw-adjacent failures shaped the compatibility review for preserving the existing global `plugins.slots.contextEngine` behavior while rejecting unsupported per-agent `contextEngine` config.\n\nFuture API/RFC context:\n\n- #70823: future machine-readable slot ownership/provenance. This PR intentionally keeps scalar plugin IDs and solves the memory role composition layer first.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Exact-head full proof refresh for PR #88504 at `2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd`. This proof covers the current memory role-slot contract, per-agent `agents.list[].plugins.slots` overrides, legacy `plugins.slots.memory` compatibility, disabled `none` recall slots, doctor migration/repair behavior, role-slot-selected plugin activation/validation, upgrade behavior from the last public release, usable `github-copilot` provider auth across rollback/upgrade testing, exact-head gateway service install/restart, gateway service health, gateway-dispatched live agent execution, and the gateway-dispatched plugin subagent completion bookkeeping included in this branch.\n- Real environment tested: Dev-01 canonical checkout plus Orion/Nano-01 Linux rollback/upgrade test box. Nano was tested at PR head `2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd`, rolled back to public release `v2026.5.28`, then upgraded directly back to the same PR head. Runtime logs were redacted for private host, path, token, session, and network values.\n- Exact steps or command run after this patch: on Dev-01, ran the targeted gateway/plugin-subagent deterministic Vitest files that cover gateway runtime plugin dispatch, plugin subagent run registration/completion, and agent method tracking. On Nano, created a private auth backup before rollback, verified source CLI provider auth, ran five clean live `github-copilot` source CLI turns with fresh proof session keys, rolled back to `v2026.5.28`, captured release install/version/config/doctor/status/models behavior, upgraded back to PR head, reran PR install/version/config/doctor/status/models/slots/agents checks, verified post-upgrade live provider execution, force-reinstalled and restarted the gateway service from exact head, verified gateway status/health/stability, ran a live gateway-dispatched agent turn through the running exact-head service, then reran focused memory/runtime and doctor/legacy slot source tests plus conflict-marker and diff checks.\n- Evidence after fix (terminal capture, redacted runtime log, linked artifact, or copied live output): redacted Nano proof bundle id `proof-full-2b0d657729a3-20260604T025709Z`; private auth-backup SHA `eef060cae6f9f53141bdcbb5fb45960cb18c935a4d5e094599a9bac4fc62a1c3`; Dev-01 gateway/plugin-subagent artifact `.artifacts/proof-full-2b0d657-dev01-20260604T030012Z`; Nano host `Nano-01`; Node `v24.16.0`; pnpm `11.2.2`; exact head `2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd`.\n\n```text\nhead=2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd\nrelease_base=v2026.5.28 e93216080aa1f425d3ab127014603eba8e365b2d\nnano_proof_bundle=proof-full-2b0d657729a3-20260604T025709Z\nnano_auth_backup_sha256=eef060cae6f9f53141bdcbb5fb45960cb18c935a4d5e094599a9bac4fc62a1c3\ndev01_gateway_artifact=.artifacts/proof-full-2b0d657-dev01-20260604T030012Z\nupgrade_path=auth backup -> exact-head baseline -> release checkout/install/doctor/status/models -> PR checkout/install/config/doctor/status/models/slots/agents -> post-upgrade live provider turn -> exact-head gateway service force install/restart -> gateway live agent dispatch\n```\n\n```text\nDev-01 exact-head deterministic gateway/plugin-subagent gates:\n- src/gateway/server-plugins.subagent-ended-hook.test.ts\n- src/gateway/server-plugins.test.ts\n- src/gateway/server-methods/agent.test.ts\n- result: passed, 4 files, 337 tests\n- coverage focus: plugin runtime gateway dispatch scope, generated idempotency fallback, plugin_subagent tracking, plugin owner propagation, registry registration, completion bookkeeping, retry dedupe, and fallback behavior when registry persistence fails\n```\n\n```text\nNano auth-preserving rollback/upgrade matrix:\n- private auth backup before rollback: created, sha256 eef060cae6f9f53141bdcbb5fb45960cb18c935a4d5e094599a9bac4fc62a1c3\n- checkout v2026.5.28: passed\n- release pnpm install --frozen-lockfile: passed\n- release version: passed\n- release config validate against PR-era role-slot config: failed as expected because old release does not know future memory role-slot keys\n- release doctor --fix --non-interactive: passed\n- release status: passed\n- release models status: passed\n- checkout PR head 2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd: passed\n- PR pnpm install --frozen-lockfile: passed\n- PR version: passed\n- PR config validate: passed\n- PR doctor --fix --non-interactive: passed\n- PR status: passed\n- PR models status: passed; github-copilot provider auth status ok, missingProvidersInUse=[]\n- PR plugins.slots inspection: passed\n- PR agents.list inspection: passed\n- post-upgrade live main agent turn: passed, provider=github-copilot, model=gpt-5.4-mini\n```\n\n```text\nNano clean live source CLI github-copilot turns after re-auth:\n- main: exit=0, provider=github-copilot, model=gpt-5.4-mini, marker=OKM2B0D\n- honcho-agent: exit=0, provider=github-copilot, model=gpt-5.4-mini, marker=OKH2B0D\n- dreamer-agent: exit=0, provider=github-copilot, model=gpt-5.4-mini, marker=OKD2B0D\n- split-agent: exit=0, provider=github-copilot, model=gpt-5.4-mini, marker=OKS2B0D\n- disabled-recall-agent: exit=0, provider=github-copilot, model=gpt-5.4-mini, marker=OKN2B0D\n```\n\n```text\nNano exact-head gateway service proof:\n- gateway install --force: passed\n- gateway restart: passed\n- gateway status: passed; CLI version 2026.6.2, Gateway version 2026.6.2, runtime running, connectivity probe ok, capability write-capable, listening on loopback port 18789\n- gateway health: passed, OK\n- gateway stability: passed\n- gateway call agent --expect-final through running service: passed, status=ok, provider=github-copilot, model=gpt-5.4-mini, marker=LIVE_GATEWAY_AGENT_FORCE_2B0D\n```\n\n```text\nNano focused exact-head source gates after upgrade:\n- focused memory/plugin runtime Vitest: passed, 4 files, 245 tests\n- focused doctor/legacy slot Vitest: passed, 3 files, 81 tests\n- check-no-conflict-markers: passed\n- git diff --check: passed\n- final git status: clean for tracked files; only pre-existing generated `1/` build-output directories remained untracked from doctor/UI build paths\n```\n\n```text\npr_global_slot_matrix_verified:\n- plugins.slots.memory.recall = memory-core\n- plugins.slots.memory.dreaming = memory-core\n- plugins.slots.memory.userModel = openclaw-honcho\n- plugins.slots.contextEngine = lossless-claw\n\npr_agent_slot_matrix_verified:\n- main: no explicit per-agent memory override\n- honcho-agent: memory.recall = openclaw-honcho; memory.userModel = openclaw-honcho\n- dreamer-agent: memory.recall = memory-core; memory.dreaming = memory-core; memory.userModel = openclaw-honcho\n- split-agent: memory.recall = memory-core; memory.capture = active-memory; memory.userModel = openclaw-honcho\n- disabled-recall-agent: memory.recall = none; memory.capture = active-memory; memory.userModel = openclaw-honcho\n```\n\n- Observed result after fix: current PR head validates and doctors the intended memory role-slot matrix after direct upgrade from the last public release. Usable `github-copilot` auth survived rollback/upgrade testing and was confirmed by post-upgrade `models status` plus a live provider turn. Five clean source CLI agent turns and one exact-head gateway service-dispatched agent turn ran against `github-copilot/gpt-5.4-mini`. Gateway service proof required `gateway install --force`; a non-forced install left the already-installed `2026.6.1` unit in place, which was explicitly caught and corrected before claiming gateway proof.\n- What was not tested: maintainer taxonomy approval is still a review decision, not something this proof can self-certify. Opengrep was not installed locally on Nano, so changed-path scan coverage remains GitHub Actions evidence. Runtime proof logs were redacted to avoid private host, path, token, session, and network values.\n- Proof limitations or environment constraints: the old-release config validation failure is expected and captured as compatibility evidence for future PR-era slot keys; it is not a failed PR-head upgrade. The gateway service is loopback-bound on Nano and was tested through local gateway CLI calls.\n\n## Implementation notes\n\n- Adds `src/plugins/slot-resolution.ts` as the shared role-slot helper layer for canonical memory role keys, defaults, normalization, effective per-agent resolution, and configured selection collection.\n- Updates config schema/types/help/labels/docs for global and per-agent memory role slots.\n- Keeps `PluginSlotsConfig.contextEngine` for global plugin slots, and adds an agent-slot type/schema that omits `contextEngine`.\n- Updates doctor legacy memory-slot handling so `doctor --fix` canonicalizes to `memory.recall` while retaining legacy `memory` during the compatibility window.\n- Updates plugin loader/activation/startup resolution so explicit role-slot selections activate memory plugins without confusing default `memory-core` fallback with a user-selected plugin under restrictive allowlists.\n- Extends validation to report missing role-slot plugin refs and validate schemas for plugins selected only by non-recall or per-agent memory roles.\n- Extends skill publishing, status scanning, uninstall cleanup, memory runtime, dreaming, compaction provider, and SDK alias behavior to use the role-aware model.\n- Keeps memory runtime registrations addressable by plugin id, so runtime recall dispatch follows the resolved global or per-agent `memory.recall` owner.\n- Passes the session agent id into Pi embedded extension factory construction so safeguard compaction provider selection honors per-agent `memory.compaction` overrides in both normal session runs and manual/queued compaction paths.\n- Updates bundled memory plugin manifests/docs to describe role support and the recall shorthand migration.\n\n## Compatibility and risk\n\nBackward compatibility preserved:\n\n- Existing `plugins.slots.memory` configs continue to resolve as recall selection.\n- `doctor --fix` now keeps the legacy `plugins.slots.memory` key in place after copying to `memory.recall`, so third-party plugins that still read only the legacy key do not hit an immediate flag day.\n- The default recall plugin remains `memory-core` unless explicitly disabled or overridden.\n- `plugins.enabled = false`, denylist behavior, and explicit `plugins.entries.<id>.enabled = false` remain respected.\n- Global `plugins.slots.contextEngine` remains separate from memory roles and continues to select context engines such as LosslessClaw.\n\nCompatibility changes reviewers should inspect:\n\n- `memory.recall`, `memory.compaction`, `memory.capture`, `memory.dreaming`, and `memory.userModel` become durable public config keys after merge.\n- Per-agent plugin-slot overrides are memory-only. `agents.list[*].plugins.slots.contextEngine` is intentionally rejected until a future PR defines and implements agent-scoped context-engine semantics.\n- Legacy `plugins.slots.memory` is still deprecated as a canonical authoring target even though it remains supported and retained for compatibility.\n\nPrimary risks:\n\n- The public memory role taxonomy becomes API surface after merge, so naming and docs need maintainer signoff.\n- Role-gating mistakes could attach the wrong memory provider or suppress expected memory behavior; this PR adds focused coverage across loader, validation, startup, runtime, doctor, status, skill publishing, and cleanup surfaces.\n- Third-party plugins should eventually read `memory.recall`, but the retained legacy key avoids forcing that ecosystem update immediately.\n\n## Verification\n\nCurrent PR branch head:\n\n- `2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd` (`feat(memory): add multi-slot memory role architecture`)\n- Branch: `kklouzal:feat/multi-slot-memory-architecture`\n- Base target: `openclaw/openclaw:main`\n\nLatest exact-head proof gates:\n\n- Dev-01 failed CI shard local equivalent: passed, 6 files, 55 tests.\n- Dev-01 conflict-focused memory/plugin runtime Vitest: passed, 3 files, 65 tests, 127 skipped.\n- Dev-01 `pnpm check:test-types`: passed.\n- Dev-01 `pnpm format:check src/plugins/memory-runtime.ts`: passed.\n- Dev-01 `node scripts/check-no-conflict-markers.mjs`: passed.\n- Dev-01 `git diff --check`: passed.\n- Orion/Nano-01 rollback/upgrade matrix from `v2026.5.28` to PR head `2b0d657729a38fc9b946b3a6d5ad5e39a7b85afd`: passed for release install/status/valid doctor-fix, expected old-release config rejection of future PR-era slot keys, PR install/config/status/plugins/models/agents/slots, focused runtime tests, focused doctor/legacy tests, conflict-marker check, and diff check.\n- Orion/Nano-01 live GitHub Copilot agent turn: attempted, blocked by current test-box source-runtime `github-copilot` auth absence; exact-head body proof does not claim live model-turn success for this refresh.\n\n",
+        "branch": "feat/multi-slot-memory-architecture",
+        "head_sha": "62152bd98f77b4c82535f7d8fe288b3a93677132",
+        "author": "kklouzal",
+        "labels": [
+          "docs",
+          "gateway",
+          "extensions: memory-lancedb",
+          "cli",
+          "commands",
+          "agents",
+          "size: XL",
+          "extensions: qa-lab",
+          "extensions: memory-wiki",
+          "plugin: migrate-hermes",
+          "proof: supplied",
+          "P2",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "feature: ✨ showcase"
+        ],
+        "files": [
+          {
+            "path": "docs/cli/memory.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/plugins.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/status.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/active-memory.md",
+            "additions": 38,
+            "deletions": 37,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/context-engine.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/configuration-reference.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/manifest.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/memory-lancedb.md",
+            "additions": 12,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/plugin.md",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/active-memory/index.test.ts",
+            "additions": 23,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/active-memory/index.ts",
+            "additions": 5,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/active-memory/openclaw.plugin.json",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-lancedb/openclaw.plugin.json",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/bridge.test.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/bridge.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/migrate-hermes/config.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/migrate-hermes/provider.test.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-lab/src/live-transports/shared/live-gateway.runtime.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-lab/src/live-transports/shared/live-gateway.runtime.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-lab/src/qa-gateway-config.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-lab/src/qa-gateway-config.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-scope-config.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/extensions.test.ts",
+            "additions": 122,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/extensions.ts",
+            "additions": 12,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-delivery-state.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-lifecycle.ts",
+            "additions": 11,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-run-manager.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/system-prompt-config.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/system-prompt.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.ts",
+            "additions": 11,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/plugins-command-helpers.test.ts",
+            "additions": 46,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/plugins-install-persist.test.ts",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-memory-search.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/repair-sequencing.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/legacy-memory-slot.test.ts",
+            "additions": 138,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/doctor/shared/legacy-memory-slot.ts",
+            "additions": 199,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/doctor/shared/preview-warnings.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/release-configured-plugin-installs.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/release-configured-plugin-installs.ts",
+            "additions": 7,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/stale-plugin-config.test.ts",
+            "additions": 55,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/stale-plugin-config.ts",
+            "additions": 60,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/status.scan.shared.test.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/status.scan.shared.ts",
+            "additions": 15,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/config-misc.test.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/config.plugin-validation.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.quality.test.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.labels.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.agents.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.plugins.ts",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/validation.ts",
+            "additions": 78,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-runtime.ts",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.ts",
+            "additions": 13,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/context-engine/delegate.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.test.ts",
+            "additions": 11,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.ts",
+            "additions": 66,
+            "deletions": 29,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/doctor.test.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.plugin-node-capability-auth.test.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/tools-invoke-shared.ts",
+            "additions": 9,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/plugin-hooks.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/plugin-hooks.ts",
+            "additions": 27,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/memory-host-sdk/dreaming.test.ts",
+            "additions": 24,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/memory-host-sdk/dreaming.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/channel-plugin-ids.test.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/compaction-provider.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/config-activation-shared.ts",
+            "additions": 29,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/config-normalization-shared.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/config-policy.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/config-state.test.ts",
+            "additions": 69,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/config-state.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/effective-plugin-ids.test.ts",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/effective-plugin-ids.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/gateway-startup-plugin-ids.ts",
+            "additions": 123,
+            "deletions": 26,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/loader.test.ts",
+            "additions": 353,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/loader.ts",
+            "additions": 174,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/memory-runtime.test.ts",
+            "additions": 186,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/memory-runtime.ts",
+            "additions": 42,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/memory-state.test.ts",
+            "additions": 227,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/memory-state.ts",
+            "additions": 124,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/registry-types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/registry.ts",
+            "additions": 51,
+            "deletions": 51,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/slot-resolution.ts",
+            "additions": 238,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/plugins/slots.test.ts",
+            "additions": 258,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/slots.ts",
+            "additions": 148,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/uninstall.test.ts",
+            "additions": 89,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/uninstall.ts",
+            "additions": 39,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/update.test.ts",
+            "additions": 36,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/update.ts",
+            "additions": 88,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/skills/loading/plugin-skills.test.ts",
+            "additions": 67,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/skills/loading/plugin-skills.ts",
+            "additions": 25,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 93,
+        "additions": 4132,
+        "deletions": 445,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88504",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88504.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "gatingTotal": 157,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 17,
+            "SUCCESS": 139,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 7712,
+    "total_ms": 3563,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 461
+        "ms": 447
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2164
+        "ms": 2771
       },
       {
         "name": "classify_commands",
@@ -603,7 +1372,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 5053
+        "ms": 297
       },
       {
         "name": "append_ledger",
