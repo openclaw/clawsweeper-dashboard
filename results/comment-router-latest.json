@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T02:39:16.098Z",
+  "generated_at": "2026-06-16T02:44:58.235Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-15T23:39:15.635Z",
+  "since": "2026-06-15T23:44:55.409Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    92114
+    92016
   ],
   "comment_ids": [
-    4714326085
+    4714357223
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4714357460,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,20 +33,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92114:4714326085:2026-06-16T02:37:22Z:re_review",
-      "comment_id": "4714326085",
-      "comment_version_key": "4714326085:2026-06-16T02:37:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92114#issuecomment-4714326085",
+      "idempotency_key": "comment-router:openclaw/openclaw:92016:4714357223:2026-06-16T02:43:57Z:re_review",
+      "comment_id": "4714357223",
+      "comment_version_key": "4714357223:2026-06-16T02:43:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92016#issuecomment-4714357223",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 92114,
-      "author": "TurboTheTurtle",
-      "author_id": 35905412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-16T02:37:22Z",
-      "comment_updated_at": "2026-06-16T02:37:22Z",
-      "status_comment_id": null,
-      "trigger": "mention",
+      "target_branch": "main",
+      "issue_number": 92016,
+      "author": "amknight",
+      "author_id": 15041791,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-06-16T02:43:57Z",
+      "comment_updated_at": "2026-06-16T02:43:57Z",
+      "status_comment_id": 4714357460,
+      "trigger": "slash",
       "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
@@ -62,34 +62,136 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-16T02:44:59.247Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 92016
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-16T02:45:00.490Z",
+          "response_comment_id": "4714357460",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(plugins): compose live hook registry view for tool-call hooks",
+        "body": "## Summary\n\nFixes #91918. After upgrading 2026.5.27 → 2026.6.5, `before_tool_call` / `after_tool_call` hooks of local (global-dir) extensions register but never fire during agent runs, silently disabling hook-based safety/observability plugins.\n\n**Root cause.** The global plugin hook runner froze a single registry at initialization. A scoped, mid-run plugin activation — the codex/copilot harness ensure or the memory ensure — re-initialized the runner from a *narrow* registry that excludes a local extension's plugin, so its tool-call hooks stopped dispatching. `before_prompt_build` kept working because it reads a runner captured at run start, while `before_tool_call` does a live `getGlobalHookRunner()` lookup — which is why the breakage looked tool-call-specific. The loader's `preserveGatewayHookRunner` gate absorbed only one such activation and then disarmed (active mode flipped to `default`), so it could not prevent the next scoped load.\n\n**Fix.** The runner is created once and resolves hooks **live on every dispatch** from the composed set of currently-live registries — the most recently initialized registry, the active registry, and the pinned channel/http-route surfaces — instead of binding one registry. This mirrors how the agent-event bridge already composes live registries; both now consume the same `collectLivePluginRegistries()` collector, so the two dispatch surfaces agree on what is \"live.\" The one-shot preserve gate in `activatePluginRegistry` is removed because activation order no longer matters.\n\nComposition details that keep it correct:\n\n- **Per-plugin ownership prefers loaded records**, so a failed or disabled scoped reload cannot shadow a healthy pinned registration — which would otherwise silently drop a fail-closed `before_tool_call` gate.\n- The **explicitly initialized registry is highest precedence**, preserving the shipped SDK contract (`initializeGlobalHookRunner` is exported via `openclaw/plugin-sdk/hook-runtime`) that an isolated test registry stays authoritative.\n- **Raw** pinned registries are used (not the channel-presentation selector), so a pinned registry with zero channels stays visible to hook dispatch.\n- Composition is **live (no memo)**, so hooks pushed into a registry after init (e.g. the `addTestHook` SDK helper) dispatch immediately.\n\n## Files\n\n- `src/plugins/hook-runner-global.ts` — live composed view + ownership/precedence rules.\n- `src/plugins/runtime.ts` — expose `collectLivePluginRegistries` (renamed from the private agent-event collector; both consumers now share it).\n- `src/plugins/loader.ts` — remove the preserve gate; always re-initialize.\n- `src/plugins/loader.test.ts` — flip the assertion that previously enshrined the registry/runner split.\n- `src/plugins/loader.hook-runner-live-view.test.ts` (new) — real-load kill chain.\n- `src/plugins/hook-runner-global.compose.test.ts` (new) — ownership / precedence / liveness rules.\n\n## Verification\n\nLocal (this patch, macOS):\n\n- `node scripts/run-vitest.mjs src/plugins/loader.test.ts` → 156 passed (includes the flipped preserve-gate test).\n- `node scripts/run-vitest.mjs src/plugins/hook-runner-global.compose.test.ts src/plugins/loader.hook-runner-live-view.test.ts src/plugins/hook-runner-global.test.ts` → 7 passed.\n- Consumer suites green: host-hooks contract, dispatch-from-config, slack outbound (the SDK init pattern), outbound deliver, subagent-registry, before-tool-call embedded + e2e, native-hook-relay, model-diagnostic-events.\n- `tsgo -p tsconfig.core.json` clean (only the two pre-existing baseline errors in `config/io.ts` + `secrets/config-io.ts`, present unchanged on `main`); `oxlint` + `oxfmt` clean on touched files; `check-import-cycles` reports 0 runtime cycles.\n\n`loader.hook-runner-live-view.test.ts` models the production kill chain (gateway-bindable full load + pin → scoped harness load → scoped memory load) and asserts a blocking `before_tool_call` gate still dispatches and returns `block: true` for a `curl` command.\n\n**Crabbox real-scenario proof (done, 2026-06-11, Blacksmith Testbox through Crabbox — `tbx_01ktwgpkfyh8tczwye38rhzxnv`, Linux x86_64, Node 24.13):** reporter-shaped end-to-end scenario from #91918 on this branch, as a user with no test harness. Fresh user environment; `pnpm install --frozen-lockfile` + `pnpm build` exit 0 with **0 `[INEFFECTIVE_DYNAMIC_IMPORT]` findings**; the issue's exact gate extension at `~/.openclaw/extensions/toolgate/` (`before_tool_call` blocks `curl`, `after_tool_call` logger, manifest `activation.onCapabilities: [\"hook\"]`, file-logged handler invocations); default bundled plugins (memory-core active); deterministic local OpenAI-Responses mock as the agent model emitting one `exec` tool call (`curl -X POST https://example.com/91918-proof; touch /tmp/curl-executed-91918`); real gateway boot — `http server listening (9 plugins: acpx, browser, canvas, device-pair, file-transfer, memory-core, phone-control, talk-voice, toolgate)`; gateway-routed `openclaw agent --agent main --message 'Please run: curl -X POST https://example.com/91918-proof' --json` (exit 0, real 35-tool toolset).\n\nGate invocation log:\n\n```\n23:39:11.203Z registered                      <- gateway boot registration\n23:39:17.765Z registered                      <- post-boot plugin re-activation in the gateway process\n23:39:25.782Z before_tool_call tool=exec command=curl -X POST https://example.com/91918-proof; touch /tmp/curl-executed-91918\n23:39:25.803Z after_tool_call tool=exec\n```\n\nThe second `registered` line is the load-bearing detail: a plugin registry re-activation happened in the gateway process after boot and before the tool call — the exact event class that rebound the runner and silently dropped tool-call hooks before this fix — and `before_tool_call` still dispatched from the live composed view. Block enforced for real: `/tmp/curl-executed-91918` absent (the command never executed) and `blocked by gate` present in the run's reply payload. Both reported symptoms covered (`before_tool_call` blocking + `after_tool_call` observation). Scenario assets are local-only (untracked `proof-91918/` in the worktree), not part of this PR.\n\n## Scope notes / follow-ups\n\n- This fixes the case where the extension is in a **live or pinned** registry — i.e. the gateway path with the extension declared via `activation.onCapabilities: [\"hook\"]` (which the reporter already applied). A short docs note making that declaration requirement explicit for hook-registering local extensions is a worthwhile follow-up (the issue's \"doctor warning + docs note\" ask).\n- A residual remains for **non-pinned embedded processes using a cold-loadable (codex/copilot) harness** (`openclaw agent --local`), where the broad run-start registry is retired with nothing pinned. This pre-dates this change for the realistic chain (the harness ensure's runtime-state clear, then the narrow memory load — the old gate disarmed on the first of those and the second killed the hooks) and is the motivation for a deeper request-scoped-registry-handle refactor; tracked separately.\n- One behavior delta in those non-pinned flows, for precision: the old gate kept the runner bound to the **retired** broad registry through one scoped default load, so its hooks kept firing from stale config closures; the live view drops retired registries immediately (the new `loader.test.ts` case \"drops hooks of replaced unpinned registries\" pins this as the contract). Hooks there can disappear one scoped activation earlier than before — accepted as more correct than dispatching stale closures, and moot wherever a surface is pinned. In practice the slice is thin: the memory ensure early-returns while the broad registry's memory runtime is live (`src/plugins/memory-runtime.ts`), so the narrow killer load needs the cold-harness clear first, which the gate did not survive either.\n\nReported by @vokaplok.\n\n\n",
+        "branch": "claude/optimistic-grothendieck-2c7361",
+        "head_sha": "da0435ff39efbd0f0660530d07891ac5cd7fa2f5",
+        "author": "amknight",
+        "labels": [
+          "maintainer",
+          "size: M",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/plugins/hook-runner-global.compose.test.ts",
+            "additions": 109,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/plugins/hook-runner-global.ts",
+            "additions": 131,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/loader.hook-runner-live-view.test.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/plugins/loader.test.ts",
+            "additions": 74,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/loader.ts",
+            "additions": 5,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/runtime.ts",
+            "additions": 11,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 445,
+        "deletions": 44,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92016",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92016.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 163,
+          "gatingTotal": 158,
+          "counts": {
+            "SUCCESS": 137,
+            "SKIPPED": 25,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1783,
+    "total_ms": 5817,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 450
+        "ms": 604
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2208
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 1321
+        "ms": 2980
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
