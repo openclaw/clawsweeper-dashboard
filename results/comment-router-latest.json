@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T11:08:04.387Z",
+  "generated_at": "2026-06-16T11:09:09.185Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T08:08:00.697Z",
+  "since": "2026-06-16T08:09:08.562Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4718069173
   ],
-  "status_comment_id": 4718069656,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4718069173:2026-06-16T11:06:57Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/93584#issuecomment-4718069173",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 93584,
       "author": "dolphinsboy",
       "author_id": 4864391,
       "author_association": "NONE",
       "comment_created_at": "2026-06-16T11:06:57Z",
       "comment_updated_at": "2026-06-16T11:06:57Z",
-      "status_comment_id": 4718069656,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "review",
       "intent": "re_review",
@@ -62,119 +62,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-16T11:08:05.302Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 93584
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-16T11:08:06.509Z",
-          "response_comment_id": "4718069656",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): repair orphaned tool_use pairs on compaction prune path",
-        "body": "## Summary\n\nFixes #93321\n\nWhen a provider-side timeout aborts an assistant turn mid-flight, the session history can be left with a `toolCall` block that has no matching `toolResult`. On the next compaction cycle the broken pair is passed directly to the LLM summarizer, which forwards it to the provider and receives a `ValidationException` (Anthropic: *tool_use ids found without tool_result blocks*), permanently breaking the session until manually reset.\n\n## Root Cause\n\n`repairToolUseResultPairing()` was only called in two places:\n1. `splitPreservedRecentTurns()` — repairs the **no-drop** summarizable slice\n2. `compaction-safeguard.ts` drop path — repairs **dropped** messages (for the dropped-chunk summary)\n\nIt was **not** called on `pruned.messages` (the kept slice after chunk drops), so any orphaned `toolCall` surviving into the kept slice reached `summarizeInStages` and then the upstream provider uncleaned.\n\nAdditionally: `repairToolUseResultPairing()` with default options deliberately does **not** synthesize a missing `tool_result` for turns with `stopReason: \"aborted\"` — it preserves them as-is. The fix passes `{ erroredAssistantResultPolicy: \"drop\" }` to drop the entire aborted turn (including its unpaired `toolCall`), matching what already happens in the prompt-send sanitizer path.\n\n## Fix\n\n**`compaction-safeguard.ts`** — apply `repairToolUseResultPairing()` with `erroredAssistantResultPolicy: \"drop\"` to `pruned.messages` before assigning to `messagesToSummarize`:\n\n```diff\n- messagesToSummarize = pruned.messages;\n+ messagesToSummarize = repairToolUseResultPairing(pruned.messages, {\n+   erroredAssistantResultPolicy: \"drop\",\n+ }).messages;\n```\n\nAlso applied to the `splitPreservedRecentTurns` call site (line ~740) which previously used default options.\n\n**`compaction-planning.ts`** — apply the same option at both the entry point and the inner drop-loop repair call.\n\n## Real Session Evidence\n\n**Session ID:** `a7c86c90-f74b-41a9-980b-70a4c6fb8570`\n**OpenClaw version at time of incident:** 2026.5.28 (e932160)\n**Platform:** macOS arm64\n**Provider:** Anthropic claude-sonnet-4-6 via `anthropic-messages` API\n\n### Exact JSONL records from the broken session\n\n**L154 — orphaned assistant turn (aborted mid-flight):**\n```json\n{\n  \"type\": \"message\",\n  \"id\": \"f5809271\",\n  \"timestamp\": \"2026-06-15T09:04:13.833Z\",\n  \"message\": {\n    \"role\": \"assistant\",\n    \"content\": [\n      {\n        \"type\": \"toolCall\",\n        \"id\": \"toolu_c8b41a5a51b6469b8f2aa84c\",\n        \"name\": \"message\",\n        \"arguments\": { \"action\": \"send\", \"message\": \"[REDACTED]\" }\n      }\n    ]\n  }\n}\n```\n*(thinking block omitted for brevity; `stopReason` absent — turn was never completed)*\n\n**L155 — provider timeout event (63ms after L154):**\n```json\n{\n  \"type\": \"custom\",\n  \"customType\": \"openclaw:prompt-error\",\n  \"data\": {\n    \"runId\": \"5ea7792a-18bd-4a56-9903-d8441437de78\",\n    \"sessionId\": \"a7c86c90-f74b-41a9-980b-70a4c6fb8570\",\n    \"provider\": \"anthropic\",\n    \"model\": \"claude-sonnet-4-6\",\n    \"api\": \"anthropic-messages\",\n    \"error\": \"request timed out\"\n  },\n  \"timestamp\": \"2026-06-15T09:04:13.896Z\"\n}\n```\n\n**L157 — fallback gpt-5 turn with empty content (no `toolResult` for `toolu_c8b41a5a51b6469b8f2aa84c`):**\n```json\n{\n  \"type\": \"message\",\n  \"timestamp\": \"2026-06-15T09:04:14.281Z\",\n  \"message\": {\n    \"role\": \"assistant\",\n    \"content\": [],\n    \"api\": \"openai-completions\",\n    \"provider\": \"openai-gateway\",\n    \"model\": \"gpt-5\",\n    \"stopReason\": \"stop\"\n  }\n}\n```\n\n### Permanent failure — every subsequent turn for 8 hours:\n```\nL160  2026-06-15T09:36:56  assistant: [assistant turn failed before producing content]\nL162  2026-06-15T09:37:10  assistant: [assistant turn failed before producing content]\nL164  2026-06-15T09:52:59  assistant: [assistant turn failed before producing content]\nL166  2026-06-15T09:55:13  assistant: [assistant turn failed before producing content]\nL168  2026-06-15T09:57:57  assistant: [assistant turn failed before producing content]\nL170  2026-06-15T10:29:38  assistant: [assistant turn failed before producing content]\n```\nSession unresponsive from 09:04 until manual reset — confirmed `ValidationException: tool_use ids found without tool_result blocks` sent to Anthropic on every API call.\n\n### Why the fix resolves this\n\nWith `erroredAssistantResultPolicy: \"drop\"`, `repairToolUseResultPairing()` drops the entire aborted assistant turn at compaction time. The broken `toolCall id=toolu_c8b41a5a51b6469b8f2aa84c` is removed before the message sequence reaches `summarizeInStages` or the upstream provider. The next API call is valid and the session recovers.\n\nThis matches the existing behaviour in the prompt-send sanitizer (`compact-Bq9HNOed.js`) which already passes `erroredAssistantResultPolicy: \"drop\"` — the compaction path was the only place missing this guard.\n\n## After-Fix Replay — Real Session Data\n\n**Fix branch:** `642e2c1435` | **Run:** 2026-06-16T10:40:51Z | **Repo:** /Users/guosong/Desktop/Sina/Code/openclaw\n\nReal JSONL records from session `a7c86c90` fed into `pruneHistoryForContextShare()` on the fix branch:\n\n```\nInput:\n  [0] role=user    content=[这个问题帮我看看]\n  [1] role=assistant content=[thinking, toolCall:toolu_..._8f2aa84c]  ← ORPHANED\n  [2] role=assistant content=[]  model=gpt-5  stopReason=stop\n  [3] role=user    content=[xxxxx... 20000 chars]\n  [4] role=user    content=[xxxxx... 20000 chars]\n  [5] role=user    content=[xxxxx... 20000 chars]\n\nOutput (droppedChunks=2):\n  [0] role=user content=[xxxxx...]\n\nValidation:\n  Orphaned toolCall blocks remaining: 0\n  ✅ PASS: toolu_c8b41a5a51b6469b8f2aa84c dropped\n           — compaction would NOT send invalid transcript to provider\n```\n\nThe aborted turn is removed by `repairToolUseResultPairing({ erroredAssistantResultPolicy: \"drop\" })` before reaching `summarizeInStages` or the upstream provider.\n\n## Tests\n\n- **`compaction-safeguard.test.ts`**: `uses repaired no-drop prune output for summarization` — aborted turn with `stopReason: \"aborted\"` is dropped entirely; only the follow-up user message reaches `summarizeInStages`\n- **`compaction-safeguard.test.ts`**: `repairs orphaned tool_use in pruned.messages when chunks are dropped` — no unpaired `toolCall` reaches `summarizeInStages` on the drop path\n- All 194 existing tests pass\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Provider-side timeout aborts an assistant turn mid-flight leaving an orphaned `toolCall` block (no matching `toolResult`). On the next compaction cycle the broken pair is passed to the LLM summarizer and then to the provider, which returns `ValidationException: tool_use ids found without tool_result blocks`, permanently breaking the session. Observed in session `a7c86c90-f74b-41a9-980b-70a4c6fb8570` on 2026-06-15: session was unresponsive for 8 hours.\n\n- **Real environment tested:** macOS arm64, OpenClaw repo `/Users/guosong/Desktop/Sina/Code/openclaw`, fix branch `642e2c1435`, Node.js v23.11.0\n\n- **Exact steps or command run after this patch:**\n```\ncd /Users/guosong/Desktop/Sina/Code/openclaw\ngit checkout fix/93321-repair-orphaned-tool-use-on-compaction  # branch: 642e2c1435\nnode --import tsx -e \"\n  import { pruneHistoryForContextShare } from './src/agents/compaction-planning.js';\n  const msgs = [\n    { role: 'user', content: 'check cluster', timestamp: 1781514200000 },\n    { role: 'assistant', content: [{ type: 'toolCall', id: 'toolu_c8b41a5a51b6469b8f2aa84c', name: 'message', arguments: { action: 'send' } }], provider: 'anthropic', model: 'claude-sonnet-4-6', timestamp: 1781514253833 },\n    { role: 'assistant', content: [], provider: 'openai-gateway', model: 'gpt-5', stopReason: 'stop', timestamp: 1781514254223 },\n    { role: 'user', content: 'x'.repeat(20000), timestamp: 1781514300000 },\n    { role: 'user', content: 'x'.repeat(20000), timestamp: 1781514360000 },\n    { role: 'user', content: 'x'.repeat(20000), timestamp: 1781514420000 },\n  ];\n  const r = pruneHistoryForContextShare({ messages: msgs, maxContextTokens: 10000, maxHistoryShare: 0.5, parts: 2 });\n  const orphans = r.messages.flatMap(m => Array.isArray(m.content) ? m.content : []).filter(b => b.type === 'toolCall').filter(b => !r.messages.some(m => m.toolCallId === b.id));\n  console.log('droppedChunks:', r.droppedChunks);\n  console.log('kept messages:', r.messages.map(m => m.role));\n  console.log('orphaned toolCall blocks remaining:', orphans.length);\n  console.log(orphans.length === 0 ? 'PASS' : 'FAIL');\n\"\n```\n\n- **Evidence after fix:** Terminal output from fix branch running against real session data (session `a7c86c90`, toolCall `toolu_c8b41a5a51b6469b8f2aa84c` extracted from live JSONL):\n```\ndroppedChunks: 2\nkept messages: [ 'user' ]\norphaned toolCall blocks remaining: 0\nPASS\n```\n\n- **Observed result after fix:** The aborted assistant turn containing `toolu_c8b41a5a51b6469b8f2aa84c` is dropped by `repairToolUseResultPairing({ erroredAssistantResultPolicy: \"drop\" })` before reaching `summarizeInStages`. No orphaned `toolCall` blocks remain in the kept messages. The compaction call to the upstream provider would succeed, and the session would recover. This matches the existing behaviour in the prompt-send sanitizer path which already applies `erroredAssistantResultPolicy: \"drop\"`.\n\n- **What was not tested:** Full end-to-end compaction LLM call with live provider credentials; end-to-end session recovery after the compaction cycle completes. The fix operates at the message preparation layer; the after-fix terminal output above confirms the broken message sequence is repaired before it would reach any provider.\n",
-        "branch": "fix/93321-repair-orphaned-tool-use-on-compaction",
-        "head_sha": "642e2c1435d8d553219c9eccec575c0e928ce4ff",
-        "author": "dolphinsboy",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-hooks/compaction-safeguard.test.ts",
-            "additions": 149,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-hooks/compaction-safeguard.ts",
-            "additions": 12,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/compaction-planning.ts",
-            "additions": 9,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/compaction.test.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 193,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93584",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93584.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 168,
-          "gatingTotal": 163,
-          "counts": {
-            "SUCCESS": 135,
-            "SKIPPED": 32,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6513,
+    "total_ms": 2662,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 642
+        "ms": 611
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3036
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2811
+        "ms": 2039
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
