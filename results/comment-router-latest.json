@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T06:15:07.411Z",
+  "generated_at": "2026-06-16T06:16:06.903Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T03:15:05.896Z",
+  "since": "2026-06-16T03:16:06.468Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4715542001
   ],
-  "status_comment_id": 4715542259,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4715542001:2026-06-16T06:14:02Z",
       "comment_url": "https://github.com/openclaw/openclaw/issues/93321#issuecomment-4715542001",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 93321,
       "author": "dolphinsboy",
       "author_id": 4864391,
       "author_association": "NONE",
       "comment_created_at": "2026-06-16T06:14:02Z",
       "comment_updated_at": "2026-06-16T06:14:02Z",
-      "status_comment_id": 4715542259,
+      "status_comment_id": null,
       "trigger": "slash",
       "command": "review",
       "intent": "re_review",
@@ -62,70 +62,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-16T06:15:08.121Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 93321
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-16T06:15:09.063Z",
-          "response_comment_id": "4715542259",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "issue",
-        "state": "open",
-        "locked": false,
-        "title": "bug: compaction preserves orphaned tool_use blocks after request timeout, permanently breaking session",
-        "body": "## Description\n\nWhen an LLM request times out mid-turn while the agent has pending parallel tool calls (tool_use blocks without corresponding tool_result blocks), OpenClaw's compaction mechanism preserves the orphaned tool_use blocks in the compacted history. This causes every subsequent API call to be permanently rejected with a `ValidationException: messages.N: tool_use ids were found without tool_result blocks` error, rendering the agent completely unresponsive.\n\n## Steps to Reproduce\n\n1. Run an agent in a session with heavy tool usage (e.g., multiple parallel `web_fetch` + `memory_search` calls)\n2. Allow context to grow large enough (~60–70% of limit) to trigger a provider-side request timeout mid-turn\n3. The timeout interrupts the turn while 3 tool_use blocks are pending but no tool_result has been received yet\n4. OpenClaw attempts compaction to reduce context size\n5. The compaction preserves the orphaned tool_use blocks (without their tool_result pairs) in the compacted history\n6. Every subsequent message to the agent fails with:\n   ```\n   ValidationException: messages.57: `tool_use` ids were found without `tool_result` blocks immediately after:\n   toolu_9088da77b54b43f18a3af238, toolu_b0bb3eae150346efb982621b, toolu_dc61dfdd7a2844f886a01315.\n   Each `tool_use` block must have a corresponding `tool_result` block in the next message.\n   ```\n7. The agent shows `[assistant turn failed before producing content]` on every subsequent message\n8. The compaction retry loop amplifies the problem: each compaction attempt re-embeds the same broken tool_use blocks, creating duplicate orphaned entries across the session history\n\n## Root Cause\n\nIn OpenClaw's compaction logic, when the session history is truncated/summarized, there is no validation that every `tool_use` block in the retained history has a corresponding `tool_result` block immediately following it.\n\nThe Anthropic API (and AWS Bedrock's Claude endpoint) strictly requires that every `tool_use` block be immediately followed by its `tool_result` in the next message. When compaction truncates at a boundary that splits a `(tool_use → tool_result)` pair, the orphaned `tool_use` block poisons the entire session permanently.\n\n**Observed in session `a7c86c90-f74b-41a9-980b-70a4c6fb8570` (wukongim agent):**\n- First timeout: `2026-06-15T09:04` (context: ~118k tokens, provider request timeout)\n- Broken tool_use IDs first appeared at event index [74]: `toolu_dc61dfdd…`, `toolu_b0bb3eae…`, `toolu_9088da77…`\n- Compaction re-ran at: `10:53`, `11:04`, `11:13` — each time re-embedding the same broken blocks\n- Agent became permanently unresponsive from `17:36` onward (~6 hours of failed retries)\n\n## Expected Behavior\n\nCompaction should validate `tool_use` / `tool_result` pairing integrity before finalizing the compacted history. If a truncation boundary would leave a `tool_use` block without its `tool_result`, the compaction should either:\n\n1. **Drop the entire unpaired turn** (discard the orphaned `tool_use` block along with any partial context around it), or\n2. **Inject a synthetic `tool_result`** with an error/cancelled status so the message sequence remains valid\n\nThis would prevent a single LLM timeout from permanently corrupting a session.\n\n## Suggested Fix\n\nIn the compaction module, after generating the truncated/summarized message list, add a post-processing validation pass:\n\n```\nfor each message in compacted_history:\n    if message contains tool_use blocks:\n        next_message = compacted_history[i + 1]\n        if next_message does not contain tool_result for all tool_use IDs:\n            remove the tool_use message (and its partial tool_result if any) from compacted_history\n```\n\nAlternatively, detect orphaned `tool_use` blocks at request-build time and strip them before sending to the provider, logging a warning.\n\n## Workaround\n\nDelete or reset the agent's `sessionId` in `sessions.json` and restart the gateway. This forces a fresh session on the next message, discarding the corrupted history.\n\n## Environment\n\n- OpenClaw version: 2026.5.28 (e932160)\n- Provider: Anthropic Claude (via AWS Bedrock, `anthropic-messages` API)\n- Model: `anthropic/ml4.6-plus` (claude-sonnet-4-6)\n- Trigger condition: provider-side request timeout during a turn with multiple parallel tool calls\n- `truncateAfterCompaction: true` was configured in `agents.defaults.compaction` but did **not** prevent the corruption (the timeout happened before compaction could cleanly reset the context)\n",
-        "author": "dolphinsboy",
-        "labels": [],
-        "cluster_id": null,
-        "job_path": null,
-        "open_prs": [
-          "#93332"
-        ],
-        "issue_implementation_cluster_id": "issue-openclaw-openclaw-93321",
-        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-93321.md",
-        "mode": "autonomous"
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3589,
+    "total_ms": 1728,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 459
+        "ms": 423
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 294
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 749
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2061
+        "ms": 1293
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
