@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T18:48:09.405Z",
+  "generated_at": "2026-06-16T18:49:23.147Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T15:48:05.482Z",
+  "since": "2026-06-16T15:49:22.665Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    93730
+    88838
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 30,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,123 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93730:4722143547:2026-06-16T18:48:01Z:clawsweeper_needs_human",
-      "comment_id": "4722143547",
-      "comment_version_key": "4722143547:2026-06-16T18:48:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93730#issuecomment-4722143547",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93730,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-16T18:41:41Z",
-      "comment_updated_at": "2026-06-16T18:48:01Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=a7265ee5080b6191b6201779c2fe9037a624d884)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +5, Tests +128. Total +133 across 3 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "a7265ee5080b6191b6201779c2fe9037a624d884",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: preserve fallback chain when primary model hits rate-limit lane suspension",
-        "body": "## Summary\n\nFixes #93036\n\nWhen a primary model hits rate-limit, `suspendSession` was called with `laneId: params.lane` unconditionally, which sets `setCommandLaneConcurrency(laneId, 0)` and locks the **entire lane** for 30 minutes — even when healthy fallback models on different providers are available. This prevents the fallback chain from serving requests.\n\n**Root cause:** `suspendSession` was designed for single-provider-per-lane setups, but multi-provider fallback chains need per-provider suspension.\n\n**Fix:** Only pass `laneId` to `suspendSession` when there are **no remaining fallback candidates**. This preserves the fallback chain while still locking the lane when all candidates are genuinely exhausted. The existing auth profile cooldown mechanism already tracks per-provider state, so the failed provider is correctly skipped on subsequent turns without needing a separate per-provider suspension store.\n\n## Changes\n\n- `src/agents/model-fallback.ts`: In the `suspend_lanes` handler, conditionally pass `laneId` only when `i + 1 >= candidates.length` (no remaining fallbacks). Also set `suspended: !hasRemainingCandidates` on the failover event to reflect actual suspension state.\n- `src/agents/model-fallback.probe.test.ts`: Two new tests verifying that (a) `suspendSession` is called without `laneId` when fallback candidates remain, and (b) `suspendSession` IS called with `laneId` when the last candidate triggers suspension.\n- `src/agents/session-suspension.test.ts`: New test verifying `suspendSession` does not lock the lane when `laneId` is omitted.\n\n## Real behavior proof\n\n**Behavior or issue addressed**: When a primary model provider (e.g. minimax) hits rate-limit with fallback models configured (e.g. deepseek), the fallback chain should continue serving requests instead of locking the entire lane for 30 minutes. Issue #93036.\n\n**Real environment tested**: macOS (darwin 25.1.0), Node v22.22.3, running against local dev build of `src/agents/model-fallback.ts`.\n\n**Exact steps or command run after this patch**: Ran `node -e` to simulate the `laneId` resolution logic from the patched `model-fallback.ts` with 3 scenarios: primary rate-limited with healthy fallback, single provider, and both providers rate-limited.\n\n**Evidence after fix**:\n\n```\n$ node -e \"<inline script>\"\n=== Real behavior proof: per-provider suspension preserves fallback chain ===\n\nEnvironment: macOS (darwin 25.1.0), Node v22.22.3\n\nScenario 1: Primary rate-limited, healthy fallback available\n  Candidates: [minimax/MiniMax-M3, opencode-go/deepseek-v4-pro]\n  Candidate 0 (minimax) hits rate_limit => suspend_lanes decision\n  suspendSession laneId: undefined\n  Result: Lane NOT locked => fallback chain continues => deepseek runs\n\nScenario 2: Single provider, no fallbacks\n  Candidates: [minimax/MiniMax-M3]\n  Candidate 0 (minimax) hits rate_limit => suspend_lanes decision\n  suspendSession laneId: \"main\"\n  Result: Lane locked for 30 min (correct, no fallback to try)\n\nScenario 3: Both providers rate-limited\n  Candidates: [minimax/MiniMax-M3, opencode-go/deepseek-v4-pro]\n  Candidate 0 (minimax) hits rate_limit => laneId: undefined (skip, try next)\n  Candidate 1 (deepseek) also rate_limited => laneId: \"main\" (lock, last candidate)\n  Result: Lane locked only after ALL candidates exhausted\n\nAll scenarios behave correctly.\n```\n\n**Observed result after fix**: Lane is only locked when all fallback candidates are exhausted. Healthy fallback providers in the same lane remain reachable. The `laneId` parameter to `suspendSession` is `undefined` when remaining candidates exist (no lane lock), and `\"main\"` when the last candidate triggers suspension (lane lock).\n\n**What was not tested**: Live gateway with actual MiniMax rate-limit errors (requires real API quota exhaustion). The logic change is a single conditional guard on the `laneId` parameter; the existing per-provider auth cooldown mechanism handles the provider-level tracking.\n\n## Risks and Mitigations\n\n- **Risk**: Edge case where the lane should have been locked but isn't because a fallback candidate exists but also fails at runtime (not during cooldown check).\n  - **Mitigation**: The fallback's runtime failure would be caught by the existing `onError` handler and propagated normally. The lane is only left unlocked during the initial cooldown decision, not during actual API calls.\n\n— [Joel Nishanth](https://offlyn.ai) · [offlyn.AI](https://offlyn.ai)\n",
-        "branch": "fix/suspend-lanes-preserve-fallback-93036",
-        "head_sha": "a7265ee5080b6191b6201779c2fe9037a624d884",
-        "author": "joelnishanth",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied"
-        ],
-        "files": [
-          {
-            "path": "src/agents/model-fallback.probe.test.ts",
-            "additions": 113,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.ts",
-            "additions": 7,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-suspension.test.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 135,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93730",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93730.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 168,
-          "gatingTotal": 163,
-          "counts": {
-            "SUCCESS": 137,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4134,
+    "total_ms": 816,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 316
+        "ms": 471
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3595
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 199
+        "ms": 334
       },
       {
         "name": "append_ledger",
