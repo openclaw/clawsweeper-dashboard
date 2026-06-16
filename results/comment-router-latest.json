@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T13:51:44.268Z",
+  "generated_at": "2026-06-16T13:51:53.870Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T10:51:43.712Z",
+  "since": "2026-06-16T10:51:50.567Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    87471
+    92813
   ],
-  "comment_ids": [
-    4719469874
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 8,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,18 +31,155 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:87471:4719469874:2026-06-16T13:49:39Z:re_review",
-      "comment_id": "4719469874",
-      "comment_version_key": "4719469874:2026-06-16T13:49:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/87471#issuecomment-4719469874",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92813:4700266863:2026-06-16T13:51:45Z:clawsweeper_needs_human",
+      "comment_id": "4700266863",
+      "comment_version_key": "4700266863:2026-06-16T13:51:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92813#issuecomment-4700266863",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 87471,
-      "author": "giodl73-repo",
-      "author_id": 235387111,
+      "issue_number": 92813,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-16T13:49:39Z",
-      "comment_updated_at": "2026-06-16T13:49:39Z",
+      "comment_created_at": "2026-06-14T00:51:14Z",
+      "comment_updated_at": "2026-06-16T13:51:45Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Manual review is needed because the remaining blocker is policy/ownership acceptance of fail-closed credential storage and clearing the existing member change request, not a mechanical code repair.; Cleared: The diff tightens credential-store permission enforcement and adds no dependency, workflow, lifecycle hook, download, package, or broader supply-chain surface. (sha=289ed622e9189efae6a08ae0d8445e74a76e8e27)",
+      "review_summary": "The PR replaces raw per-agent SQLite chmod hardening with an open-or-refuse helper that verifies private modes, moves the post-open permission pass into initialization cleanup, and adds permission regression tests.\n\nPR surface: Source +40, Tests +184. Total +224 across 2 files.\n\nReproducibility: yes. Current main's source path still calls raw chmodSync for the agent DB directory and sidecars, and the PR body supplies before/after terminal proof against the production entry point under chmod syscall failures.",
+      "review_followup": "- [P1] Manual review is needed because the remaining blocker is policy/ownership acceptance of fail-closed credential storage and clearing the existing member change request, not a mechanical code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "289ed622e9189efae6a08ae0d8445e74a76e8e27",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(state): refuse chmod-less agent database volumes that cannot prove credential privacy",
+        "body": "## Summary\n\nThe per-agent SQLite database stores credentials (API keys and OAuth tokens under `agents/<agentId>/agent/`). On filesystems that reject `chmod` (Azure Files, NFS without `no_root_squash`, some Docker/SMB volume drivers), `ensureOpenClawAgentDatabasePermissions` called raw `chmodSync` and the agent could not open its database at all: it threw an uncaught `ENOTSUP`/`EPERM` before the handle opened, while the non-secret shared state DB came up fine.\n\nThis is the follow-up to #92786, which closed that gap by reusing the shared state DB helper `bestEffortChmodSync`. @vincentkoc closed #92786 because that helper is too permissive for a secret store: it would silently open a world-readable credential store on a chmod-less volume. The canonical paths named were an ACL-aware Windows verify, or a scoped policy that refuses unsafe agent DB locations. This PR implements the scoped fail-closed policy; the shared non-secret state DB is untouched and keeps its best-effort behavior.\n\n## Fix\n\nNew `enforcePrivateAgentDbChmodSync` used for the agent DB directory and sidecar files, replacing the raw `chmodSync` calls. It proves the resulting mode is private after every `chmod` attempt, on both the success and the failure path, before the credential store is trusted:\n\n- POSIX: after attempting `chmod`, OpenClaw reads the resulting mode with `stat` regardless of whether `chmod` reported success or threw. The store is tolerated only when `stat` proves it private (`mode & 0o077 === 0`) for the directory and each existing DB/WAL/SHM target; otherwise it refuses with a scoped, actionable error pointing the operator at a local path via `OPENCLAW_STATE_DIR`. When `chmod` failed but the target is already private the chmod was cosmetic, so OpenClaw warns once and continues.\n- Windows (`process.platform === \"win32\"`): refuse when `chmod` fails. Windows file modes do not reflect NTFS ACLs, so a failed `chmod` on a network-backed/SMB volume gives no proof the credential store is private.\n\nThis closes the gap raised in review: a volume can report a successful `chmod` while leaving the mode unchanged. Core CIFS mounted without the Unix extensions documents exactly this; `man mount.cifs` states that attempting to change permissions \"will return success but have no effect\", and `stat` then reports the mount `file_mode`/`dir_mode` (commonly `0644`/`0755`). Silent-ignore FUSE/bindfs mounts behave the same way. The previous helper only checked the resulting mode inside the `catch` path, so a silent-success volume sailed past the check and opened a `0644` credential DB. Verifying after every attempt refuses that case.\n\nThis is deliberately stricter than the sibling `bestEffortChmodSync`, which tolerates `ENOTSUP`/`EOPNOTSUPP`/`EINVAL` unconditionally for the non-secret store. For a credential store the only safe question is whether the secret is private now.\n\nThe post-open permission pass runs inside the same cleanup as schema setup. The refusal can fire on the second (post-open) pass when the agent directory is private but the freshly created DB file is born group/world readable on a chmod-less mount; keeping it inside the cleanup closes the live SQLite handle and WAL maintenance before the error escapes instead of leaking them. This PR is rebased on `main`; the open path now uses the `configureSqliteConnectionPragmas` cleanup added in ea346f4361, with the post-open permission pass moved inside that same `try` so a privacy refusal still releases the handle.\n\n## Verification\n\n- Colocated regression suite `src/state/openclaw-agent-db.permissions.test.ts` (7 cases): chmod success hardens to `0700`/`0600`; chmod fails but store already private opens; chmod reports success but the store stays world-readable refuses (the silent-ignore case); chmod fails on a non-private dir refuses; `win32` chmod failure refuses; `EACCES` on a non-private dir refuses; and a post-open refusal closes the freshly opened handle (asserts every captured `DatabaseSync` instance reports `!isOpen`). The post-open case forces the target non-private through the resolved DB path so it is deterministic regardless of the ambient umask. Run with `node scripts/run-vitest.mjs src/state/openclaw-agent-db.permissions.test.ts` -> 7 passed.\n- `oxlint` on the changed files -> clean.\n\n## Real behavior proof\n\nBehavior addressed: Opening the per-agent credential database on a volume that does not apply `chmod` now opens only when the store is provably private, and otherwise refuses with a scoped error instead of silently storing credentials with permissive modes. This includes volumes that report a successful `chmod` while leaving the mode unchanged, which previously opened a world-readable credential DB. A refusal that fires after the database handle is already open closes that handle and its WAL maintenance instead of leaking them.\n\nReal environment tested: Linux (Node 22.19) running the production entry point `openOpenClawAgentDatabase` against a real temporary state dir. The chmod-less volume is reproduced at the OS layer with an LD_PRELOAD shim over libc chmod(2)/fchmod(2)/fchmodat(2): with `CHMOD_FAIL_CODE=SILENT` the calls return success without changing the mode (the documented CIFS-without-unix-extensions and silent-ignore FUSE behavior); with `ENOTSUP`/`EACCES` they return the matching real errno from the kernel call boundary. Store privacy is varied with the process umask (077 produces a private 0700/0600 store; 022 produces a group/world readable 0644 DB file that only becomes visible to the post-open permission pass). After each run the resulting agent DB file mode is read with `stat`, and open file descriptors are counted from `/proc/self/fd` to show whether the SQLite handle leaked.\n\nExact steps or command run after this patch: `gcc -shared -fPIC -o chmodfail.so chmodfail.c`; then for each scenario `( umask <077|022>; LD_PRELOAD=$PWD/chmodfail.so CHMOD_FAIL_CODE=<SILENT|ENOTSUP|EACCES> node_modules/.bin/tsx drive-agent-db.mts )` where the driver calls the real `openOpenClawAgentDatabase`, prints the resulting DB file mode on success, and on a thrown refusal scans `/proc/self/fd` for any descriptor still pointing at `openclaw-agent.sqlite`. The before capture reverts the single source file to the reviewed head da170353; the same shim is used for before and after.\n\nEvidence after fix: redacted live terminal output (non-secret `state/db` best-effort warn lines trimmed).\n\n```\n# BEFORE (reviewed head da170353), SILENT volume (chmod returns success, no effect), umask 022\n#   -> opens a world/group-readable 0644 credential DB (the reported gap):\n$ ( umask 022; LD_PRELOAD=$PWD/chmodfail.so CHMOD_FAIL_CODE=SILENT node_modules/.bin/tsx drive-agent-db.mts )\nagent DB open: OPENED db.isOpen=true path=<STATE_DIR>/agents/main/agent/openclaw-agent.sqlite\nagent DB file mode after open: 0644\nagent DB dir mode after open: 0700\nOPEN_DB_FDS=3\nREAL_EXIT=0\n\n# AFTER (this PR), SILENT volume, umask 022 -> refuses, no leaked descriptors:\n$ ( umask 022; LD_PRELOAD=$PWD/chmodfail.so CHMOD_FAIL_CODE=SILENT node_modules/.bin/tsx drive-agent-db.mts )\nagent DB open: REFUSED - OpenClaw agent database <STATE_DIR>/agents/main/agent/openclaw-agent.sqlite stores credentials and cannot be made private on this volume (mode 644; chmod reported success without changing the mode). Move the agent database to a filesystem that enforces private permissions by setting OPENCLAW_STATE_DIR to a local directory.\nOPEN_DB_FDS=0\nREAL_EXIT=1\n\n# AFTER (this PR), ENOTSUP volume, private store (umask 077) -> opens:\n$ ( umask 077; LD_PRELOAD=$PWD/chmodfail.so CHMOD_FAIL_CODE=ENOTSUP node_modules/.bin/tsx drive-agent-db.mts )\nagent DB open: OPENED db.isOpen=true path=<STATE_DIR>/agents/main/agent/openclaw-agent.sqlite\nagent DB file mode after open: 0600\nagent DB dir mode after open: 0700\nOPEN_DB_FDS=3\nREAL_EXIT=0\n\n# AFTER (this PR), ENOTSUP volume, group/world readable DB file (umask 022) -> post-open refuses, handle closed:\n$ ( umask 022; LD_PRELOAD=$PWD/chmodfail.so CHMOD_FAIL_CODE=ENOTSUP node_modules/.bin/tsx drive-agent-db.mts )\nagent DB open: REFUSED - OpenClaw agent database <STATE_DIR>/agents/main/agent/openclaw-agent.sqlite stores credentials and cannot be made private on this volume (mode 644; Error: ENOTSUP: operation not supported on socket, chmod '<STATE_DIR>/agents/main/agent/openclaw-agent.sqlite'). Move the agent database to a filesystem that enforces private permissions by setting OPENCLAW_STATE_DIR to a local directory.\nOPEN_DB_FDS=0\nREAL_EXIT=1\n\n# AFTER (this PR), EACCES volume, group/world readable DB file (umask 022) -> refuses (stays loud), handle closed:\n$ ( umask 022; LD_PRELOAD=$PWD/chmodfail.so CHMOD_FAIL_CODE=EACCES node_modules/.bin/tsx drive-agent-db.mts )\nagent DB open: REFUSED - OpenClaw agent database <STATE_DIR>/agents/main/agent/openclaw-agent.sqlite stores credentials and cannot be made private on this volume (mode 644; Error: EACCES: permission denied, chmod '<STATE_DIR>/agents/main/agent/openclaw-agent.sqlite'). Move the agent database to a filesystem that enforces private permissions by setting OPENCLAW_STATE_DIR to a local directory.\nOPEN_DB_FDS=0\nREAL_EXIT=1\n\n# AFTER (this PR), normal local filesystem (no shim), umask 022 -> opens at 0600 (no regression):\n$ ( umask 022; node_modules/.bin/tsx drive-agent-db.mts )\nagent DB open: OPENED db.isOpen=true path=<STATE_DIR>/agents/main/agent/openclaw-agent.sqlite\nagent DB file mode after open: 0600\nagent DB dir mode after open: 0700\nOPEN_DB_FDS=3\nREAL_EXIT=0\n```\n\nObserved result after fix: On a volume that does not apply `chmod`, including one that reports `chmod` success while leaving the mode unchanged, the agent DB opens (exit 0) only when the credential store is provably private; when it would be group or world readable it refuses with a scoped, actionable error (exit 1) instead of storing credentials permissively. On the reviewed head da170353 the same SILENT volume opened a 0644 credential DB (exit 0). When the refusal fires after the handle is open, the descriptor count to `openclaw-agent.sqlite` is 0, so the SQLite handle and WAL maintenance are released. A genuine EACCES fault stays loud. On a normal local filesystem the store opens at 0600.\n\nWhat was not tested: A literal Azure Files / NFS / Docker volume, a native Windows SMB mount, or a real CIFS `dynperm` mount end to end. The chmod-less behavior is reproduced at the libc syscall boundary via LD_PRELOAD, matching the documented CIFS-without-unix-extensions contract; `dynperm` (where the client caches a fabricated mode that `stat` reports but the server does not persist) is a CIFS-specific case a mode check cannot defeat and is out of scope. The Windows refusal path is exercised by overriding `process.platform` to `win32` in the regression suite; real NTFS ACL semantics were not exercised on Linux.\n\nRefs: #92786 (closed; this is its canonical follow-up), #91919 (the shared state DB best-effort fix this intentionally does not reuse for the secret store), ea346f4361 (the failed-init cleanup this PR is rebased onto). CIFS contract: https://man7.org/linux/man-pages/man8/mount.cifs.8.html\n\nCC @vincentkoc for the canonical-fix review.\n",
+        "branch": "fix/agent-db-secret-private-or-refuse",
+        "head_sha": "289ed622e9189efae6a08ae0d8445e74a76e8e27",
+        "author": "yetval",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/state/openclaw-agent-db.permissions.test.ts",
+            "additions": 184,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/state/openclaw-agent-db.ts",
+            "additions": 43,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 227,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92813",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92813.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "CHANGES_REQUESTED",
+        "checks": {
+          "total": 170,
+          "gatingTotal": 165,
+          "counts": {
+            "SUCCESS": 135,
+            "SKIPPED": 32,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-src-security:FAILURE",
+            "checks-node-core-tooling:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-core-src-security:FAILURE",
+            "checks-node-core-tooling:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92813:4714013362:2026-06-16T01:29:09Z:re_review",
+      "comment_id": "4714013362",
+      "comment_version_key": "4714013362:2026-06-16T01:29:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92813#issuecomment-4714013362",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92813,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-16T01:29:09Z",
+      "comment_updated_at": "2026-06-16T01:29:09Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-run",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92813:4703725285:2026-06-15T01:10:03Z:re_review",
+      "comment_id": "4703725285",
+      "comment_version_key": "4703725285:2026-06-15T01:10:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92813#issuecomment-4703725285",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92813,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-15T01:10:03Z",
+      "comment_updated_at": "2026-06-15T01:10:03Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -64,32 +199,66 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92813:4703654396:2026-06-15T00:49:55Z:re_review",
+      "comment_id": "4703654396",
+      "comment_version_key": "4703654396:2026-06-15T00:49:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92813#issuecomment-4703654396",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92813,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-15T00:49:55Z",
+      "comment_updated_at": "2026-06-15T00:49:55Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2147,
+    "total_ms": 5446,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 544
+        "ms": 424
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2862
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 1592
+        "ms": 2131
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
