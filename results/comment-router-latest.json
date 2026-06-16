@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T11:12:10.249Z",
+  "generated_at": "2026-06-16T11:13:20.743Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T08:12:06.792Z",
+  "since": "2026-06-16T08:13:20.055Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,7 +14,7 @@
   "comment_ids": [
     4717890542
   ],
-  "status_comment_id": 4718103822,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -38,14 +38,14 @@
       "comment_version_key": "4717890542:2026-06-16T11:11:04Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/93585#issuecomment-4717890542",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 93585,
       "author": "snowzlm",
       "author_id": 102895281,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-16T10:46:23Z",
       "comment_updated_at": "2026-06-16T11:11:04Z",
-      "status_comment_id": 4718103822,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "review-pr review",
       "intent": "re_review",
@@ -62,102 +62,22 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-16T11:12:11.353Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 93585
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-16T11:12:13.748Z",
-          "response_comment_id": "4717629198",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(daemon): keep systemd gateway running after child OOM",
-        "body": "## Summary\n- Add `OOMPolicy=continue` to generated Linux systemd gateway units.\n- Document the recommendation in the Linux platform guide.\n- Extend the existing systemd unit test to cover the new directive.\n\n## Problem\nA systemd-managed gateway can run transient child processes in the same service cgroup, such as shell commands or focused local checks started through OpenClaw tools. OpenClaw already biases covered child processes toward being selected first by the OOM killer via `oom_score_adj=1000`, but with systemd's default OOM policy a child OOM kill can still mark the whole gateway unit failed and restart the gateway.\n\nObserved chain on a Linux systemd user service:\n\n```text\nkernel: oom-kill: task_memcg=/user.slice/.../app.slice/openclaw-gateway.service, task=tsgo, pid=<child>, global_oom\nkernel: Out of memory: Killed process <child> (tsgo) ... oom_score_adj:1000\nsystemd: openclaw-gateway.service: The kernel OOM killer killed some processes in this unit.\nsystemd: openclaw-gateway.service: Failed with result 'oom-kill'.\nsystemd: openclaw-gateway.service: Scheduled restart job, restart counter is at 1.\n```\n\nThe killed process was the transient child, not the gateway PID. However, the gateway unit restarted anyway, interrupting active Telegram/session work.\n\n## Fix\n`OOMPolicy=continue` tells systemd to keep the unit running when one process in the unit is killed by the kernel OOM killer. That matches OpenClaw's existing child OOM-score strategy: the child command/session should fail and report its own error, while the gateway keeps channel connections and active session state alive.\n\nThis does **not** change:\n\n- `KillMode=control-group` cleanup behavior on intentional gateway stops/restarts.\n- the gateway's own OOM behavior if the main gateway PID is killed.\n- `OPENCLAW_NO_RESPAWN` semantics from #93570.\n\n## Validation\n- `node scripts/run-vitest.mjs src/daemon/systemd-unit.test.ts`\n  - `4 passed`\n- `pnpm exec oxfmt --check --threads=1 src/daemon/systemd-unit.ts src/daemon/systemd-unit.test.ts docs/platforms/linux.md`\n  - passed\n- `git diff --check`\n  - passed\n\nI intentionally did not rerun full local `tsgo` because that exact kind of heavy child process previously triggered the OOM chain described above. CI should provide the broader type/lint signal.\n\n## Risk\nLow. The directive only affects systemd's reaction when an OOM kill happens inside the unit. It reduces unnecessary gateway restarts when transient children are killed, while preserving normal stop/restart cleanup semantics and main-process restart behavior.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** A Linux systemd user-service gateway should keep the gateway unit alive when a transient child process, not the gateway PID, is selected by the kernel OOM killer. The child command/session should fail independently instead of causing systemd to mark `openclaw-gateway.service` failed and restart all channels.\n\n**Real environment tested:** Linux systemd user-service environment. The unit was generated from this PR branch using `buildSystemdUnit()` and validated with `systemd-analyze verify --user` against the generated unit file.\n\n**Exact steps or command run after this patch:**\n1. Render a gateway systemd unit from this PR branch:\n   `pnpm exec tsx --eval \"import { buildSystemdUnit } from './src/daemon/systemd-unit.ts'; console.log(buildSystemdUnit({ description: 'OpenClaw Gateway proof unit', programArguments: ['/bin/true'], environment: { OPENCLAW_GATEWAY_PORT: '18789' } }));\" > /tmp/proof-openclaw-gateway-93585.service`\n2. Inspect the lifecycle/OOM-related unit directives with `rg -n '^(Restart|RestartSec|OOMPolicy|KillMode|TimeoutStopSec|TimeoutStartSec|SuccessExitStatus)=' /tmp/proof-openclaw-gateway-93585.service`.\n3. Verify the unit with `systemd-analyze verify --user /tmp/proof-openclaw-gateway-93585.service`.\n\n**Evidence after fix:**\n```text\n$ rg -n '^(Restart|RestartSec|OOMPolicy|KillMode|TimeoutStopSec|TimeoutStartSec|SuccessExitStatus)=' /tmp/proof-openclaw-gateway-93585.service\n10:Restart=always\n11:RestartSec=5\n13:TimeoutStopSec=30\n14:TimeoutStartSec=30\n15:SuccessExitStatus=0 143\n16:OOMPolicy=continue\n17:KillMode=control-group\n\n$ systemd-analyze verify --user /tmp/proof-openclaw-gateway-93585.service\nverify_exit=0\n```\n\n**Observed result after fix:** The generated unit includes `OOMPolicy=continue` together with the existing restart and cleanup directives, and systemd accepts the unit file with exit code `0`. This is the after-fix behavior needed so a transient child OOM kill does not automatically put the whole gateway unit into `oom-kill` failed state.\n\n**What was not tested:** I did not intentionally trigger another live OOM event on the host. The pre-fix live incident already showed the bad chain (`task=tsgo` killed inside `openclaw-gateway.service`, followed by `Failed with result 'oom-kill'` and a gateway restart). Re-triggering OOM would risk interrupting active channels again.\n",
-        "branch": "fix/systemd-oompolicy-continue",
-        "head_sha": "50fb65d39c3a2fa8d47199e5369ff875dcaa48c9",
-        "author": "snowzlm",
-        "labels": [
-          "docs",
-          "gateway",
-          "size: XS",
-          "proof: supplied"
-        ],
-        "files": [
-          {
-            "path": "docs/platforms/linux.md",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 11,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93585",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93585.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 168,
-          "gatingTotal": 163,
-          "counts": {
-            "SUCCESS": 136,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 7732,
+    "total_ms": 2601,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 604
+        "ms": 674
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2839
+        "ms": 0
       },
       {
         "name": "classify_commands",
@@ -165,11 +85,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 4263
+        "ms": 1914
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
