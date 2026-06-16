@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T22:56:28.240Z",
+  "generated_at": "2026-06-16T22:56:29.015Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T19:56:25.749Z",
+  "since": "2026-06-16T19:56:26.188Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
@@ -39,12 +39,12 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/86649#issuecomment-4724293425",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 86649,
+      "issue_number": 82950,
       "author": "SebTardif",
       "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-16T22:54:04Z",
-      "comment_updated_at": "2026-06-16T22:54:04Z",
+      "comment_created_at": "2026-06-16T22:54:03Z",
+      "comment_updated_at": "2026-06-16T22:54:03Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -64,89 +64,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: relay Claude CLI assistant partial messages as streaming deltas",
-        "body": "Fixes #86050\n\n## Summary\n\nRelay Claude CLI assistant records as streaming deltas so the WebChat UI shows progressive output instead of waiting for the full response.\n\n**Fix 1**: Parse `assistant` records from the Claude CLI JSONL stream and forward their text content as `chat.delta` events.\n\n**Fix 2**: Gate on `stop_reason` using a positive partial signal: only forward records where `stop_reason` is explicitly present and `null` (the documented Claude CLI partial marker). Complete messages with `stop_reason: \"end_turn\"` are skipped to avoid duplicating the final message. Records without `stop_reason` at all are ignored as ambiguous (could be complete messages from custom `claude-stream-json` backends).\n\n## Changed files\n\n- `src/agents/cli-output.ts` -- Added `parseClaudeCliPartialAssistantDelta` with positive `stop_reason: null` guard\n- `src/agents/cli-output.test.ts` -- Tests covering partial forwarding, complete-message skip, absent-stop_reason rejection, and edge cases\n\n## Verification\n\nAll tests use the documented `stop_reason: null` marker for partial messages:\n- `stop_reason: null` (explicit) -> text forwarded as streaming delta\n- `stop_reason: \"end_turn\"` -> record skipped (complete message, not a partial)\n- `stop_reason` absent -> record skipped (not a confirmed partial; prevents false delivery from custom backends)\n- Non-assistant record types -> ignored by the parser\n- Malformed content arrays -> returns null without throwing\n- Mixed text + tool_use content -> text extracted, tool_use entries ignored\n\nFixes #86050\n\n## Real behavior proof\n\nBehavior addressed: Claude CLI assistant records are not relayed as streaming deltas, so WebChat waits for the full response. The `parseClaudeCliPartialAssistantDelta` function requires a positive partial signal (`stop_reason: null` explicitly present) to skip complete messages and forward only true streaming partials as `chat.delta` events.\n\nReal environment tested: macOS 15.5, Node v22.19, OpenClaw built from branch `fix/gateway-stream-relay` at `/tmp/proof-86649`.\n\nExact steps or command run after this patch:\n\nStep 1. Build from branch and verify the partial assistant delta parser is active in compiled production code.\nStep 2. Feed four Claude CLI JSONL records through the production `createCliJsonlStreamingParser`: two partials (`stop_reason: null`), one complete (`stop_reason: \"end_turn\"`), and one ambiguous (no `stop_reason` field).\n\nEvidence after fix: terminal output from the patched build:\n\nThe partial assistant delta parser and its `stop_reason: null` guard are active in the compiled production bundle:\n\n```console\n$ grep -n \"parseClaudeCliPartialAssistantDelta\\|stop_reason.*null\\|partialDelta\" dist/claude-live-session-BYm1bWnI.js\n216:function parseClaudeCliPartialAssistantDelta(params) {\n220:if (!isRecord$1(message) || !(\"stop_reason\" in message) || message.stop_reason !== null) return null;\n394:const partialDelta = parseClaudeCliPartialAssistantDelta({\n402:if (partialDelta) {\n403:assistantText = partialDelta.text;\n404:params.onAssistantDelta(partialDelta);\n```\n\nRuntime exercise of the production parser with Claude CLI JSONL event shapes:\n\n```console\n$ npx tsx proof-exercise.ts\n=== Feeding Claude CLI JSONL records through production parser ===\n\nInput record 1 (partial, stop_reason: null):\n  {\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Here is\"}],\"stop_reason\":null},\"session_id\":\"sess-abc123\"}\n  -> Deltas so far: [{\"text\":\"Here is\",\"delta\":\"Here is\"}]\n\nInput record 2 (partial, stop_reason: null, extended text):\n  {\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Here is the answer\"}],\"stop_reason\":null},\"session_id\":\"sess-abc123\"}\n  -> Deltas so far: [{\"text\":\"Here is\",\"delta\":\"Here is\"},{\"text\":\"Here is the answer\",\"delta\":\" the answer\"}]\n\nInput record 3 (complete, stop_reason: \"end_turn\"):\n  {\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Here is the answer to your question.\"}],\"stop_reason\":\"end_turn\"},\"session_id\":\"sess-abc123\"}\n  -> Deltas so far: [{\"text\":\"Here is\",\"delta\":\"Here is\"},{\"text\":\"Here is the answer\",\"delta\":\" the answer\"}]\n  -> Complete message skipped (no new delta), avoiding duplicate delivery\n\nInput record 4 (no stop_reason field, ambiguous source):\n  {\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Some response\"}]},\"session_id\":\"sess-abc123\"}\n  -> Deltas so far: [{\"text\":\"Here is\",\"delta\":\"Here is\"},{\"text\":\"Here is the answer\",\"delta\":\" the answer\"}]\n  -> Record without stop_reason skipped (not a confirmed partial)\n\n=== Summary ===\nTotal records fed: 4\nPartial deltas relayed: 2\nDelta breakdown:\n  [0] delta=\"Here is\" (cumulative: \"Here is\")\n  [1] delta=\" the answer\" (cumulative: \"Here is the answer\")\n\nBefore fix: Records 1-2 would not emit deltas (assistant type was ignored).\nAfter fix: Records 1-2 relay as streaming deltas. Records 3-4 correctly skipped.\nNo duplicate final text delivered.\n```\n\nObserved result after fix: The compiled production code at `dist/claude-live-session-BYm1bWnI.js:216-220` contains the `parseClaudeCliPartialAssistantDelta` function with the positive partial signal guard (`stop_reason !== null`). At line 394, the main parser calls this function as a fallback when no raw stream delta is available. Runtime exercise confirms: assistant records with `stop_reason: null` relay as incremental streaming deltas (`\"Here is\"` then `\" the answer\"`), complete messages with `stop_reason: \"end_turn\"` are skipped (preventing duplicate delivery), and ambiguous records without `stop_reason` are also skipped (preventing false delivery from custom backends).\n\nWhat was not tested: Live Claude CLI session with real streaming output over the gateway WebSocket connection. The fix exercises the production parser against the documented Claude CLI JSONL protocol shapes. End-to-end WebChat/TUI display was not verified.\n\n\n\n\n\n\n",
-        "branch": "fix/gateway-stream-relay",
-        "head_sha": "d6379c707782cdcc6adbe044e42015e05a7b5cf7",
-        "author": "sebtardif",
-        "labels": [
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/agents/cli-output.test.ts",
-            "additions": 188,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-output.ts",
-            "additions": 66,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 254,
-        "deletions": 6,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86649",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86649.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "gatingTotal": 159,
-          "counts": {
-            "SKIPPED": 26,
-            "SUCCESS": 137,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2728,
+    "total_ms": 4197,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 579
+        "ms": 2815
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1898
-      },
-      {
-        "name": "classify_commands",
         "ms": 0
       },
       {
+        "name": "classify_commands",
+        "ms": 1
+      },
+      {
         "name": "execute_commands",
-        "ms": 237
+        "ms": 1370
       },
       {
         "name": "append_ledger",
