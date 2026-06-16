@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T07:03:16.211Z",
+  "generated_at": "2026-06-16T07:03:23.890Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T04:03:15.869Z",
+  "since": "2026-06-16T04:03:20.420Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    93527
+    93524
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,127 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93524:4715807202:2026-06-16T07:03:17Z:clawsweeper_auto_repair",
+      "comment_id": "4715807202",
+      "comment_version_key": "4715807202:2026-06-16T07:03:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93524#issuecomment-4715807202",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93524,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-16T06:56:34Z",
+      "comment_updated_at": "2026-06-16T07:03:17Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=475f5ddf68f4d4ea490fd9f68eb5033b6ef348a0)",
+      "review_summary": "Clears Matrix decrypt bridge exhausted retry and failed-decryption notification sets when Matrix crypto retry signals fire.\n\nPR surface: Source +2. Total +2 across 1 file.\n\nReproducibility: yes. from source for the PR defect: current main removes exhausted entries from decryptRetries, and the PR still calls a method that only iterates decryptRetries. I did not live-reproduce the original Matrix server failure.",
+      "review_followup": "- [P1] Human review is needed because the branch has a blocking implementation defect and insufficient real behavior proof; automation should not claim the contributor's Matrix setup proof.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "475f5ddf68f4d4ea490fd9f68eb5033b6ef348a0",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "#93501: [Bug]: Matrix error decrypting event",
+        "body": "## Summary\n\nWhen Matrix decryption fails with `MEGOLM_UNKNOWN_INBOUND_SESSION_ID` (\"The sender's device has not sent us the keys\"), the decrypt bridge retries up to 8 times before permanently marking the event as exhausted. When crypto signals later arrive (KeyBackupDecryptionKeyCached, DevicesUpdated, KeysChanged, RehydrationCompleted) indicating new keys may be available, `retryPendingNow()` returns immediately because `decryptRetries` is empty — previously exhausted events are permanently blocked. This causes Matrix communication to stall until a gateway restart.\n\nFix: clear `exhaustedDecryptRetries` and `failedDecryptionsNotified` when crypto signals fire, allowing events to be retried after new keys become available.\n\n## Linked context\n\nCloses #93501\n\n- Error: `DecryptionError[msg: The sender's device has not sent us the keys for this message.]`\n- Matrix status shows: verified, backup active, recovery key stored\n- Recovery currently requires: login to Element + restart gateway\n\n## Root Cause\n\nIn `extensions/matrix/src/matrix/sdk/decrypt-bridge.ts`:\n\n1. `scheduleDecryptRetry()` retries decryption up to `MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS` (8) with exponential backoff\n2. On exhaustion, the event's retry key is added to `exhaustedDecryptRetries` Set and removed from `decryptRetries` Map\n3. `bindCryptoRetrySignals()` listens for crypto events (KeyBackupDecryptionKeyCached, RehydrationCompleted, DevicesUpdated, KeysChanged) and calls `retryPendingNow()`\n4. `retryPendingNow()` only iterates `decryptRetries`, which is empty after exhaustion — it returns immediately\n5. `exhaustedDecryptRetries` permanently blocks future retry scheduling via `scheduleDecryptRetry()`\n6. Even when backup keys are decrypted or new cross-signing keys arrive, exhausted events can never be retried\n\n## Real behavior proof\n\n**Behavior or issue addressed:**\nClear `exhaustedDecryptRetries` and `failedDecryptionsNotified` when crypto signals arrive, allowing previously exhausted decryption events to be retried after new keys become available.\n\n**Real environment tested:**\n- OS: Linux 4.19.112-2.el8.x86_64\n- Runtime: v24.3.0, pnpm 8.6.1\n- Setup: OpenClaw local dev instance, real Matrix decrypt bridge module import\n\n**Exact steps or command run after the patch:**\n1. Create a `MatrixDecryptBridge` instance and bind crypto signals\n2. Manually add entries to `exhaustedDecryptRetries` and `failedDecryptionsNotified` (simulating post-exhaustion state)\n3. Verify both sets have entries (size = 2 each)\n4. Emit a crypto signal (`KeyBackupDecryptionKeyCached`)\n5. Verify both sets are cleared (size = 0 each)\n6. Confirm new retries can now be scheduled\n\n**Evidence after fix:**\n\n**Terminal screenshot (reproduction output):**\n\n![repro-output](https://img.shields.io/badge/evidence-script_recorded-blue)\n```\n=== Before crypto signal ===\nexhaustedDecryptRetries size: 2\nfailedDecryptionsNotified size: 2\nexhausted entries: room1|event1, room1|event2\nfailed entries: room1|event1, room2|event3\n\n=== After crypto signal (KeyBackupDecryptionKeyCached) ===\nexhaustedDecryptRetries size: 0\nfailedDecryptionsNotified size: 0\n\n=== Result: PASSED ✅ ===\nCrypto signal correctly clears exhausted/failed sets, allowing retry of previously blocked decryption events.\n```\n\n**Test suite output:**\n```\n✓ extensions/matrix/src/matrix/monitor/events.test.ts (41 tests) all passed\n✓ extensions/matrix/src/matrix/sdk/ (90 tests) all passed\n```\n\n**Production change:**\n```diff\nextensions/matrix/src/matrix/sdk/decrypt-bridge.ts | 2 ++\n  @@ -148,6 +148,8 @@\n     const trigger = (reason: string): void => {\n  +    this.exhaustedDecryptRetries.clear();\n  +    this.failedDecryptionsNotified.clear();\n       this.retryPendingNow(reason);\n     };\n```\n\n**Observed result after fix:**\n\n**Before fix (broken):**\n- `exhaustedDecryptRetries` size: 2 (events permanently blocked)\n- `failedDecryptionsNotified` size: 2 (re-notification blocked)\n- `retryPendingNow()` returns immediately, no retries happen\n- Recovery requires gateway restart\n\n**After fix (working):**\n- `exhaustedDecryptRetries` size: 0 → cleared on crypto signal\n- `failedDecryptionsNotified` size: 0 → cleared on crypto signal  \n- New events can be scheduled for retry after key state changes\n- Recovery happens automatically when crypto signals fire\n\n**Summary:** before: crypto signal → no retries (exhausted set blocks) → after: crypto signal → clear exhausted sets → retries resume\n\n**What was not tested:** N/A\n\n## Risk checklist\n\n- [ ] User-facing behavior change? No\n- [ ] Configuration or environment change? No\n- [ ] Security or authentication change? No\n- [ ] What is the highest-risk area of this change?\n  - Decryption retry lifecycle in Matrix decrypt bridge — clearing exhausted sets on every crypto signal is safe because the retry mechanism already has its own attempt cap (8) and backoff, so clearing the exhausted set just allows a fresh retry window when key state changes\n- [ ] How is that risk mitigated?\n  - The change is purely additive (only clears state, never adds new state); the existing `MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS` cap and exponential backoff still apply to prevent infinite retry loops\n\n## Regression Test Plan\n\n- [x] `extensions/matrix/src/matrix/sdk/` tests pass (90 tests)\n- [x] `extensions/matrix/src/matrix/monitor/events.test.ts` tests pass (41 tests)\n- [x] Reproduction script confirms exhausted/failed sets are cleared on crypto signal\n- [x] Change is minimal (2 lines, additive only)\n\n## Current review state\n\n- Next action: waiting for ClawSweeper review\n- What is still waiting: automated review + CI\n\n---\n",
+        "branch": "fix/issue-93501--bug---matrix-error-decrypting-event-",
+        "head_sha": "475f5ddf68f4d4ea490fd9f68eb5033b6ef348a0",
+        "author": "mmyzwl",
+        "labels": [
+          "channel: matrix",
+          "size: XS",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/matrix/src/matrix/sdk/decrypt-bridge.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 2,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93524",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93524.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "gatingTotal": 157,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 127,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-src-security:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-src-security:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 601,
+    "total_ms": 3793,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 332
+        "ms": 411
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 3047
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 259
+        "ms": 314
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
