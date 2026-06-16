@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T03:49:07.955Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-16T03:50:21.905Z",
+  "repo": "openclaw/clawhub",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T00:49:05.533Z",
+  "since": "2026-06-16T00:50:21.514Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    93480
+    2680
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,120 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93480:4714665962:2026-06-16T03:49:02Z:clawsweeper_needs_human",
-      "comment_id": "4714665962",
-      "comment_version_key": "4714665962:2026-06-16T03:49:02Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93480#issuecomment-4714665962",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93480,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-16T03:44:03Z",
-      "comment_updated_at": "2026-06-16T03:49:02Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=92d759fe3c63bfde8723057195602944d5e0bebd)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +31, Tests +61. Total +92 across 2 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "92d759fe3c63bfde8723057195602944d5e0bebd",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agent): restore suppressed answer when before_agent_finalize revision is silent",
-        "body": "### Summary\n\n- **Problem**: Issue #93166 reports a data-loss bug in the core response-iteration loop. When a `before_agent_finalize` hook requests a revision, the embedded run loop suppresses delivery of the first (real) answer but leaves it in the session transcript, then re-prompts for a revised answer. In a group-chat context with the `NO_REPLY` silent-response directive, the revision pass sees its own first answer already in the transcript and correctly ends the turn with the silent token. The terminal path then delivers nothing, so the real answer is never sent — the user receives nothing.\n- **Root Cause**: `onBeforeTerminalDelivery` (`src/agents/embedded-agent-runner/run/attempt.ts`) suppresses the original answer's channel delivery and records a revision reason; the run loop in `src/agents/embedded-agent-runner/run.ts` then re-prompts with a hidden continuation. On the revision pass the model replies with the silent token; the payload builder strips that `NO_REPLY`-only reply to an empty array (`buildEmbeddedRunPayloads`), so `payloadCount` is `0` and `shouldTreatEmptyAssistantReplyAsSilent` resolves the turn to silent. The original answer is still reachable at the revision-honor point (`payloadsForTerminalPath`), but it is discarded when the loop `continue`s, so a silent revision pass drops the turn entirely.\n- **Fix**: Treat a revision that collapses to a silent/empty reply as \"keep the original answer.\" Capture the suppressed original at the revision-honor point, and at the terminal return restore it when the revision pass resolves to a silent turn.\n  - At the `before_agent_finalize` honor branch, retain the about-to-be-suppressed `payloadsForTerminalPath` plus its visible/raw text in `suppressedBeforeFinalizeRevisionReply` (only when it actually carries deliverable content).\n  - At the terminal return, when a suppressed original exists and the revision pass resolved to a silent turn (`emptyAssistantReplyIsSilent`), deliver the suppressed original instead of the silent token, and mirror its `finalAssistantVisibleText` / `finalAssistantRawText` so downstream consumers (`result-fallback-classifier`, the commitment/raw-assistant text path) stay consistent and the result is not mislabeled `terminalReplyKind: \"silent-empty\"`.\n  - A genuine revision (real revised text) is unaffected: the restore guard only fires on a silent/empty revision pass, so a revised answer still replaces the original.\n- **What changed**:\n  - `src/agents/embedded-agent-runner/run.ts` — capture the suppressed original at the revision-honor branch; restore it (plus mirrored visible/raw text and `terminalReplyKind`) at the terminal return when the revision pass is silent/empty.\n  - `src/agents/embedded-agent-runner/run.before-agent-finalize.test.ts` — two harness cases driven against the production payload-builder contract (a `NO_REPLY`-only reply strips to empty): a group-chat silent revision pass restores the original answer; a real revised answer is delivered (restore guard does not fire).\n- **What did NOT change (scope boundary)**:\n  - `onBeforeTerminalDelivery` suppression, the revision-reason hook, and the revision-honor decision (`shouldHonorBeforeAgentFinalizeRevision`) are unchanged; the restore runs only at the terminal return after the loop has decided not to revise again.\n  - The downstream silent-token suppression in the reply pipeline and the payload builder are unchanged; the fix only changes which payloads the runner returns.\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - Gateway protocol unchanged.\n  - Out of scope: the issue's secondary observation that `before_agent_finalize` hooks are not unregistered on `gateway.reload.mode = \"hot\"` is a separate plugin hook-lifecycle bug and is not addressed here.\n\n### Reproduction\n\n1. Configure a `before_agent_finalize` hook that requests a revision (e.g. a confidence-check plugin).\n2. Run a group chat where silent replies are allowed (the `NO_REPLY` directive; `allowEmptyAssistantReplyAsSilent`).\n3. Send a message that warrants a response.\n4. First pass produces a real answer; the hook requests a revision; the run loop suppresses the first answer's delivery and re-prompts with a hidden continuation.\n5. The revision pass sees its own first answer already in the transcript and ends the turn with `NO_REPLY`; the payload builder strips it to an empty reply.\n6. **Before this PR**: the terminal path treats the empty revision pass as silent and delivers nothing, the suppressed real answer is never sent, and the user receives nothing.\n7. **After this PR**: the silent revision pass restores the suppressed real answer, which is delivered.\n\n### Real behavior proof\n\n**Behavior addressed (#93166)**: a `before_agent_finalize` revision that collapses to a silent reply (the model produced no new deliverable answer) no longer discards the suppressed original; the runner restores and delivers the original instead of dropping the turn, while a genuine revised answer still replaces the original.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production `runEmbeddedAgent` terminal-delivery selection)**: the `run.before-agent-finalize` harness drives the real run-loop revision honor and terminal-return path with mocked per-attempt results, modeling the production payload-builder contract (a `NO_REPLY`-only reply strips to an empty array) and asserting the payloads the runner returns for delivery.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run.before-agent-finalize.test.ts`; `pnpm tsgo:core` (prod typecheck); a scoped `tsgo` over the changed test file's import graph; `oxfmt` and `node scripts/run-oxlint.mjs` on both changed files.\n\n**Evidence after fix (Vitest output for the touched test file)**:\n\n```text\n Test Files  1 passed (1)\n      Tests  6 passed (6)\n```\n\n**Observed result after fix**: with a revision honored on attempt 1 (real \"First answer.\") and attempt 2 returning a `NO_REPLY`-only reply that strips to empty in a group chat (`allowEmptyAssistantReplyAsSilent`), `result.payloads` carries `[{ text: \"First answer.\" }]` and `result.meta.finalAssistantVisibleText` is `\"First answer.\"`; when attempt 2 instead returns real \"Revised answer.\", `result.payloads` carries `[{ text: \"Revised answer.\" }]` (the restore guard does not fire).\n\n**What was not tested**: a live gateway end-to-end run with a real `before_agent_finalize` confidence-check plugin and a group channel (e.g. QQBot/Telegram). The run-loop terminal-delivery selection that drops the turn is covered deterministically against the production path; a full gateway round-trip was not driven. The secondary hot-reload hook-lifecycle observation is out of scope.\n\n**Repro confirmation**: the silent-revision test asserts `result.payloads` equals `[{ text: \"First answer.\" }]`; without the restore the terminal path resolves the empty revision pass to the silent token `[{ text: \"NO_REPLY\" }]`, so the test fails on a pre-fix tree and passes with the fix.\n\n### Risk / Mitigation\n\n- **Risk**: the restore could override an intentional suppression. **Mitigation**: it fires only when a `before_agent_finalize` revision was honored (a suppressed original exists) AND the revision pass collapsed to a silent/empty reply; in a revision context a silent reply means \"no change,\" and a real revised answer is delivered unchanged.\n- **Risk**: the result metadata could disagree with the delivered payloads. **Mitigation**: `finalAssistantVisibleText`, `finalAssistantRawText`, and `terminalReplyKind` are restored together with the payloads, so the result reflects the delivered original and downstream classifiers stay consistent.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Agents / runtime\n\n### Linked Issue/PR\n\nFixes #93166\n",
-        "branch": "fix/93166-before-finalize-revision-dataloss",
-        "head_sha": "92d759fe3c63bfde8723057195602944d5e0bebd",
-        "author": "openperf",
-        "labels": [
-          "agents",
-          "size: S"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run.before-agent-finalize.test.ts",
-            "additions": 61,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 37,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 98,
-        "deletions": 6,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93480",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93480.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 170,
-          "gatingTotal": 165,
-          "counts": {
-            "SUCCESS": 139,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2731,
+    "total_ms": 700,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 351
+        "ms": 381
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2059
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 297
+        "ms": 309
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
