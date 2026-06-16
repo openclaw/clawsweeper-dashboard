@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-16T19:10:29.873Z",
+  "generated_at": "2026-06-16T19:11:08.504Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T16:10:27.023Z",
+  "since": "2026-06-16T16:11:04.881Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    89040
+    93584
   ],
   "comment_ids": [
-    4722461827
+    4722468506
   ],
-  "status_comment_id": 4722462415,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4722461827:2026-06-16T19:09:27Z:re_review",
-      "comment_id": "4722461827",
-      "comment_version_key": "4722461827:2026-06-16T19:09:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4722461827",
+      "idempotency_key": "comment-router:openclaw/openclaw:93584:4722468506:2026-06-16T19:10:02Z:re_review",
+      "comment_id": "4722468506",
+      "comment_version_key": "4722468506:2026-06-16T19:10:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93584#issuecomment-4722468506",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-16T19:09:27Z",
-      "comment_updated_at": "2026-06-16T19:09:27Z",
-      "status_comment_id": 4722462415,
+      "target_branch": null,
+      "issue_number": 93584,
+      "author": "dolphinsboy",
+      "author_id": 4864391,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-16T19:10:02Z",
+      "comment_updated_at": "2026-06-16T19:10:02Z",
+      "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-review",
+      "command": "review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -68,181 +68,82 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-06-16T19:10:30.742Z",
+          "dispatched_at": "2026-06-16T19:11:09.385Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 89040
+          "item_number": 93584
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-06-16T19:10:31.910Z",
-          "response_comment_id": "4722462415",
+          "commented_at": "2026-06-16T19:11:12.232Z",
+          "response_comment_id": "4718069656",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
-        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walker performs no directory pruning — it walks the full tree and returns every file matching the configured patterns, with no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`**\n- Add `yieldBetweenHandlers` option with `setImmediate` yield between hook handlers\n- Add per-handler timing instrumentation with handler index reporting\n- Log warnings for slow handlers exceeding 500ms threshold\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable `yieldBetweenHandlers` for `agent:bootstrap` hook triggers\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Support new async workspace file loading and timing callback interfaces\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — every matching file returned without an artificial cap (no directory pruning), and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — 3 new tests for yield-between-handlers ordering, handler timing reporting, and slow handler warning\n\nAll existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\nCloses #87509\n\n",
-        "branch": "fix/bootstrap-context-event-loop-stall",
-        "head_sha": "4d63431cafa0f8a6b8958823766e12200df980a3",
-        "author": "jerry-xin",
+        "title": "fix(agents): repair orphaned tool_use pairs on compaction prune path",
+        "body": "## Summary\n\nFixes #93321\n\nWhen a provider-side timeout aborts an assistant turn mid-flight, the session history can be left with a `toolCall` block that has no matching `toolResult`. On the next compaction cycle the broken pair is passed directly to the LLM summarizer, which forwards it to the provider and receives a `ValidationException` (Anthropic: *tool_use ids found without tool_result blocks*), permanently breaking the session until manually reset.\n\n## Root Cause\n\n`repairToolUseResultPairing()` was only called in two places:\n1. `splitPreservedRecentTurns()` — repairs the **no-drop** summarizable slice\n2. `compaction-safeguard.ts` drop path — repairs **dropped** messages (for the dropped-chunk summary)\n\nIt was **not** called on `pruned.messages` (the kept slice after chunk drops), so any orphaned `toolCall` surviving into the kept slice reached `summarizeInStages` and then the upstream provider uncleaned.\n\nAdditionally: `repairToolUseResultPairing()` with default options deliberately does **not** synthesize a missing `tool_result` for turns with `stopReason: \"aborted\"` — it preserves them as-is. The fix passes `{ erroredAssistantResultPolicy: \"drop\" }` to drop the entire aborted turn (including its unpaired `toolCall`), matching what already happens in the prompt-send sanitizer path.\n\n## Fix\n\n**`compaction-safeguard.ts`** — apply `repairToolUseResultPairing()` with `erroredAssistantResultPolicy: \"drop\"` to `pruned.messages` before assigning to `messagesToSummarize`:\n\n```diff\n- messagesToSummarize = pruned.messages;\n+ messagesToSummarize = repairToolUseResultPairing(pruned.messages, {\n+   erroredAssistantResultPolicy: \"drop\",\n+ }).messages;\n```\n\nAlso applied to the `splitPreservedRecentTurns` call site (line ~740) which previously used default options.\n\n**`compaction-planning.ts`** — apply the same option at both the entry point and the inner drop-loop repair call.\n\n## Real Session Evidence\n\n**Session ID:** `a7c86c90-f74b-41a9-980b-70a4c6fb8570`\n**OpenClaw version at time of incident:** 2026.5.28 (e932160)\n**Platform:** macOS arm64\n**Provider:** Anthropic claude-sonnet-4-6 via `anthropic-messages` API\n\n### Exact JSONL records from the broken session\n\n**L154 — orphaned assistant turn (aborted mid-flight):**\n```json\n{\n  \"type\": \"message\",\n  \"id\": \"f5809271\",\n  \"timestamp\": \"2026-06-15T09:04:13.833Z\",\n  \"message\": {\n    \"role\": \"assistant\",\n    \"content\": [\n      {\n        \"type\": \"toolCall\",\n        \"id\": \"toolu_c8b41a5a51b6469b8f2aa84c\",\n        \"name\": \"message\",\n        \"arguments\": { \"action\": \"send\", \"message\": \"[REDACTED]\" }\n      }\n    ]\n  }\n}\n```\n*(thinking block omitted for brevity; `stopReason` absent — turn was never completed)*\n\n**L155 — provider timeout event (63ms after L154):**\n```json\n{\n  \"type\": \"custom\",\n  \"customType\": \"openclaw:prompt-error\",\n  \"data\": {\n    \"runId\": \"5ea7792a-18bd-4a56-9903-d8441437de78\",\n    \"sessionId\": \"a7c86c90-f74b-41a9-980b-70a4c6fb8570\",\n    \"provider\": \"anthropic\",\n    \"model\": \"claude-sonnet-4-6\",\n    \"api\": \"anthropic-messages\",\n    \"error\": \"request timed out\"\n  },\n  \"timestamp\": \"2026-06-15T09:04:13.896Z\"\n}\n```\n\n**L157 — fallback gpt-5 turn with empty content (no `toolResult` for `toolu_c8b41a5a51b6469b8f2aa84c`):**\n```json\n{\n  \"type\": \"message\",\n  \"timestamp\": \"2026-06-15T09:04:14.281Z\",\n  \"message\": {\n    \"role\": \"assistant\",\n    \"content\": [],\n    \"api\": \"openai-completions\",\n    \"provider\": \"openai-gateway\",\n    \"model\": \"gpt-5\",\n    \"stopReason\": \"stop\"\n  }\n}\n```\n\n### Permanent failure — every subsequent turn for 8 hours:\n```\nL160  2026-06-15T09:36:56  assistant: [assistant turn failed before producing content]\nL162  2026-06-15T09:37:10  assistant: [assistant turn failed before producing content]\nL164  2026-06-15T09:52:59  assistant: [assistant turn failed before producing content]\nL166  2026-06-15T09:55:13  assistant: [assistant turn failed before producing content]\nL168  2026-06-15T09:57:57  assistant: [assistant turn failed before producing content]\nL170  2026-06-15T10:29:38  assistant: [assistant turn failed before producing content]\n```\nSession unresponsive from 09:04 until manual reset — confirmed `ValidationException: tool_use ids found without tool_result blocks` sent to Anthropic on every API call.\n\n### Why the fix resolves this\n\nWith `erroredAssistantResultPolicy: \"drop\"`, `repairToolUseResultPairing()` drops the entire aborted assistant turn at compaction time. The broken `toolCall id=toolu_c8b41a5a51b6469b8f2aa84c` is removed before the message sequence reaches `summarizeInStages` or the upstream provider. The next API call is valid and the session recovers.\n\nThis matches the existing behaviour in the prompt-send sanitizer (`compact-Bq9HNOed.js`) which already passes `erroredAssistantResultPolicy: \"drop\"` — the compaction path was the only place missing this guard.\n\n## After-Fix Replay — Real Session Data\n\n**Fix branch:** `642e2c1435` | **Run:** 2026-06-16T10:40:51Z | **Repo:** /Users/guosong/Desktop/Sina/Code/openclaw\n\nReal JSONL records from session `a7c86c90` fed into `pruneHistoryForContextShare()` on the fix branch:\n\n```\nInput:\n  [0] role=user    content=[这个问题帮我看看]\n  [1] role=assistant content=[thinking, toolCall:toolu_..._8f2aa84c]  ← ORPHANED\n  [2] role=assistant content=[]  model=gpt-5  stopReason=stop\n  [3] role=user    content=[xxxxx... 20000 chars]\n  [4] role=user    content=[xxxxx... 20000 chars]\n  [5] role=user    content=[xxxxx... 20000 chars]\n\nOutput (droppedChunks=2):\n  [0] role=user content=[xxxxx...]\n\nValidation:\n  Orphaned toolCall blocks remaining: 0\n  ✅ PASS: toolu_c8b41a5a51b6469b8f2aa84c dropped\n           — compaction would NOT send invalid transcript to provider\n```\n\nThe aborted turn is removed by `repairToolUseResultPairing({ erroredAssistantResultPolicy: \"drop\" })` before reaching `summarizeInStages` or the upstream provider.\n\n## Tests\n\n- **`compaction-safeguard.test.ts`**: `uses repaired no-drop prune output for summarization` — aborted turn with `stopReason: \"aborted\"` is dropped entirely; only the follow-up user message reaches `summarizeInStages`\n- **`compaction-safeguard.test.ts`**: `repairs orphaned tool_use in pruned.messages when chunks are dropped` — no unpaired `toolCall` reaches `summarizeInStages` on the drop path\n- All 194 existing tests pass\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Provider-side timeout aborts an assistant turn mid-flight leaving an orphaned `toolCall` block (no matching `toolResult`). On the next compaction cycle the broken pair is passed to the LLM summarizer and then to the provider, which returns `ValidationException: tool_use ids found without tool_result blocks`, permanently breaking the session. Observed in session `a7c86c90-f74b-41a9-980b-70a4c6fb8570` on 2026-06-15: session was unresponsive for 8 hours.\n\n- **Real environment tested:** macOS arm64, OpenClaw repo `/Users/guosong/Desktop/Sina/Code/openclaw`, fix branch `642e2c1435`, Node.js v23.11.0\n\n- **Exact steps or command run after this patch:**\n```\ncd /Users/guosong/Desktop/Sina/Code/openclaw\ngit checkout fix/93321-repair-orphaned-tool-use-on-compaction  # branch: 642e2c1435\nnode --import tsx -e \"\n  import { pruneHistoryForContextShare } from './src/agents/compaction-planning.js';\n  const msgs = [\n    { role: 'user', content: 'check cluster', timestamp: 1781514200000 },\n    { role: 'assistant', content: [{ type: 'toolCall', id: 'toolu_c8b41a5a51b6469b8f2aa84c', name: 'message', arguments: { action: 'send' } }], provider: 'anthropic', model: 'claude-sonnet-4-6', timestamp: 1781514253833 },\n    { role: 'assistant', content: [], provider: 'openai-gateway', model: 'gpt-5', stopReason: 'stop', timestamp: 1781514254223 },\n    { role: 'user', content: 'x'.repeat(20000), timestamp: 1781514300000 },\n    { role: 'user', content: 'x'.repeat(20000), timestamp: 1781514360000 },\n    { role: 'user', content: 'x'.repeat(20000), timestamp: 1781514420000 },\n  ];\n  const r = pruneHistoryForContextShare({ messages: msgs, maxContextTokens: 10000, maxHistoryShare: 0.5, parts: 2 });\n  const orphans = r.messages.flatMap(m => Array.isArray(m.content) ? m.content : []).filter(b => b.type === 'toolCall').filter(b => !r.messages.some(m => m.toolCallId === b.id));\n  console.log('droppedChunks:', r.droppedChunks);\n  console.log('kept messages:', r.messages.map(m => m.role));\n  console.log('orphaned toolCall blocks remaining:', orphans.length);\n  console.log(orphans.length === 0 ? 'PASS' : 'FAIL');\n\"\n```\n\n- **Evidence after fix:** Terminal output from fix branch running against real session data (session `a7c86c90`, toolCall `toolu_c8b41a5a51b6469b8f2aa84c` extracted from live JSONL):\n```\ndroppedChunks: 2\nkept messages: [ 'user' ]\norphaned toolCall blocks remaining: 0\nPASS\n```\n\n- **Observed result after fix:** The aborted assistant turn containing `toolu_c8b41a5a51b6469b8f2aa84c` is dropped by `repairToolUseResultPairing({ erroredAssistantResultPolicy: \"drop\" })` before reaching `summarizeInStages`. No orphaned `toolCall` blocks remain in the kept messages. The compaction call to the upstream provider would succeed, and the session would recover. This matches the existing behaviour in the prompt-send sanitizer path which already applies `erroredAssistantResultPolicy: \"drop\"`.\n\n- **What was not tested:** Full end-to-end compaction LLM call with live provider credentials; end-to-end session recovery after the compaction cycle completes. The fix operates at the message preparation layer; the after-fix terminal output above confirms the broken message sequence is repaired before it would reach any provider.\n",
+        "branch": "fix/93321-repair-orphaned-tool-use-on-compaction",
+        "head_sha": "642e2c1435d8d553219c9eccec575c0e928ce4ff",
+        "author": "dolphinsboy",
         "labels": [
           "agents",
-          "size: L",
-          "proof: supplied",
-          "P1",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability"
+          "size: S",
+          "proof: supplied"
         ],
         "files": [
           {
-            "path": "src/agents/bootstrap-files.ts",
-            "additions": 9,
+            "path": "src/agents/agent-hooks/compaction-safeguard.test.ts",
+            "additions": 149,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/bootstrap-hooks.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 72,
-            "deletions": 41,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
-            "additions": 196,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.test.ts",
-            "additions": 102,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.ts",
-            "additions": 132,
-            "deletions": 41,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
-            "additions": 42,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/internal-hooks.test.ts",
-            "additions": 89,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/internal-hooks.ts",
-            "additions": 30,
+            "path": "src/agents/agent-hooks/compaction-safeguard.ts",
+            "additions": 12,
             "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/compaction-planning.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/compaction.test.ts",
+            "additions": 23,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 9,
-        "additions": 673,
-        "deletions": 86,
+        "changedFiles": 4,
+        "additions": 193,
+        "deletions": 4,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93584",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93584.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 163,
-          "gatingTotal": 158,
+          "total": 168,
+          "gatingTotal": 163,
           "counts": {
-            "IN_PROGRESS": 31,
-            "SUCCESS": 107,
-            "SKIPPED": 24,
+            "SUCCESS": 135,
+            "SKIPPED": 32,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-tooling:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-agents-core-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-agents-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-tooling:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-agents-core-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-agents-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -253,15 +154,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5514,
+    "total_ms": 7961,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 782
+        "ms": 575
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2054
+        "ms": 3035
       },
       {
         "name": "classify_commands",
@@ -269,7 +170,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2652
+        "ms": 4326
       },
       {
         "name": "append_ledger",
