@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T12:33:40.488Z",
+  "generated_at": "2026-06-17T12:34:40.101Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T09:33:38.144Z",
+  "since": "2026-06-17T09:34:37.473Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    93535
+    94133
   ],
   "comment_ids": [
-    4730122666
+    4730122674
   ],
-  "status_comment_id": 4730123364,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:93535:4730122666:2026-06-17T12:32:31Z:re_review",
-      "comment_id": "4730122666",
-      "comment_version_key": "4730122666:2026-06-17T12:32:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93535#issuecomment-4730122666",
+      "idempotency_key": "comment-router:openclaw/openclaw:94133:4730122674:2026-06-17T12:32:31Z:re_review",
+      "comment_id": "4730122674",
+      "comment_version_key": "4730122674:2026-06-17T12:32:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94133#issuecomment-4730122674",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 93535,
+      "target_branch": null,
+      "issue_number": 94133,
       "author": "kumaxs",
       "author_id": 45620232,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-17T12:32:31Z",
       "comment_updated_at": "2026-06-17T12:32:31Z",
-      "status_comment_id": 4730123364,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "review",
       "intent": "re_review",
@@ -62,118 +62,102 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-17T12:33:41.326Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 93535
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-17T12:33:42.449Z",
-          "response_comment_id": "4730123364",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): emit before_agent_reply phase unconditionally for cron triggers",
-        "body": "## Problem\n\nCron isolated-agent turns can abort with `externalAbort: true`, `stopReason: \"aborted\"`, and `error: \"LLM request failed.\"` despite the model provider being healthy and no rate-limit hit. The abort fires after \\~6 minutes, well within the configured `timeoutSeconds: 600` (10 min) wall clock.\n\nSee #93530 for full issue details.\n\n## Root Cause\n\nThe cron watchdog (`createCronAgentWatchdog` in `src/cron/service/agent-watchdog.ts`) depends on the `before_agent_reply` execution phase to transition into the \"executing\" stage and clear its pre-execution watchdog timer.\n\nIn `runEmbeddedAgentInternal` (`src/agents/embedded-agent-runner/run.ts`), the `before_agent_reply` phase was only emitted when `hookRunner?.hasHooks(\"before_agent_reply\")` returned true. When no hook plugin registered for that event:\n\n1. `runEmbeddedAgent` enters the cron-trigger branch\n2. `hookRunner?.hasHooks(\"before_agent_reply\")` returns false → phase is skipped\n3. The watchdog never transitions out of \"waiting_for_execution\"\n4. Pre-execution timeout fires (default: 60s)\n5. `triggerTimeout()` → `runAbortController.abort(reason)`\n6. The on-going LLM call is interrupted → `externalAbort: true` → \"LLM request failed.\"\n\n## Fix\n\nThis PR unconditionally emits the `before_agent_reply` phase for cron triggers, then separately wraps the hook execution in the `hasHooks` guard. This way the watchdog sees the phase even when no before_agent_reply hook is registered.\n\n**Before:** `if (trigger === \"cron\" && hookRunner?.hasHooks(\"before_agent_reply\"))`\n**After:** `if (trigger === \"cron\")` (emits phase) + `if (hookRunner?.hasHooks(\"before_agent_reply\"))` (runs hook)\n\n## Testing\n\n- Existing cron tests pass unchanged since the phase is now emitted strictly *before* the hook guard that was already there\n- The watchdog pre-execution timeout path is exercised by `src/cron/service/agent-watchdog.test.ts`\n- Manual verification: _pending_\n\nFixes #93530",
-        "branch": "fix/cron-watchdog-before-agent-reply-phase",
-        "head_sha": "56a23c82671d3edc901a3e39f14e00f1e550bfeb",
+        "title": "fix: refresh subagent idle timeout on successful tool calls",
+        "body": "## Problem\n\nWhen a subagent (`sessions_spawn` with `mode: \"run\"`) performs long-running tool calls (`web_fetch`, `read`, `exec`, etc.), the LLM stream is idle. If no LLM token arrives within 120 seconds, the session is terminated with:\n\n```\nLLM idle timeout (120s): no response from model\n```\n\nThis is particularly impactful for research/analysis subagents that perform multi-step data collection before generating their final report. The subagent may have completed all its data gathering and be about to synthesize the output, but the 120s window expires and kills the session.\n\n`agents.defaults.subagents.runTimeoutSeconds` (default 900s / 15min) only controls total wall-clock time, not idle time between LLM turns — so a subagent can be well within its total budget but still get killed because no LLM output happened during tool calls.\n\n## Fix\n\nA **tool-activity heartbeat** mechanism that keeps the session alive when tools are actively returning results:\n\n1. **New module** `tool-activity-heartbeat.ts` — provides `onToolActivity()` / `notifyToolActivity()` modelled on the existing `llm-request-activity.ts` pattern\n2. **`llm-idle-timeout.ts`** — `streamWithIdleTimeout` now subscribes to both LLM-request activity AND tool-activity via `armTimer()`, so either signal resets the idle watchdog\n3. **`attempt.ts`** — calls `notifyToolActivity(runAbortController.signal)` after every completed tool call (both success and error branches)\n\nThe 30-second heartbeat window is intentionally shorter than the 120s default idle timeout, giving slow tool calls multiple chances to refresh before the watchdog fires.\n\n## How it works\n\n1. Tool call starts → LLM stream is idle\n2. Tool completes → `notifyToolActivity(runAbortController.signal)` fires → idle timer resets (30s window)\n3. Next tool call starts within 30s → timer stays alive\n4. Agent returns to LLM → `next()` resets the timer via existing `onLlmRequestActivity`\n5. If neither tool nor LLM makes progress for 120s → timeout (as expected)\n\nNo new config fields. No breaking changes. Just a smarter timeout origin.\n\n## Related\n\n- Issue #94124\n- PR #49834 — model fallback cooldowns\n",
+        "branch": "fix/subagent-idle-timeout-tool-activity",
+        "head_sha": "619020dd23db53522edafe41a078654f445b82f6",
         "author": "kumaxs",
         "labels": [
           "agents",
-          "size: XS",
+          "size: S",
           "triage: needs-real-behavior-proof"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 27,
-            "deletions": 19,
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 3,
+            "deletions": 0,
             "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/llm-idle-timeout.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/tool-activity-heartbeat.ts",
+            "additions": 55,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 1,
-        "additions": 27,
-        "deletions": 19,
+        "changedFiles": 3,
+        "additions": 61,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93535",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93535.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94133",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94133.md",
         "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 168,
-          "gatingTotal": 163,
+          "total": 172,
+          "gatingTotal": 167,
           "counts": {
-            "FAILURE": 7,
-            "SUCCESS": 129,
+            "FAILURE": 1,
+            "SUCCESS": 139,
             "SKIPPED": 31,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-fast:FAILURE",
-            "checks-node-core-src-security:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "Real behavior proof:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-fast:FAILURE",
-            "checks-node-core-src-security:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "Real behavior proof:FAILURE"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4923,
+    "total_ms": 2833,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 592
+        "ms": 441
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1736
+        "ms": 2168
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 2566
+        "ms": 206
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
