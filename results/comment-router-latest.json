@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T08:44:26.616Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-17T08:45:08.360Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T05:44:23.149Z",
+  "since": "2026-06-17T05:45:07.945Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    93977
+    402
   ],
-  "comment_ids": [
-    4727787275
-  ],
-  "status_comment_id": 4727787573,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 2,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,142 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:93977:4727787275:2026-06-17T08:43:26Z:re_review",
-      "comment_id": "4727787275",
-      "comment_version_key": "4727787275:2026-06-17T08:43:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93977#issuecomment-4727787275",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 93977,
-      "author": "fsdwen",
-      "author_id": 1214772,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T08:43:26Z",
-      "comment_updated_at": "2026-06-17T08:43:26Z",
-      "status_comment_id": 4727787573,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-17T08:44:27.580Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 93977
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-17T08:44:28.688Z",
-          "response_comment_id": "4727787573",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(auto-reply): defer foreground fence creation to delivery time (lazy fence)",
-        "body": "## Summary\n\nDefer `beginForegroundReplyFence` from inbound dispatch entry time to first actual delivery attempt. This prevents same-session concurrent messages from cancelling or interleaving each other.\n\n## Behavior addressed\n\nWhen message B arrives in the same session while message A is still generating its reply, the eager fence creation at inbound time causes B to immediately bump the generation counter. A's `shouldCancelForegroundReplyDelivery` check then finds a newer `visibleDeliveryGeneration` and cancels A's remaining delivery (data loss).\n\nEven with a guard that prevents cancellation of active generations (PR #93845), the delivery order becomes interleaved: A first half → B complete → A remaining half.\n\n## Root cause\n\n`beginForegroundReplyFence(finalized)` is called at line 566 of `dispatchInboundMessageWithBufferedDispatcher`, before the agent even starts processing. This creates a new generation for every inbound message immediately, causing older generations to be seen as stale.\n\n## Fix\n\nDefer fence creation using a lazy getter:\n\n```typescript\nlet foregroundReplyFence: ForegroundReplyFenceSnapshot | undefined;\nconst getForegroundReplyFence = () => {\n  foregroundReplyFence ??= beginForegroundReplyFence(finalized);\n  return foregroundReplyFence;\n};\n```\n\nThe fence is now created only when `beforeDeliver` or `deliver` is first called. If message A has not started delivering when B arrives, B's fence creation does not pre-empt A — both messages complete without cancellation or interleaving.\n\n## Key changes\n\n- `dispatch.ts`: Introduce lazy getter, make `beforeDeliver` always defined, use lazy fence in `deliver`, guard `onSettled` path\n- `dispatch.freshness.test.ts`: Update expectations for lazy fence behavior, add two new scenarios (no-delivery fence avoidance, concurrent pending dispatch)\n\n## Verification\n\nBefore fix — older message cancelled when newer message delivers first:\n```\nolderResult: { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } }\nchannel deliveries: [B final only]  ← A's reply lost\n```\n\nAfter fix — both messages complete, both delivered:\n```\nolderResult: { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } }\nchannel deliveries: [B final, A final]  ← full delivery preserved\n```\n\n## Real behavior proof\n\n**Behavior addressed**: Same-session concurrent foreground reply cancellation due to eager fence creation at inbound time.\n\n**Real environment tested**: Linux Node 24, upstream/main at f06539d8ba, full dispatch module loaded with lazy fence in effect.\n\n**Exact steps or command run after this patch**:\n```bash\nnode --input-type=module -e \"\nimport { dispatchInboundMessageWithBufferedDispatcher } from './src/auto-reply/dispatch.js';\n\nlet started; const startedPromise = new Promise(r => started = r);\nlet released; const releasedPromise = new Promise(r => released = r);\nconst items = [];\nconst ctx = (sid) => ({\n  SessionKey: 'sk1', AccountId: 'default', From: 'wa:+1000', To: 'wa:bot',\n  ChatType: 'direct', Provider: 'whatsapp', Surface: 'whatsapp',\n  OriginatingChannel: 'whatsapp', OriginatingTo: 'wa:+1000', MessageSid: sid\n});\n\nconst aDispatch = dispatchInboundMessageWithBufferedDispatcher({\n  ctx: ctx('msg-a'), cfg: {},\n  replyResolver: async () => { started(); await releasedPromise;\n    return { text: 'reply from message A' }; },\n  dispatcherOptions: { deliver: async (p,i) => {\n    items.push({from:'A',kind:i.kind,text:p.text});\n    return { visibleReplySent: true }; }}\n});\nawait startedPromise;\n\nconst bResult = await dispatchInboundMessageWithBufferedDispatcher({\n  ctx: ctx('msg-b'), cfg: {},\n  replyResolver: async () => ({ text: 'reply from message B' }),\n  dispatcherOptions: { deliver: async (p,i) => {\n    items.push({from:'B',kind:i.kind,text:p.text});\n    return { visibleReplySent: true }; }}\n});\n\nreleased();\nconst aResult = await aDispatch;\n\nconsole.log('Message A result:', JSON.stringify(aResult));\nconsole.log('Message B result:', JSON.stringify(bResult));\nconsole.log('Total deliveries:', items.length);\nitems.forEach((m,i) => console.log('Delivery', i+1, m.from, m.kind, m.text));\n\"\n```\n\n**Evidence after fix** — terminal output:\n```\nMessage A result: {\"queuedFinal\":true,\"counts\":{\"tool\":0,\"block\":0,\"final\":1}}\nMessage B result: {\"queuedFinal\":true,\"counts\":{\"tool\":0,\"block\":0,\"final\":1}}\nTotal deliveries: 2\nDelivery 1 B final reply from message B\nDelivery 2 A final reply from message A\n```\n\nBoth A and B show `queuedFinal: true` with `final: 1`. Two deliveries recorded — no data loss from concurrent same-session dispatch.\n\nBefore the fix, A would have shown `queuedFinal: false, counts: {final: 0}` and only 1 delivery (B only) — A's reply would have been cancelled.\n\n**Observed result after fix**: Lazy fence prevents concurrent same-session messages from cancelling each other. When A's fence has not been created at the time B delivers, A completes fully. This eliminates both data loss and message interleaving.\n\n**What was not tested**: Multi-message roundtrip through a real messaging channel (telegram/discord/whatsapp) requiring two inbound messages within a ~100ms window — impractical to reproduce deterministically without a custom channel harness.\n\n## References\n\n- Fixes #93858\n- Related: #93831, #91914\n- Alternative approach: #93845 (active generation guard — complementary but insufficient alone)\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "fix/93858-defer-foreground-fence",
-        "head_sha": "d44b5b1a9086a09dddb351cefbd0bce62ef7ca1b",
-        "author": "fsdwen",
-        "labels": [
-          "size: S",
-          "triage: needs-real-behavior-proof"
-        ],
-        "files": [
-          {
-            "path": "src/auto-reply/dispatch.freshness.test.ts",
-            "additions": 98,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/dispatch.ts",
-            "additions": 23,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 121,
-        "deletions": 27,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93977",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93977.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 168,
-          "gatingTotal": 163,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 135,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6248,
+    "total_ms": 743,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 604
+        "ms": 406
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2849
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2771
+        "ms": 328
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
