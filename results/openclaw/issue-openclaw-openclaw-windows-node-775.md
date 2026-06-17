@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-775"
 mode: "autonomous"
-run_id: "27721006816"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27721006816"
+run_id: "27723655699"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27723655699"
 head_sha: "f2b07a7265fb9eb4547c7959e7f055a164510cd8"
 workflow_conclusion: "failure"
 result_status: "blocked"
-published_at: "2026-06-17T21:33:49.548Z"
+published_at: "2026-06-17T22:28:43.294Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/775"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/775"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27721006816](https://github.com/openclaw/clawsweeper/actions/runs/27721006816)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27723655699](https://github.com/openclaw/clawsweeper/actions/runs/27723655699)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/775
 
 ## Summary
 
-Issue #775 remains a viable narrow setup-engine fix on current main 6811d6a3e21bddd362e3957127d19a4b887f0ace. The exact reporter diagnostic is still absent from `WslInstallSupport.TryGetEnvironmentIssue`, but this worker's checkout is read-only, so no local branch, patch, validation, or PR can be produced in this run.
+Issue #775 remains a viable narrow setup-engine fix on current main 6811d6a3e21bddd362e3957127d19a4b887f0ace. The exact reporter diagnostic is still absent from WslInstallSupport.TryGetEnvironmentIssue, but this worker's checkout is read-only, so no local branch, patch, validation, or PR can be produced in this run.
 
 ## Impact
 
