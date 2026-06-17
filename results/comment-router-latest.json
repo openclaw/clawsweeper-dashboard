@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T12:38:04.426Z",
+  "generated_at": "2026-06-17T12:38:43.427Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T09:38:03.845Z",
+  "since": "2026-06-17T09:38:40.149Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    94099
+    94103
   ],
   "comment_ids": [
-    4730164866
+    4730177562
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:94099:4730164866:2026-06-17T12:35:37Z:re_review",
-      "comment_id": "4730164866",
-      "comment_version_key": "4730164866:2026-06-17T12:35:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94099#issuecomment-4730164866",
+      "idempotency_key": "comment-router:openclaw/openclaw:94103:4730177562:2026-06-17T12:36:26Z:re_review",
+      "comment_id": "4730177562",
+      "comment_version_key": "4730177562:2026-06-17T12:36:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94103#issuecomment-4730177562",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 93265,
-      "author": "fuller-stack-dev",
-      "author_id": 263060202,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-06-17T12:35:36Z",
-      "comment_updated_at": "2026-06-17T12:35:36Z",
+      "issue_number": 94103,
+      "author": "fsdwen",
+      "author_id": 1214772,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-17T12:36:26Z",
+      "comment_updated_at": "2026-06-17T12:36:26Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -64,20 +64,82 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tailscale): pre-clean stale serve entries on gateway startup",
+        "body": "## Summary\n\nOn each gateway restart, `tailscale serve --bg --yes <port>` appends new entries without removing old ones. The `--service=<name>` path is especially affected because service registrations are append-only in the Tailscale control plane. After a few restarts, `tailscale serve status` shows duplicate entries causing `ERR_SSL_PROTOCOL_ERROR` or `ERR_CONNECTION_REFUSED`.\n\nThis PR adds best-effort pre-cleanup in `startGatewayTailscaleExposure` that calls `disableTailscaleServe` before `enableTailscaleServe`, reusing the existing shutdown cleanup logic.\n\n## Root Cause\n\nThree structural defects in `src/gateway/server-tailscale.ts`:\n\n1. **No startup pre-cleanup**: `startGatewayTailscaleExposure` unconditionally calls `enableTailscaleServe` without checking or cleaning existing routes. `tailscale serve --bg --yes` is append-only.\n2. **`resetOnExit` defaults to `false`**: The only cleanup mechanism (shutdown `disableTailscaleServe`) is opt-in. Most users never enable it.\n3. **serviceName path highest risk**: `--service=<name>` registrations are append-only in Tailscale's service registry, accumulating duplicates on every restart.\n\n### Solution Comparison\n\n| Approach | Mechanism | Reuse | Risk | Score |\n|----------|-----------|-------|------|-------|\n| **A: Orchestration-level cleanup** ✅ | Call `disableTailscaleServe` before `enableTailscaleServe` in `startGatewayTailscaleExposure` | High — reuses existing `disableTailscaleServe` | Very low | **8.6/10** |\n| B: Low-level auto-reset | Auto-reset inside `enableTailscaleServe` | Medium — changes function semantics | High — affects all callers | 6.1/10 |\n| C: Serve + Funnel parity | Same as A plus funnel pre-cleanup | Medium — speculative | Medium | 8.0/10 |\n\n**Selected: Approach A** — correct abstraction level (orchestration layer does lifecycle management), minimal change (+13 lines), lowest regression risk, reuses existing code.\n\n## Changes\n\n| File | Change | Lines |\n|------|--------|-------|\n| `src/gateway/server-tailscale.ts` | Pre-cleanup try/catch before `enableTailscaleServe` | +13 |\n| `src/gateway/server-tailscale.test.ts` | 5 new tests + 4 updated assertions | +84/-2 |\n\n### Behavior\n\n- **serve without serviceName**: `tailscale serve reset` → `tailscale serve <port>`\n- **serve with serviceName**: `tailscale serve clear <name>` → `tailscale serve --service=<name> <port>`\n- **preserveFunnel**: Unaffected (early return before pre-cleanup)\n- **funnel mode**: Unaffected (separate code path)\n- **Pre-cleanup failure**: Non-blocking (try-catch best-effort)\n\n## Real behavior proof\n\n**Behavior addressed**: Duplicate Tailscale serve entries accumulate on gateway restart because `tailscale serve --bg --yes <port>` is append-only and no pre-cleanup runs before adding new entries.\n\n**Real environment tested**: Linux x64 (worktree), Node 22, vitest v4.1.8.\n\n**Exact steps or command run after this patch**:\n```console\n$ node scripts/run-vitest.mjs src/gateway/server-tailscale.test.ts\n[test] starting test/vitest/vitest.gateway.config.ts\n\n RUN  v4.1.8\n\n Test Files  2 passed (2)\n      Tests  28 passed (28)\n   Start at  18:42:48\n   Duration  2.76s\n\n[test] passed 1 Vitest shard in 19.66s\n\n$ node scripts/run-vitest.mjs src/gateway/server-tailscale.test.ts \\\n    src/gateway/server-startup-post-attach.test.ts \\\n    src/infra/tailscale.test.ts\n Test Files  5 passed (5)\n      Tests  165 passed (165)\n```\n\n**Evidence after fix**: All 28 tests pass including 5 new tests that verify: (a) `disableTailscaleServe` is called before `enableTailscaleServe` in serve mode, (b) pre-cleanup failure does not block serve enable, (c) `serviceName` is passed through to pre-cleanup, (d) funnel mode does not trigger serve pre-cleanup, (e) `preserveFunnel` skip path does not trigger pre-cleanup. Broader suite of 165 tests across related files all pass with no regressions.\n\n**Observed result after fix**: The `startGatewayTailscaleExposure` function now calls `disableTailscaleServe` (best-effort) before `enableTailscaleServe`, ensuring stale serve entries from prior runs are cleaned up before new ones are added. The `invocationCallOrder` test proves the correct ordering.\n\n**What was not tested**: End-to-end `tailscale serve status` verification on a real Tailscale-connected machine was not performed — this requires a Tailscale account with a configured tailnet. The logic of the `tailscale serve reset` and `tailscale serve clear <name>` commands is upstream Tailscale CLI behavior, not OpenClaw logic.\n\n## Risks\n\n1. `serve reset` clears all serve routes when not using `serviceName` — consistent with existing `resetOnExit` behavior.\n2. First-run reset on old Tailscale versions may fail — catch block prevents blocking.\n3. Startup latency: `disableTailscaleServe` has a 15s timeout, but typically completes in <1s.\n\nFixes #93936\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        "branch": "fix/93936-tailscale-serve-preclean",
+        "head_sha": "d54e193e04c2cb03aa20a5e5b1412e5cc79038a8",
+        "author": "fsdwen",
+        "labels": [
+          "gateway",
+          "size: S",
+          "triage: mock-only-proof"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-tailscale.test.ts",
+            "additions": 84,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-tailscale.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 97,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94103",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94103.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 168,
+          "gatingTotal": 163,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 134,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2421,
+    "total_ms": 3549,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 566
+        "ms": 554
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2710
       },
       {
         "name": "classify_commands",
@@ -85,7 +147,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1840
+        "ms": 272
       },
       {
         "name": "append_ledger",
