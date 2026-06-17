@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T21:43:38.865Z",
+  "generated_at": "2026-06-17T21:44:33.120Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T18:43:35.627Z",
+  "since": "2026-06-17T18:44:32.470Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     94106
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4735773556
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -62,98 +64,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(secrets): scope env scrub to migrated providers' vars",
-        "body": "## Summary\n\nMigrating one provider's API key to a SecretRef can silently delete a different provider's credential from `~/.openclaw/.env`. When two known-secret env vars hold the same value (for example `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` both pointing at one shared LiteLLM/proxy gateway key), running `openclaw secrets configure` / `apply` to migrate only one of them scrubs both `.env` lines. The non-migrated provider was never converted to a ref, so it loses its only credential and fails to authenticate on the next run.\n\n## Root cause\n\nThe post-migration env scrub matches lines by value only, against the union of every provider's known env var names. It has no notion of which provider was actually migrated.\n\n`src/secrets/apply.ts` (before):\n\n```ts\nconst envRawByPath = scrubEnvFiles({\n  env: params.env,\n  scrubbedValues: targetMutations.scrubbedValues,\n  changedFiles,\n  enabled: options.scrubEnv,\n});\n```\n\n```ts\nconst scrubbed = scrubEnvRaw(\n  current,\n  params.scrubbedValues,\n  new Set(listKnownSecretEnvVarNames()),\n);\n```\n\n`scrubbedValues` is a `Set<string>` of plaintext values with no env-key/provider association. `scrubEnvRaw` deletes a line when its key is in the allowed-key set AND its value is in `scrubbedValues`. Because the allowed-key set is `listKnownSecretEnvVarNames()` (all providers), two different providers sharing a value collapse to one match and both lines are removed, even though only one was migrated. `scrubEnv` defaults to `true` (`src/secrets/plan.ts:192`), so this is the default path.\n\n## Fix\n\nScope the scrub to the migrated providers' env vars. Build the allowed-key set from the resolved targets' provider ids and pass it to `scrubEnvFiles` instead of the global list.\n\n`src/secrets/apply.ts` (after):\n\n```ts\nconst scrubbedProviderEnvKeys = new Set<string>();\nfor (const { resolved, target } of targetMutations.resolvedTargets) {\n  const providerId = (resolved.providerId ?? target.providerId ?? \"\").trim();\n  if (!providerId) {\n    continue;\n  }\n  for (const envKey of getProviderEnvVars(normalizeProviderId(providerId))) {\n    scrubbedProviderEnvKeys.add(envKey);\n  }\n}\n\nconst envRawByPath = scrubEnvFiles({\n  env: params.env,\n  scrubbedValues: targetMutations.scrubbedValues,\n  scrubbedProviderEnvKeys,\n  changedFiles,\n  enabled: options.scrubEnv,\n});\n```\n\n`scrubEnvFiles` now takes `scrubbedProviderEnvKeys` and forwards it to `scrubEnvRaw`. A `.env` line is removed only when both its key belongs to a migrated provider and its value matches a migrated value. The migrated provider's line is still scrubbed; an unrelated provider's var sharing the same value is no longer eligible.\n\n## Why this is the right boundary\n\nThe defect is in how the env scrub derives its allowed-key set, so the fix lives at the same call site that already has the resolved targets. The provider-to-env-var mapping reuses the existing `getProviderEnvVars` / `normalizeProviderId` helpers (the same `normalizeProviderId(resolved.providerId)` pattern already used a few lines above for `providerTargets`), so no new lookup surface is added. The empty-set short-circuit (`scrubbedProviderEnvKeys.size === 0`) preserves the existing no-op behavior when nothing maps to a provider. Sibling scrub paths are unaffected: the auth-profiles and legacy `auth.json` scrubs are already keyed per migrated provider/path, not by a global value set; only the `.env` scrub used the broad key list.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/secrets/apply.test.ts src/secrets/apply.envscrub-collision.repro.test.ts` -> 22 passed (21 existing + 1 new). The existing \"remove migrated key, keep UNRELATED\" case stays green.\n- `node scripts/run-oxlint.mjs src/secrets/apply.ts src/secrets/apply.envscrub-collision.repro.test.ts` -> clean.\n- `oxfmt --check src/secrets/apply.ts src/secrets/apply.envscrub-collision.repro.test.ts` -> all files correctly formatted.\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json` / `-p test/tsconfig/tsconfig.core.test.json` -> no errors in the changed files.\n- New test `src/secrets/apply.envscrub-collision.repro.test.ts` fails on pristine `origin/main` and passes with this patch.\n\nClosest existing reports are unrelated: #84763 / #42250 / #56581 scrub provider env from ACP/exec child processes; #92522 is the opposite direction (audit misses LaunchAgent service-env plaintext, i.e. under-scrubbing). None cover this `.env` value-collision over-deletion.\n\n## Real behavior proof\n\nBehavior addressed: migrating only the openai apiKey to a SecretRef must not delete `ANTHROPIC_API_KEY` from `~/.openclaw/.env` when both vars share one value.\nReal environment tested: drove the real `runSecretsApply({ write: true })` against a temp state dir with `.env` containing `OPENAI_API_KEY=<shared>`, `ANTHROPIC_API_KEY=<shared>`, `UNRELATED=value`, migrating only the openai provider, on pristine `origin/main` and on the patched tree with identical inputs.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/secrets/apply.envscrub-collision.repro.test.ts`\nEvidence after fix:\n```\n# BEFORE (pristine main 03ca096e84)\nAssertionError: expected 'UNRELATED=value\\n' to contain 'ANTHROPIC_API_KEY'\n- ANTHROPIC_API_KEY\n+ UNRELATED=value\nTests  1 failed (1)\n\n# AFTER (this patch, identical inputs)\nTest Files  1 passed (1)\n     Tests  1 passed (1)\n```\nObserved result after fix: the openai line is removed, while `ANTHROPIC_API_KEY` and `UNRELATED=value` survive.\nWhat was not tested: only the `.env` scrub path was exercised end to end; the auth-profiles and legacy `auth.json` scrubs were not re-driven here because they are already keyed per migrated provider and were not changed.\n",
-        "branch": "fix/secrets-env-scrub-provider-scope",
-        "head_sha": "822fc3a0b63c7ec9b19de6307f19dd2539268498",
-        "author": "yetval",
-        "labels": [
-          "size: S",
-          "proof: supplied",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/secrets/apply.envscrub-collision.repro.test.ts",
-            "additions": 105,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/secrets/apply.ts",
-            "additions": 20,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 125,
-        "deletions": 7,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94106",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94106.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 170,
-          "gatingTotal": 165,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 134,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-control-plane-http-models:FAILURE",
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-control-plane-http-models:FAILURE",
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3630,
+    "total_ms": 1329,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 559
+        "ms": 638
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2664
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 381
+        "ms": 679
       },
       {
         "name": "append_ledger",
