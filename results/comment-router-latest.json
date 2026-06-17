@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T11:13:08.884Z",
+  "generated_at": "2026-06-17T11:14:01.780Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T08:13:08.457Z",
+  "since": "2026-06-17T08:13:59.375Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94104
+    94103
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,126 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94103:4729265526:2026-06-17T11:13:56Z:clawsweeper_needs_human",
+      "comment_id": "4729265526",
+      "comment_version_key": "4729265526:2026-06-17T11:13:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94103#issuecomment-4729265526",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 94103,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-17T11:08:41Z",
+      "comment_updated_at": "2026-06-17T11:13:56Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=d54e193e04c2cb03aa20a5e5b1412e5cc79038a8)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +13, Tests +82. Total +95 across 2 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "d54e193e04c2cb03aa20a5e5b1412e5cc79038a8",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tailscale): pre-clean stale serve entries on gateway startup",
+        "body": "## Summary\n\nOn each gateway restart, `tailscale serve --bg --yes <port>` appends new entries without removing old ones. The `--service=<name>` path is especially affected because service registrations are append-only in the Tailscale control plane. After a few restarts, `tailscale serve status` shows duplicate entries causing `ERR_SSL_PROTOCOL_ERROR` or `ERR_CONNECTION_REFUSED`.\n\nThis PR adds best-effort pre-cleanup in `startGatewayTailscaleExposure` that calls `disableTailscaleServe` before `enableTailscaleServe`, reusing the existing shutdown cleanup logic.\n\n## Root Cause\n\nThree structural defects in `src/gateway/server-tailscale.ts`:\n\n1. **No startup pre-cleanup**: `startGatewayTailscaleExposure` unconditionally calls `enableTailscaleServe` without checking or cleaning existing routes. `tailscale serve --bg --yes` is append-only.\n2. **`resetOnExit` defaults to `false`**: The only cleanup mechanism (shutdown `disableTailscaleServe`) is opt-in. Most users never enable it.\n3. **serviceName path highest risk**: `--service=<name>` registrations are append-only in Tailscale's service registry, accumulating duplicates on every restart.\n\n### Solution Comparison\n\n| Approach | Mechanism | Reuse | Risk | Score |\n|----------|-----------|-------|------|-------|\n| **A: Orchestration-level cleanup** ✅ | Call `disableTailscaleServe` before `enableTailscaleServe` in `startGatewayTailscaleExposure` | High — reuses existing `disableTailscaleServe` | Very low | **8.6/10** |\n| B: Low-level auto-reset | Auto-reset inside `enableTailscaleServe` | Medium — changes function semantics | High — affects all callers | 6.1/10 |\n| C: Serve + Funnel parity | Same as A plus funnel pre-cleanup | Medium — speculative | Medium | 8.0/10 |\n\n**Selected: Approach A** — correct abstraction level (orchestration layer does lifecycle management), minimal change (+13 lines), lowest regression risk, reuses existing code.\n\n## Changes\n\n| File | Change | Lines |\n|------|--------|-------|\n| `src/gateway/server-tailscale.ts` | Pre-cleanup try/catch before `enableTailscaleServe` | +13 |\n| `src/gateway/server-tailscale.test.ts` | 5 new tests + 4 updated assertions | +84/-2 |\n\n### Behavior\n\n- **serve without serviceName**: `tailscale serve reset` → `tailscale serve <port>`\n- **serve with serviceName**: `tailscale serve clear <name>` → `tailscale serve --service=<name> <port>`\n- **preserveFunnel**: Unaffected (early return before pre-cleanup)\n- **funnel mode**: Unaffected (separate code path)\n- **Pre-cleanup failure**: Non-blocking (try-catch best-effort)\n\n## Verification\n\n```\npnpm test src/gateway/server-tailscale.test.ts\n  Test Files  2 passed (2)\n       Tests  28 passed (28)\n\npnpm test src/gateway/server-tailscale.test.ts \\\n       src/gateway/server-startup-post-attach.test.ts \\\n       src/infra/tailscale.test.ts\n  Test Files  5 passed (5)\n       Tests  165 passed (165)\n```\n\n## Risks\n\n1. `serve reset` clears all serve routes when not using `serviceName` — consistent with existing `resetOnExit` behavior.\n2. First-run reset on old Tailscale versions may fail — catch block prevents blocking.\n3. Startup latency: `disableTailscaleServe` has a 15s timeout, but typically completes in <1s.\n\nFixes #93936\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        "branch": "fix/93936-tailscale-serve-preclean",
+        "head_sha": "d54e193e04c2cb03aa20a5e5b1412e5cc79038a8",
+        "author": "fsdwen",
+        "labels": [
+          "gateway",
+          "size: S",
+          "triage: needs-real-behavior-proof"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-tailscale.test.ts",
+            "additions": 84,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-tailscale.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 97,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94103",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94103.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 168,
+          "gatingTotal": 163,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 134,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 778,
+    "total_ms": 2640,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 419
+        "ms": 342
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2050
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 350
+        "ms": 221
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
