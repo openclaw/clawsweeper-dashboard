@@ -2,12 +2,12 @@
 repo: "openclaw/remindctl"
 cluster_id: "issue-openclaw-remindctl-57"
 mode: "autonomous"
-run_id: "27725888928"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27725888928"
+run_id: "27727328301"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27727328301"
 head_sha: "f2b07a7265fb9eb4547c7959e7f055a164510cd8"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-06-17T23:31:33.280Z"
+published_at: "2026-06-17T23:57:26.936Z"
 canonical: "https://github.com/openclaw/remindctl/issues/57"
 canonical_issue: "https://github.com/openclaw/remindctl/issues/57"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/remindctl
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27725888928](https://github.com/openclaw/clawsweeper/actions/runs/27725888928)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27727328301](https://github.com/openclaw/clawsweeper/actions/runs/27727328301)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/remindctl/issues/57
 
 ## Summary
 
-Issue #57 remains a valid, non-security release-packaging bug on current main. The GitHub release workflow still builds and packages a single `.build/release/remindctl`, while `scripts/sign-and-notarize.sh` already contains the intended dual-architecture `swift build --arch` plus `lipo` pattern. A narrow new fix PR should update the release artifact path so `remindctl-macos.zip` contains a signed universal `arm64` and `x86_64` binary while preserving the Homebrew tap artifact name.
+Issue #57 remains a valid, non-security release-packaging bug on current main. The release workflow still packages a single `.build/release/remindctl`, while `scripts/sign-and-notarize.sh` already has the dual-architecture `swift build --arch` plus `lipo` pattern. Plan one narrow fix PR that makes `remindctl-macos.zip` contain a signed universal `arm64` and `x86_64` binary while keeping the Homebrew tap artifact name unchanged.
 
 ## Impact
 
