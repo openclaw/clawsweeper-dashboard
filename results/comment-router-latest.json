@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T09:00:52.895Z",
+  "generated_at": "2026-06-17T09:02:05.218Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T06:00:50.412Z",
+  "since": "2026-06-17T06:02:04.532Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     93964
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4726885192
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -62,99 +64,28 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): exclude volatile output from failed exec hash so critica…",
-        "body": "## Summary\r\n\r\n- `hashExecToolOutcome` previously included the full `output` field in the hash for both `completed` and `failed` exec results. For `failed` exec calls, error output often varies between invocations (timestamps, connection state messages), causing `resultHash` to differ on every call.\r\n- This prevented `noProgressStreak` from accumulating, so the `critical` and `global-circuit-breaker` thresholds never fired — even after hundreds of identical failed calls with the same command and exit code.\r\n- Split the combined `completed || failed` branch in `hashExecToolOutcome` into separate paths:\r\n  - `completed`: keeps `output` in hash (unchanged behavior — same output produces same hash)\r\n  - `failed`: hashes only `status`, `exitCode`, and `timedOut`, excluding the volatile output text so repeated identical failures accumulate a streak regardless of varying error messages\r\n- Out of scope: no change to completed exec hashing, no change to warning-level detection (recentCount), no change to non-exec tool hashing.\r\n\r\n## Change Type\r\n\r\n- [x] Bug fix / [ ] Feature / [ ] Refactor / [ ] Docs / [ ] Security / [ ] Chore\r\n\r\n## Scope\r\n\r\n- [ ] Gateway / [ ] Skills / [ ] Auth / [ ] Memory / [x] Agents / [ ] Integrations / [ ] API / [ ] UI/UX / [ ] CI\r\n\r\n## Linked context\r\n\r\nCloses #93917\r\n\r\nThanks @zj0001 for the detailed root-cause analysis and production evidence.\r\n\r\n## Real behavior proof\r\n\r\n**Behavior addressed:** Failed exec tool calls with varying output text (timestamps, connection state) now correctly accumulate a noProgressStreak, enabling the critical and global circuit-breaker thresholds to fire — previously the streak was always 1 because the resultHash differed on every invocation.\r\n\r\n**Environment tested:** Node 22.x on Linux (NewStartOS), tsx loader for production function verification.\r\n\r\n**Steps run after the patch:** Called the actual patched `detectToolCallLoop` and `recordToolCallOutcome` functions from source via `node --import tsx`:\r\n\r\n```bash\r\nnode --import tsx --no-warnings -e \"\r\nimport { detectToolCallLoop, recordToolCall, recordToolCallOutcome } from './src/agents/tool-loop-detection.js';\r\nconst state = { lastActivity: Date.now(), state: 'processing', queueDepth: 0 };\r\nconst config = { enabled: true, criticalThreshold: 20 };\r\nconst params = { command: 'docker exec alist /opt/alist/alist admin set admin123' };\r\nfor (let i = 0; i < 20; i++) {\r\n  const id = 'exec-fail-' + i;\r\n  recordToolCall(state, 'exec', params, id, config);\r\n  recordToolCallOutcome(state, {\r\n    toolName: 'exec', toolParams: params, toolCallId: id,\r\n    result: { content: [{ type: 'text', text: 'Connection refused at ' + (Date.now() + i) }],\r\n      details: { status: 'failed', exitCode: 1, durationMs: 100 + i,\r\n        aggregated: 'ssh: Connection refused attempt ' + i } },\r\n    config,\r\n  });\r\n}\r\nconst result = detectToolCallLoop(state, 'exec', params, config);\r\nconsole.log('stuck:', result.stuck, 'level:', result.stuck ? result.level : 'N/A',\r\n  'detector:', result.stuck ? result.detector : 'N/A', 'count:', result.stuck ? result.count : 0);\r\n\"\r\n```\r\n\r\n**Evidence after fix:**\r\n\r\n```text\r\nstuck: true level: critical detector: generic_repeat count: 20\r\n```\r\n\r\nBefore the patch, the same scenario with varying output text produced only a warning (streak was always 1, only recentCount accumulated):\r\n\r\n```text\r\nstuck: true level: warning detector: generic_repeat\r\n```\r\n\r\n**Observed result after the fix:** Repeated failed exec calls with varying output text now correctly trigger the `generic_repeat` critical detector at the configured threshold (20), and the `global_circuit_breaker` at threshold (30). Completed exec calls retain unchanged behavior — same output produces same hash, different output is treated as progress.\r\n\r\n**Not tested:** Live gateway session with a real SSH/Docker connection failure loop; running the full vitest suite (native rolldown binding unavailable on this machine).\r\n\r\n## Tests and validation\r\n\r\n- Added test: \"blocks repeated failed exec calls despite varying output text (#93917)\" — verifies 20 repeated failed exec calls with varying aggregated output trigger critical detection.\r\n- Updated test: \"blocks varying-output failed exec calls at the global circuit breaker (#93917)\" — verifies 30 repeated failed exec calls with varying output trigger global_circuit_breaker.\r\n- Existing test \"keeps changing exec output below the global no-progress breaker\" (completed exec with varying output) remains unchanged and still produces warning only — confirming completed behavior is not affected.\r\n\r\n## Risk checklist\r\n\r\n- Did user-visible behavior change? No (loop detection is a background guard; no API/output change)\r\n- Did config, environment, or migration behavior change? No\r\n- Did security, auth, secrets, network, or tool execution behavior change? No\r\n- Highest-risk area: The `noProgressStreak` now accumulates for failed exec calls with the same exitCode/timedOut, which could cause legitimate retry attempts (where exitCode varies) to not be blocked. This is mitigated by the fact that different exitCodes produce different hashes, so only truly identical failures accumulate.\r\n",
-        "branch": "fix/93917-generic-repeat-circuit-breaker-varying-exec-output",
-        "head_sha": "fba6f4f44ec147b1e2798eb2d53d94ebd801cd66",
-        "author": "hugenshen",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/agents/tool-loop-detection.test.ts",
-            "additions": 35,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tool-loop-detection.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 50,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93964",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93964.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 170,
-          "gatingTotal": 165,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 32,
-            "SUCCESS": 133,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-fast:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-fast:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2707,
+    "total_ms": 1422,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 286
+        "ms": 675
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2182
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 213
+        "ms": 735
       },
       {
         "name": "append_ledger",
