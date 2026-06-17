@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T17:36:26.662Z",
+  "generated_at": "2026-06-17T17:36:58.852Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T14:36:26.229Z",
+  "since": "2026-06-17T14:36:55.987Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    63919
+    93965
   ],
   "comment_ids": [
-    4733480280
+    4733496123
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4733496512,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:63919:4733480280:2026-06-17T17:34:16Z:re_review",
-      "comment_id": "4733480280",
-      "comment_version_key": "4733480280:2026-06-17T17:34:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/63919#issuecomment-4733480280",
+      "idempotency_key": "comment-router:openclaw/openclaw:93965:4733496123:2026-06-17T17:35:47Z:re_review",
+      "comment_id": "4733496123",
+      "comment_version_key": "4733496123:2026-06-17T17:35:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93965#issuecomment-4733496123",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 85664,
-      "author": "simonusa",
-      "author_id": 178938782,
+      "target_branch": "main",
+      "issue_number": 93965,
+      "author": "zhangguiping-xydt",
+      "author_id": 275915537,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T17:34:15Z",
-      "comment_updated_at": "2026-06-17T17:34:15Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-17T17:35:47Z",
+      "comment_updated_at": "2026-06-17T17:35:47Z",
+      "status_comment_id": 4733496512,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,30 +62,124 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-17T17:36:59.585Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 93965
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-17T17:37:00.648Z",
+          "response_comment_id": "4733496512",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "[Bug]: opencode-go provider streaming — API calls complete on provider side but gateway never receives stream termination signal",
+        "body": "## Summary\n\nopencode-go routes through the shared OpenAI-compatible completions provider. When the provider emits tokens but the upstream SSE socket then stalls (never sends `[DONE]`, never closes the stream), the gateway sits on `model_call:stream_progress` until `stuckSessionAbortMs` (~622s) aborts it, surfacing as `LLM request failed.` / `Request was aborted`. Issue #93610 reports ~90% of opencode-go cron jobs failing this way intermittently.\n\nThis PR adds a **provider-owned, abortable** stream wrapper at the raw opencode-go SSE boundary — the direction requested in the linked PR threads (#93640 / #93655 review comments). It does not touch the shared `openai-completions.ts` provider or any shared stream consumer.\n\n### Behavior\n\n- **Provider-scoped.** Only activates when `model.provider === \"opencode-go\"`. Other providers pass through unchanged.\n- **Abortable at the raw SSE boundary.** The wrapper injects a fresh `AbortController` into the underlying OpenAI SDK request via `options.signal` (which `openai-completions.ts` already forwards as `requestOptions.signal`). When the wrapper detects a stall, it calls `controller.abort()`, which genuinely interrupts the underlying fetch/stream — not just `iterator.return()`.\n- **Idle-based termination.** A configurable idle window (default 120s — matches the runtime's shared `DEFAULT_LLM_IDLE_TIMEOUT_MS`, far below the 622s stuck-session recovery, far above normal delayed usage-only chunk gaps) arms only after the first forwarded upstream event, then refreshes on every subsequent forward-progress event (text/tool/thinking delta, usage-only chunk). A natural `done`/`error` event cancels it. The pre-progress window (request → first event) is left to the runtime's own first-event watchdog, which cron runs deliberately leave uncapped (`resolveLlmIdleTimeoutMs` returns 0 when `trigger === \"cron\"`). So:\n  - **Genuinely stalled stream** → aborted at ~120s with a downstream `{ type: \"error\", reason: \"aborted\" }` event, well before the 622s recovery would fire.\n  - **Normal delayed / usage-only completion** → preserved unchanged. As long as chunks keep arriving (even slowly) the timer keeps refreshing; the final `done` event cancels it.\n\n### Why provider-scoped, not in the shared runtime\n\nA stall at the OpenAI SSE layer can have provider-specific causes (opencode-go's DeepSeek/Kimi/GLM routing through Zen vs Go catalogs has its own SSE quirks). Fixing this in the shared runtime would impose a new idle budget on every OpenAI-compatible provider, including ones with legitimately long thinking windows. Keeping the wrapper inside `extensions/opencode-go/` lets opencode-go tune its own threshold without coupling to the shared runtime contract. The default 120s is chosen to exactly match the runtime's shared `DEFAULT_LLM_IDLE_TIMEOUT_MS`, so non-cron interactive opencode-go runs see no behavior change versus the existing watchdog; cron runs — for which the runtime disables its idle watchdog entirely (`resolveLlmIdleTimeoutMs` returns 0 when `trigger === \"cron\"` and no explicit timeout is set) — finally get provider-owned termination well before the ~622s stuck-session recovery kicks in.\n\n### Root cause chain\n\n1. opencode-go plugin's `wrapStreamFn` (in `extensions/opencode-go/stream.ts`) previously only wrapped payload/reasoning mutation helpers. It had no raw SSE consumer.\n2. The actual stream came from the shared `src/llm/providers/openai-completions.ts:337`, where `for await (const chunk of openaiStream)` blocks indefinitely when the provider's SSE socket emits tokens and then never closes.\n3. `AssistantMessageEventStream` (`packages/llm-core/src/utils/event-stream.ts`) only exposes `push`/`end`/`result`. It has no `abort`; it relies on the underlying iterator finishing naturally.\n4. The only abortable surface in this chain is `options.signal` (an `AbortSignal`), which `openai-completions.ts:168` forwards to the OpenAI SDK `requestOptions.signal`. Today only the outer stuck-session recovery (622s) triggers it.\n5. Therefore the provider-owned fix has to live in `extensions/opencode-go/stream.ts`'s `wrapStreamFn`, where it can both inject an `AbortController` into `options.signal` before calling the underlying stream and monitor the wrapped stream's event cadence to abort when progress stalls.\n\n## Linked context\n\n- Issue: #93610 (`[Bug]: opencode-go provider streaming — API calls complete on provider side but gateway never receives stream termination signal`).\n- Related PRs closed in favor of this direction: #93640, #93655, #93708 (the shared-runtime/compat-shim approach was rejected; maintainer asked for a provider-scoped and abortable fix at the raw opencode-go SSE boundary).\n- Provider-owned hook used: `wrapStreamFn` (`extensions/opencode-go/index.ts`).\n- Shared files intentionally untouched: `src/llm/providers/openai-completions.ts`, `packages/llm-core/src/utils/event-stream.ts`, `src/plugin-sdk/provider-stream-shared.ts`.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** opencode-go cron jobs hang for ~622s on `model_call:stream_progress` after the provider has emitted tokens but never closes the SSE stream. The gateway then aborts via `stuckSessionAbortMs` and surfaces `LLM request failed.` / `Request was aborted`. Issue #93610 reports ~90% of opencode-go cron jobs failing intermittently this way.\n- **Real environment tested:** macOS 26.5 arm64, Node 24.15.0, OpenClaw v2026.6.8, worktree SHA 8782b9a, opencode-go/deepseek-v4-flash with real `OPENCODE_API_KEY`. Gateway started via `pnpm gateway:dev`, agent request via `pnpm openclaw agent --local --model opencode-go/deepseek-v4-flash`.\n- **Exact steps or command run after this patch:**\n  ```bash\n  # Start gateway with opencode-go provider configured\n  OPENCODE_API_KEY=\"sk-7b5...\" \\\n  OPENCLAW_GATEWAY_TOKEN=\"...\" \\\n  pnpm gateway:dev\n\n  # Real opencode-go API request (normal completion path)\n  OPENCODE_API_KEY=\"sk-7b5...\" \\\n  pnpm openclaw agent --local --model opencode-go/deepseek-v4-flash \\\n    --session-key opencode-go-proof-final \\\n    --message \"Say hello in one word\" --json\n\n  # Deterministic boundary tests (stall-abort and delayed-completion paths)\n  npx vitest run --config test/vitest/vitest.extension-misc.config.ts \\\n    extensions/opencode-go/\n  ```\n- **Evidence after fix:**\n\n**Real opencode-go/deepseek-v4-flash request — normal completion path:**\n\nGateway startup confirms provider auth pre-warmed (wrapper activated):\n```\n[gateway] provider auth state pre-warmed in 533ms eventLoopMax=11.4ms\n[gateway] ready\n```\n\nAgent run output (redacted; full JSON output attached to PR):\n```json\n{\n  \"payloads\": [{\"text\": \"Hello\", \"mediaUrl\": null}],\n  \"meta\": {\n    \"durationMs\": 4877,\n    \"agentMeta\": {\n      \"provider\": \"opencode-go\",\n      \"model\": \"deepseek-v4-flash\",\n      \"usage\": {\n        \"input\": 24812, \"output\": 13,\n        \"cacheRead\": 2944, \"reasoningTokens\": 11,\n        \"total\": 27769\n      }\n    },\n    \"aborted\": false,\n    \"stopReason\": \"stop\",\n    \"executionTrace\": {\n      \"winnerProvider\": \"opencode-go\",\n      \"winnerModel\": \"deepseek-v4-flash\",\n      \"attempts\": [{\"provider\": \"opencode-go\", \"model\": \"deepseek-v4-flash\", \"result\": \"success\", \"stage\": \"assistant\"}],\n      \"fallbackUsed\": false,\n      \"runner\": \"embedded\"\n    },\n    \"completion\": {\n      \"stopReason\": \"stop\",\n      \"finishReason\": \"stop\"\n    }\n  }\n}\n```\n\nThe request completed in 4.9s with `stopReason=stop`, `aborted=false`. The wrapper's idle timer was armed after the first forwarded event, refreshed on each subsequent event, and cancelled by the terminal `done` event — the normal completion path is preserved unchanged.\n\n**Deterministic boundary tests — stall-abort path:**\n\n```\nRUN  v4.1.8 /Users/zhangguiping/daily_pr_work/openclaw-93610\n\n Test Files  5 passed (5)\n      Tests  19 passed (19)\n   Start at  01:27:03\n   Duration  6.55s\n```\n\nThree new boundary tests in `stream-termination.test.ts`:\n1. **Stalled stream is aborted** — fake base stream emits `start` + one `text_delta` then nothing; with `idleTimeoutMs=5000`, advancing fake timers past 5s triggers `controller.abort()` on the injected `AbortSignal`, downstream receives `{ type: \"error\", reason: \"aborted\" }`.\n2. **Slow time-to-first-byte is not mis-aborted** — fake base stream emits nothing; advancing fake timers past 60s shows `abort()` was NOT called. Idle timer is armed only after first forwarded upstream event.\n3. **Normal delayed completion is not truncated** — fake base stream emits `start` + `text_delta` + 2s gap (below 5s idle timeout) + `done`; no abort, `done` forwarded unchanged.\n\n- **Observed result after fix:**\n  - **Normal completion path (real opencode-go/DeepSeek):** Agent request completed in 4.9s with `stopReason=stop`, `aborted=false`, response \"Hello\". The wrapper's idle timer armed, refreshed, and was cancelled by the terminal `done` event — normal completion is preserved, no truncation.\n  - **Stalled path (deterministic):** AbortSignal fired at the idle timeout boundary, downstream received terminal `{ type: \"error\", reason: \"aborted\" }` instead of hanging until 622s stuck-session recovery.\n  - **Delayed path (deterministic):** No abort when events arrive within the idle window; `done` forwarded unchanged.\n\n- **What was not tested:**\n  - The live stalled-after-progress path could not be deterministically triggered because the opencode-go/DeepSeek SSE stall is intermittent (~90% on the reporter's cron jobs, not 100%) and requires extended cron runs to reproduce. The deterministic boundary tests in `stream-termination.test.ts` prove the abort logic with fake timers at the exact `wrapStreamFn` boundary that production streams traverse.\n  - The live provider path was tested for the normal completion case, proving the wrapper does not break real opencode-go requests.\n\n## Tests and validation\n\n- Extension-specific test: new file `extensions/opencode-go/stream-termination.test.ts` (vitest, runs in the `extension-misc` shard alongside the existing opencode-go suite).\n- The wrapper is also wired through `createOpencodeGoWrapper` in `extensions/opencode-go/stream.ts`, and the full 19-test opencode-go extension suite passes with the new layer in place — no regressions in the existing Kimi reasoning sanitizer, DeepSeek V4 thinking, onboarding, or media-understanding tests.\n- The wrapper does not change `openai-completions.ts` or any other shared runtime file.\n\n## Risk checklist\n\n- [x] **Provider-scoped only.** Non-opencode-go providers are not affected (early return at the top of the wrapped streamFn).\n- [x] **No truncation of normal completion.** Idle timer refreshes on every event (including delayed usage-only chunks) and is canceled on natural `done`/`error`.\n- [x] **No new coupling to the shared runtime.** Wrapper lives entirely in `extensions/opencode-go/`.\n- [x] **Threshold tuning.** Default 120s — matches the runtime's shared `DEFAULT_LLM_IDLE_TIMEOUT_MS`, so non-cron interactive opencode-go runs see no behavior change versus the existing watchdog, while cron runs (for which the runtime disables its idle watchdog entirely) finally get provider-owned termination well before the 622s stuck-session recovery. Can be tuned later via the `idleTimeoutMs` parameter without touching the shared runtime.\n- [x] **No shared file changes.** `openai-completions.ts`, `event-stream.ts`, and `provider-stream-shared.ts` are intentionally untouched.\n- [x] **Live provider normal-path proof supplied.** Real opencode-go/deepseek-v4-flash request completed normally in 4.9s with `stopReason=stop`, `aborted=false`.\n- [x] **Live stalled-path proof supplied (deterministic).** Boundary tests at the `wrapStreamFn` production boundary prove the abort fires and the delayed-completion path is preserved.\n- [x] **Default 120s matches runtime `DEFAULT_LLM_IDLE_TIMEOUT_MS`.** Pre-submit Codex review on the prior 30s default flagged a regression risk for slow time-to-first-byte reasoning completions; the default now matches the runtime's shared `DEFAULT_LLM_IDLE_TIMEOUT_MS` exactly so non-cron interactive runs see no behavior change. The default is still far below the ~622s stuck-session recovery that cron runs hit today.\n\nRefs #93610\n",
+        "branch": "fix/issue-93610-stalled-stream",
+        "head_sha": "d4fb2d8eebf1c7c861f151b0dc9974d80a5f23a3",
+        "author": "zhangguiping-xydt",
+        "labels": [
+          "size: L",
+          "proof: supplied",
+          "extensions: opencode-go",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/opencode-go/stream-termination.test.ts",
+            "additions": 302,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/opencode-go/stream-termination.ts",
+            "additions": 307,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/opencode-go/stream.ts",
+            "additions": 16,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 625,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93965",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93965.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 22,
+          "gatingTotal": 17,
+          "counts": {
+            "SUCCESS": 11,
+            "QUEUED": 4,
+            "SKIPPED": 7
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2104,
+    "total_ms": 5196,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 423
+        "ms": 1271
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1579
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 1671
+        "ms": 2319
       },
       {
         "name": "append_ledger",
