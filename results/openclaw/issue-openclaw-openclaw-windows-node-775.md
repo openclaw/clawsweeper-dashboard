@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-775"
 mode: "autonomous"
-run_id: "27717782966"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27717782966"
+run_id: "27721006816"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27721006816"
 head_sha: "f2b07a7265fb9eb4547c7959e7f055a164510cd8"
 workflow_conclusion: "failure"
 result_status: "blocked"
-published_at: "2026-06-17T20:49:29.494Z"
+published_at: "2026-06-17T21:33:49.548Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/775"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/775"
 canonical_pr: null
-actions_total: 3
+actions_total: 4
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27717782966](https://github.com/openclaw/clawsweeper/actions/runs/27717782966)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27721006816](https://github.com/openclaw/clawsweeper/actions/runs/27721006816)
 
 Workflow conclusion: failure
 
@@ -35,13 +35,13 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/775
 
 ## Summary
 
-Issue #775 is still a viable narrow setup-engine fix on main. Current WSL environment detection does not match the reporter's exact `WSL2 is not supported with your current machine configuration` status output, but this worker has a read-only filesystem and could not apply or validate the implementation branch.
+Issue #775 remains a viable narrow setup-engine fix on current main 6811d6a3e21bddd362e3957127d19a4b887f0ace. The exact reporter diagnostic is still absent from `WslInstallSupport.TryGetEnvironmentIssue`, but this worker's checkout is read-only, so no local branch, patch, validation, or PR can be produced in this run.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 3 |
+| Worker actions | 4 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,9 +66,10 @@ Issue #775 is still a viable narrow setup-engine fix on main. Current WSL enviro
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #775 | keep_canonical | planned | canonical | #775 is the canonical source issue and should remain open until a fix PR lands. |
-| cluster:issue-openclaw-openclaw-windows-node-775 | fix_needed | planned |  | A narrow code/test fix is needed; current main still falls through for the exact reporter diagnostic. |
-| cluster:issue-openclaw-openclaw-windows-node-775 | build_fix_artifact | planned |  | Emit a deterministic fix plan for a new credited PR from `clawsweeper/issue-openclaw-openclaw-windows-node-775`. |
+| #775 | keep_canonical | planned | canonical | #775 is the source issue and should remain open until a fix PR is created and validated. |
+| cluster:issue-openclaw-openclaw-windows-node-775 | fix_needed | planned |  | Current main still misses the reporter's exact WSL status output, and the requested fix can stay narrow. |
+| cluster:issue-openclaw-openclaw-windows-node-775 | build_fix_artifact | planned |  | A new fix PR is appropriate, but this worker can only emit the artifact because the filesystem is read-only. |
+| cluster:issue-openclaw-openclaw-windows-node-775 | open_fix_pr | blocked |  | Implementation and PR creation are blocked by the read-only checkout, not by product ambiguity or security concerns. |
 
 ## Needs Human
 
