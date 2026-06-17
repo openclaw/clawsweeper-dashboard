@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T13:34:37.886Z",
+  "generated_at": "2026-06-17T13:36:34.945Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T10:34:35.180Z",
+  "since": "2026-06-17T10:36:31.736Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    93547
+    93848
   ],
   "comment_ids": [
-    4730785404
+    4730815805
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:93547:4730785404:2026-06-17T13:32:03Z:re_review",
-      "comment_id": "4730785404",
-      "comment_version_key": "4730785404:2026-06-17T13:32:03Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93547#issuecomment-4730785404",
+      "idempotency_key": "comment-router:openclaw/openclaw:93848:4730815805:2026-06-17T13:35:06Z:freeform_assist",
+      "comment_id": "4730815805",
+      "comment_version_key": "4730815805:2026-06-17T13:35:06Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93848#issuecomment-4730815805",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 93547,
-      "author": "amersheeny",
-      "author_id": 7223047,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T13:32:03Z",
-      "comment_updated_at": "2026-06-17T13:32:03Z",
+      "issue_number": 93848,
+      "author": "chenyangjun-xy",
+      "author_id": 294178215,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-17T13:35:06Z",
+      "comment_updated_at": "2026-06-17T13:35:06Z",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "command": "recheck",
+      "intent": "freeform_assist",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -58,76 +58,64 @@
       "repair_reason": null,
       "review_summary": null,
       "review_followup": null,
-      "freeform_prompt": null,
+      "freeform_prompt": "recheck",
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(acp): recover stale persistent sessions by structured resume-required code [AI-assisted]",
-        "body": "## Summary\n\nFixes #87830 — thread-bound persistent ACP sessions stop replying on the second turn for Kiro.\n\nWhen a backend can no longer resume a stale persistent session, acpx raises a `SessionResumeRequiredError` whose **reason text varies by backend**: Claude reports `\"Resource not found\"`, Kiro reports `\"Internal error\"` (`RequestError -32603`). OpenClaw's recovery gate (`manager.runtime-resume-state.ts`) matched the *human reason text* and required `\"resource not found\"`, so Kiro's \"Internal error\" never triggered the fresh-session retry — the turn failed with `ACP_TURN_FAILED` and the thread produced no reply, while Claude (whose reason happened to match the regex) recovered.\n\n**Root cause is deeper than the reason text:** acpx tags every such failure with the structured contract `detailCode: \"SESSION_RESUME_REQUIRED\"` (`retryable: true`), independent of wording. But the two `AcpRuntimeError` construction seams (`consumeAcpTurnEvents`, `errorFromTurnResult`) were **discarding `detailCode`**, leaving the gate no choice but to parse the message.\n\nThe fix:\n1. Preserve `detailCode` on `AcpRuntimeError` (additive optional field) so structured failure data isn't thrown away at construction.\n2. Thread `detailCode` through both seams.\n3. Match `SESSION_RESUME_REQUIRED` structurally across the error and its cause chain, instead of the reason regex.\n\nThis recovers **every** backend's resume-required failure (not just the two observed reasons) and is *more precise* than the old regex — a generic \"Internal error\" without the structured code is surfaced rather than silently retried.\n\n### Relationship to #93315\n\n#93315 (@xialonglee) targets the same bug by extending the message regex to also match `SessionResumeRequiredError` / `session resume required`. That approach cannot match the real failure: acpx builds the message as `` `Persistent ACP session ${id} could not be resumed: ${reason}` `` (acpx dist `live-checkpoint`, `makeSessionResumeRequiredError`), so the `AcpRuntimeError.message` reaching the gate is `\"Persistent ACP session … could not be resumed: Internal error\"` — the `SessionResumeRequiredError` string is the error's `.name`, never in the message (the seams use `normalizeText(event.message)` / `normalizeText(result.error.message)`, the raw message, not the `formatAcpErrorChain` rendering). #93315's retry test passes only because it manually concatenates `\" <- SessionResumeRequiredError: …\"` into the test event message — a string the real pipeline does not emit. Keying on the structured `detailCode` avoids depending on message wording entirely.\n\nAI-assisted (Claude Code), directed and reviewed by the PR author.\n\n## Real behavior proof\n\nBehavior addressed: a thread-bound persistent ACP turn whose backend reports a resume-required failure with reason \"Internal error\" (Kiro / `RequestError -32603`) now discards the stale persistent identity and retries with a fresh session, instead of failing the turn (#87830).\n\nReal environment tested: macOS (Darwin), Node 22, the real `AcpSessionManager` turn runner exercised end-to-end through `manager.runTurn` with the actual recovery path (`prepareFreshManagerRuntimeHandleRetry` → `ensureSession`). The failure reproduces fully at the manager boundary: the recovery code is pure error-classification and makes no backend/Bot-API call, so a mocked runtime emitting the exact acpx error shape (`detailCode: \"SESSION_RESUME_REQUIRED\"`, message `\"…could not be resumed: Internal error\"`) drives the real production path.\n\nExact steps or command run after this patch:\n1. `node scripts/run-vitest.mjs src/acp/control-plane/manager.turn-results.test.ts`\n2. Revert the three source files to `origin/main` and re-run to confirm the new cases fail without the fix.\n\nEvidence after fix: copied live command output.\n\nWith the fix — all cases pass (the two resume-required reasons, the thrown-cause shape, and the negative precision case):\n\n```\nTests  18 passed (18)\n```\n\nReverting the source (matcher + seams + AcpRuntimeError) to `origin/main`, the Kiro \"Internal error\" and thrown-cause cases fail while the happy-path and precision cases still pass — proving the new behavior:\n\n```\n×  retries with a fresh persistent session on a resume-required error: Internal error (Kiro RequestError -32603)\n×  recovers when the resume-required error is wrapped as a thrown cause\nTests  2 failed | 16 passed (18)\nCaused by: AcpRuntimeError: Persistent ACP session acpx-sid-stale could not be resumed: Internal error\n```\n\nDependency contract verified directly in `node_modules/acpx` dist: `SessionResumeRequiredError extends AcpxOperationalError` with `detailCode: \"SESSION_RESUME_REQUIRED\"`, `retryable: true`; the message is `` `Persistent ACP session ${id} could not be resumed: ${reason}` ``.\n\nObserved result after fix: the manager calls `prepareFreshSession`, re-runs `ensureSession` with `resumeSessionId` undefined, the session identity is replaced with the fresh backend id, and the turn completes; session state transitions running→idle with no error.\n\nWhat was not tested: a live Kiro ACP backend. The failing backend is Kiro specifically (Claude already recovers, since its \"Resource not found\" matched the old regex), and I don't have a live Kiro environment. The fix path performs no external call, and the failure is fully reproducible at the manager boundary, so the red-on-main / green-with-fix unit demonstration above is mechanism-level proof of the exact acpx error shape.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/acp/control-plane/manager.turn-results.test.ts` — 18 passed (4 new cases).\n- ACP control-plane + acp-core runtime suites pass (`manager.test`, `manager.failover`, `manager.backend-failover`, `manager.initialize-session`, `manager.startup-identity-reconcile`, `acp-core/runtime/errors`, `error-text`).\n- New regression cases fail against `origin/main`'s source and pass with the fix (verified by reverting the three source files).\n- `tsgo:core` + `tsgo:core:test` green; oxlint/oxfmt clean; `pnpm build` green.\n\nRelease-note context: persistent ACP threads (notably Kiro) no longer get permanently stuck after a stale-session resume failure; recovery now keys on acpx's structured resume-required code rather than the backend's reason wording. Reported by @chouzz in #87830.\n",
-        "branch": "fix/acp-session-resume-structured-detailcode",
-        "head_sha": "762f574ebd157412f71056a60ac888bda2fca262",
-        "author": "amersheeny",
+        "title": "fix(media): resolve absolute-path channel media for native vision blocks",
+        "body": "## Summary\n\n- Problem: Telegram inbound images saved to disk are not passed to the model as native vision content blocks. The model receives only `<media:image>` placeholder text and cannot analyze the actual image. The same workflow works correctly through the webchat / Control UI.\n- Why now: Any user sending images via Telegram DM to an OpenClaw bot with a vision-capable model cannot get the agent to see or describe the image. The image file is correctly downloaded to `~/.openclaw/media/inbound/` but is silently dropped during native vision block hydration.\n- What changed:\n  - `MediaAttachmentCache.resolveLocalPath()` now validates absolute filesystem paths against local roots via `resolveUsableLocalCandidate`, matching the existing relative-path validation added in 610691c796\n  - `resolveCurrentTurnImages()` now returns successfully resolved images even when a subset fails, instead of discarding the entire batch\n  - Added regression test for absolute-path media hydration\n- What did NOT change: Relative-path handling is unchanged. Webchat inline-image path (early-return on `params.images`) is untouched. No new dependencies added.\n- Outcome: Channel-delivered absolute-path images (Telegram, Discord, Slack, etc.) are now hydrated into native vision content blocks instead of being silently dropped on a single read failure.\n- Reviewer focus: `attachments.cache.ts` changes to `resolveLocalPath`, `current-turn-images.ts` changes to the all-or-nothing fallback logic, and the new test case.\n\n## Linked context\n\nCloses #79162, closes #62292, closes #69808\n\nWas this requested by a maintainer?\n- No, but the issues have clear reproduction steps and root cause analysis.\n\n## Root Cause\n\n- Root cause: `resolveLocalPath()` skipped absolute-path validation — it returned `path.resolve(rawPath)` directly while relative paths went through `resolveUsableLocalCandidate`. Channel-delivered inbound media (Telegram, Discord, Slack, etc.) use absolute filesystem paths from `saveMediaBuffer`. When the path later failed `isInboundPathAllowed` in `ensureLocalStat`, the error was silently caught — channel attachments have `url` cleared, so `getBuffer` had no fallback and re-threw. Separately, `resolveCurrentTurnImages()` discarded all images when any single read failed.\n- Missing detection / guardrail: No test coverage for absolute-path media hydration. The existing test only covered relative paths. The symmetric relative-path validation in `resolveLocalPath` (added in 610691c796) was the guardrail that should have also covered absolute paths.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Telegram inbound images saved to disk are not passed to the model as native vision content blocks; the model receives only `<media:image>` placeholder text and cannot analyze the actual image.\n- Real environment tested: Ubuntu 24.04 (x64), Node 22.22.0, OpenClaw main branch (9166165).\n- Exact steps or command run after this patch:\n  ```bash\n  node scripts/run-vitest.mjs run src/auto-reply/reply/current-turn-images.test.ts\n  ```\n- Evidence after fix:\n  ```text\n  node scripts/run-vitest.mjs output:\n  ✓ hydrates Telegram-style state-relative media into native prompt images\n  ✓ hydrates channel-delivered absolute-path media into native prompt images\n  Test Files  1 passed (1)\n       Tests  2 passed (18)\n  ```\n- Observed result after fix: The new absolute-path test passes alongside the existing relative-path test. resolveCurrentTurnImages now returns partially-resolved image batches instead of discarding all images on a single failure. The absolute-path validation in resolveLocalPath is symmetric with the existing relative-path handling.\n- What was not tested: Not run against a live Telegram bot with a real image. The proof exercises the full hydration chain through the media store with local file I/O.\n- Proof limitations or environment constraints: Unit-test-based — does not verify a live end-to-end Telegram roundtrip.\n\n## Tests and validation\n\nWhich commands did you run?\n- `node scripts/run-vitest.mjs run src/auto-reply/reply/current-turn-images.test.ts`\n- `node scripts/run-vitest.mjs run src/media-understanding/runner.attachments.test.ts`\n\nWhat regression coverage was added or updated?\n- Added 1 new test case:\n  1. `hydrates channel-delivered absolute-path media into native prompt images` — writes a file under a temp state/media directory, sets `OPENCLAW_STATE_DIR`, and asserts absolute-path hydration into native `ImageContent` blocks\n\nWhat failed before this fix, if known?\n- Telegram inbound images appeared only as `<media:image>` placeholder text\n- Any channel using `saveMediaBuffer` for inbound media could silently lose native vision blocks when a single attachment read failed\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/telegram-inbound-image-vision-blocks",
+        "head_sha": "6c7fb02403c63335515089123508e4d817429203",
+        "author": "chenyangjun-xy",
         "labels": [
           "size: S",
-          "proof: supplied",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "proof: supplied"
         ],
         "files": [
           {
-            "path": "packages/acp-core/src/runtime/errors.ts",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/control-plane/manager.runtime-resume-state.ts",
-            "additions": 23,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/control-plane/manager.turn-results.test.ts",
-            "additions": 76,
-            "deletions": 35,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/control-plane/manager.turn-stream.ts",
-            "additions": 2,
+            "path": "src/auto-reply/reply/current-turn-images.test.ts",
+            "additions": 34,
             "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/current-turn-images.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media-understanding/attachments.cache.ts",
+            "additions": 11,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 113,
-        "deletions": 43,
+        "changedFiles": 3,
+        "additions": 48,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93547",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93547.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93848",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93848.md",
         "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 164,
-          "gatingTotal": 159,
+          "total": 11,
+          "gatingTotal": 6,
           "counts": {
-            "SUCCESS": 139,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
+            "SUCCESS": 8,
+            "SKIPPED": 3
           },
           "blockers": [],
           "pending": [],
@@ -136,21 +124,21 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": false,
+      "reason": "author association NONE and repository permission read are not allowed"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3063,
+    "total_ms": 3570,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 715
+        "ms": 1334
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1975
+        "ms": 1861
       },
       {
         "name": "classify_commands",
@@ -158,7 +146,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 357
+        "ms": 361
       },
       {
         "name": "append_ledger",
