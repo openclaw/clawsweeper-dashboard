@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T01:08:55.464Z",
+  "generated_at": "2026-06-17T01:11:14.008Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T22:08:53.471Z",
+  "since": "2026-06-16T22:11:09.059Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    93810
+    93584
   ],
   "comment_ids": [
-    4724987452
+    4725001239
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4725001409,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:93810:4724987452:2026-06-17T01:07:04Z:re_review",
-      "comment_id": "4724987452",
-      "comment_version_key": "4724987452:2026-06-17T01:07:04Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93810#issuecomment-4724987452",
+      "idempotency_key": "comment-router:openclaw/openclaw:93584:4725001239:2026-06-17T01:10:12Z:re_review",
+      "comment_id": "4725001239",
+      "comment_version_key": "4725001239:2026-06-17T01:10:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93584#issuecomment-4725001239",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93810,
-      "author": "yetval",
-      "author_id": 102706514,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T01:07:04Z",
-      "comment_updated_at": "2026-06-17T01:07:04Z",
-      "status_comment_id": null,
+      "target_branch": "main",
+      "issue_number": 93584,
+      "author": "dolphinsboy",
+      "author_id": 4864391,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-17T01:10:12Z",
+      "comment_updated_at": "2026-06-17T01:10:12Z",
+      "status_comment_id": 4725001409,
       "trigger": "mention",
-      "command": "re-run",
+      "command": "review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -62,101 +62,107 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-17T01:11:14.694Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 93584
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-17T01:11:16.845Z",
+          "response_comment_id": "4718069656",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): preserve startup overflow catch-up deferrals in start() maintenance pass",
-        "body": "## Summary\nAfter the gateway is down across one or more cron slots and restarts with more overdue cron-expression jobs than `maxMissedJobsPerRestart` (default 5), the overflow jobs have their startup catch-up run silently dropped for a full schedule period. A daily `0 9 * * *` job whose catch-up was staggered to `now + 5s` is pushed back to the next natural `09:00`, roughly 16 hours later, so the missed run never happens.\n\n## Root cause\n`runMissedJobs` defers overflow jobs to a near-future staggered slot and deliberately protects those deferrals so a later maintenance pass does not advance them. The protective pass in `src/cron/service/timer.ts:1856` disables future-slot repair:\n\n```ts\n// timer.ts, the sibling protective pass during catch-up\nrecomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });\n```\n\nBut `start()`'s own second maintenance pass in `src/cron/service/ops.ts:269` omitted any protection:\n\n```ts\n// before (ops.ts:269)\nconst changed = recomputeNextRunsForMaintenance(state, { recomputeExpired: true });\n```\n\n`repairFutureCronNextRunAtMs` defaults to `true` (`src/cron/service/jobs.ts:675`), so `shouldRepairFutureCronNextRunAtMs` (`src/cron/service/jobs.ts:197`) sees each overflow cron deferral as a stale future slot (`now < nextRunAtMs < naturalNext`, `kind: \"cron\"`, non-`agentTurn`) and recomputes it to its natural schedule slot, clobbering the catch-up.\n\n## Fix\nThe right fix is not to disable all future-slot repair in `start()`'s pass (that pass legitimately repairs genuinely stale future cron slots on startup). It is to exempt only the jobs that `runMissedJobs` just deferred, while leaving repair on for everything else.\n\n- `runMissedJobs` now returns the set of job ids it deferred this startup (`src/cron/service/timer.ts`).\n- `recomputeNextRunsForMaintenance` gains a `skipFutureRepairJobIds` option that skips future-slot repair for exactly those ids while still running every other repair/expiry branch (`src/cron/service/jobs.ts`).\n- `start()` threads the deferred ids into its second pass (`src/cron/service/ops.ts:269`):\n\n```ts\n// after\nconst deferredCatchupJobIds = await runMissedJobs(state, { ... });\n...\nconst changed = recomputeNextRunsForMaintenance(state, {\n  recomputeExpired: true,\n  skipFutureRepairJobIds: deferredCatchupJobIds,\n});\n```\n\nAn earlier revision of this PR used a blanket `repairFutureCronNextRunAtMs: false` here; that over-corrected by disabling ordinary stale-future repair for every job in the pass. The scoped exemption fixes the dropped catch-up without weakening the repair feature.\n\n## Why this is the right boundary\nThe catch-up deferral and its protection are owned by the startup path. `runMissedJobs` creates the deferrals, so it is the natural owner of \"which ids are exempt this startup,\" and `start()`'s follow-up pass is the only consumer. The exemption is keyed on those ids, so:\n- overflow catch-up deferrals survive until their staggered tick, and\n- any other stale future cron slot present at startup is still repaired by the same pass.\n\nNo sibling surfaces share the defect: `runMissedJobs` (timer.ts) already disables repair in its own pass, and regular timer-tick maintenance uses `recomputeNextRuns`/read paths outside the startup overflow window. Existing behavior for missing, expired, and already-executed slots is preserved.\n\n## Verification\nNew colocated regression tests `src/cron/service.startup-overflow-clobber.test.ts` drive the real `ops.start()`:\n- `keeps the overflow daily-cron catch-up deferral after start()'s maintenance pass` (6 overdue cron jobs at production defaults: `maxMissedJobsPerRestart` 5, stagger 5000ms). Fails on pristine `main`, passes with this patch.\n- `still repairs a stale future cron slot on start() when no jobs were deferred`. Passes with this patch; fails if the exemption is widened back to a blanket `repairFutureCronNextRunAtMs: false`, guarding the scoping.\n\n```\nnode scripts/run-vitest.mjs src/cron/service.startup-overflow-clobber.test.ts\n  -> Tests 2 passed (2)\nnode scripts/run-vitest.mjs src/cron/service.restart-catchup.test.ts \\\n  src/cron/service/ops.test.ts src/cron/service/ops.regression.test.ts \\\n  src/cron/service/timer.regression.test.ts src/cron/service/timer.test.ts\n  -> Test Files 6 passed (6), Tests 114 passed (114)\nnode scripts/run-vitest.mjs src/cron/service.jobs.test.ts src/cron/stagger.test.ts (+3 jobs suites)\n  -> Test Files 5 passed (5), Tests 97 passed (97)\noxlint --type-aware <changed files>  -> exit 0\noxfmt --check <changed files>        -> All matched files use the correct format\nrun-tsgo -p tsconfig.core.json                      -> exit 0\nrun-tsgo -p test/tsconfig/tsconfig.core.test.json   -> exit 0\n```\n\nProof matrix across all three variants of the same two tests:\n\n| variant | overflow deferral test | stale-future repair test |\n| --- | --- | --- |\n| pristine `main` | FAIL (clobbered) | PASS |\n| blanket `repairFutureCronNextRunAtMs: false` | PASS | FAIL (ordinary repair lost) |\n| this PR (scoped exemption) | PASS | PASS |\n\n## Real behavior proof\nBehavior addressed: overflow cron catch-up deferral survives `start()`'s maintenance pass while ordinary stale-future repair still runs.\nReal environment tested: the real `ops.start()` startup path (recover, `runMissedJobs`, second maintenance pass, arm timer) over temp cron stores, on pristine `main` and on the patched tree with identical inputs. Output below is captured from the cron service's own structured logger plus the resulting `nextRunAtMs`.\nExact steps or command run after this patch: drive `ops.start()` with a capturing logger over two stores (6 overdue cron jobs; one stale-future cron slot).\nEvidence after fix:\n```\n# BEFORE (pristine main f94a2506d2) - Scenario A: 6 overdue cron jobs, production defaults\n[info] cron: staggering missed jobs to prevent gateway overload {\"immediateCount\":5,\"deferredCount\":1,\"totalMissed\":6}\n[info] cron: running missed jobs after restart {\"count\":5,\"jobIds\":[\"hourly-0\",...,\"hourly-4\"]}\ndaily-overflow nextRunAtMs = 1765702800000 (2025-12-14T09:00:00.000Z)   <- catch-up dropped, next run ~16h away\n\n# AFTER (this patch) - Scenario A: identical inputs\n[info] cron: staggering missed jobs to prevent gateway overload {\"immediateCount\":5,\"deferredCount\":1,\"totalMissed\":6}\n[info] cron: running missed jobs after restart {\"count\":5,\"jobIds\":[\"hourly-0\",...,\"hourly-4\"]}\n[info] cron: started {\"enabled\":true,\"jobs\":6,\"nextWakeAtMs\":1765645205000}\ndaily-overflow nextRunAtMs = 1765645205000 (2025-12-13T17:00:05.000Z)    <- catch-up preserved, gateway wakes in 5s\n\n# AFTER (this patch) - Scenario B: 1 stale future cron slot, no overflow deferrals\n[info] cron: started {\"enabled\":true,\"jobs\":1,\"nextWakeAtMs\":1765702800000}\ndaily-stale-future nextRunAtMs = 1765702800000 (2025-12-14T09:00:00.000Z) <- stale slot still repaired to natural slot\n```\nObserved result after fix: the overflow daily job keeps its `now + 5s` catch-up (timer arms to wake in 5s), and a non-deferred stale future slot is still repaired to its natural `09:00`.\nWhat was not tested: end-to-end gateway restart against a live on-disk store with the OS timer actually firing the deferred run; the proof drives the startup function directly under a fixed clock.\n\n## Relation to existing work\nPR #78272 (merged) added the future-slot repair feature and the protective pass in `timer.ts`, but did not touch `ops.ts`, leaving its second pass unprotected. PR #81731 (open) fixes a separate exact-second slot misclassification in `jobs.ts` and does not change `ops.ts:269`; the two changes do not overlap.\n",
-        "branch": "fix/cron-startup-overflow-clobber",
-        "head_sha": "cdc12e2d736ec2ca55e9c863b2885d28909d5565",
-        "author": "yetval",
+        "title": "fix(agents): repair orphaned tool_use pairs on compaction prune path",
+        "body": "## Summary\n\nFixes #93321\n\nWhen a provider-side timeout aborts an assistant turn mid-flight, the session history can be left with a `toolCall` block that has no matching `toolResult`. On the next compaction cycle the broken pair is passed directly to the LLM summarizer, which forwards it to the provider and receives a `ValidationException` (Anthropic: *tool_use ids found without tool_result blocks*), permanently breaking the session until manually reset.\n\n## Root Cause\n\n`repairToolUseResultPairing()` was only called in two places:\n1. `splitPreservedRecentTurns()` — repairs the **no-drop** summarizable slice\n2. `compaction-safeguard.ts` drop path — repairs **dropped** messages (for the dropped-chunk summary)\n\nIt was **not** called on `pruned.messages` (the kept slice after chunk drops), so any orphaned `toolCall` surviving into the kept slice reached `summarizeInStages` and then the upstream provider uncleaned.\n\nAdditionally: `repairToolUseResultPairing()` with default options deliberately does **not** synthesize a missing `tool_result` for turns with `stopReason: \"aborted\"` — it preserves them as-is. The fix passes `{ erroredAssistantResultPolicy: \"drop\" }` to drop the entire aborted turn (including its unpaired `toolCall`), matching what already happens in the prompt-send sanitizer path.\n\n## Fix\n\n**`compaction-safeguard.ts`** — apply `repairToolUseResultPairing()` with `erroredAssistantResultPolicy: \"drop\"` to `pruned.messages` before assigning to `messagesToSummarize`:\n\n```diff\n- messagesToSummarize = pruned.messages;\n+ messagesToSummarize = repairToolUseResultPairing(pruned.messages, {\n+   erroredAssistantResultPolicy: \"drop\",\n+ }).messages;\n```\n\nAlso applied to the `splitPreservedRecentTurns` call site (line ~740) which previously used default options.\n\n**`compaction-planning.ts`** — apply the same option at both the entry point and the inner drop-loop repair call.\n\n## Real Session Evidence\n\n**Session ID:** `a7c86c90-f74b-41a9-980b-70a4c6fb8570`\n**OpenClaw version at time of incident:** 2026.5.28 (e932160)\n**Platform:** macOS arm64\n**Provider:** Anthropic claude-sonnet-4-6 via `anthropic-messages` API\n\n### Exact JSONL records from the broken session\n\n**L154 — orphaned assistant turn (aborted mid-flight):**\n```json\n{\n  \"type\": \"message\",\n  \"id\": \"f5809271\",\n  \"timestamp\": \"2026-06-15T09:04:13.833Z\",\n  \"message\": {\n    \"role\": \"assistant\",\n    \"content\": [\n      {\n        \"type\": \"toolCall\",\n        \"id\": \"toolu_c8b41a5a51b6469b8f2aa84c\",\n        \"name\": \"message\",\n        \"arguments\": { \"action\": \"send\", \"message\": \"[REDACTED]\" }\n      }\n    ]\n  }\n}\n```\n*(thinking block omitted for brevity; `stopReason` absent — turn was never completed)*\n\n**L155 — provider timeout event (63ms after L154):**\n```json\n{\n  \"type\": \"custom\",\n  \"customType\": \"openclaw:prompt-error\",\n  \"data\": {\n    \"runId\": \"5ea7792a-18bd-4a56-9903-d8441437de78\",\n    \"sessionId\": \"a7c86c90-f74b-41a9-980b-70a4c6fb8570\",\n    \"provider\": \"anthropic\",\n    \"model\": \"claude-sonnet-4-6\",\n    \"api\": \"anthropic-messages\",\n    \"error\": \"request timed out\"\n  },\n  \"timestamp\": \"2026-06-15T09:04:13.896Z\"\n}\n```\n\n**L157 — fallback gpt-5 turn with empty content (no `toolResult` for `toolu_c8b41a5a51b6469b8f2aa84c`):**\n```json\n{\n  \"type\": \"message\",\n  \"timestamp\": \"2026-06-15T09:04:14.281Z\",\n  \"message\": {\n    \"role\": \"assistant\",\n    \"content\": [],\n    \"api\": \"openai-completions\",\n    \"provider\": \"openai-gateway\",\n    \"model\": \"gpt-5\",\n    \"stopReason\": \"stop\"\n  }\n}\n```\n\n### Permanent failure — every subsequent turn for 8 hours:\n```\nL160  2026-06-15T09:36:56  assistant: [assistant turn failed before producing content]\nL162  2026-06-15T09:37:10  assistant: [assistant turn failed before producing content]\nL164  2026-06-15T09:52:59  assistant: [assistant turn failed before producing content]\nL166  2026-06-15T09:55:13  assistant: [assistant turn failed before producing content]\nL168  2026-06-15T09:57:57  assistant: [assistant turn failed before producing content]\nL170  2026-06-15T10:29:38  assistant: [assistant turn failed before producing content]\n```\nSession unresponsive from 09:04 until manual reset — confirmed `ValidationException: tool_use ids found without tool_result blocks` sent to Anthropic on every API call.\n\n### Why the fix resolves this\n\nWith `erroredAssistantResultPolicy: \"drop\"`, `repairToolUseResultPairing()` drops the entire aborted assistant turn at compaction time. The broken `toolCall id=toolu_c8b41a5a51b6469b8f2aa84c` is removed before the message sequence reaches `summarizeInStages` or the upstream provider. The next API call is valid and the session recovers.\n\nThis matches the existing behaviour in the prompt-send sanitizer (`compact-Bq9HNOed.js`) which already passes `erroredAssistantResultPolicy: \"drop\"` — the compaction path was the only place missing this guard.\n\n## After-Fix Replay — Real Session Data\n\n**Fix branch:** `642e2c1435` | **Run:** 2026-06-16T10:40:51Z | **Repo:** /Users/guosong/Desktop/Sina/Code/openclaw\n\nReal JSONL records from session `a7c86c90` fed into `pruneHistoryForContextShare()` on the fix branch:\n\n```\nInput:\n  [0] role=user    content=[这个问题帮我看看]\n  [1] role=assistant content=[thinking, toolCall:toolu_..._8f2aa84c]  ← ORPHANED\n  [2] role=assistant content=[]  model=gpt-5  stopReason=stop\n  [3] role=user    content=[xxxxx... 20000 chars]\n  [4] role=user    content=[xxxxx... 20000 chars]\n  [5] role=user    content=[xxxxx... 20000 chars]\n\nOutput (droppedChunks=2):\n  [0] role=user content=[xxxxx...]\n\nValidation:\n  Orphaned toolCall blocks remaining: 0\n  ✅ PASS: toolu_c8b41a5a51b6469b8f2aa84c dropped\n           — compaction would NOT send invalid transcript to provider\n```\n\nThe aborted turn is removed by `repairToolUseResultPairing({ erroredAssistantResultPolicy: \"drop\" })` before reaching `summarizeInStages` or the upstream provider.\n\n## Tests\n\n- **`compaction-safeguard.test.ts`**: `uses repaired no-drop prune output for summarization` — aborted turn with `stopReason: \"aborted\"` is dropped entirely; only the follow-up user message reaches `summarizeInStages`\n- **`compaction-safeguard.test.ts`**: `repairs orphaned tool_use in pruned.messages when chunks are dropped` — no unpaired `toolCall` reaches `summarizeInStages` on the drop path\n- All 194 existing tests pass\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Provider-side timeout aborts an assistant turn mid-flight leaving an orphaned `toolCall` block (no matching `toolResult`). On the next compaction cycle the broken pair is passed to the LLM summarizer and then to the provider, which returns `ValidationException: tool_use ids found without tool_result blocks`, permanently breaking the session. Observed in session `a7c86c90-f74b-41a9-980b-70a4c6fb8570` on 2026-06-15: session was unresponsive for 8 hours.\n\n- **Real environment tested:** macOS arm64, OpenClaw repo `/Users/guosong/Desktop/Sina/Code/openclaw`, fix branch `642e2c1435`, Node.js v23.11.0\n\n- **Exact steps or command run after this patch:**\n```\ncd /Users/guosong/Desktop/Sina/Code/openclaw\ngit checkout fix/93321-repair-orphaned-tool-use-on-compaction  # branch: 642e2c1435\nnode --import tsx -e \"\n  import { pruneHistoryForContextShare } from './src/agents/compaction-planning.js';\n  const msgs = [\n    { role: 'user', content: 'check cluster', timestamp: 1781514200000 },\n    { role: 'assistant', content: [{ type: 'toolCall', id: 'toolu_c8b41a5a51b6469b8f2aa84c', name: 'message', arguments: { action: 'send' } }], provider: 'anthropic', model: 'claude-sonnet-4-6', timestamp: 1781514253833 },\n    { role: 'assistant', content: [], provider: 'openai-gateway', model: 'gpt-5', stopReason: 'stop', timestamp: 1781514254223 },\n    { role: 'user', content: 'x'.repeat(20000), timestamp: 1781514300000 },\n    { role: 'user', content: 'x'.repeat(20000), timestamp: 1781514360000 },\n    { role: 'user', content: 'x'.repeat(20000), timestamp: 1781514420000 },\n  ];\n  const r = pruneHistoryForContextShare({ messages: msgs, maxContextTokens: 10000, maxHistoryShare: 0.5, parts: 2 });\n  const orphans = r.messages.flatMap(m => Array.isArray(m.content) ? m.content : []).filter(b => b.type === 'toolCall').filter(b => !r.messages.some(m => m.toolCallId === b.id));\n  console.log('droppedChunks:', r.droppedChunks);\n  console.log('kept messages:', r.messages.map(m => m.role));\n  console.log('orphaned toolCall blocks remaining:', orphans.length);\n  console.log(orphans.length === 0 ? 'PASS' : 'FAIL');\n\"\n```\n\n- **Evidence after fix:** Terminal output from fix branch running against real session data (session `a7c86c90`, toolCall `toolu_c8b41a5a51b6469b8f2aa84c` extracted from live JSONL):\n```\ndroppedChunks: 2\nkept messages: [ 'user' ]\norphaned toolCall blocks remaining: 0\nPASS\n```\n\n- **Observed result after fix:** The aborted assistant turn containing `toolu_c8b41a5a51b6469b8f2aa84c` is dropped by `repairToolUseResultPairing({ erroredAssistantResultPolicy: \"drop\" })` before reaching `summarizeInStages`. No orphaned `toolCall` blocks remain in the kept messages. The compaction call to the upstream provider would succeed, and the session would recover. This matches the existing behaviour in the prompt-send sanitizer path which already applies `erroredAssistantResultPolicy: \"drop\"`.\n\n- **What was not tested:** Full end-to-end compaction LLM call with live provider credentials; end-to-end session recovery after the compaction cycle completes. The fix operates at the message preparation layer; the after-fix terminal output above confirms the broken message sequence is repaired before it would reach any provider.\n",
+        "branch": "fix/93321-repair-orphaned-tool-use-on-compaction",
+        "head_sha": "642e2c1435d8d553219c9eccec575c0e928ce4ff",
+        "author": "dolphinsboy",
         "labels": [
+          "agents",
           "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
+          "proof: supplied"
         ],
         "files": [
           {
-            "path": "src/cron/service.startup-overflow-clobber.test.ts",
-            "additions": 113,
+            "path": "src/agents/agent-hooks/compaction-safeguard.test.ts",
+            "additions": 149,
             "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/service/jobs.ts",
-            "additions": 8,
-            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service/ops.ts",
-            "additions": 5,
+            "path": "src/agents/agent-hooks/compaction-safeguard.ts",
+            "additions": 12,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service/timer.ts",
-            "additions": 4,
-            "deletions": 3,
+            "path": "src/agents/compaction-planning.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/compaction.test.ts",
+            "additions": 23,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 4,
-        "additions": 130,
-        "deletions": 6,
+        "additions": 193,
+        "deletions": 4,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93810",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93810.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93584",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93584.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 162,
-          "gatingTotal": 157,
+          "total": 168,
+          "gatingTotal": 163,
           "counts": {
             "SUCCESS": 135,
-            "SKIPPED": 24,
-            "FAILURE": 2,
+            "SKIPPED": 32,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2193,
+    "total_ms": 8285,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 498
+        "ms": 3067
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1481
+        "ms": 1868
       },
       {
         "name": "classify_commands",
@@ -164,11 +170,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 201
+        "ms": 3323
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
