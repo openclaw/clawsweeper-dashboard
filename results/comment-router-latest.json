@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T05:08:08.137Z",
+  "generated_at": "2026-06-17T05:08:40.616Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T02:08:07.667Z",
+  "since": "2026-06-17T02:08:39.293Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    93686
+    93922
   ],
-  "comment_ids": [
-    4726245694
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,63 +31,104 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:93686:4726245694:2026-06-17T05:06:10Z:re_review",
-      "comment_id": "4726245694",
-      "comment_version_key": "4726245694:2026-06-17T05:06:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93686#issuecomment-4726245694",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93922:4726216755:2026-06-17T05:08:36Z:clawsweeper_needs_human",
+      "comment_id": "4726216755",
+      "comment_version_key": "4726216755:2026-06-17T05:08:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93922#issuecomment-4726216755",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 93686,
-      "author": "zhangguiping-xydt",
-      "author_id": 275915537,
+      "issue_number": 93922,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T05:06:10Z",
-      "comment_updated_at": "2026-06-17T05:06:10Z",
+      "comment_created_at": "2026-06-17T05:02:16Z",
+      "comment_updated_at": "2026-06-17T05:08:36Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=f204a9e2ca1beade84e0e18500c27e21bb569df1)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "f204a9e2ca1beade84e0e18500c27e21bb569df1",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "[Bug]: Session stuck in permanent busy state after mid-turn gateway restart — no auto-recovery, only /new or /reset clears it",
+        "body": "## Summary\n\n- Add `clearStaleAbortedRunFlags()` function that scans all session stores and clears `abortedLastRun=true` from any session still in `status=running` state\n- Call it after all retry recovery attempts are exhausted (`attempt >= maxRetries` with `result.failed > 0`)\n- Call it on the error/catch path of the recovery scheduler\n- Previously, sessions with `abortedLastRun=true` and `status=running` would remain permanently stuck after recovery retries exhausted — `assemble()` would fire indefinitely but dispatch zero LLM completions\n\nFixes #92519\n\n## Linked context\n\nRoot cause analysis: When a gateway restart interrupts a mid-turn LLM completion, the ongoing session gets marked with `abortedLastRun=true` by the restart recovery mechanism. The recovery scheduler (`scheduleRestartAbortedMainSessionRecovery`) then runs `recoverStartupOrphanedMainSessions` with exponential backoff retries.\n\nIn the original code, when all retries are exhausted:\n1. The `.then()` handler only checks `attempt < maxRetries` — if exceeded, it does nothing\n2. The `.catch()` handler only retries if `attempt < maxRetries` — otherwise logs \"gave up\" and stops\n\nNo cleanup is performed in either case. The session remains with `abortedLastRun=true` AND `status=running` indefinitely, creating a zombie state:\n- `assemble()` sees `status=running` → fires the turn\n- But `abortedLastRun=true` causes dispatch to skip LLM completions\n- Session is permanently \"busy\" until user runs `/new` or `/reset`\n\nThe fix adds `clearStaleAbortedRunFlags()` which does the final cleanup: scan all session stores and delete the `abortedLastRun` flag from any session still stuck in \"running\" state, allowing normal message processing to resume.\n\nRelated code paths:\n- `src/agents/main-session-restart-recovery.ts`: `scheduleRestartAbortedMainSessionRecovery()` retry loop\n- `src/agents/main-session-restart-recovery.ts`: `recoverStore()` marks sessions with `abortedLastRun=true`\n- `src/agents/main-session-restart-recovery.ts`: `clearStaleAbortedRunFlags()` — new function\n\n## Real behavior proof\n\n**Behavior addressed**:\nAfter restart recovery retries are exhausted, sessions stuck with `abortedLastRun=true` and `status=running` are now automatically unstuck. The `clearStaleAbortedRunFlags()` function scans session stores and clears the stale flag, allowing normal message processing to resume without requiring `/new` or `/reset`.\n\n**Real environment tested**:\n- **Runtime**: node v25.9.0 on Linux 6.8.0-124-generic x64\n- **Gateway**: local mode, port 18789, 8 plugins loaded, OpenClaw v2026.6.2\n- **Git**: branch `feat/issue-92519-bug-session-stuck-in-permanent-busy-stat` at 1f022870f7f\n- **Build**: `pnpm build` passed\n\n**Exact steps or command run after this patch**:\n\n```bash\n# 1. Verify the fix function exists in compiled output\ngrep -n 'clearStaleAbortedRunFlags' dist/*main-session-restart-recovery*.js\n\n# 2. Create a session store with stuck sessions (simulating mid-turn restart)\nmkdir -p /tmp/test/agents/main/sessions\ncat > /tmp/test/agents/main/sessions/sessions.json <<'JSON'\n{\"agent:main:main\":{\"status\":\"running\",\"abortedLastRun\":true},\n \"agent:main:session:stuck-1\":{\"status\":\"running\",\"abortedLastRun\":true},\n \"agent:main:session:normal-1\":{\"status\":\"done\"}}\nJSON\n\n# 3. Apply clearStaleAbortedRunFlags logic and check before/after\npython3 -c \"\nimport json\nwith open('/tmp/test/agents/main/sessions/sessions.json') as f:\n    store = json.load(f)\nfor k, v in store.items():\n    print(f'{k}: status={v.get(\"status\")}, abortedLastRun={v.get(\"abortedLastRun\")}')\n\"\n```\n\n**After-fix evidence**:\n\n```\n=== EVIDENCE 1: Fix compiled into production bundle ===\n$ grep -n 'clearStaleAbortedRunFlags' dist/*main-session-restart-recovery*.js\ndist/main-session-restart-recovery-BD_Y5P82.js:526:async function clearStaleAbortedRunFlags(params) {\ndist/main-session-restart-recovery-BD_Y5P82.js:553:    else if (result.failed > 0 && attempt >= maxRetries) clearStaleAbortedRunFlags({\ndist/main-session-restart-recovery-BD_Y5P82.js:563:        clearStaleAbortedRunFlags({\n\n=== EVIDENCE 2: Before/after — fix directly unsticks stuck sessions ===\n=== BEFORE (stuck state after mid-turn gateway restart) ===\n  agent:main:main: status=running, abortedLastRun=True    ← stuck\n  agent:main:session:stuck-1: status=running, abortedLastRun=True  ← stuck\n  agent:main:session:normal-1: status=done    ← normal\n\n=== AFTER clearStaleAbortedRunFlags() ===\nCleared: 2 session(s)\n  agent:main:main: status=running, abortedLastRun=undefined  ← unstuck ✓\n  agent:main:session:stuck-1: status=running, abortedLastRun=undefined  ← unstuck ✓\n  agent:main:session:normal-1: status=done  ← untouched ✓\n\n=== EVIDENCE 3: Gateway startup recovery log ===\nWARN:  marked interrupted main session failed: agent:main:main (transcript tail is not resumable)\nWARN:  marked interrupted main session failed: agent:main:session:stuck-test-001 (transcript tail is not resumable)\nINFO:  main-session restart recovery complete: recovered=0 failed=2 skipped=0\n\n=== EVIDENCE 4: Unit tests pass ===\n$ pnpm vitest run src/agents/main-session-restart-recovery.test.ts\n Test Files  2 passed (2)\n      Tests  50 passed (50)\n```\n\n**Observed result after the fix**:\nThe fix compiles into the production agent bundle at 3 call sites (function definition + 2 call sites). When recovery retries exhaust (attempt >= maxRetries with failed > 0), `clearStaleAbortedRunFlags` scans all session stores and clears `abortedLastRun` from any session with `status=running`. Before/after simulation confirmed: 2/2 stuck sessions became unstuck, 1 normal session untouched. Gateway startup recovery correctly logs detected stuck sessions. Next incoming message triggers a normal agent turn instead of being blocked by the stale recovery marker.\n\n**What was not tested**:\nA live Telegram mid-turn gateway restart with an active session. This requires Telegram bot credentials and a destructive gateway-kill test. The mechanism is verified through: (1) compiled function presence in production bundle, (2) direct before/after simulation on session store, (3) gateway startup recovery logging, (4) unit test coverage (50/50).\n\n**ClawSweeper review response**:\n- [P1] \"Preserve the recovery marker after failed retries\" — The fix only clears `abortedLastRun` from sessions where `status=running` AND `abortedLastRun=true` (the exact zombie state). A genuinely active session (running without abortedLastRun) is never touched. This is a safety net for exhausted retries.\n- [P1] \"Use the recovery eligibility filters before clearing markers\" — Uses `resolveRestartRecoveryStorePaths()`, the same path resolution as recovery itself.\n- [P1] \"Proof needs actual mid-turn restart + follow-up message\" — Direct session store before/after provides end-to-end proof of the fix's logic. Combined with compiled output and gateway recovery logging, the fix is verified across all layers.\n\n```bash\n# Run restart recovery unit tests\npnpm vitest run src/agents/main-session-restart-recovery.test.ts\n```\n\nExpected: All tests pass. The new `clearStaleAbortedRunFlags` code path is exercised through the retry-exhaustion branches.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes`)\n- Sessions that previously required manual `/new` or `/reset` to recover from a mid-turn gateway restart will now auto-recover. Users see a warning log entry instead of a stuck session.\n\nDid config, environment, or migration behavior change? (`No`)\n- No config files, environment variables, or database migrations.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`No`)\n- The fix only clears an internal boolean flag on the session metadata object. It does not affect credentials, network, or execution.\n\nWhat is the highest-risk area?\n- Clearing `abortedLastRun` from a session that is genuinely still running (false positive). If the recovery retries exhaust but the session is still actively executing, clearing the flag could allow a concurrent turn to start.\n\nHow is that risk mitigated?\n- The function only clears `abortedLastRun` from sessions where `status=running` AND `abortedLastRun=true`. A genuinely active session would have `status=running` but NOT `abortedLastRun=true` (the flag is only set during recovery marking). The flag's presence combined with exhausted retries is the signal that the session is stale, not active.\n\n## Current review state\n\nWhat is the next action?\n- Maintainer review\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n- Nothing from author side. The fix is complete with real-behavior evidence from a running Gateway instance and compiled output verification.\n\nWhich bot or reviewer comments were addressed?\n- No prior review feedback on this PR.\n\n**Additional real-environment verification**:\n- **Runtime**: node v25.9.0 on Linux 6.8.0-124-generic x64\n- **Setup**: Live Gateway (port 18789), Telegram + Discord channels connected\n- **Test flow**:\n  1. User sent Telegram message → bot replied normally (session status: done)\n  2. Gateway killed mid-turn → session status: running, abortedLastRun=true\n  3. Gateway restarted with fix → recovery initiated\n  4. fix applies \\`clearStaleAbortedRunFlags()\\` after retries exhausted:\n     - Scans all session stores for sessions with status=running AND abortedLastRun=true\n     - Clears abortedLastRun → allows next incoming message to trigger fresh turn\n\n**Code change** (src/agents/main-session-restart-recovery.ts):\n- Added \\`clearStaleAbortedRunFlags()\\` called after all restart recovery retries exhausted\n- Session with abortedLastRun=true AND status=running → abortedLastRun cleared\n- Next incoming message triggers a fresh agent turn instead of blocked by stale recovery marker\n\n**Observed result after the fix**: Without fix, sessions with exhausted recovery retries stay permanently stuck (assemble() fires 300× with 0 LLM dispatches). With fix, abortedLastRun is cleared, session can process new messages.",
+        "branch": "feat/issue-92519-bug-session-stuck-in-permanent-busy-stat",
+        "head_sha": "f204a9e2ca1beade84e0e18500c27e21bb569df1",
+        "author": "lzyyzznl",
+        "labels": [
+          "agents",
+          "size: XS"
+        ],
+        "files": [],
+        "changedFiles": 0,
+        "additions": 0,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93922",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93922.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 11,
+          "gatingTotal": 6,
+          "counts": {
+            "SUCCESS": 7,
+            "SKIPPED": 4
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1839,
+    "total_ms": 1532,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 456
+        "ms": 243
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1067
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1370
+        "ms": 198
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
