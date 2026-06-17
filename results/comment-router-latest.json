@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T23:27:49.434Z",
+  "generated_at": "2026-06-17T23:29:42.232Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T20:27:45.313Z",
+  "since": "2026-06-17T20:29:41.919Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    93928
+    94288
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,127 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:93928:4736263062:2026-06-17T22:58:58Z:re_review",
-      "comment_id": "4736263062",
-      "comment_version_key": "4736263062:2026-06-17T22:58:58Z",
-      "comment_url": "https://github.com/openclaw/openclaw/issues/93928#issuecomment-4736263062",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93928,
-      "author": "yetval",
-      "author_id": 102706514,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T22:58:58Z",
-      "comment_updated_at": "2026-06-17T22:58:58Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-run",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "issue",
-        "state": "open",
-        "locked": false,
-        "title": "[BUG] drive list/info ignore pagination; info falsely reports File not found past page 1",
-        "body": "## Summary\nIn a Feishu drive folder with more files than one API page, `feishu_drive` `action: info` returns a false `File not found: <token>` for any file that lives beyond the first page, and `action: list` cannot retrieve any page after the first. Both surfaces ignore the `has_more` / `next_page_token` cursor the Lark API returns, so files past page 1 are silently inaccessible.\n\n## Environment\n- Commit: cc451f98cbae5cb1db24cb3e97bced6d58952f57 (origin/main at time of filing)\n- Surface: Feishu plugin `feishu_drive` tool, `list` and `info` actions (`extensions/feishu/src/drive.ts`, `extensions/feishu/src/drive-schema.ts`)\n\n## Steps to reproduce\n1. Have a Feishu drive folder with more files than fit in one `drive.file.list` page (the API signals this with `has_more: true` and a `next_page_token`).\n2. Call `feishu_drive` `action: info` with the `file_token` of a file that sorts onto page 2 or later.\n3. Or call `feishu_drive` `action: list` on that folder and try to fetch the next page.\n\n## Expected\n- `info` follows `has_more` / `next_page_token` until it finds the file, then returns its metadata.\n- `list` accepts a page cursor so the caller can page through the whole folder, and reports whether more pages remain.\n\n## Actual\n- `info` searches only the first page and throws `File not found: <token>` for any file past page 1, even though the file exists and the API advertised more pages.\n- `list` returns only the first page. The action schema exposes no `page_token`, so the returned `next_page_token` can never be fed back, and pages 2+ are unreachable.\n\n## Root cause\n`getFileInfo` (`extensions/feishu/src/drive.ts:356`) does a single first-page `.find()` and throws when absent, never following `has_more`:\n\n```ts\nasync function getFileInfo(client: Lark.Client, fileToken: string, folderToken?: string) {\n  // Use list with folder_token to find file info\n  const res = await client.drive.file.list({\n    params: folderToken ? { folder_token: folderToken } : {},\n  });\n  if (res.code !== 0) {\n    throw new Error(res.msg);\n  }\n\n  const file = res.data?.files?.find((f) => f.token === fileToken);\n  if (!file) {\n    throw new Error(`File not found: ${fileToken}`);\n  }\n  // ...\n}\n```\n\n`listFolder` (`extensions/feishu/src/drive.ts:331`) passes no `page_token` and the `list` action schema (`extensions/feishu/src/drive-schema.ts:25`) exposes none, so the `next_page_token` it does return at `drive.ts:352` can never be supplied on a follow-up call:\n\n```ts\nasync function listFolder(client: Lark.Client, folderToken?: string) {\n  const validFolderToken = folderToken && folderToken !== \"0\" ? folderToken : undefined;\n  const res = await client.drive.file.list({\n    params: validFolderToken ? { folder_token: validFolderToken } : {},\n  });\n  // ... returns next_page_token but the dispatch (drive.ts:770-773) accepts no cursor to send back\n}\n```\n\nThe Lark SDK `@larksuiteoapi/node-sdk` `drive.file.list` accepts `page_size` / `page_token` and returns `next_page_token` / `has_more` (and offers a `listWithIterator`). The plugin reads neither cursor field on this path.\n\n## Sibling surfaces\nThis is the direct sibling-class of the just-merged wiki pagination fix #37626 (commit 5f90f08957), which paginated `wiki.spaceNode.list` / `wiki.space.list` in `wiki.ts` + `wiki-schema.ts` but did not touch `drive.ts`. The same plugin's comment paths already paginate correctly: `list_comments` and `list_comment_replies` expose `page_size` + `page_token` in the schema (`drive-schema.ts:54-66`) and read `has_more` / `page_token` from the response (`drive.ts:486-487`, `519-520`). So the drive `list` / `info` omission is the lone un-paginated lister in the plugin. Checked the open Feishu PRs (tool-family gates, card/proactive send, topic queue, audit redaction, URL challenge, streaming card coalescing); none touch drive `list` / `info`.\n\n## Real behavior proof\nBehavior addressed: `feishu_drive` `info` must find a file that lives past the first `drive.file.list` page instead of falsely reporting `File not found`.\nReal environment tested: real `registerFeishuDriveTools` runtime driven end to end through the tool's `execute` dispatch and `getFileInfo`, with `client.drive.file.list` mocked to return the target on page 2 with `has_more: true` + `next_page_token`, at commit cc451f98cbae.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs extensions/feishu/src/drive.pagination.repro.test.ts` (the repro registers the real drive tool, calls `action: info` for a token that sorts to page 2, and asserts the lister is drained to 2 pages and the file is returned).\nEvidence after fix:\n```\n# OBSERVED (buggy, origin/main cc451f98cbae)\n FAIL  extensions/feishu/src/drive.pagination.repro.test.ts > info finds a file that lives past the first page\n AssertionError: expected \"vi.fn()\" to be called 2 times, but got 1 times\n   115|     expect(listMock).toHaveBeenCalledTimes(2);\n       |                      ^\n -> getFileInfo queried only page 1 (one list call) and threw \"File not found: target\";\n    list was never asked for page 2 despite has_more: true.\n\n# EXPECTED (correct behavior on identical inputs, with the local fix applied)\n Test Files  2 passed (2)\n      Tests  16 passed (16)\n -> getFileInfo drains has_more/next_page_token to page 2 (two list calls), finds and\n    returns the file. Existing drive.test.ts stays green (15 tests), 16 total.\n```\nObserved result after fix: on unmodified main, info silently fails for files past page 1 (list called once, throws File not found); draining pages following has_more/next_page_token fixes it without regressing existing drive behavior.\nWhat was not tested: not run against a live Feishu tenant; the proof drives the real plugin code path with the Lark `drive.file.list` response shape mocked rather than a live multi-page folder. The `list` action was not exercised in the automated repro (its defect is structural: the schema exposes no `page_token` cursor, shown above), only `info` was driven end to end.\n",
-        "author": "yetval",
-        "labels": [
-          "P2",
-          "clawsweeper:no-new-fix-pr",
-          "clawsweeper:source-repro",
-          "clawsweeper:linked-pr-open",
-          "impact:data-loss",
-          "issue-rating: 🦞 diamond lobster"
-        ],
-        "cluster_id": null,
-        "job_path": null,
-        "open_prs": [
-          "#94000",
-          "#94042"
-        ],
-        "issue_implementation_cluster_id": "issue-openclaw-openclaw-93928",
-        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-93928.md",
-        "mode": "autonomous"
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:93928:4729078790:2026-06-17T10:48:32Z:re_review",
-      "comment_id": "4729078790",
-      "comment_version_key": "4729078790:2026-06-17T10:48:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/issues/93928#issuecomment-4729078790",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93928,
-      "author": "yetval",
-      "author_id": 102706514,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T10:48:32Z",
-      "comment_updated_at": "2026-06-17T10:48:32Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-run",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4763,
+    "total_ms": 557,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 424
+        "ms": 303
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 372
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3313
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 632
+        "ms": 244
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
