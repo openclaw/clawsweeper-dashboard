@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T01:00:15.319Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-17T01:01:35.725Z",
+  "repo": "openclaw/clawhub",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-16T22:00:12.819Z",
+  "since": "2026-06-16T22:01:35.403Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    93823
+    2697
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,130 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93823:4724923171:2026-06-17T01:00:09Z:clawsweeper_needs_human",
-      "comment_id": "4724923171",
-      "comment_version_key": "4724923171:2026-06-17T01:00:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93823#issuecomment-4724923171",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93823,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T00:53:23Z",
-      "comment_updated_at": "2026-06-17T01:00:09Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] No automated code repair is needed; the remaining blocker is contributor real-behavior proof or maintainer override plus normal green-check gating.; Cleared: The diff only changes a WhatsApp text fallback expression and a colocated test, with no dependency, credential, CI, lockfile, or code-execution surface changes. (sha=001a57ba17059945ce38b2725f1a091ae5388a53)",
-      "review_summary": "The branch changes the WhatsApp auto-reply first-media failure fallback to resend the leading caption chunk directly and adds a two-chunk regression test.\n\nPR surface: Source 0, Tests +26. Total +26 across 2 files.\n\nReproducibility: yes. Source inspection of current main shows a deterministic path where a two-chunk reply loses the leading caption when the first media send fails; I did not run the test in this read-only review.",
-      "review_followup": "- [P1] No automated code repair is needed; the remaining blocker is contributor real-behavior proof or maintainer override plus normal green-check gating.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "001a57ba17059945ce38b2725f1a091ae5388a53",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(whatsapp): keep opening text chunk when first media fails on multi-chunk reply",
-        "body": "## Summary\n\nWhen a WhatsApp auto-reply is longer than the chunk limit (default 4000, so two or more chunks) and is sent with an image whose fetch or send fails (404, timeout, oversize), the opening chunk of the agent's answer is silently dropped. The user receives the second chunk, the \"Media failed\" warning, then the rest, but never the first chunk. The adapter still logs the reply as delivered, so the loss is invisible.\n\nSingle-chunk captions are unaffected, which is why this was not caught earlier: every existing test uses a one-chunk caption.\n\n## Root cause\n\n`extensions/whatsapp/src/auto-reply/deliver-reply.ts`. The leading text chunk is popped off `remainingText` and attached to the first media item as its caption:\n\n```ts\nconst remainingText = [...textChunks];\nconst leadingCaption = remainingText.shift() || \"\";\nawait sendMediaWithLeadingCaption({\n  mediaUrls: mediaList,\n  caption: leadingCaption,\n  ...\n```\n\nWhen the first media send fails, `onError` is called with `caption` set to that first chunk so it can be resurfaced as text. The fallback line (deliver-reply.ts:337) was:\n\n```ts\n// before\nconst fallbackTextParts = [remainingText.shift() ?? caption ?? \"\", warning].filter(Boolean);\n```\n\n`remainingText.shift()` is evaluated first. On a multi-chunk reply it returns the second chunk, which is truthy, so `?? caption` is never reached and the first chunk (the caption) is discarded. It also consumes the second chunk from `remainingText`, but the trailing loop below re-sends the rest, so only the first chunk is lost. On a single-chunk reply `remainingText` is empty, `shift()` is `undefined`, and `?? caption` resurfaces the only chunk, which is why the existing behavior looked correct.\n\n## Fix\n\n```ts\n// after\nconst fallbackTextParts = [caption ?? \"\", warning].filter(Boolean);\n```\n\n`caption` already holds the first chunk that was attached to the failed media item, so resurfacing it is exactly what the fallback intends. The trailing loop (`for (const chunk of remainingText)`) already sends every remaining chunk, so dropping the stray `shift()` here both restores the opening chunk and keeps the rest intact.\n\n## Why this is the right boundary\n\nThe defect is entirely in the first-media `onError` text fallback. The trailing-media branch (`isFirst === false`) was added by PR #93334 and is untouched and unaffected: it sends a fixed \"Media unavailable.\" notice and never handled caption text. The trailing-text loop that emits the remaining chunks is unchanged. No other channel reuses this WhatsApp-local fallback. Single-chunk behavior is preserved (`caption` resurfaces the only chunk exactly as before).\n\n## Verification\n\n- New regression test `delivers the opening text chunk when the first media fails on a multi-chunk reply` fails on pristine main and passes with the patch.\n- `node scripts/run-vitest.mjs extensions/whatsapp/src/auto-reply/deliver-reply.test.ts`\n  - pristine main: `Tests 1 failed | 29 passed (30)`, failure `expected 'BRAVOLINE\\n⚠️ Media failed.' to contain 'ALPHALINE'`\n  - with patch: `Tests 30 passed (30)`\n- `node scripts/run-oxlint.mjs <changed files>`: clean\n- `oxfmt --check <changed files>`: new code conforms (oxfmt 0.52.0)\n- `node scripts/run-tsgo.mjs -p extensions/whatsapp/tsconfig.json`: exit 0\n\n## Real behavior proof\n\nBehavior addressed: On a multi-chunk WhatsApp reply whose first media send fails, the opening text chunk is now delivered instead of dropped.\nReal environment tested: Drove the real `deliverWebReply` end to end with a two-chunk reply (textLimit 9, text \"ALPHALINEBRAVOLINE\") and an image whose send rejects, capturing the actual sequence of `platform.reply` calls on pristine main and on the patched tree with identical inputs.\nExact steps or command run after this patch: ran the production `deliverWebReply` via vitest with the media send forced to reject, serializing every reply argument to a file for each tree.\nEvidence after fix:\n```\n# BEFORE (pristine main e17297f7dc) - observed reply sequence\n[\n  \"BRAVOLINE\\n⚠️ Media failed.\"\n]\n# AFTER (this patch, identical inputs) - observed reply sequence\n[\n  \"ALPHALINE\\n⚠️ Media failed.\",\n  \"BRAVOLINE\"\n]\n```\nObserved result after fix: The opening chunk \"ALPHALINE\" is delivered with the warning, followed by \"BRAVOLINE\"; no chunk is lost.\nWhat was not tested: No live WhatsApp transport round-trip; the media transport boundary was driven through the existing test harness rather than a real Baileys socket.\n",
-        "branch": "fix/whatsapp-multichunk-first-media-fallback",
-        "head_sha": "001a57ba17059945ce38b2725f1a091ae5388a53",
-        "author": "yetval",
-        "labels": [
-          "channel: whatsapp-web",
-          "size: XS",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/whatsapp/src/auto-reply/deliver-reply.test.ts",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/auto-reply/deliver-reply.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 27,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93823",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93823.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "gatingTotal": 157,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 126,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2746,
+    "total_ms": 521,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 285
+        "ms": 311
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2203
-      },
-      {
-        "name": "classify_commands",
         "ms": 1
       },
       {
+        "name": "classify_commands",
+        "ms": 0
+      },
+      {
         "name": "execute_commands",
-        "ms": 239
+        "ms": 199
       },
       {
         "name": "append_ledger",
