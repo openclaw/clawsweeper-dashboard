@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T07:51:33.047Z",
+  "generated_at": "2026-06-17T07:52:27.161Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T04:51:30.322Z",
+  "since": "2026-06-17T04:52:26.584Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     93975
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4727358492
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -62,111 +64,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(plugins): detect orphan diagnostics with explicit code marker (2-part fix)",
-        "body": "## Problem\n\nWhen a plugin is removed but its path remains in `plugins.load.paths`,\ndiscovery.ts emits \"plugin path not found\" diagnostics without `pluginId`.\nThese orphan diagnostics persist in SQLite `diagnostics_json` across\nrestarts, but `hasStalePersistedPluginDiagnostics()` fails to detect\nthem as stale. The stale persisted index then blocks Gateway startup\nwith config validation errors.\n\n## Root Cause -- Two Bugs, Both Required\n\n### Bug 1: Imprecise stale detection (`plugin-registry-snapshot.ts`)\n\nThe original `!pluginId` blanket rule would mark legitimate diagnostics\nwithout pluginId (e.g. source-overlay warnings) as stale, causing\nperpetual rediscovery on every startup.\n\n### Bug 2: Zod schema strips `code` field (`installed-plugin-index-store.ts`)\n\n`PluginDiagnosticSchema` was missing the optional `code` field. Zod default\nstrip mode silently drops unknown fields during `safeParseWithSchema`,\nso even after Bug 1 was fixed, the `code: \"orphan-source-path\"` marker\nwas lost during the SQLite read-write round-trip.\n\n## Fix (3 commits)\n\n### `74b3e4d` -- Explicit code marker\n- `discovery.ts`: tag orphan diagnostics with `code: \"orphan-source-path\"`\n- `manifest-types.ts`: add `\"orphan-source-path\"` to `PluginDiagnosticCode`\n- `plugin-registry-snapshot.ts`: check `diag.code === \"orphan-source-path\"`\ninstead of the blanket `!pluginId` rule\n- `plugin-registry-snapshot.test.ts`: updated/added test cases\n\n### `79ea25d` -- Zod schema round-trip fix\n- `installed-plugin-index-store.ts`: add `code: z.string().optional()` to\n`PluginDiagnosticSchema` so the `code` field survives read-write round-trip\n\n### `5e71b53` -- Lint fix\n- Remove unused test helper `expectDiagnosticsContainSource`\n\n## Verification\n\n- [x] Unit tests: 20/20 passed (`plugin-registry-snapshot.test.ts`)\n- [x] No production impact, isolated environment cleaned up\n- [x] Bishop review: approved\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Orphan diagnostics from removed plugins\nblock Gateway startup because `hasStalePersistedPluginDiagnostics()` fails\nto detect them as stale, causing the persisted index to be used directly\nfor config validation (which fails because paths are missing).\n\n- **Real environment tested**: Windows Server 2019 (Build 17763), Node.js\nv24.16.0, isolated OpenClaw environment with 5-variable isolation\n(`OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`,\n`OPENCLAW_DISABLE_BUNDLED_PLUGINS=1`, `HOME`) on port 18790.\n\n- **Exact steps or command run after this patch**:\n1. Generate orphan diagnostic by configuring a plugin path that does not exist\n2. `loadInstalledPluginIndex()` generates diagnostic with\n   `code: \"orphan-source-path\"`\n3. `writePersistedInstalledPluginIndexSync()` persists to SQLite\n4. `readPersistedInstalledPluginIndexSync()` reads back from SQLite\n5. `loadPluginRegistrySnapshotWithMetadata()` gets snapshot\n6. Verify snapshot `source` is `\"derived\"` (stale detected, re-derived index)\n\n- **Evidence after fix**:\n\nThe `code` field survives the full SQLite write-read round-trip:\n\n```\n=== Phase 1: Generated diagnostic ===\n{\n  \"level\": \"error\",\n  \"message\": \"plugin path not found: C:\\\\Users\\\\...\\\\gone-plugin\",\n  \"source\": \"C:\\\\Users\\\\...\\\\gone-plugin\",\n  \"code\": \"orphan-source-path\"\n}\n\n=== Phase 2: After write-read round-trip (fix applied) ===\n{\n  \"level\": \"error\",\n  \"message\": \"plugin path not found: C:\\\\Users\\\\...\\\\gone-plugin\",\n  \"source\": \"C:\\\\Users\\\\...\\\\gone-plugin\",\n  \"code\": \"orphan-source-path\"\n}\ncode field preserved: YES\n\n=== Phase 3: Snapshot metadata ===\nsource: derived\n\n=== VERDICT ===\nFIX VERIFIED: code field preserved round-trip AND stale detection triggered.\n```\n\nGateway startup after fix (console output):\n\n```\n[plugin-registry-snapshot] persisted registry has stale persisted\nsource (orphan plugin diagnostics detected)\n[plugin-registry-snapshot] derived new registry index\n```\n\nSQLite `diagnostics_json` contains the `code` field:\n\n```json\n[\n  {\n    \"level\": \"error\",\n    \"message\": \"plugin path not found: C:\\\\Users\\\\...\\\\gone-plugin\",\n    \"source\": \"C:\\\\Users\\\\...\\\\gone-plugin\",\n    \"code\": \"orphan-source-path\"\n  }\n]\n```\n\nWithout fix 2 (Zod schema missing `code`), the field was silently\nstripped by Zod default strip mode during `safeParseWithSchema`.\n\n- **Observed result after fix**: Gateway starts successfully with stale\norphan diagnostics in persisted index. The\n`persisted-registry-stale-source` diagnostic is emitted, registry is\nre-derived, and orphan diagnostic entries are cleaned up on the next\nindex write.\n\n- **What was not tested**: Production environment (intentionally avoided).\nCross-platform behavior (macOS/Linux) -- same logic applies but not\nexplicitly tested on those platforms.\n\n## Changes\n\n- `src/plugins/manifest-types.ts`\n- `src/plugins/discovery.ts`\n- `src/plugins/plugin-registry-snapshot.ts`\n- `src/plugins/plugin-registry-snapshot.test.ts`\n- `src/plugins/installed-plugin-index-store.ts`",
-        "branch": "fix/plugin-diagnostics-orphan-cleanup-v2",
-        "head_sha": "5e71b536963b457f0d89917569168d717b3d5b62",
-        "author": "ralf003",
-        "labels": [
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/plugins/discovery.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/installed-plugin-index-store.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/manifest-types.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/plugin-registry-snapshot.test.ts",
-            "additions": 46,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/plugin-registry-snapshot.ts",
-            "additions": 19,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 69,
-        "deletions": 18,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93975",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93975.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 168,
-          "gatingTotal": 163,
-          "counts": {
-            "SUCCESS": 135,
-            "CANCELLED": 1,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2933,
+    "total_ms": 1154,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 274
+        "ms": 564
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2438
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 196
+        "ms": 577
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
