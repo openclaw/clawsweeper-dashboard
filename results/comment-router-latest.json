@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T04:57:23.824Z",
+  "generated_at": "2026-06-17T04:57:34.522Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T01:57:21.054Z",
+  "since": "2026-06-17T01:57:29.452Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    93812
+    93944
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4726148362
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93812:4726044353:2026-06-17T04:57:17Z:clawsweeper_needs_human",
-      "comment_id": "4726044353",
-      "comment_version_key": "4726044353:2026-06-17T04:57:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93812#issuecomment-4726044353",
+      "idempotency_key": "comment-router:openclaw/openclaw:93944:4726148362:2026-06-17T04:55:31Z:re_review",
+      "comment_id": "4726148362",
+      "comment_version_key": "4726148362:2026-06-17T04:55:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93944#issuecomment-4726148362",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 93812,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 93944,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T04:44:11Z",
-      "comment_updated_at": "2026-06-17T04:57:17Z",
+      "comment_created_at": "2026-06-17T04:55:31Z",
+      "comment_updated_at": "2026-06-17T04:55:31Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -62,136 +64,118 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix #89668: [Bug]: WebChat can leak internal browser tool commentary/debug text into user-visible replies",
-        "body": "## Summary\n\nFixes #89668.\n\nWebChat can leak internal browser tool commentary and debug text into user-visible assistant replies. The leak surfaces on two paths from the gateway to the WebChat client:\n\n1. `chat.history` assistant text blocks still contain raw Harmony plain-text tool-call scaffolding such as `commentary to=functions.browser code {\"action\":\"status\"}` and the namespaced variant `commentary to=functions.browser.commentary code {...}`.\n2. Live streaming `agent`/`chat` delta events broadcast the raw assistant text first and only sanitize afterwards, so a client that consumes the stream as it arrives still sees the scaffolding.\n\nThis change closes both paths by routing all assistant visible text through the existing `sanitizeAssistantVisibleText` helper, which already understands the namespaced `functions.browser` / `functions.browser.commentary` grammar introduced earlier in this PR.\n\n## Root Cause\n\n- **Root cause:** the root cause is that the chat-display projection that feeds WebChat `chat.history` and the embedded-agent-subscribe non-phase streaming delta branch both emitted assistant text constructed from raw model output without routing it through the canonical `sanitizeAssistantVisibleText` sanitizer, so raw Harmony plain-text tool-call scaffolding (`commentary to=functions.browser code {...}`, `commentary to=functions.browser.commentary code {...}`) reached the user verbatim on both the persisted history path and the live streaming path. The canonical sanitizer (the parser/normalizer in `src/shared/text/assistant-visible-text.ts`) already knew how to strip these forms because the underlying grammar mapping was extended earlier in this PR; the root cause was that two surfaces bypassed the contract and never invoked the canonical sanitizer, so the model-origin scaffolding leaked through unchanged.\n- **Why this is root-cause fix:** the fix routes both surfaces through the same canonical sanitizer (`sanitizeAssistantVisibleText` for history, `sanitizeAssistantVisibleStreamText` for streaming) that already governs every other assistant-visible-text surface, instead of bolting on a one-off string filter at either surface. The source-of-truth contract is \"assistant visible text is always sanitized through the canonical helper\"; this PR makes the two surfaces that violated that contract comply with it, so the same fix automatically inherits any future extension to the sanitizer grammar (e.g., new scaffolding forms) via the upstream parser, without further per-surface patches. Because the canonical sanitizer is the root source of truth, fixing the contract violation here is the root-cause fix rather than a downstream patch.\n\n## Changes\n\n- `src/gateway/chat-display-projection.ts`\n  - Add `sanitizeAssistantChatHistoryText` and `truncateChatHistoryDisplayText` helpers.\n  - Add `assistantVisibleText` option to `sanitizeChatHistoryContentBlock`; when set, assistant `text`/`content` is routed through `sanitizeAssistantChatHistoryText` instead of plain truncation.\n  - Route assistant top-level `entry.content`, array content blocks (with `assistantVisibleText: role === \"assistant\"`), `entry.text`, and `projectAssistantTextFromMixedToolContent` text blocks through the sanitizer.\n- `src/agents/embedded-agent-subscribe.handlers.messages.ts`\n  - In `handleMessageUpdate`'s recomputed branch and the non-phase `else` branch, run the assembled raw assistant text through `sanitizeAssistantVisibleStreamText` before computing `next` and `visibleDelta`, so streamed deltas never carry raw scaffolding.\n- Tests\n  - `src/gateway/server-methods/server-methods.test.ts`: regression covering `sanitizeChatHistoryMessages` stripping namespaced Harmony browser scaffolding from assistant history text blocks while preserving surrounding visible text.\n  - `src/agents/embedded-agent-subscribe.handlers.messages.test.ts`: regression covering non-phase streaming deltas emitting sanitized text only.\n\n## Review findings addressed\n\nNo actionable reviewer/bot/maintainer finding was present in the PR discussion. The linked issue (`#89668`) carries `clawsweeper:needs-live-repro`, which maps to a request for real behavior reproduction. The local gateway + WebChat RPC proof below addresses that request by reproducing the leak end-to-end against an isolated gateway built from this PR head and asserting both leak paths are closed.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** WebChat must not surface raw Harmony plain-text tool-call scaffolding (`commentary to=functions.browser code {...}` and `commentary to=functions.browser.commentary code {...}`) to a user viewing assistant replies. The leak was observable through both persisted chat history (`chat.history`) and live streaming delta events (`agent` stream=assistant, `chat` message assistant). Linked issue #89668 reports exactly this leak; this PR closes both surfaces.\n- **Real environment tested:** Linux x86_64. Isolated local OpenClaw gateway built from this PR head (`8d6efe75ace279d0383c549bf712ed3779b07a53` plus this commit) and spawned via `node scripts/run-with-env.mjs OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs gateway` with a throwaway `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, random auth token, loopback bind, and `dist/` rebuilt through `run-node.mjs`'s `dirty_watched_tree` path. A fake OpenAI-compatible HTTP provider (`/v1/chat/completions`, SSE streaming) bound to `127.0.0.1` returned the leak payload verbatim so the gateway truly ingested raw scaffolding. Client was Node.js 22 driving the same WebChat WebSocket RPC surface (`connect -> chat.send -> agent.wait -> chat.history`) that the browser Control UI uses, plus a passive listener recording every `agent`/`chat` event.\n- **Exact steps or command run after this patch:** `node proof.mjs` (driver at `local-e2e-proof-after-fix3/proof.mjs`). The driver (1) starts the fake provider and isolated gateway from a clean state dir; (2) opens a WebChat WebSocket and completes the `connect` handshake; (3) `chat.send` turn 1 prompting the provider to stream `MIXED-BEFORE\\ncommentary to=functions.browser code {\"action\":\"status\"}\\ncommentary to=functions.browser.commentary code {\"action\":\"status\"}\\nMIXED-AFTER`; (4) `agent.wait` until the run terminates, then `chat.history`; (5) `chat.send` turn 2 prompting the provider to stream `DOTTED-BEFORE\\ncommentary to=functions.browser.commentary code {\"action\":\"status\"}\\nDOTTED-AFTER`; (6) `agent.wait` + `chat.history`; (7) scans captured `chat.history` assistant texts, live `agent` stream=assistant events, and `chat` assistant events for the leak needles (`commentary to=functions.browser`, `functions.browser.commentary`, `functions.browser code`, `functions.browser`).\n- **Evidence after fix:** `local-e2e-proof-after-fix3/result.json` (verdict=PASS, all four leak needle scans clean), `local-e2e-proof-after-fix3/proof.mjs` (reproducible driver), `local-e2e-proof-after-fix3/gateway.log`, `local-e2e-proof-after-fix3/provider.log` (runtime logs from the isolated run).\n\n```text\n# fake provider streams back raw scaffolding\ncontent = \"MIXED-BEFORE\\ncommentary to=functions.browser code {\\\"action\\\":\\\"status\\\"}\\ncommentary to=functions.browser.commentary code {\\\"action\\\":\\\"status\\\"}\\nMIXED-AFTER\"\n# WebChat client drives a real turn\nws.connect -> chat.send(sessionKey=\"main\", message=...) -> agent.wait -> chat.history\n# assertions on the captured RPC + stream events\nhistoryLeaked=false   # chat.history assistant text has no leak needles\nstreamLeaked=false    # live agent/chat deltas have no leak needles\nmixedVisibleOk=true   # surrounding visible text preserved\n```\n\n- **Observed result after fix:** `providerSentRawNeedles=true` confirms the fake provider actually returned text containing `commentary to=functions.browser` and `functions.browser.commentary`, so the leak trigger condition is real. `historyLeaked=false`: `chat.history` assistant text blocks contain none of the leak needles; visible text collapses to `MIXED-BEFORE\\nMIXED-AFTER` and `DOTTED-BEFORE\\nDOTTED-AFTER`. `streamLeaked=false`: live `agent` (stream=assistant) and `chat` assistant events emit sanitized text only — no raw scaffolding reaches a streaming WebChat consumer. `mixedVisibleOk=true`, `dottedVisibleOk=true`: both scaffolding shapes (top-level `functions.browser` and namespaced `functions.browser.commentary`) are stripped while surrounding user-visible text is preserved. `agent.wait` for both turns returns `status: ok`, so the run genuinely executed the assistant path that triggers the sanitizer.\n- **What was not tested:** Live proof against a real model account or a real messaging transport (Telegram, Discord, Slack, iMessage, WhatsApp, Desktop, Mantis) was not executed; the fake OpenAI-compatible provider stands in for the model. The leak path is fully reproducible without a real model, so this disclosure is about transport/account coverage, not about whether the fix holds. The Harmony plain-text tool-call parser and the canonical `sanitizeAssistantVisibleText` implementation are unchanged in this commit; they were already introduced earlier in this PR and are reused as-is.\n\n## Maintainer-ready checklist\n\n- **Fix classification:** root-cause fix — closes two assistant-visible-text surfaces (chat history projection, embedded agent subscribe non-phase streaming) that bypassed the canonical sanitizer, by routing both through the same sanitizer instead of adding a one-off filter at either surface.\n- **Maintainer-ready confidence:** high — the leak is reproducible end-to-end against an isolated gateway with a fake provider that emits raw scaffolding, and the post-fix run shows all four leak needle scans clean on both surfaces with surrounding visible text preserved.\n- **Why it matters / User impact:** any WebChat user viewing an assistant reply that happened to contain a Harmony plain-text browser tool-call fragment would see internal scaffolding like `commentary to=functions.browser code {\"action\":\"status\"}` in the persisted history and during live streaming. This is the exact symptom in issue #89668; closing both surfaces restores the contract that assistant visible text is always sanitized.\n- **What did NOT change:** the Harmony plain-text tool-call parser (`packages/tool-call-repair/`), the canonical sanitizer implementation in `src/shared/text/assistant-visible-text.ts`, any public API/schema/protocol/wire format/default value/migration/compatibility surface, and all non-WebChat delivery paths (Telegram, Discord, Slack, iMessage, WhatsApp, Desktop, Mantis) are out of scope and unchanged. The scope only adds sanitizer calls at two surfaces that previously bypassed it.\n- **Architecture / source-of-truth check:** `src/gateway/chat-display-projection.ts` is a projection/mirror path that derives WebChat display data from session state — it does not feed back into the model-consumed transcript, so routing its assistant text through the canonical sanitizer is a presentation-layer fix, not a change to the source-of-truth contract. The streaming handler change likewise only affects what is broadcast to WebChat clients, not what is persisted to the model-consumed transcript. The canonical sanitizer remains the single source of truth for what assistant text is allowed to be visible.\n- **Target test file:** `src/gateway/server-methods/server-methods.test.ts` and `src/agents/embedded-agent-subscribe.handlers.messages.test.ts` cover the two surfaces respectively.\n- **Scenario locked in:** assistant history text block containing mixed top-level `commentary to=functions.browser` and namespaced `commentary to=functions.browser.commentary` scaffolding surrounded by visible text must collapse to just the surrounding visible text in `chat.history`, and live streaming `agent`/`chat` deltas must emit only the sanitized text.\n- **Why this is the smallest reliable guardrail:** the regression tests pin the exact leak payload from issue #89668 (both top-level and namespaced forms) at each surface and assert both leak needles are gone while surrounding visible text survives, so a regression that re-introduces either scaffolding form at either surface fails the test immediately.\n\n## Patch quality notes\n\n- **Patch quality notes:** the patch-quality scanner reports `default_return_added` warnings on `packages/tool-call-repair/src/stream-normalizer.ts` and `src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.ts` (e.g., `return false;`, `return true;` lines added). These are early-return sentinels in the namespaced-tool-call promotion logic introduced earlier in this PR (commit `8d6efe75`), not in the files this commit changes; they short-circuit promotion when the candidate target name fails a structural check (e.g., `functions.browser` must contain a dot and match an allowlist entry), which is the intended contract — without the early return, malformed names would fall through to the legacy path and re-introduce the leak. They are not silent fallbacks masking missing behavior; they are explicit structural validators. This commit's own changes in `chat-display-projection.ts` and `embedded-agent-subscribe.handlers.messages.ts` add no new default returns; they route existing text through an existing sanitizer, so no new patch-quality smell is introduced.\n\n## Merge risk\n\n- **Risk labels considered:** availability, message-delivery, session-state (the three categories flagged by the patch-quality gate because this PR's files touch chat projection, agent subscribe handlers, and tool-call normalization).\n- **Risk explanation:** *availability* — the sanitizer runs on the gateway hot path for every assistant text block in `chat.history` and on every non-phase streaming delta; the sanitizer is linear in text length and already runs on the persisted-history write path, so the incremental cost is one linear scan per surface with no quadratic behavior, and the worst case (very long assistant text) is bounded by the existing chat-history text truncation. *message-delivery* — the streaming change alters what text is broadcast on the `agent`/`chat` events; the alteration only removes scaffolding that should never have been visible, and the regression test pins the exact post-fix delta, so a delivery regression would fail the test. *session-state* — the change does not touch persisted session transcript writes (only the projection derived from them and the streaming broadcast), so model-consumed context is unaffected; the session transcript contract is unchanged.\n- **Why acceptable:** the change only narrows what is shown to WebChat users and inherits its behavior from an already-shipped canonical sanitizer; both surfaces have pinned regression tests, and the local gateway E2E proof confirms both leak paths are closed with surrounding visible text preserved. No new public API, schema, protocol, or compatibility surface is introduced.\n",
-        "branch": "feat/issue-89668",
-        "head_sha": "b1487e8f9547b56a9ffe9adece63c05edc4b3723",
-        "author": "mushuiyu886",
+        "title": "fix(cron): emit exhausted-unavailable-tool failure signal to suppress self-debug delivery (fixes #92535)",
+        "body": "# PR Body Skeleton — Issue #92535\n\n## Summary\n\n- **Problem**: Isolated cron can deliver internal unavailable-tool self-debug text (\"I can't use the tool...\") as normal chat output to Telegram, while recording the run as successful. The self-debug text then enters the transcript and can be persisted/amplified through memory and dreaming.\n- **Root Cause**: The unknown-tool guard in `guardUnknownToolLoopInMessage` (attempt.tool-call-normalization.ts:1077) converts exhausted unavailable-tool calls into plain assistant text. The cron outcome classifier in `hasRecoveringTerminalOutput` (helpers.ts:269) treats `normalizedFinalAssistantVisibleText !== undefined` as evidence of recovery, classifying the run as successful. No structured signal distinguishes \"model-authored self-debug about missing tools\" from a valid final answer.\n- **Fix**: Emit a structured exhausted-unavailable-tool terminal signal from the runner's unknown-tool loop detector when the threshold is exceeded. Cron checks this signal before classifying the run outcome — if the signal is present and fatal, mark the run as failed and suppress delivery.\n- **What changed**:\n  - `src/agents/embedded-agent-runner/types.ts` — extend `EmbeddedRunFailureSignal.kind` with `\"exhausted_unavailable_tool\"`, make `code` optional\n  - `src/agents/embedded-agent-runner/failure-signal.ts` — accept `exhaustedUnknownTool` param; when true + cron trigger → emit `exhausted_unavailable_tool` fatal signal\n  - `src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.ts` — export `UnknownToolLoopGuardState`, add `didExhaustUnknownTool` flag, wire `exhaustionRef` through stream wrapper\n  - `src/agents/embedded-agent-runner/run/attempt.ts` — create `exhaustionRef`, pass to stream wrapper, surface `exhaustedUnknownTool` in attempt result\n  - `src/agents/embedded-agent-runner/run/types.ts` — add `exhaustedUnknownTool?: boolean` to `EmbeddedRunAttemptResult`\n  - `src/agents/embedded-agent-runner/run.ts` — pass `attempt.exhaustedUnknownTool` to `resolveEmbeddedRunFailureSignal`\n  - `src/agents/embedded-agent-runner/failure-signal.test.ts` — add 2 regression tests for exhausted unknown-tool signal\n- **What did NOT change (scope boundary)**:\n  - Normal tool failure handling (other denial types, exec failures, model errors) — unchanged\n  - Telegram transport layer — not modified\n  - Non-cron delivery paths (interactive agent turns) — unchanged\n  - The unknown-tool guard's existing behavior of converting exhausted calls to assistant text — preserved for interactive contexts\n\n## Reproduction\n\n1. Configure an isolated cron job with `exec` tool access but without `process` tool\n2. The exec command starts a long-running shell process\n3. Cron polls and receives \"Command still running\" → the model is told to use `process` for follow-up\n4. The model calls `process`, which is unavailable → unknown-tool loop detection triggers\n5. After exceeding the threshold, `guardUnknownToolLoopInMessage` rewrites the tool call to plain assistant text: \"I can't use the tool 'process' here because it isn't available...\"\n6. `hasRecoveringTerminalOutput` sees `normalizedFinalAssistantVisibleText !== undefined` → run classified as successful\n7. **Before this PR**: The self-debug text is delivered to the chat channel as normal assistant output and appended to the topic transcript\n8. **After this PR**: The runner emits a structured exhausted-unavailable-tool terminal signal; cron recognizes it as fatal → run marked failed, delivery suppressed\n\n## Real behavior proof\n\n**Behavior or issue addressed (#92535)**: Before this fix, when the agent runner exhausts repeated unknown-tool calls the guard rewrites them into plain assistant text (e.g., \"I can't use the tool...\"), and the isolated cron outcome classifier treats that normalized text as evidence of recovery — delivering the self-debug text as normal chat output while recording the run as successful. After this fix, the runner emits a structured exhausted-unavailable-tool terminal signal, cron checks this signal before classifying the run outcome, and marks the run as failed when the signal is present — suppressing delivery of internal tool/runtime failure text.\n\n**Real environment tested**: Linux, Node 22 — Vitest with fake timers against `guardUnknownToolLoopInMessage`, `isSuccessfulCronPayload`, `hasRecoveringTerminalOutput`, `classifyCronRunOutcome`, `resolveCronPayloadOutcome`\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/failure-signal.test.ts src/agents/tool-loop-detection.test.ts src/cron/isolated-agent/helpers.test.ts`\n\n**Evidence after fix**:\n```text\n[test] starting test/vitest/vitest.unit-fast.config.ts\n RUN  v4.1.8 /home/0668001395/openclawProject1\n Test Files  1 passed (1)\n      Tests  10 passed (10)\n[test] passed 1 Vitest shard\n\n[test] starting test/vitest/vitest.cron.config.ts\n RUN  v4.1.8 /home/0668001395/openclawProject1\n Test Files  1 passed (1)\n      Tests  25 passed (25)\n[test] passed 1 Vitest shard\n\n[test] starting test/vitest/vitest.agents.config.ts\n RUN  v4.1.8 /home/0668001395/openclawProject1\n Test Files  1 passed (1)\n      Tests  59 passed (59)\n[test] passed 3 Vitest shards in 22.35s\n```\n\n**Observed result after fix**: The unknown-tool exhaustion detector emits a structured terminal signal (`exhaustedUnavailableTool: true`) when the repeat threshold is exceeded, instead of relying solely on the advisory text message. The cron outcome classifier checks for this signal in the failure payload — when `exhaustedUnavailableTool` is set, the run is marked as failed and delivery is suppressed. Normal tool failures and other denial signal types continue to work as before. The new regression test confirms: on origin/main the exhausted unavailable-tool run is incorrectly classified as successful (normalizedFinalAssistantVisibleText is truthy), while on the patched branch the run is correctly classified as failed (exhaustedUnavailableToolSignal is fatal).\n\n**What was not tested**: Live Gateway round-trip with real Telegram delivery was not tested — it requires a provisioned Telegram bot. The fix is verified at the unit level with Vitest against the runner's unknown-tool guard normalization and cron's outcome classification functions directly. The structured signal path from runner → cron is tested, but end-to-end delivery through the full Gateway pipeline to a real Telegram channel is not covered.\n\n**Repro confirmation**: The new regression test cases in failure-signal.test.ts do not exist on origin/main — the `resolveEmbeddedRunFailureSignal` function on main has no awareness of unknown-tool exhaustion and cannot detect when the guard has rewritten exhausted tool calls into self-debug assistant text. On the patched branch, the function accepts `exhaustedUnknownTool: true` and returns a structured `exhausted_unavailable_tool` fatal signal (`fatalForCron: true`), which `resolveCronPayloadOutcome` already checks to suppress delivery. Before: 8 test cases run (no exhaustion detection path exists). After: 10 test cases run (8 existing + 2 new regression cases for exhausted unknown-tool signal).\n\n## Regression Test Plan\n\n- `src/agents/tool-loop-detection.test.ts` — existing 59 tests (unchanged behavior: normal unknown-tool detection still works)\n- `src/cron/isolated-agent/helpers.test.ts` — new test case: exhausted unavailable-tool signal → cron outcome = fatal\n- `src/agents/embedded-agent-runner/run/attempt.test.ts` — existing tests for guardUnknownToolLoopInMessage (unchanged behavior: guard still converts exhausted calls to text for interactive contexts)\n\n## Root Cause\n\nThe bug sits at the intersection of two subsystems:\n\n1. **Agent Runner** (`tool-loop-detection.ts:581-590` + `attempt.tool-call-normalization.ts:1077-1083`): The unknown-tool loop detector instructs the model to \"stop retrying that missing tool and answer without it.\" The guard then rewrites the tool call into plain assistant text. This is intentional for interactive turns — the model should recover gracefully. But there's no structured signal marking this as an \"exhausted unavailable tool\" event vs. a genuine model answer.\n\n2. **Cron Outcome Classification** (`helpers.ts:269-278`): `hasRecoveringTerminalOutput` checks `normalizedFinalAssistantVisibleText !== undefined` as evidence of recovery. This correctly handles cases where the model produces a real answer after tool warnings. But it cannot distinguish \"model-authored self-debug about missing tools\" from a valid final answer — both are plain assistant text.\n\nThe fix bridges these two systems with a structured signal. The runner marks the exhausted-unavailable-tool event with a terminal flag. Cron checks this flag before accepting the assistant text as recovery evidence. This is the canonical fix recommended by ClawSweeper: \"Carry an explicit exhausted-unavailable-tool terminal signal from the agent runner into cron outcome classification.\"\n\n## Risk / Mitigation\n\n- **Risk**: The `exhaustedUnknownTool` flag relies on the stream guard wrapper detecting exhaustion inside `wrapStreamTrimToolCallNames`. If future refactoring replaces this wrapper, the detection may silently stop working.\n  **Mitigation**: The existing test suite (`failure-signal.test.ts`) directly tests `resolveEmbeddedRunFailureSignal` with `exhaustedUnknownTool: true`. If the flag stops being propagated, the explicit test coverage will not catch it — but the behavior regression (self-debug text delivered) would be a user-visible symptom caught by integration tests or user reports.\n- **Risk**: The `exhausted_unavailable_tool` failure signal is only emitted for `trigger === \"cron\"`. Non-cron interactive runs that also exhaust unknown tools will still produce the self-debug text, but this is intentional — interactive users can see and correct the behavior.\n  **Mitigation**: This is by design. The cron path is the delivery boundary where there is no human operator to notice the bad output.\n\n## Change Type (select all)\n\n- [x] Bug fix\n\n## Scope (select all touched areas)\n\n- [x] agents (agent runner failure signal + stream guard)\n- [x] cron (isolated agent outcome classification — downstream consumer)\n\n## Review Findings Addressed\n\nN/A (initial submission)\n\n## Linked Issue/PR\n\nFixes #92535\n",
+        "branch": "fix/issue-92535-cron-unknown-tool-signal",
+        "head_sha": "582b994715ea296f6922f4c0f1c679b6ec91e290",
+        "author": "zenglingbiao",
         "labels": [
-          "gateway",
           "agents",
-          "size: M",
+          "size: S",
           "proof: supplied"
         ],
         "files": [
           {
-            "path": "packages/tool-call-repair/src/grammar.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/tool-call-repair/src/payload.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/tool-call-repair/src/stream-normalizer.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers.sanitizeuserfacingtext.test.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.test.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.ts",
-            "additions": 55,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.handlers.messages.test.ts",
-            "additions": 47,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.handlers.messages.ts",
-            "additions": 10,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/chat-display-projection.ts",
-            "additions": 47,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/server-methods.test.ts",
+            "path": "src/agents/embedded-agent-runner/failure-signal.test.ts",
             "additions": 28,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugin-sdk/tool-payload.test.ts",
-            "additions": 24,
+            "path": "src/agents/embedded-agent-runner/failure-signal.ts",
+            "additions": 11,
             "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.ts",
+            "additions": 14,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/types.ts",
+            "additions": 2,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 11,
-        "additions": 276,
-        "deletions": 27,
+        "changedFiles": 7,
+        "additions": 60,
+        "deletions": 5,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93812",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93812.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93944",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93944.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 168,
-          "gatingTotal": 163,
+          "total": 167,
+          "gatingTotal": 162,
           "counts": {
-            "SUCCESS": 140,
-            "SKIPPED": 26,
-            "FAILURE": 1,
+            "SUCCESS": 132,
+            "SKIPPED": 31,
+            "IN_PROGRESS": 1,
+            "FAILURE": 2,
             "NEUTRAL": 1
           },
           "blockers": [
-            "checks-node-agentic-control-plane-agent-chat:FAILURE"
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE"
           ],
-          "pending": [],
+          "pending": [
+            "checks-node-agentic-gateway-methods:IN_PROGRESS"
+          ],
           "terminalBlockers": [
-            "checks-node-agentic-control-plane-agent-chat:FAILURE"
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3109,
+    "total_ms": 5435,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 534
+        "ms": 3052
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2223
+        "ms": 2005
       },
       {
         "name": "classify_commands",
@@ -199,7 +183,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 328
+        "ms": 365
       },
       {
         "name": "append_ledger",
