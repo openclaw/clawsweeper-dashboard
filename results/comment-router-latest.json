@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T22:40:52.295Z",
+  "generated_at": "2026-06-17T22:40:58.873Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T19:40:49.949Z",
+  "since": "2026-06-17T19:40:56.694Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    94255
+    94257
   ],
   "comment_ids": [
-    4736141434
+    4736141648
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:94255:4736141434:2026-06-17T22:38:57Z:re_review",
-      "comment_id": "4736141434",
-      "comment_version_key": "4736141434:2026-06-17T22:38:57Z",
-      "comment_url": "https://github.com/openclaw/openclaw/issues/94255#issuecomment-4736141434",
+      "idempotency_key": "comment-router:openclaw/openclaw:94257:4736141648:2026-06-17T22:38:59Z:re_review",
+      "comment_id": "4736141648",
+      "comment_version_key": "4736141648:2026-06-17T22:38:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94257#issuecomment-4736141648",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 94255,
+      "issue_number": 94257,
       "author": "Nas01010101",
       "author_id": 156536069,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T22:38:57Z",
-      "comment_updated_at": "2026-06-17T22:38:57Z",
+      "comment_created_at": "2026-06-17T22:38:59Z",
+      "comment_updated_at": "2026-06-17T22:38:59Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -66,21 +66,57 @@
       "actions": [],
       "author_repository_permission": "read",
       "target": {
-        "kind": "issue",
-        "state": "open",
-        "locked": false,
-        "title": "Inbound MediaTypes/MediaUrls lose index-alignment: normalizeOptionalTextArray .filter(Boolean) compacts padded holes, mis-assigning attachment content-types in persisted transcripts",
-        "body": "## Summary\n\nThe inbound-media **writer** and the user-turn-transcript **reader** hold directly contradictory contracts for the parallel `Media*` arrays, so attachment content-types (and URLs) are assigned to the **wrong attachment** whenever an earlier attachment lacks a type/url.\n\n**Writer** — `alignedStrings`, `src/channels/inbound-event/media.ts:35-42` (pads holes with `\"\"` to *keep* index alignment):\n```ts\nfunction alignedStrings(values: Array<string | undefined>): string[] | undefined {\n  if (!values.some(Boolean)) {\n    return undefined;\n  }\n  // Preserve indexes across parallel Media* arrays so transcribed indexes and\n  // media metadata continue to refer to the same attachment.\n  return values.map((value) => value ?? \"\");\n}\n```\n\n**Reader** — `normalizeOptionalTextArray`, `src/sessions/user-turn-transcript.ts:142-148`, called by `buildPersistedUserTurnMediaInputsFromFields` (`:176-178`) (drops the `\"\"` holes, then indexes positionally):\n```ts\nfunction normalizeOptionalTextArray(\n  values: readonly (string | null | undefined)[] | null | undefined,\n): string[] {\n  return (\n    values?.map(normalizeOptionalText).filter((value): value is string => Boolean(value)) ?? []\n  );\n}\n// :176-178\nconst paths = normalizeOptionalTextArray(fields.MediaPaths);\nconst urls = normalizeOptionalTextArray(fields.MediaUrls);\nconst types = normalizeOptionalTextArray(fields.MediaTypes);\n```\n\nBecause one array gets compacted and another doesn't, index `i` no longer refers to the same attachment. Reached on every inbound media turn via `src/auto-reply/reply/get-reply-run.ts:1210` → `buildPersistedUserTurnMediaInputsFromFields(ctx)`.\n\n## Impact\n\n| Inbound (writer, index-aligned) | Persisted (after reader) | Correct |\n|---|---|---|\n| `a.bin` (no type), `b.png` (`image/png`) | `a.bin → image/png` ❌, `b.png → image/png` (right value, wrong reason) ❌ | `a.bin → undefined` (no derivable type), `b.png → image/png` |\n\nA non-image attachment is mislabeled with a later attachment's MIME type; the real `image/png` is shifted off its true attachment (it lands on `b.png` only because compaction collapsed the array to a single element). The same failure hits `MediaUrls` when an earlier attachment has a path but no URL. **Severity: low–moderate** — it corrupts persisted transcript metadata (not message routing), and only on multi-attachment turns where an earlier attachment lacks a type/url (common for raw files/blobs). No crash, no message loss.\n\n## Proposed fix\n\nStop compacting the parallel arrays in the reader — map per-index and let the `\"\"` holes normalize to `undefined`, which the builder's existing per-index `??` lookups already treat as \"absent\":\n```ts\nfunction normalizeOptionalTextArray(\n  values: readonly (string | null | undefined)[] | null | undefined,\n): (string | undefined)[] {\n  return values?.map(normalizeOptionalText) ?? [];\n}\n```\n`buildPersistedUserTurnMediaInputsFromFields` is unchanged: it already derives `mediaCount` from `Math.max(paths.length, urls.length, …)` and reads each index with `types[index] ?? (index === 0 ? singleType : undefined)`, so an `undefined` hole falls through correctly and `mediaCount` becomes the true attachment count. The single-field fallbacks (`MediaType` at index 0) are unaffected.\n\n**Sibling-contrast:** the writer (`alignedStrings`) and `MediaTranscribedIndexes` both go to explicit lengths specifically to keep index → attachment stable (the writer's comment: *\"so transcribed indexes and media metadata continue to refer to the same attachment\"*). The reader is the lone consumer that re-compacts, breaking the invariant the rest of the pipeline maintains.\n\n**Provenance:** the writer's alignment-padding (`07f05e972e`) and the reader's compacting normalizer (`833520b13a`) were introduced in **separate refactors** and never reconciled.\n\n## Reproduction (real exported reader, no mocks)\n\nInput `{ MediaPaths: [\"/media/a.bin\",\"/media/b.png\"], MediaTypes: [\"\",\"image/png\"] }`.\n\nReal output on **current main** (buggy):\n```\nOUT /media/a.bin => image/png      <-- WRONG (belongs to b.png)\nOUT /media/b.png => image/png\n```\nReal output after the fix:\n```\nOUT /media/a.bin => undefined      <-- correct: no type borrowed from the next attachment\nOUT /media/b.png => image/png\n```\n\n> Heads-up for triage: `src/sessions/user-turn-transcript.ts` is being actively refactored (a session-seam routing change plus several open PRs touch the file) — none touch `buildPersistedUserTurnMediaInputsFromFields`/`normalizeOptionalTextArray`, but the fix may want rebasing if that work lands first. I have a branch ready and am happy to open the PR.\n",
-        "author": "Nas01010101",
-        "labels": [],
+        "kind": "pull_request",
+        "title": "fix(sessions): preserve Media* index alignment when reading user-turn fields",
+        "body": "## Summary\n\nThe inbound-media **writer** pads missing values with `\"\"` to keep the parallel `MediaPaths` / `MediaUrls` / `MediaTypes` arrays index-aligned, but the user-turn-transcript **reader** compacted those `\"\"` holes with `.filter(Boolean)` before indexing. The two arrays then drift out of alignment, so a later attachment's content-type (or URL) is assigned to an **earlier** attachment in the persisted transcript.\n\nFixes #94255\n\n## Change\n\n`normalizeOptionalTextArray` in `src/sessions/user-turn-transcript.ts` no longer compacts. It now maps each entry to a normalized string or `undefined` and returns `(string | undefined)[]`, preserving the writer's `\"\"` alignment holes (which normalize to `undefined`) so index `i` keeps referring to the same attachment.\n\nThe downstream builder (`buildPersistedUserTurnMediaInputsFromFields`) already does per-index `??` lookups (`types[index] ?? (index === 0 ? singleType : undefined)`) and derives `mediaCount` from `Math.max(paths.length, urls.length, ...)`, so it treats an `undefined` hole as \"absent\" with no further change — and `mediaCount` is now the true attachment count instead of a post-compaction shrink.\n\n**Reviewer decision points:**\n- Return type widened from `string[]` to `(string | undefined)[]`. The only call site is the builder above; the `paths[index]`/`urls[index]`/`types[index]` lookups already tolerate `undefined` via `??`, and the `if (!mediaPath && !url) continue;` guard skips pure-hole rows.\n- No change to the single-field fallbacks (`MediaPath`/`MediaUrl`/`MediaType` at index 0).\n\n## Real behavior proof\n\n**Behavior addressed:** An inbound media turn with two attachments where the first lacks a content-type (`MediaTypes = [\"\", \"image/png\"]`) — the persisted reader assigned `image/png` to the typeless first attachment instead of to the second.\n\n**Real environment tested:** openclaw worktree at HEAD of `main` (`a7f96847ce`) on macOS, Node v26.0.0, exercising the real exported `buildPersistedUserTurnMediaInputsFromFields` reader (no mocks) against the actual writer wire format `MediaTypes=[\"\",\"image/png\"]`.\n\n**Exact steps or command run after this patch:** added a temporary spec calling the real reader and printed its output, run via the repo's vitest with `node` so console output surfaces:\n\n```\nnode_modules/.bin/vitest run src/sessions/_proof.test.ts --config vitest.config.ts --disable-console-intercept\n```\n\n**Evidence after fix:** real reader console output, copied verbatim:\n\n```\nINPUT MediaPaths= [\"/media/a.bin\",\"/media/b.png\"]\nINPUT MediaTypes= [\"\",\"image/png\"]\nOUT /media/a.bin => undefined\nOUT /media/b.png => image/png\n```\n\nFor contrast, the same real reader on the pre-patch source produced the misaligned output:\n\n```\nOUT /media/a.bin => image/png\nOUT /media/b.png => image/png\n```\n\n**Observed result after fix:** `/media/a.bin` now resolves to `undefined` (no false content-type borrowed from the next attachment), and `/media/b.png` keeps its own `image/png`. Before the patch `/media/a.bin` was wrongly labeled `image/png`. Each attachment now resolves independently from its own index.\n\n**What was not tested:** end-to-end channel ingestion through a live messaging provider (the fix is confined to the persisted-fields reader). The `MediaUrls` misalignment variant is covered by the unit suite rather than a live capture.\n\n## Tests and validation\n\nTwo regression tests added to `src/sessions/user-turn-transcript.test.ts` (the `MediaTypes` hole case and the `MediaUrls` hole case). Full file suite: **27/27 pass**. oxlint and tsgo clean on the changed file. The temporary proof spec shown above was removed after capturing the evidence; it is not part of the diff.\n",
+        "branch": "fix/media-types-index-alignment",
+        "head_sha": "41b450cd9fd2adc9e34013b42187b43d1a765189",
+        "author": "nas01010101",
+        "labels": [
+          "size: XS",
+          "proof: supplied"
+        ],
+        "files": [
+          {
+            "path": "src/sessions/user-turn-transcript.test.ts",
+            "additions": 35,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/sessions/user-turn-transcript.ts",
+            "additions": 6,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 41,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "open_prs": [
-          "#94257"
-        ],
-        "issue_implementation_cluster_id": "issue-openclaw-openclaw-94255",
-        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-94255.md",
-        "mode": "autonomous"
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94257",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94257.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 170,
+          "gatingTotal": 165,
+          "counts": {
+            "SUCCESS": 137,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
@@ -89,23 +125,23 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2649,
+    "total_ms": 2370,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 604
+        "ms": 566
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 496
+        "ms": 1599
       },
       {
         "name": "classify_commands",
-        "ms": 1235
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 303
+        "ms": 192
       },
       {
         "name": "append_ledger",
