@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T07:26:26.797Z",
+  "generated_at": "2026-06-17T07:27:31.004Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T04:26:24.956Z",
+  "since": "2026-06-17T04:27:22.524Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    92037
+    93532
   ],
   "comment_ids": [
-    4727171178
+    4727143970
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4727188355,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 3,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92037:4727171178:2026-06-17T07:24:14Z:re_review",
-      "comment_id": "4727171178",
-      "comment_version_key": "4727171178:2026-06-17T07:24:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92037#issuecomment-4727171178",
+      "idempotency_key": "comment-router:openclaw/openclaw:93532:4727143970:2026-06-17T07:26:17Z:re_review",
+      "comment_id": "4727143970",
+      "comment_version_key": "4727143970:2026-06-17T07:26:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93532#issuecomment-4727143970",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 92037,
-      "author": "anagnorisis2peripeteia",
-      "author_id": 129746152,
+      "target_branch": "main",
+      "issue_number": 93532,
+      "author": "momothemage",
+      "author_id": 35096042,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T07:24:14Z",
-      "comment_updated_at": "2026-06-17T07:24:14Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-17T07:20:58Z",
+      "comment_updated_at": "2026-06-17T07:26:17Z",
+      "status_comment_id": 4727188355,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,232 +62,138 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-17T07:27:32.051Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 93532
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-17T07:27:34.549Z",
+          "response_comment_id": "4726822893",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "feat(cron): on-exit schedule — wake on a watched command's exit",
-        "body": "## Summary\n\nAdds an **`on-exit` cron schedule kind**: a job that fires once when a watched shell command exits, starting a fresh agent turn in the originating conversation. It's \"a #83738 cron wake, triggered by a process exit instead of by the tool call\" — it reuses the merged origin-aware wake as its delivery mechanism and only adds the *trigger*.\n\n- **The gap.** openclaw already wakes the parent when an *openclaw-managed* child finishes — sub-agents, isolated cron runs, and image/video/music generation raise `task_completion` internal events consumed by the embedded-agent runtime. But nothing watches an **arbitrary external command**, and the CLI backends can't participate in that internal system at all: a command a `claude-cli` agent runs via its exec tool lives inside the per-turn process tree that's `signalProcessTree(SIGTERM→SIGKILL)`'d at turn end (#71662), so it dies before it can observe an exit or fire a wake. The only pre-existing workaround is a polling `every:Nm` cron that burns a turn per poll.\n- **What this does.** A new `CronSchedule` kind `{ kind: \"on-exit\", command, cwd? }`, executed by a **gateway-ProcessSupervisor-owned watcher** (`cron-exit-watchers.ts`). The watcher runs the command as a child of the *gateway* supervisor — outside any agent turn's process tree — so it survives turn teardown by construction. On exit it fires #83738's origin-aware wake on the job's captured session, so the woken turn **continues the originating conversation** (native `claude-cli --resume`, see proof), with the exit code folded into the woken turn's text. One-shot per arm.\n- **Surfaces.** `on-exit` is accepted by the protocol schema, the cron tool (`schedule.kind:\"on-exit\"` + `command`/`cwd`), and the CLI (`cron add --on-exit <shell> [--on-exit-cwd <path>]`). Watchers arm on job add/update and on gateway-startup reconcile (so persisted jobs re-arm after a restart) and cancel on remove/disable/shutdown.\n- **AI-assisted:** yes — drafted with Claude.\n\n## Why a *non*-internally-managed wake (and why it works for every backend)\n\nThe internal `task_completion` machinery is embedded-runtime-bound and command-agnostic — it has no \"watch a shell command\" task type, for any backend. A `claude-cli` (or `claude-cli-interactive`/proxy) agent can't register an external command with it, and a command it runs inline dies at turn teardown. So the watcher must live outside the turn and outside the embedded-agent event system — the gateway ProcessSupervisor. Because the wake then rides the gateway **command lane** (busy-detection is `getQueueSize(Main)`, acquired at the dispatch layer *above* the backend), it behaves identically on plain `claude-cli` and the interactive MITM backend: if the watched command exits mid-turn, the wake hits `requests-in-flight`, re-queues, and fires when the lane frees — never concurrently. Proven below on plain `claude-cli`; the interactive path is the same lane mechanism.\n\n## Real behavior proof\n\nReal OpenClaw gateway (built from this branch) + real `claude-cli` (claude-sonnet-4-6) backend with native session resume (`resumeArgs`), in a Linux container. A persisted `on-exit` job (`command: \"sleep 22\"`) is loaded at gateway startup; a binding turn establishes the session; the watched command exits; the watcher fires the origin wake. Gateway logs ([gw-clean.log](https://github.com/anagnorisis2peripeteia/openclaw/blob/proof-assets-onexit/gw-clean.log), [cron-exit-structured.log](https://github.com/anagnorisis2peripeteia/openclaw/blob/proof-assets-onexit/cron-exit-structured.log)):\n\n```\n20:45:02  cron-exit: watcher armed                          jobId=onexit-hl command=\"sleep 22\"   <- armed from the PERSISTED job at startup (survives restart)\n20:45:12  cli exec  trigger=heartbeat  useResume=false      <- binding turn establishes the cli session\n20:45:17  (binding turn finished)\n20:45:27  cron-exit: watched command exited; firing job     exitCode=0 reason=exit                <- watched command exits -> watcher fires the origin wake\n20:45:46  cli exec  trigger=heartbeat  useResume=true  resumeSession=1b22992cb50d  reuse=reusable  historyPrompt=present\n                                                             ^- the woken turn NATIVELY --resumes the originating session (not history-replay)\n```\n\nThe wake turn ran *after* the binding turn finished, so it is unambiguously the on-exit wake — and it natively `--resume`d the binding turn's claude-cli session, continuing the conversation. A separate run also exercised the **mid-turn case**: the watched command exited while a turn was in flight, the wake hit `requests-in-flight`, re-queued, and the woken turn ran after the in-flight turn ended (never concurrently).\n\n- **Behavior or issue addressed:** an agent (any backend, esp. `claude-cli`) cannot reliably arm \"wake me when this external command exits\" — managed `task_completion` doesn't cover external commands and an agent-spawned command dies at turn teardown.\n- **Real environment tested:** real gateway from this branch + real `claude-cli` backend with `resumeArgs`, Linux container; on-exit job persisted to the store and armed at startup.\n- **Exact steps or command run after this patch:** seed a persisted `on-exit` job (`sleep 22`, sessionKey bound), start the gateway, run a binding turn, let the command exit.\n- **Evidence after fix:** redacted gateway logs above ([gw-clean.log](https://github.com/anagnorisis2peripeteia/openclaw/blob/proof-assets-onexit/gw-clean.log), [cron-exit-structured.log](https://github.com/anagnorisis2peripeteia/openclaw/blob/proof-assets-onexit/cron-exit-structured.log)) showing arm → exit → fire → native-resume woken turn.\n- **Observed result after fix:** the watcher armed from the persisted job, the watched command's exit fired the origin wake, and the woken turn natively `--resume`d the originating session.\n- **What was not tested:** the Telegram-thread visual (the session is a local key here; thread delivery is #83738's merged + proven mechanism — the wake routing is identical regardless of channel). The interactive/MITM backend (same command-lane mechanism; not separately captured).\n\n### Bug caught by the live proof\n`getInvalidPersistedCronJobReason` only allowed `at/every/cron`, so on-exit jobs **failed persistence validation** — they couldn't be saved to the store or survive a restart (the watcher arms from the store at startup). Fixed + regression test. This is exactly the class of issue unit tests around the schema/codec missed and the live store-seed proof surfaced.\n\n## Limitations & maintainer notes\n\n- **Command execution policy.** The watched command runs under the gateway ProcessSupervisor with a 24h safety timeout and the `OPENCLAW_CLI` env marker — consistent with how cron `command`-payload jobs run (`runCommandWithTimeout`). It does **not** apply the full `tools.exec` policy (host approvals, sandbox selection, unsafe-command guards, script preflight); neither do cron command-payload jobs. Unifying an approvals/sandbox policy across *both* gateway-level command-execution paths is a cross-cutting product/security decision flagged for maintainer ownership, not narrowed here.\n- **Downgrade.** `on-exit` is a new schedule kind. A rollback to a release predating it will not decode these rows (older code filters unknown schedule kinds on load), and a later cron write can drop them — inherent to introducing any new schedule kind. Treat on-exit jobs as not downgrade-preserved until a versioned-store strategy lands.\n\n## Tests / CI\n\n- New: `cron-exit-watchers.test.ts` (arm/fire-on-exit/skip-timer-and-disabled/idempotent/cancel/no-fire-after-cancel/one-shot), `persisted-shape.onexit.test.ts`, `schedule-options.onexit.test.ts` (CLI), `row-codec.schedule.test.ts` (store round-trip), plus on-exit cases in schedule/normalize.\n- tsgo clean; full cron suite + watcher/CLI suites green; full Linux unit suite run on this head (results in the re-review comment).\n",
-        "branch": "feat/cron-watch-process-exit",
-        "head_sha": "21273ffa65490060fd3d62c359c00a876975beaa",
-        "author": "anagnorisis2peripeteia",
+        "title": "Expose verified ClawHub source in skill verify output",
+        "body": "## Summary\n\nRefs #92077. Follow-up to #93506.\n\nThis PR exposes the trusted ClawHub source provenance that #93506 started consuming in one more user-visible surface:\n\n- Adds `openclaw.verifiedSourceUrl` to `openclaw skills verify` JSON output when ClawHub verification returns server-resolved GitHub provenance.\n- Reuses the same trust-boundary helper for install persistence and verify output, so unsupported provenance shapes remain untrusted.\n- Builds the promoted source URL from server-resolved `repo` + `commit` + optional `path`, producing a commit-pinned GitHub URL instead of trusting the raw `provenance.url` field, which can point at a mutable ref such as `main`.\n- Documents the new verify JSON field in the skills CLI docs.\n\nThis does not read or promote self-attested `SKILL.md` metadata from #92860. It also does not replace #93314, which is still the readback half for provenance already written to local `.clawhub/origin.json`.\n\n## Behavior addressed\n\nUsers and tooling consuming `openclaw skills verify` JSON can now find the verified source URL under the OpenClaw-owned metadata envelope without guessing whether raw ClawHub `provenance.url` is immutable or trusted.\n\nUnavailable provenance or any non-`server-resolved-github-import` provenance stays only in the raw verification envelope and is not promoted as `openclaw.verifiedSourceUrl`.\n\n## Real behavior proof\n\nBehavior addressed: `openclaw skills verify` JSON now promotes only server-resolved ClawHub GitHub provenance into a commit-pinned `openclaw.verifiedSourceUrl`.\n\nConflict/merge proof after prepare:\n\n- Rebased the narrow PR stack onto `origin/main` at `f50812dd56`.\n- `git merge-tree $(git merge-base HEAD origin/main) origin/main HEAD` reports a clean merged result with no conflict records.\n- Current PR diff is scoped to ClawHub verify output implementation, focused tests, and docs only: `docs/cli/skills.md`, `src/cli/skills-cli.ts`, `src/cli/skills-cli.verify.test.ts`, `src/cli/skills-cli.commands.test.ts`, `src/skills/lifecycle/clawhub.ts`, and `src/skills/lifecycle/clawhub.test.ts`.\n- Local signature verification with the configured SSH signing public key reports all prepared commits as good signatures: `ad66207604 G`, `8a06d22861 G`, `c1059e3b9b G`, and `3e8e0bf34c G`.\n\nExact focused checks run after rebasing onto current `main`:\n\n```sh\nPNPM_CONFIG_MODULES_DIR=../../node_modules node scripts/run-vitest.mjs run --config test/vitest/vitest.cli.config.ts src/cli/skills-cli.verify.test.ts src/cli/skills-cli.commands.test.ts\nPNPM_CONFIG_MODULES_DIR=../../node_modules node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-src.config.ts src/skills/lifecycle/clawhub.test.ts\nnode --import tsx scripts/generate-prompt-snapshots.ts --check\ngit diff --check\n```\n\nEvidence after fix:\n\n```text\nCLI verify/command tests: 2 files passed, 52 tests passed\nClawHub lifecycle tests: 1 file passed, 42 tests passed\nPrompt snapshots: current (7 files) after regenerating the 6 drifted Codex happy-path snapshots reported by CI\ngit diff --check: passed\nPinned commit validation: `openclaw.verifiedSourceUrl` now requires a full 40-hex ClawHub provenance commit; branch-like `main` and short hashes are covered as negative tests.\n```\n\nObserved result after fix:\n\n- A verification response with `provenance.source: \"server-resolved-github-import\"`, `repo: \"openclaw/skills\"`, `commit: \"def456\"`, and `path: \"agentreceipt\"` produces `openclaw.verifiedSourceUrl: \"https://github.com/openclaw/skills/tree/def456/agentreceipt\"`.\n- A verification response with unavailable or self-declared provenance does not produce `openclaw.verifiedSourceUrl`.\n- Install persistence and verify output continue sharing the same helper, so only server-resolved provenance is promoted.\n\nLive-sample limitation: there is still no live positive production ClawHub provenance sample available for this contract. The PR body records that limitation explicitly, and the focused CLI/lifecycle tests exercise the server-resolved provenance envelope that ClawHub returns for this feature.\n\n\n\n",
+        "branch": "feature/issue-92077-verified-source-verify-output",
+        "head_sha": "3e8e0bf34c1f9e9b9d28441af0d9356b9bf035eb",
+        "author": "momothemage",
         "labels": [
-          "app: web-ui",
-          "gateway",
+          "docs",
           "cli",
-          "scripts",
-          "agents",
+          "maintainer",
           "size: XL",
-          "proof: supplied",
           "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 security-boundary",
-          "status: ⏳ waiting on author"
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "DESIGN-cron-on-exit.md",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/cron.ts",
-            "additions": 11,
+            "path": "docs/cli/skills.md",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/proof-cron-on-exit.mts",
-            "additions": 177,
+            "path": "src/cli/skills-cli.commands.test.ts",
+            "additions": 47,
             "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/tools/cron-tool.schema.test.ts",
-            "additions": 2,
-            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/tools/cron-tool.ts",
-            "additions": 10,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/cron-cli/register.cron-add.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/cron-cli/schedule-options.onexit.test.ts",
-            "additions": 44,
+            "path": "src/cli/skills-cli.ts",
+            "additions": 3,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/cron-cli/schedule-options.ts",
-            "additions": 31,
+            "path": "src/cli/skills-cli.verify.test.ts",
+            "additions": 66,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/skills/lifecycle/clawhub.test.ts",
+            "additions": 37,
             "deletions": 5,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/normalize.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/normalize.ts",
-            "additions": 30,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/persisted-shape.onexit.test.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/persisted-shape.ts",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/schedule.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/schedule.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/list-page-types.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/store/row-codec.schedule.test.ts",
-            "additions": 54,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/store/row-codec.ts",
-            "additions": 24,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/types.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/cron-exit-watchers.test.ts",
-            "additions": 308,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/cron-exit-watchers.ts",
-            "additions": 238,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-cron-lazy.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.ts",
-            "additions": 65,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/hook-types.ts",
-            "additions": 5,
-            "deletions": 0,
+            "path": "src/skills/lifecycle/clawhub.ts",
+            "additions": 44,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
             "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.discord-group.json",
-            "additions": 18,
-            "deletions": 2,
+            "additions": 1127,
+            "deletions": 1118,
             "changeType": "MODIFIED"
           },
           {
             "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.heartbeat-turn.json",
-            "additions": 18,
-            "deletions": 2,
+            "additions": 1157,
+            "deletions": 1148,
             "changeType": "MODIFIED"
           },
           {
             "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.telegram-direct.json",
-            "additions": 18,
-            "deletions": 2,
+            "additions": 1123,
+            "deletions": 1114,
             "changeType": "MODIFIED"
           },
           {
             "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
-            "additions": 4,
-            "deletions": 4,
+            "additions": 10,
+            "deletions": 9,
             "changeType": "MODIFIED"
           },
           {
             "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
-            "additions": 4,
-            "deletions": 4,
+            "additions": 10,
+            "deletions": 9,
             "changeType": "MODIFIED"
           },
           {
             "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md",
-            "additions": 4,
-            "deletions": 4,
+            "additions": 11,
+            "deletions": 10,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 30,
-        "additions": 1224,
-        "deletions": 34,
+        "changedFiles": 12,
+        "additions": 3639,
+        "deletions": 3416,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92037",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92037.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93532",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93532.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 9,
-          "gatingTotal": 4,
+          "total": 163,
+          "gatingTotal": 158,
           "counts": {
-            "SKIPPED": 4,
-            "SUCCESS": 5
+            "SUCCESS": 137,
+            "SKIPPED": 25,
+            "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
@@ -295,30 +201,29 @@
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2187,
+    "total_ms": 12735,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 639
+        "ms": 6312
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1189
+        "ms": 2155
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 345
+        "ms": 4244
       },
       {
         "name": "append_ledger",
