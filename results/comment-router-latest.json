@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T06:21:24.257Z",
+  "generated_at": "2026-06-17T06:21:26.227Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T03:21:22.416Z",
+  "since": "2026-06-17T03:21:22.609Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    434
+    93241
   ],
   "comment_ids": [
-    4726658452
+    4726666733
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4726667072,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:93692:4726658452:2026-06-17T06:19:14Z:re_review",
-      "comment_id": "4726658452",
-      "comment_version_key": "4726658452:2026-06-17T06:19:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93692#issuecomment-4726658452",
+      "idempotency_key": "comment-router:openclaw/openclaw:93241:4726666733:2026-06-17T06:20:37Z:re_review",
+      "comment_id": "4726666733",
+      "comment_version_key": "4726666733:2026-06-17T06:20:37Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93241#issuecomment-4726666733",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93692,
-      "author": "zenglingbiao",
-      "author_id": 290951975,
+      "target_branch": "main",
+      "issue_number": 93241,
+      "author": "0xghost42",
+      "author_id": 151941421,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T06:19:14Z",
-      "comment_updated_at": "2026-06-17T06:19:14Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-17T06:20:37Z",
+      "comment_updated_at": "2026-06-17T06:20:37Z",
+      "status_comment_id": 4726667072,
       "trigger": "mention",
       "command": "review",
       "intent": "re_review",
@@ -62,22 +62,110 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-17T06:21:27.236Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 93241
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-17T06:21:28.646Z",
+          "response_comment_id": "4726667072",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): classify Zhipu GLM overload as overloaded for failover",
+        "body": "## Summary\n\nModel fallback (`agents.defaults.model.fallbacks`) did not recover correctly when Zhipu (GLM) returned its overload error. Zhipu signals overload as **HTTP 200** with the error in the body:\n\n```\n[1305][该模型当前访问量过大，请您稍后再试]\n```\n\nThe Anthropic-compatible client surfaces that body as a thrown error, which `runWithModelFallback` normalizes via `coerceToFailoverError` → `isOverloadedErrorMessage`. There was no pattern for this phrase, so the overload was not recognized as a failover reason.\n\nThis adds the distinctive overload phrase `访问量过大` (\"traffic too high\") to `ERROR_PATTERNS.overloaded`, next to the existing Chinese overload markers (`服务过载`, `当前负载过高`). The error now classifies as `overloaded` — the failover reason the issue asks for — so the configured fallback is reached with the correct, overload-specific recovery semantics.\n\nCloses #93211\n\n## Verification\n\n### Real behavior proof\n\n- **Behavior addressed:** Zhipu/GLM overload body `[1305][该模型当前访问量过大，请您稍后再试]` was not recognized as `overloaded`, so failover did not key on the provider-overload contract.\n- **Real environment tested:** drove the real `runWithModelFallback` orchestrator (the function the issue names as mishandling the error) in this checkout, before and after the patch, injecting the exact reported error at the throw point the Anthropic-compatible client surfaces it. No live Zhipu endpoint was available (no API key), so the `[1305]` body is reproduced at that runtime boundary rather than over the wire.\n- **Exact steps or command run after this patch:**\n\n```\n# orchestrator-level (real runWithModelFallback):\nnode scripts/run-vitest.mjs src/agents/model-fallback.test.ts -t \"Zhipu\"\n# matcher-level:\nnode scripts/run-vitest.mjs src/agents/embedded-agent-helpers/failover-matches.test.ts\n```\n\n- **Evidence after fix:** ran the orchestrator test with the overload pattern removed, then restored:\n\n```\n# BEFORE (pattern removed) — runWithModelFallback with the GLM body:\nresult.attempts[0].reason === \"unknown\"     # not recognized as overload\n\n# AFTER (this patch):\nresult.attempts[0].reason === \"overloaded\"  # recognized; recovery keyed on overload\nrun called twice; fallback run === [\"anthropic\", \"claude-haiku-3-5\"]\n```\n\n- **Observed result after fix:** with the patch the GLM overload error resolves to `overloaded` inside `runWithModelFallback` and the configured fallback model is attempted. For full honesty about current `main`: an unrecognized error already falls back generically with reason `unknown` when candidates remain, so the symptom from the 2026.6.5 report (no fallback at all) is partly masked on `main`; this patch supplies the *correct* classification (`overloaded`), which is what the issue requests and what carries the proper provider-overload retry/cooldown handling rather than the generic `unknown` path.\n- **What was not tested:** end-to-end delivery against the live Zhipu Anthropic-compatible endpoint (`https://open.bigmodel.cn/api/anthropic`) — no credentials. The orchestrator classification + fallback decision is the failover decision point, exercised above.\n\nCoverage: `failover-matches.test.ts` → 25 passed (GLM body pinned as `overloaded`, not rate-limit/auth); `model-fallback.test.ts` → 80 passed (new orchestrator case asserts the GLM overload reaches the configured fallback keyed on `overloaded`).\n",
+        "branch": "zhipu-overload-failover",
+        "head_sha": "e0eb3c44c1b49346e088f363b42a445a44d72ea1",
+        "author": "0xghost42",
+        "labels": [
+          "agents",
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "status: 🔁 re-review loop"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-helpers/failover-matches.test.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-helpers/failover-matches.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.test.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 40,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93241",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93241.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "gatingTotal": 157,
+          "counts": {
+            "SUCCESS": 136,
+            "SKIPPED": 24,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-tooling:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-core-tooling:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3400,
+    "total_ms": 6773,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1829
+        "ms": 615
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2990
       },
       {
         "name": "classify_commands",
@@ -85,7 +173,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1559
+        "ms": 3146
       },
       {
         "name": "append_ledger",
