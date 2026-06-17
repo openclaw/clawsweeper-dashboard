@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T22:57:18.884Z",
+  "generated_at": "2026-06-17T22:57:43.825Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T19:57:16.183Z",
+  "since": "2026-06-17T19:57:41.297Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    93843
+    94156
   ],
   "comment_ids": [
-    4736242562
+    4736253123
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4736253316,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:93843:4736242562:2026-06-17T22:55:08Z:re_review",
-      "comment_id": "4736242562",
-      "comment_version_key": "4736242562:2026-06-17T22:55:08Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93843#issuecomment-4736242562",
+      "idempotency_key": "comment-router:openclaw/openclaw:94156:4736253123:2026-06-17T22:56:48Z:re_review",
+      "comment_id": "4736253123",
+      "comment_version_key": "4736253123:2026-06-17T22:56:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94156#issuecomment-4736253123",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93843,
-      "author": "yetval",
-      "author_id": 102706514,
+      "target_branch": "main",
+      "issue_number": 94156,
+      "author": "lastguru-net",
+      "author_id": 1543525,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T22:55:08Z",
-      "comment_updated_at": "2026-06-17T22:55:08Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-17T22:56:48Z",
+      "comment_updated_at": "2026-06-17T22:56:48Z",
+      "status_comment_id": 4736253316,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,105 +62,143 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-17T22:57:44.464Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 94156
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-17T22:57:46.439Z",
+          "response_comment_id": "4735434651",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(memory-wiki): prevent distinct titles from silently overwriting each other",
-        "body": "## Summary\n\nTwo distinct memory-wiki pages whose titles slugify to the same value silently overwrite each other, and the first page is permanently lost.\n\nThe agent-facing path is `wiki_apply` with op `create_synthesis`. When an agent saves a synthesis titled \"Q3 Report\" and later saves a different synthesis titled \"Q3-Report\", both resolve to `syntheses/q3-report.md` under id `synthesis.q3-report`. The second write overwrites the first: the first synthesis's managed Summary, sourceIds, claims, and confidence are gone, and neither `wiki_get` nor `wiki_search` can recover them. No error or warning is surfaced.\n\n`slugifyWikiSegment` collapses case, spaces, and punctuation, so realistic agent-generated titles collide: \"Q3 Report\" / \"Q3-Report\", \"Project Alpha!\" / \"Project Alpha\", \"Sales (2026)\" / \"Sales 2026\", \"Meeting Notes\" / \"meeting notes\". The sibling CLI path `wiki ingest` has the same defect for `sources/<slug>.md`.\n\n## Root cause\n\n`extensions/memory-wiki/src/apply.ts` derived the synthesis page path and id from the bare slug, with no disambiguation when an existing page at that slug belongs to a different title:\n\n```ts\n// before\nconst slug = slugifyWikiSegment(params.mutation.title);\nconst pagePath = path.join(\"syntheses\", `${slug}.md`).replace(/\\\\/g, \"/\");\nconst root = await fsRoot(params.config.vault.path);\nconst existing = await root.readText(pagePath).catch(() => \"\");\n```\n\n`slugifyWikiSegment` only appends a hash when the slug exceeds the byte cap (`extensions/memory-wiki/src/markdown.ts`), so short colliding titles get no hash. `ingest.ts` had the identical pattern for `source.<slug>`.\n\n## Fix\n\nAdd one shared identity helper and route both writers through it. The plain readable slug is reused when it is free or already owns the same title (so re-applying a synthesis still updates in place); a distinct title that lands on an existing page gets a stable title-hash suffix, matching the existing `okf.ts` hashed-identity pattern:\n\n```ts\n// after (markdown.ts)\nexport async function resolveTitleKeyedWikiSlug(params: {\n  title: string;\n  readExistingTitleBySlug: (slug: string) => Promise<string | undefined>;\n}): Promise<string> {\n  const baseSlug = slugifyWikiSegment(params.title);\n  const existingTitle = await params.readExistingTitleBySlug(baseSlug);\n  if (existingTitle === undefined || existingTitle.trim() === params.title.trim()) {\n    return baseSlug;\n  }\n  const suffix = createHash(\"sha1\").update(params.title).digest(\"hex\").slice(0, WIKI_SEGMENT_HASH_BYTES);\n  return `${baseSlug}-${suffix}`;\n}\n```\n\n`apply.ts` (`create_synthesis`) and `ingest.ts` (`wiki ingest`) both resolve their slug through this helper before reading/writing the page.\n\n## Why this is the right boundary\n\n- The helper lives next to `slugifyWikiSegment` and reuses the same `WIKI_SEGMENT_HASH_BYTES` and SHA-1 pattern already used by `okf.ts`/`createWikiPageFilename`. Two call sites share it (synthesis and source), so it pays rent.\n- Backward compatible with no vault migration: the common single-page-per-title case keeps its plain `<slug>.md` path because the stored title matches. Only genuine distinct-title collisions get a hashed path, so existing vaults and same-title re-applies are unchanged.\n- Prior art: closed PR #65992 proposed a source-path-keyed fix for the ingest half only and was closed unmerged; merged PR #64742 fixed only the Unicode/empty-slug case. Neither touched `create_synthesis`, and the distinct-title slug collision is still live on current `main` (proof below). This change fixes the agent-facing synthesis path that no prior PR addressed, and removes the same live collision from the source path with one helper.\n\n## Verification\n\nFrom a worktree with deps (node at /opt/node/bin):\n\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/slug-collision.test.ts extensions/memory-wiki/src/apply.test.ts extensions/memory-wiki/src/ingest.test.ts extensions/memory-wiki/src/markdown.test.ts extensions/memory-wiki/src/query.test.ts` -> 53 passed\n- New `slug-collision.test.ts` fails on pristine `main` (both synthesis and source collide onto one page) and passes with this patch.\n- `node scripts/run-oxlint.mjs <changed files>` -> clean\n- `oxfmt --check <changed files>` -> clean\n- tsgo: the only error surfaced is a pre-existing unused import in `src/agents/model-picker-visibility.ts` on current `main` (unrelated to this extension change); no type error in the changed files.\n\n## Real behavior proof\n\nBehavior addressed: distinct memory-wiki syntheses/sources whose titles slugify equal no longer overwrite each other.\nReal environment tested: drove the real `applyMemoryWikiMutation` (`create_synthesis`) against a temp vault on pristine `main` and on this patch with identical inputs, then read the vault from disk.\nExact steps or command run after this patch: apply `create_synthesis` \"Q3 Report\" (body \"Revenue grew 12 percent\"), then apply `create_synthesis` \"Q3-Report\" (body \"Headcount fell 4 percent\"); list `syntheses/` and check each page body.\nEvidence after fix:\n```\n# BEFORE (pristine main 70023a1183)\nsynthesis page files: [\"q3-report.md\"]\n  q3-report.md: revenue=false headcount=true\nfirst synthesis (Q3 Report) recoverable: false\n\n# AFTER (this patch, identical inputs)\nsynthesis page files: [\"q3-report-97358135a013.md\",\"q3-report.md\"]\n  q3-report-97358135a013.md: revenue=false headcount=true\n  q3-report.md: revenue=true headcount=false\nfirst synthesis (Q3 Report) recoverable: true\n```\nObserved result after fix: both syntheses persist as separate pages; the first synthesis's body, sourceIds, and claims are retained and recoverable.\nWhat was not tested: a full `pnpm check`/`pnpm build` (OOM-prone box); two source files given an identical explicit title still merge by design, since title is the identity here.\n",
-        "branch": "fix/memory-wiki-slug-collision",
-        "head_sha": "d75f5e017b60d8c1c60c247a7620f5422da48e6d",
-        "author": "yetval",
+        "title": "fix: expose OpenAI image quality and moderation CLI options",
+        "body": "## Summary\r\n\r\nThis PR adds image quality and OpenAI moderation controls to the `openclaw infer image` CLI:\r\n\r\n- Adds `--quality low|medium|high|auto` to `openclaw infer image generate`\r\n- Adds `--quality low|medium|high|auto` to `openclaw infer image edit`\r\n- Adds OpenAI-specific `--openai-moderation low|auto` to generation and editing\r\n- Passes `quality` through to the image generation runtime\r\n- Passes `--openai-moderation` through as `providerOptions.openai.moderation`\r\n- Passes OpenAI moderation into both native OpenAI image requests and Codex Responses `image_generation` tool requests\r\n- Updates capability inspect metadata for `image.generate` and `image.edit`\r\n- Documents the new flags in the CLI, OpenAI provider, and image generation docs\r\n\r\n## Why this is needed\r\n\r\nOpenClaw already exposes advanced image generation controls in the built-in `image_generate` agent tool, including OpenAI-specific moderation and quality-related options. The CLI also already exposes several image generation controls, such as:\r\n\r\n- `--output-format`\r\n- `--background`\r\n- `--openai-background`\r\n\r\nBut the CLI did not expose quality or OpenAI moderation, even though these are important OpenAI image-generation controls.\r\n\r\nThat gap matters for two reasons.\r\n\r\nFirst, image quality affects cost. OpenAI image generation pricing varies by quality level, so users running generation through the CLI need a direct way to choose cheaper draft output or higher quality final output.\r\n\r\nSecond, moderation is an OpenAI-specific generation option. The CLI already has the provider-specific `--openai-background` escape hatch, so `--openai-moderation` follows the same pattern instead of forcing users to leave the CLI path.\r\n\r\nThere was also an implementation gap in the OpenAI provider itself: the direct OpenAI image path already forwarded `openai.moderation`, but the Codex Responses image path did not pass it into the upstream `image_generation` tool payload. Since the Responses API image generation tool supports moderation, requests routed through Codex OAuth should preserve the same option instead of silently dropping it.\r\n\r\nWithout these flags and pass-through support, users who need cost-aware or moderation-aware OpenAI image generation have to use the agent tool directly, write custom wrappers, or bypass OpenClaw's CLI. That weakens the CLI as the stable local automation surface for media generation.\r\n\r\n## How this solves it\r\n\r\nThe implementation keeps the existing CLI shape and runtime boundaries:\r\n\r\n- `--quality` is implemented as a general image quality hint because quality is already modeled as a top-level image generation runtime option.\r\n- `--openai-moderation` is implemented as an OpenAI-specific option, matching the existing `--openai-background` provider-specific pattern.\r\n- Both options are available for `image generate` and `image edit`.\r\n- Values are normalized and validated before provider dispatch.\r\n- Invalid values fail early with clear CLI errors.\r\n- Capability inspect output now advertises the new flags for both `image.generate` and `image.edit`.\r\n- The OpenAI provider forwards moderation in both supported OpenAI image transports:\r\n  - Native OpenAI image generation/editing requests\r\n  - Codex Responses `image_generation` tool requests\r\n- Documentation now shows how to use the new flags from the CLI and explains the OpenAI provider use case.\r\n\r\n## Behavior details\r\n\r\nFor generation:\r\n```bash\r\nopenclaw infer image generate \\\r\n  --model openai/gpt-image-2 \\\r\n  --quality low \\\r\n  --openai-moderation low \\\r\n  --prompt \"Low-cost draft poster\" \\\r\n  --json\r\n```\r\n\r\nFor editing, the same controls are available:\r\n```bash\r\nopenclaw infer image edit \\\r\n  --file ./poster.png \\\r\n  --model openai/gpt-image-2 \\\r\n  --quality high \\\r\n  --openai-moderation auto \\\r\n  --prompt \"Refine this poster for final export\" \\\r\n  --json\r\n```\r\n\r\n`--quality` accepts:\r\n\r\n- `low`\r\n- `medium`\r\n- `high`\r\n- `auto`\r\n\r\n`--openai-moderation` accepts:\r\n\r\n- `low`\r\n- `auto`\r\n\r\n## Verification\r\n\r\nRan:\r\n```bash\r\npnpm docs:list\r\npnpm format:fix -- src/cli/capability-cli.ts src/cli/capability-cli.test.ts docs/cli/infer.md docs/providers/openai.md docs/tools/image-generation.md\r\npnpm test src/cli/capability-cli.test.ts\r\npnpm format:docs:check\r\npnpm tsgo:core\r\npnpm format:fix -- extensions/openai/image-generation-provider.ts extensions/openai/image-generation-provider.test.ts\r\npnpm test extensions/openai/image-generation-provider.test.ts\r\ngit diff --check\r\npnpm build\r\n```\r\n\r\nObserved result:\r\n\r\n- `pnpm test src/cli/capability-cli.test.ts`: 97 tests passed\r\n- `pnpm format:docs:check`: docs formatting clean\r\n- `pnpm tsgo:core`: passed\r\n- `pnpm test extensions/openai/image-generation-provider.test.ts`: 62 tests passed\r\n- `git diff --check`: no whitespace errors\r\n- `pnpm build`: build success\r\n\r\n## Real behavior proof\r\n\r\nBehavior addressed:\r\n\r\n- The CLI accepts `--quality` for image generation and image editing.\r\n- The CLI accepts `--openai-moderation` for image generation and image editing.\r\n- The CLI forwards `quality` as a top-level runtime option.\r\n- The CLI forwards OpenAI moderation as `providerOptions.openai.moderation`.\r\n- Existing OpenAI background handling remains intact.\r\n- Capability inspect metadata reports the expanded flags.\r\n- The OpenAI provider forwards moderation into Codex Responses `image_generation` tool requests instead of dropping it on the OAuth/Codex route.\r\n\r\nEvidence after fix:\r\n\r\n- The generation CLI test asserts that the runtime receives `quality: \"low\"` and `providerOptions.openai.moderation: \"low\"`.\r\n- The edit CLI test asserts that the runtime receives `quality: \"high\"` and OpenAI provider options containing both `background: \"transparent\"` and `moderation: \"auto\"`.\r\n- Invalid `--quality` and `--openai-moderation` values are rejected before provider dispatch.\r\n- Capability inspect tests assert that both `image.generate` and `image.edit` report `--quality` and `--openai-moderation`.\r\n- The OpenAI provider test asserts that Codex Responses image generation sends `moderation: \"low\"` inside the `image_generation` tool payload.\r\n\r\nConsole output after fix:\r\n```bash\r\nberu@beru:~/src/openclaw$ openclaw infer image generate --help\r\n|\r\no  \r\n\r\nOpenClaw 2026.6.8 (7f6d396) — All your chats, one OpenClaw.\r\n\r\nUsage: openclaw infer image generate [options]\r\n\r\nGenerate images\r\n\r\nOptions:\r\n  --aspect-ratio <ratio>       Aspect ratio hint like 16:9\r\n  --background <value>         Background hint: transparent, opaque, or auto\r\n  --count <n>                  Number of images\r\n  -h, --help                   Display help for command\r\n  --json                       Output JSON (default: false)\r\n  --model <provider/model>     Model override\r\n  --openai-background <value>  OpenAI background hint: transparent, opaque, or auto\r\n  --openai-moderation <value>  OpenAI moderation hint: low or auto\r\n  --output <path>              Output path\r\n  --output-format <format>     Output format hint: png, jpeg, or webp\r\n  --prompt <text>              Prompt text\r\n  --quality <value>            Quality hint: low, medium, high, or auto\r\n  --resolution <value>         Resolution hint: 1K, 2K, or 4K\r\n  --size <size>                Size hint like 1024x1024\r\n  --timeout-ms <ms>            Provider request timeout in milliseconds\r\nberu@beru:~/src/openclaw$ openclaw infer image edit --help\r\n|\r\no  \r\n\r\nOpenClaw 2026.6.8 (7f6d396) — All your chats, one OpenClaw.\r\n\r\nUsage: openclaw infer image edit [options]\r\n\r\nEdit images with one or more input files\r\n\r\nOptions:\r\n  --aspect-ratio <ratio>       Aspect ratio hint like 16:9\r\n  --background <value>         Background hint: transparent, opaque, or auto\r\n  --file <path>                Input file (default: [])\r\n  -h, --help                   Display help for command\r\n  --json                       Output JSON (default: false)\r\n  --model <provider/model>     Model override\r\n  --openai-background <value>  OpenAI background hint: transparent, opaque, or auto\r\n  --openai-moderation <value>  OpenAI moderation hint: low or auto\r\n  --output <path>              Output path\r\n  --output-format <format>     Output format hint: png, jpeg, or webp\r\n  --prompt <text>              Prompt text\r\n  --quality <value>            Quality hint: low, medium, high, or auto\r\n  --resolution <value>         Resolution hint: 1K, 2K, or 4K\r\n  --size <size>                Size hint like 1024x1024\r\n  --timeout-ms <ms>            Provider request timeout in milliseconds\r\n```\r\n\r\nAs observed, the new options are present.\r\n\r\nWhat was not tested:\r\n\r\n- No live OpenAI image generation request was made. This PR changes CLI parsing and runtime/provider pass-through; the focused tests verify the runtime call shape and Codex Responses request payload.\r\n\r\n## Documentation\r\n\r\nUpdated:\r\n\r\n- `docs/cli/infer.md`\r\n- `docs/providers/openai.md`\r\n- `docs/tools/image-generation.md`\r\n",
+        "branch": "beru/openai-image-cli-options",
+        "head_sha": "7f6d39610e49917a3119d041842be0bb46aefe79",
+        "author": "lastguru-net",
         "labels": [
-          "size: S",
-          "extensions: memory-wiki",
-          "proof: supplied"
+          "docs",
+          "cli",
+          "size: M",
+          "extensions: openai",
+          "triage: needs-real-behavior-proof",
+          "P3",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/memory-wiki/src/apply.ts",
-            "additions": 8,
+            "path": "docs/cli/infer.md",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/openai.md",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/image-generation.md",
+            "additions": 22,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/openai/image-generation-provider.test.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/openai/image-generation-provider.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/capability-cli.test.ts",
+            "additions": 114,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/capability-cli.ts",
+            "additions": 59,
             "deletions": 3,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-wiki/src/ingest.ts",
-            "additions": 15,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-wiki/src/markdown.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-wiki/src/slug-collision.test.ts",
-            "additions": 128,
-            "deletions": 0,
-            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 175,
-        "deletions": 5,
+        "changedFiles": 7,
+        "additions": 228,
+        "deletions": 9,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93843",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93843.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94156",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94156.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 155,
-          "gatingTotal": 150,
+          "total": 12,
+          "gatingTotal": 7,
           "counts": {
-            "SUCCESS": 128,
-            "SKIPPED": 25,
-            "FAILURE": 2
+            "FAILURE": 1,
+            "SUCCESS": 2,
+            "SKIPPED": 9
           },
           "blockers": [
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE"
+            "Real behavior proof:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE"
+            "Real behavior proof:FAILURE"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2996,
+    "total_ms": 5662,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 758
+        "ms": 530
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1929
+        "ms": 1986
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 296
+        "ms": 3123
       },
       {
         "name": "append_ledger",
