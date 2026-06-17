@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-17T05:50:18.550Z",
+  "generated_at": "2026-06-17T05:50:54.201Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T02:50:15.666Z",
+  "since": "2026-06-17T02:50:51.801Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    93952
+    93841
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,114 +31,123 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93952:4726450629:2026-06-17T05:50:12Z:clawsweeper_auto_repair",
-      "comment_id": "4726450629",
-      "comment_version_key": "4726450629:2026-06-17T05:50:12Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93952#issuecomment-4726450629",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93841:4725680560:2026-06-17T05:50:49Z:clawsweeper_needs_human",
+      "comment_id": "4725680560",
+      "comment_version_key": "4725680560:2026-06-17T05:50:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93841#issuecomment-4725680560",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 93952,
+      "issue_number": 93841,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-17T05:44:09Z",
-      "comment_updated_at": "2026-06-17T05:50:12Z",
+      "comment_created_at": "2026-06-17T03:44:17Z",
+      "comment_updated_at": "2026-06-17T05:50:49Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=73e6c4730b27fdaf280c995016ad06bf20b9d128)",
-      "review_summary": "Adds a runtime auth refresh hard-deadline helper, wraps the embedded runner refresh single-flight with it, and adds focused unit/regression tests.\n\nPR surface: Source +56, Tests +112. Total +168 across 4 files.\n\nReproducibility: yes. from source: current main awaits refreshInFlight without a timeout, and a never-settling prepareProviderRuntimeAuth leaves every later waiter blocked. I did not run a live gateway repro in this read-only review.",
-      "review_followup": "- [P1] The contributor needs to fix the auth-state race and provide their own real behavior proof; automation cannot supply external after-fix gateway proof for them.",
+      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=9036696b5af87db592050af9ebb84664a16790ef)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +27, Tests +173. Total +200 across 7 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "73e6c4730b27fdaf280c995016ad06bf20b9d128",
+      "expected_head_sha": "9036696b5af87db592050af9ebb84664a16790ef",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): hard-deadline runtime auth refresh to prevent gateway deadlock",
-        "body": "## Summary\n\nA long-running gateway can permanently deadlock its entire agent lane on a stuck OAuth auth-refresh. The runtime auth single-flight in `auth-controller.ts` stores the in-flight refresh promise in `runtimeAuthState.refreshInFlight`; every model turn that needs auth does `await runtimeAuthState.refreshInFlight` **with no timeout**. If the underlying provider auth hook (`prepareProviderRuntimeAuth` -> OAuth refresh, keychain read, or cross-agent file-lock wait) never settles, `refreshInFlight` is never cleared and **every subsequent turn hangs forever** awaiting it. The process stays alive and the port stays open, so it looks healthy while no replies are produced.\n\nObserved in production: a gateway froze mid-day right after a token hit expiry. Process alive (11d uptime, port listening) but fully idle since the freeze, zero sockets to the provider, all threads parked, one never-resolving `await`. On-disk token was valid the whole time (a fresh process pre-warmed auth in ~0.7s), and no on-disk lock was held — i.e. a pure in-memory single-flight deadlock.\n\nThis adds a hard deadline so the single-flight promise **always** settles:\n\n- New `withRuntimeAuthRefreshDeadline()` + `RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS` (300s) in `runtime-auth-refresh.ts`. 300s sits above the OAuth manager's own 120s call timeout plus a peer's 180s stale-lock window, so a legitimately slow cross-agent refresh still completes while a true hang is forced to reject.\n- `refreshRuntimeAuth` wraps the refresh operation in that deadline; on timeout it rejects, the `.finally` clears `refreshInFlight`, and all waiters unblock with a descriptive error instead of hanging.\n- The `.finally` clear is no longer gated on `generation`: a profile rotation during a slow/hung refresh must still release the handle it owns, otherwise a stale handle wedges the new generation. The existing `refreshInFlight === refreshPromise` identity guard still prevents clobbering a newer refresh.\n\nNo behavior change on the happy path (fast refresh resolves long before the deadline). The deadline is a backstop only.\n\n## Repro / Test plan\n\n- [x] `withRuntimeAuthRefreshDeadline` unit tests: rejects after the deadline when work never settles (fake timers), resolves/propagates when work wins the race, passes through unbounded for non-positive timeout, and the default exceeds the OAuth call + stale-lock budget.\n- [x] `auth-controller` regression test: a `prepareProviderRuntimeAuth` that hangs forever sets `refreshInFlight`, then after advancing past the hard deadline the wedged handle rejects with `exceeded hard deadline` and is no longer the active in-flight handle.\n- [x] Proof the test catches the bug: with the deadline neutralized (timeout `0` = unbounded), the regression test **times out / FAILS**; restored, it passes.\n- [x] `node scripts/run-vitest.mjs run src/agents/runtime-auth-refresh.test.ts src/agents/embedded-agent-runner/run/auth-controller.test.ts` -> 17 tests pass.\n- [x] `pnpm tsgo` clean for touched files; `scripts/run-oxlint.mjs` clean; `pnpm build` clean (no `[INEFFECTIVE_DYNAMIC_IMPORT]`).\n\nThanks @amittell.\n",
-        "branch": "fix/auth-refresh-deadline-guard",
-        "head_sha": "73e6c4730b27fdaf280c995016ad06bf20b9d128",
-        "author": "amittell",
+        "title": "fix(ui): render persisted history text blocks",
+        "body": "## Summary\n\n- Problem: Opening a previous Control UI chat from History could show assistant replies while the user's own persisted messages were blank or effectively missing, leaving large empty-looking regions while scrolling through the conversation.\n- Solution: Normalize persisted Responses `input_text` / `output_text` content blocks into Control UI renderable text blocks and align the related text extractors with those persisted content shapes.\n- What changed: `message-normalizer`, `message-extract`, and shared assistant-visible text extraction now recognize persisted Responses text block names; unit and browser E2E coverage lock the conversion and History behavior.\n- What did NOT change: This patch does not change `chat.history` request/response transport, History loading/session selection protocol, CSS layout, unknown content block fallback behavior, or assistant-visible extraction for `input_text` assistant messages; those areas stay unchanged and out of scope.\n- Why it matters / User impact: History is used to inspect prior conversations. If persisted user prompts disappear, the transcript loses the question/answer context and the scroll position can look like a large blank gap even though `chat.history` returned the messages.\n- Fixes #90241\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Opening a previous Control UI chat from History could show assistant replies while persisted user `input_text` messages were not visible, producing the reported missing user messages and empty-looking scroll regions.\n- **Real environment tested:** Local repo worktree with project dependencies installed. Browser proof used local Playwright Chromium against the Control UI E2E server with controlled Gateway History responses, exercising the actual Control UI DOM and scroll viewport.\n- **Exact steps or command run after this patch:** Ran focused persisted text-block tests, the issue-requested Control UI unit tests, the issue-requested Control UI E2E suite, and a browser capture of the History session switch and scroll behavior.\n\n```bash\nnode scripts/run-vitest.mjs src/shared/chat-message-content.test.ts ui/src/ui/chat/message-normalizer.test.ts ui/src/ui/chat/message-extract.test.ts\n```\n\n```bash\nnode scripts/run-vitest.mjs ui/src/ui/controllers/chat.test.ts ui/src/ui/chat/build-chat-items.test.ts ui/src/ui/views/chat.test.ts\n```\n\n```bash\nnode scripts/run-vitest.mjs ui/src/ui/e2e/chat-flow.e2e.test.ts\n```\n\n- **Evidence after fix:** The local Control UI browser viewport proof showed persisted user `input_text` and assistant `output_text` messages visible after opening History and scrolling through the session.\n\nFocused persisted text-block tests:\n\n```text\nunit-fast: 1 file passed, 15 tests passed\nunit-ui: 2 files passed, 41 tests passed\n```\n\nRequired Control UI unit tests from the issue comment:\n\n```text\n3 files passed, 270 tests passed\n```\n\nRequired Control UI E2E suite from the issue comment:\n\n```text\n1 file passed, 15 tests passed\n```\n\nBrowser viewport proof from the local Control UI History session switch:\n\n```json\n{\n  \"bottomVisible\": [\n    \"User history question 66\\nhistory detail line\\nhistory detail line\\nhistory detail line\\nhistory detail line\",\n    \"Assistant history answer 67\\nhistory detail line\\nhistory detail line\\nhistory detail line\\nhistory detail line\",\n    \"User history question 68\\nhistory detail line\\nhistory detail line\\nhistory detail line\\nhistory detail line\",\n    \"Assistant history answer 69\\nhistory detail line\\nhistory detail line\\nhistory detail line\\nhistory detail line\"\n  ],\n  \"topVisible\": [\n    \"User history question 0\\nhistory detail line\\nhistory detail line\\nhistory detail line\\nhistory detail line\",\n    \"Assistant history answer 1\\nhistory detail line\\nhistory detail line\\nhistory detail line\\nhistory detail line\",\n    \"User history question 2\\nhistory detail line\\nhistory detail line\\nhistory detail line\\nhistory detail line\",\n    \"Assistant history answer 3\\nhistory detail line\\nhistory detail line\\nhistory detail line\\nhistory detail line\",\n    \"User history question 4\\nhistory detail line\\nhistory detail line\\nhistory detail line\\nhistory detail line\"\n  ]\n}\n```\n\n- **Observed result after fix:** After opening History and switching to the persisted session, the Control UI browser viewport shows user and assistant chat bubbles at both the bottom and the expanded top of the history. The previously invisible persisted user `input_text` messages render as normal user message text.\n- **What was not tested:** No live external provider, account, or channel was used. The issue is a Control UI persisted History rendering bug, and the proof uses the local Control UI E2E server with controlled Gateway responses to exercise the browser-visible behavior without external credentials.\n\n## Regression Test Plan\n\n- **Target test file:** `ui/src/ui/e2e/chat-flow.e2e.test.ts` locks the History session switch and scroll behavior; `ui/src/ui/chat/message-normalizer.test.ts`, `ui/src/ui/chat/message-extract.test.ts`, and `src/shared/chat-message-content.test.ts` lock the text block conversion boundaries.\n- **Scenario locked in:** The E2E regression creates 70 mixed persisted history messages, with even items as user `input_text` and odd items as assistant `output_text`, then opens Control UI chat, switches to Session B through the Chat session picker, verifies the `chat.history` request targets `agent:main:session-b`, checks the bottom viewport, scrolls to the top, and checks the top viewport.\n- **Why this is the smallest reliable guardrail:** The bug requires the real Control UI grouping/rendering/scroll window to interact with persisted `input_text` and `output_text` blocks. Unit tests lock the conversion boundary, and the local Gateway-history browser test locks the user-visible History behavior without external provider or channel credentials.\n\n## Merge risk\n\n- **Risk labels considered:** `impact:session-state`, `impact:message-loss`, message-delivery, and the issue's `P2` user-visible History regression were considered. No live-channel or provider risk label applies to this Control UI rendering path.\n- **Risk explanation:** Low. The change is limited to recognized text content block names and keeps unknown block types on the existing non-text path. Assistant `output_text` follows the existing assistant expansion path, while user `input_text` becomes plain renderable text. This touches message rendering/extraction code but does not change transport, storage, public config, or provider behavior.\n- **Why acceptable:** The regression tests cover the conversion boundaries and the real browser-visible History flow, including both the initial bottom render window and scroll expansion to older messages. The diff is below the large-change threshold and has focused source/test pairing.\n\n## Root Cause\n\n- **Root cause:** The root cause is a Control UI normalization contract mismatch: the history loader kept the messages, but the Control UI render mapping only treated `type: \"text\"` blocks as displayable text. Persisted Responses history can store user text as `input_text` and assistant text as `output_text`, so those blocks reached the UI without being normalized into renderable chat text.\n- **Why this is root-cause fix:** This changes the normalization/extraction boundary that turns persisted message content into renderable chat items. It fixes the source contract mismatch between persisted Responses text block names and Control UI renderable text items instead of masking the symptom with CSS spacing changes, History loader filtering, or session-specific special cases.\n- **Fix classification:** Root cause fix\n- **Maintainer-ready confidence:** High. The diff is limited to recognized persisted text block names, includes unit coverage at the conversion boundaries, and includes a browser-visible History regression for the reported behavior.\n- **Patch quality notes:** The E2E uses existing 10s waits already common in this suite for browser-visible UI readiness; they wait for specific session text and viewport conditions, not arbitrary sleep. The apparent public contract signal is limited to explaining that `chat.history` transport is unchanged; this patch only normalizes already persisted content block names at the UI boundary. A linked open PR scan for #90241 returned no competing PRs.\n- **Architecture / source-of-truth check:** The source-of-truth boundary for this bug is the Control UI normalization/extraction layer where persisted message content is converted into renderable chat items. The patch aligns that boundary with persisted Responses `input_text` / `output_text` data before downstream grouping and scroll rendering, and leaves `chat.history` protocol/data format compatibility unchanged.\n",
+        "branch": "feat/issue-90241",
+        "head_sha": "9036696b5af87db592050af9ebb84664a16790ef",
+        "author": "mushuiyu886",
         "labels": [
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "app: web-ui",
+          "size: M",
+          "proof: supplied"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/run/auth-controller.test.ts",
-            "additions": 62,
+            "path": "src/shared/chat-message-content.test.ts",
+            "additions": 9,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/auth-controller.ts",
-            "additions": 20,
+            "path": "src/shared/chat-message-content.ts",
+            "additions": 7,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/message-extract.test.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/message-extract.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/message-normalizer.test.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/message-normalizer.ts",
+            "additions": 27,
             "deletions": 8,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/runtime-auth-refresh.test.ts",
-            "additions": 52,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/runtime-auth-refresh.ts",
-            "additions": 45,
-            "deletions": 1,
+            "path": "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+            "additions": 128,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 179,
-        "deletions": 11,
+        "changedFiles": 7,
+        "additions": 212,
+        "deletions": 12,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93952",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93952.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93841",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93841.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 170,
-          "gatingTotal": 165,
+          "total": 162,
+          "gatingTotal": 157,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 134,
+            "SUCCESS": 133,
+            "SKIPPED": 25,
             "FAILURE": 3,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
             "check-prod-types:FAILURE",
             "check-lint:FAILURE",
             "check-dependencies:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
             "check-prod-types:FAILURE",
             "check-lint:FAILURE",
             "check-dependencies:FAILURE"
@@ -148,32 +157,32 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3093,
+    "total_ms": 2664,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 273
+        "ms": 320
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2593
+        "ms": 2067
       },
       {
         "name": "classify_commands",
-        "ms": 4
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 193
+        "ms": 251
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 1
       }
     ]
   }
