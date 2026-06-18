@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T07:00:06.914Z",
+  "generated_at": "2026-06-18T07:00:24.783Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T04:00:04.401Z",
+  "since": "2026-06-18T04:00:20.792Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    94465
+    93873
   ],
   "comment_ids": [
-    4738880720
+    4738888259
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4738888532,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:94465:4738880720:2026-06-18T06:58:03Z:re_review",
-      "comment_id": "4738880720",
-      "comment_version_key": "4738880720:2026-06-18T06:58:03Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94465#issuecomment-4738880720",
+      "idempotency_key": "comment-router:openclaw/openclaw:93873:4738888259:2026-06-18T06:59:18Z:re_review",
+      "comment_id": "4738888259",
+      "comment_version_key": "4738888259:2026-06-18T06:59:18Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93873#issuecomment-4738888259",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 94465,
-      "author": "wangmiao0668000666",
-      "author_id": 290215524,
+      "target_branch": "main",
+      "issue_number": 93873,
+      "author": "xialonglee",
+      "author_id": 22994703,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-18T06:58:03Z",
-      "comment_updated_at": "2026-06-18T06:58:03Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-18T06:59:18Z",
+      "comment_updated_at": "2026-06-18T06:59:18Z",
+      "status_comment_id": 4738888532,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,114 +62,108 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-18T07:00:25.686Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 93873
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-18T07:00:26.834Z",
+          "response_comment_id": "4738888532",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): keep lane-task timeout alive during long-running tools (fixes #94033)",
-        "body": "## Summary\n\nCron jobs with `isolated: true` fail with `CommandLaneTaskTimeoutError` when tool execution exceeds ~10 minutes. Root cause: the embedded runner only refreshes the lane-task sliding-window timestamp via `noteLaneTaskProgress`, which fires from the runner's own `notifyExecutionPhase` / `notifyRunProgress` callbacks. Long-running tool execution (e.g. an `exec` running for several minutes) happens *inside* the embedded attempt and emits no runner callbacks, so the sliding window expires even though the task is making progress.\n\nThis PR adds a periodic heartbeat that keeps the sliding window fresh while the embedded attempt is in flight, and applies it at the single production call site.\n\nThis is the same root-cause fix as the open PRs (#94060, #94082, #94090). Differences vs those competitors:\n\n- **Packaged as a tested helper** (`startLaneTaskProgressHeartbeat`) with focused unit coverage of start/stop/idempotency/cleanup-on-settle. Competitors inline `setInterval` and ship zero tests.\n- **20s default interval**, not 30s. The 30s grace window in `command-queue.ts:265` (`taskTimeoutMs + 30s`) sits exactly at the timeout boundary — a 30s heartbeat could race the grace check. 20s leaves headroom while staying below the grace threshold.\n- **`.unref()` on the interval** so the heartbeat never blocks process exit on its own. Competitors' bare `setInterval` keeps the event loop alive.\n- **Standalone real-environment proof** that drives the actual lane-task sliding window in `command-queue.ts` with the production timeout logic, not a vitest mock.\n\n## Changes\n\n- `src/agents/embedded-agent-runner/lane-heartbeat.ts` (new, 65 lines): exports `startLaneTaskProgressHeartbeat` and `withLaneTaskProgressHeartbeat`. Default interval 20s; intervals are `.unref()`'d; both helpers stop the heartbeat deterministically.\n- `src/agents/embedded-agent-runner/lane-heartbeat.test.ts` (new, 103 lines): 7 focused tests — heartbeat fires at requested interval; `stop()` halts calls; `stop()` is idempotent; default interval is 20s; `withLaneTaskProgressHeartbeat` stops on resolve / reject / slow resolution.\n- `src/agents/embedded-agent-runner/run.ts` (+7 / -0): add `startLaneTaskProgressHeartbeat(noteLaneTaskProgress)` before the `runEmbeddedAttemptWithBackend(...)` call (line 1856, the only call site) and call `.stop()` inside the existing `.finally()` block. No reformatting; the integration is two adjacent insertions.\n- `scripts/repro/issue-94033-cron-lane-timeout.mts` (new, 113 lines): standalone proof that runs the production `enqueueCommandInLane` / `CommandLaneTaskTimeoutError` path with and without the heartbeat, prints outcomes, and asserts the heartbeat scenario completes while the no-heartbeat scenario times out.\n\n## Real behavior proof\n\n- **Behavior addressed**: `CommandLaneTaskTimeoutError` fires during long-running tool execution inside an embedded attempt because no progress is reported for the lane-task sliding window.\n- **Real environment tested**: Linux x86_64 local checkout, Node 22.19+, pnpm workspace.\n- **Exact steps or command run after this patch**:\n  - `node --import tsx scripts/repro/issue-94033-cron-lane-timeout.mts`\n  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.agents.config.ts src/agents/embedded-agent-runner/lane-heartbeat.test.ts`\n  - `npx oxlint --import-plugin --config .oxlintrc.json src/agents/embedded-agent-runner/lane-heartbeat.ts src/agents/embedded-agent-runner/lane-heartbeat.test.ts src/agents/embedded-agent-runner/run.ts scripts/repro/issue-94033-cron-lane-timeout.mts`\n- **Evidence after fix (standalone repro — terminal output from real Node process)**:\n  ```text\n  === Reproduction for issue #94033 ===\n  Lane: repro-cron-94033\n  Configured taskTimeoutMs: 600\n  Task runs for: 1500ms (longer than timeout)\n\n  [diagnostic] lane task error: lane=repro-cron-94033 durationMs=602 error=\"CommandLaneTaskTimeoutError: Command lane \\\"repro-cron-94033\\\" task timed out after 600ms\"\n  [without-heartbeat] outcome=timed-out elapsedMs=724 noteProgressCalls=0\n\n  [with-heartbeat ] outcome=completed elapsedMs=1502 noteProgressCalls=14\n\n  === Results ===\n  Without heartbeat (pre-fix): timed-out after 724ms (timeout fired as expected)\n  With heartbeat    (post-fix): completed after 1502ms (noteProgress called 14 times)\n\n  PASS: heartbeat keeps the lane-task sliding window alive during long-running work.\n  ```\n  This is real console output from `node --import tsx scripts/repro/issue-94033-cron-lane-timeout.mts`. The repro drives the actual lane-task sliding window logic from `src/process/command-queue.ts` (`enqueueCommandInLane`, `runQueueEntryTask`, `CommandLaneTaskTimeoutError`) using real timers and real `setInterval`. The pre-fix scenario times out exactly as observed in production; the post-fix scenario completes and the heartbeat fires 14 times during the 1.5s task.\n- **Evidence of necessity (revert test — terminal output from real Node process)**: temporarily skipping the heartbeat call reproduces the pre-fix failure on the same task:\n  ```text\n  [diagnostic] lane task error: lane=revert-test durationMs=602 error=\"CommandLaneTaskTimeoutError: Command lane \\\"revert-test\\\" task timed out after 600ms\"\n  REVERT-TEST: timed out as expected (pre-fix behavior confirmed)\n  ```\n  Real stdout from running the repro without the heartbeat wrapper. Confirms the fix is necessary, not redundant. The fix was restored after this revert test.\n- **Evidence after fix (unit tests — vitest run stdout)**:\n  ```text\n  RUN  v4.1.8 /home/0668000666/0668000666/AI/OpenClaw/new_open_claw\n\n   ✓ src/agents/embedded-agent-runner/lane-heartbeat.test.ts > startLaneTaskProgressHeartbeat > calls noteProgress at the requested interval\n   ✓ src/agents/embedded-agent-runner/lane-heartbeat.test.ts > startLaneTaskProgressHeartbeat > stops calling noteProgress after stop()\n   ✓ src/agents/embedded-agent-runner/lane-heartbeat.test.ts > startLaneTaskProgressHeartbeat > stop() is idempotent\n   ✓ src/agents/embedded-agent-runner/lane-heartbeat.test.ts > startLaneTaskProgressHeartbeat > uses a 20s default interval\n   ✓ src/agents/embedded-agent-runner/lane-heartbeat.test.ts > withLaneTaskProgressHeartbeat > stops the heartbeat when the task resolves\n   ✓ src/agents/embedded-agent-runner/lane-heartbeat.test.ts > withLaneTaskProgressHeartbeat > stops the heartbeat when the task rejects\n   ✓ src/agents/embedded-agent-runner/lane-heartbeat.test.ts > withLaneTaskProgressHeartbeat > keeps ticking noteProgress until the task settles\n\n   Test Files  1 passed (1)\n        Tests  7 passed (7)\n  ```\n  This is supplemental unit-test coverage — the primary real behavior proof is the standalone repro above, not these tests.\n- **Observed result after fix**: when an embedded attempt's tool execution exceeds the configured `taskTimeoutMs`, the lane-task sliding window stays fresh and the task completes normally. The standalone repro confirms the production behavior under the same parameters used in the issue.\n- **What was not tested**: a full packaged OpenClaw desktop/manual cron run. The fix is scoped to the lane-task progress refresh; no surface outside the embedded runner was touched.\n\n## Verification\n\n- `node --import tsx scripts/repro/issue-94033-cron-lane-timeout.mts` → PASS (pre-fix timeout fires; post-fix task completes with 14 progress notes).\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.agents.config.ts src/agents/embedded-agent-runner/lane-heartbeat.test.ts` → **7/7 tests pass**.\n- Revert test (skip heartbeat) on the same repro path → `CommandLaneTaskTimeoutError` fires (pre-fix behavior).\n- `npx oxlint --import-plugin --config .oxlintrc.json <changed files>` → clean (no errors).\n\n## Notes for maintainers\n\n- The fix is the single call site in `run.ts:1856`. No other locations call `runEmbeddedAttemptWithBackend`, so this one insertion covers the whole runner.\n- The 20s interval rationale is in the helper's doc comment. The 30s grace window in `command-queue.ts:265` is the upper bound — a heartbeat at 30s would race the grace check on every cycle. 20s leaves headroom.\n- `setInterval` is `.unref()`'d so a leftover timer (e.g. in a failure path that bypasses `.finally`) cannot prevent the Node process from exiting. The `.stop()` call inside the existing `.finally()` is the primary defense; `.unref()` is a belt-and-suspenders guarantee.\n- The helper is intentionally minimal (two exports, one with promise-wrapping). Callers can use either form; the embedded runner uses the start/stop form so the existing `.finally()` block can be reused without restructuring the inline `runEmbeddedAttemptWithBackend({...}).catch().finally()` chain.\n\n## Related\n\n- Fixes #94033\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/94033-cron-lane-heartbeat",
-        "head_sha": "23e768e14963c77a68f1a3ee3e45ee843c510084",
-        "author": "wangmiao0668000666",
+        "title": "fix(whatsapp): restart listener on selfChatMode config change",
+        "body": "## Root Cause\n\n`extensions/whatsapp/src/shared.ts:185` lists `channels.whatsapp` as a `noopPrefix`, so changing `channels.whatsapp.selfChatMode` does not trigger a WhatsApp listener restart; the connect-time presence value stays stale until a full restart. The `noopPrefixes` rules are checked after `configPrefixes` rules in the reload planner, but the specific `selfChatMode` key was never listed in `configPrefixes`, so it fell through to the broad `channels.whatsapp` noop match.\n\n## Summary\n\n- WhatsApp `selfChatMode` config changes were silently ignored as hot no-ops, leaving stale presence until a full gateway restart.\n- This PR adds `\"channels.whatsapp.selfChatMode\"` to the `configPrefixes` array in the WhatsApp plugin reload config, matching the existing pattern for `\"channels.whatsapp.accounts\"`, so the channel restarts when `selfChatMode` changes.\n- Fixes #86888\n\n## Verification\n\n- `pnpm test extensions/whatsapp/index.test.ts` — 3/3 passed\n- `pnpm test src/gateway/config-reload.test.ts` — 352/352 passed (total 355/355)\n- Autoreview: clean — no accepted/actionable findings\n\n## Real behavior proof\n\nBehavior addressed: WhatsApp `selfChatMode` config change did not trigger a WhatsApp channel restart, leaving stale presence behavior until a full gateway restart.\n\nReal environment tested: Linux (4.19.112-2.el8.x86_64), Node v24.15.0, branch `fix/issue-86888-whatsapp-selfchatmode-reload` at commit `83b809b3a2`.\n\nExact steps or command run after this patch:\n```bash\npnpm test extensions/whatsapp/index.test.ts\npnpm test src/gateway/config-reload.test.ts\n```\n\nEvidence after fix:\n```console\n$ pnpm test extensions/whatsapp/index.test.ts\n Test Files  1 passed (1)\n      Tests  3 passed (3)\n\n$ pnpm test src/gateway/config-reload.test.ts\n Test Files  4 passed (4)\n      Tests  352 passed (352)\n```\n\nObserved result after fix: All 355 tests pass. The new test `\"restarts the WhatsApp channel when selfChatMode changes (configPrefix wins over broad noop prefix)\"` confirms that changing `channels.whatsapp.selfChatMode` triggers a channel restart (not a restartGateway or noop), validating the specific prefix match ordering in `buildGatewayReloadPlan`. The existing test `\"keeps other channels.whatsapp.* changes as hot no-ops\"` still passes, confirming that other `channels.whatsapp.*` paths remain unaffected.\n\nWhat was not tested: Full E2E WhatsApp connection test (requires real WhatsApp credentials). The fix relies on the same `reload.configPrefixes` pattern already proven by `channels.whatsapp.accounts` in production.\n",
+        "branch": "fix/issue-86888-whatsapp-selfchatmode-reload",
+        "head_sha": "83b809b3a2fec2670b01d25e9cd4d1c3c8491989",
+        "author": "xialonglee",
         "labels": [
-          "scripts",
-          "agents",
-          "size: M",
+          "channel: whatsapp-web",
+          "gateway",
+          "size: XS",
           "proof: supplied"
         ],
         "files": [
           {
-            "path": "scripts/repro/issue-94033-cron-lane-timeout.mts",
-            "additions": 113,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "extensions/whatsapp/index.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/lane-heartbeat.test.ts",
-            "additions": 103,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "extensions/whatsapp/src/shared.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/lane-heartbeat.ts",
-            "additions": 65,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 7,
-            "deletions": 0,
+            "path": "src/gateway/config-reload.test.ts",
+            "additions": 9,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 288,
-        "deletions": 0,
+        "changedFiles": 3,
+        "additions": 11,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94465",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94465.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93873",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93873.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 34,
-          "gatingTotal": 29,
+          "total": 168,
+          "gatingTotal": 163,
           "counts": {
-            "SUCCESS": 10,
-            "QUEUED": 10,
-            "SKIPPED": 14
+            "SUCCESS": 135,
+            "SKIPPED": 31,
+            "FAILURE": 1,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
+            "check-additional-boundaries-a:FAILURE"
           ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
+          "pending": [],
+          "terminalBlockers": [
+            "check-additional-boundaries-a:FAILURE"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2824,
+    "total_ms": 6714,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 776
+        "ms": 631
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1723
+        "ms": 3345
       },
       {
         "name": "classify_commands",
@@ -177,7 +171,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 311
+        "ms": 2713
       },
       {
         "name": "append_ledger",
