@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T16:48:44.328Z",
+  "generated_at": "2026-06-18T16:50:18.765Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T13:48:42.361Z",
+  "since": "2026-06-18T13:50:18.336Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94342
+    94626
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,130 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94342:4744166786:2026-06-18T16:48:37Z:clawsweeper_needs_human",
-      "comment_id": "4744166786",
-      "comment_version_key": "4744166786:2026-06-18T16:48:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94342#issuecomment-4744166786",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 94342,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-18T16:42:41Z",
-      "comment_updated_at": "2026-06-18T16:48:37Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Needs contributor and maintainer revision rather than ClawSweeper repair because the blocker combines API direction with missing real hook-file proof for an external PR.; Needs attention: The diff touches a guardrail-sensitive pre-send hook path and currently appears to leave the reported HOOK.md key inert.; Review finding: [P1] Dispatch the hook key users actually register — src/infra/outbound/deliver.ts:1643 (sha=ca2130989db78b400b7f62023a4ef2c7df25d479)",
-      "review_summary": "The PR adds an internal `message:sending` emission before outbound plugin `message_sending` hooks and updates internal hook types plus outbound tests.\n\nPR surface: Source +46, Tests -14. Total +32 across 3 files.\n\nReproducibility: yes. at source level: a handler registered as `message_sending` is stored under that exact key, while this patch emits only `message:sending`. I did not run a live Gateway reproduction in this read-only review.",
-      "review_followup": "- [P1] Needs contributor and maintainer revision rather than ClawSweeper repair because the blocker combines API direction with missing real hook-file proof for an external PR.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "ca2130989db78b400b7f62023a4ef2c7df25d479",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(hooks): wire message:sending internal hook to user-defined hooks",
-        "body": "## Summary\n\nFix #73542: user-defined hooks from the `hooks/` directory that register for `message_sending` never fire. The delivery code calls `hookRunner.runMessageSending()` (plugin hooks) but never calls `triggerInternalHook()` to bridge to user hooks.\n\n## Root Cause\n\nThe `message:sent` event has both calls and works correctly, providing a clear reference implementation at `deliver.ts:1033-1058`:\n```typescript\nhookRunner.runMessageSent(...)           // plugin hooks\nfireAndForgetHook(\n  triggerInternalHook(\n    createInternalHookEvent(\"message\", \"sent\", ...)\n  )\n);                                       // internal/user hooks\n```\nThe `message_sending` path only calls `hookRunner.runMessageSending()` for plugin-registered hooks, missing the `triggerInternalHook` path entirely.\n\n## Fix\n\nAdd the missing `triggerInternalHook` call for `message:sending` in `deliverOutboundPayloadsCore()`, using the same fire-and-forget pattern as `message:sent`. Also add `MessageSendingHookContext` and `MessageSendingHookEvent` types to the internal hooks type definitions.\n\n**Changes:**\n- `src/hooks/internal-hooks.ts` — +19 lines (add MessageSendingHookContext/Event types)\n- `src/infra/outbound/deliver.ts` — +28 lines (add triggerInternalHook call)\n- `src/infra/outbound/deliver.test.ts` — updated 2 tests to expect both message:sending and message:sent calls\n\n## Real behavior proof\n\n**Behavior addressed:** User-defined hook files in the `hooks/` directory that register for `message:sending` via `registerInternalHook(\"message:sending\", handler)` never receive events. This prevents users from implementing pre-delivery message guardrails (output filtering, content validation, cancellation) without writing a full plugin.\n\n**Real environment tested:** Code path analysis using the full OpenClaw source tree, comparing the `message:sending` delivery path with the working `message:sent` path at `src/infra/outbound/deliver.ts`.\n\n**Exact steps or command run after this patch:**\n1. Create a hook file in `hooks/` that registers for `message:sending`\n2. Send a message through any channel\n3. Verify the hook receives the `message:sending` event with context (to, content, channelId, accountId, conversationId)\n4. Verify the hook can observe messages before delivery\n\n**Evidence after fix:**\n\nDelivery flow before the fix (message:sending):\n```\ndeliverOutboundPayloadsCore()\n  → applyMessageSendingHook()\n    → hookRunner.runMessageSending()  ← plugin hooks only\n    → triggerInternalHook() NOT called ← user hooks missed\n```\n\nDelivery flow after the fix (message:sending):\n```\ndeliverOutboundPayloadsCore()\n  → fireAndForgetHook(\n      triggerInternalHook(\n        createInternalHookEvent(\"message\", \"sending\", sessionKey, {\n          to, content, channelId, accountId, conversationId\n        })\n      )\n    )                                 ← user hooks now notified\n  → applyMessageSendingHook()\n    → hookRunner.runMessageSending()  ← plugin hooks unchanged\n```\n\nThis mirrors the existing `message:sent` pattern at `deliver.ts:1048` exactly:\n```\nfireAndForgetHook(\n  triggerInternalHook(\n    createInternalHookEvent(\"message\", \"sent\", ...)\n  )\n);\n```\n\n**Observed result after fix:** Both `createInternalHookEvent` and `triggerInternalHook` are now called 2 times (message:sending + message:sent) instead of 1 (message:sent only). Tests updated to verify both calls with correct type/action/context.\n\n**What was not tested:** End-to-end delivery with a real user-defined hook file in the `hooks/` directory.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/message-sending-hook",
-        "head_sha": "ca2130989db78b400b7f62023a4ef2c7df25d479",
-        "author": "mazhuima",
-        "labels": [
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/hooks/internal-hooks.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/deliver.test.ts",
-            "additions": 48,
-            "deletions": 62,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/deliver.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 94,
-        "deletions": 62,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94342",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94342.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 17,
-          "gatingTotal": 12,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 6,
-            "SKIPPED": 10
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2295,
+    "total_ms": 712,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 469
+        "ms": 417
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1484
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 316
+        "ms": 284
       },
       {
         "name": "append_ledger",
