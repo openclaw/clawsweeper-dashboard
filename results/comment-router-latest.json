@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T15:04:07.650Z",
+  "generated_at": "2026-06-18T15:04:26.097Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T12:04:05.537Z",
+  "since": "2026-06-18T12:04:25.702Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94611
+    94605
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 1,
+  "scanned_comments": 0,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,135 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:94611:4743154493:2026-06-18T14:48:18Z:re_review",
-      "comment_id": "4743154493",
-      "comment_version_key": "4743154493:2026-06-18T14:48:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94611#issuecomment-4743154493",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 94611,
-      "author": "zenglingbiao",
-      "author_id": 290951975,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-18T14:48:18Z",
-      "comment_updated_at": "2026-06-18T14:48:18Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(infra): pin ensurePortAvailable to 127.0.0.1 in startSshPortForward (fixes #94596)",
-        "body": "### Summary\n\n- **Problem**: `startSshPortForward` in `src/infra/ssh-tunnel.ts` calls `ensurePortAvailable(localPort)` without a host, like the earlier Chrome CDP caller did before #94394. On dual-stack hosts the host-less probe binds the IPv6 wildcard `::` and misses an IPv4-only occupant, reporting a busy port as free.\n- **Root Cause**: The SSH tunnel path pins its forward to `127.0.0.1` (via `-L ${localPort}:127.0.0.1:${remotePort}`) and every other probe in the module uses IPv4 loopback (`pickEphemeralPort`, `canConnectLocal`), but the `ensurePortAvailable` call was left host-less when the host parameter was added in #94394.\n- **Fix**: Pass `\"127.0.0.1\"` as the host argument, matching the caller's actual bind interface.\n- **What changed**:\n  - `src/infra/ssh-tunnel.ts` — add `\"127.0.0.1\"` host parameter to `ensurePortAvailable(localPort)` call\n- **What did NOT change (scope boundary)**:\n  - The Chrome CDP caller was already fixed in #94394\n  - The `EADDRINUSE` fallback to `pickEphemeralPort()` is unchanged\n  - No other `ensurePortAvailable` call sites were affected\n\n### Reproduction\n\n1. On a dual-stack Linux host, occupy port N with an IPv4-only listener\n2. Configure an SSH tunnel with `localPortPreferred: N`\n3. **Before this PR**: `ensurePortAvailable(N)` binds `::` (IPv6), sees port N as free, proceeds to `ssh -L N:127.0.0.1:...` which fails with `EADDRINUSE`\n4. **After this PR**: `ensurePortAvailable(N, \"127.0.0.1\")` correctly detects the IPv4 occupant and falls back to `pickEphemeralPort()`\n\n### Real behavior proof\n\n**Behavior or issue addressed (94596)**: On dual-stack hosts the SSH tunnel port preflight uses a host-less probe that misses IPv4-only occupants, identical to the root cause fixed for the Chrome CDP path in #94394. The one-line fix aligns the SSH tunnel caller with every other IPv4-scoped probe in the same module.\n\n**Real environment tested**: Linux, Node 22 — the project's CI shard runner against the SSH tunnel and ports test suites\n\n**Exact steps or command run after this patch**: `npx vitest run src/infra/ssh-tunnel.test.ts src/infra/ports.test.ts`\n\n**Evidence before fix**:\n```text\nsrc/infra/ssh-tunnel.ts line 122:\n  await ensurePortAvailable(localPort);\nThe host parameter added in #94394 is missing — the probe binds :: and\nmisses IPv4-only occupants on dual-stack hosts.\n```\n\n**Evidence after fix**:\n```text\n$ npx vitest run src/infra/ssh-tunnel.test.ts src/infra/ports.test.ts\n\n Test Files  2 passed (2)\n      Tests  16 passed (16)\n\nAll SSH tunnel and port inspection scenarios pass — the preflight probe\nnow uses 127.0.0.1 consistently with every other IPv4-scoped call in the\nmodule (pickEphemeralPort, canConnectLocal, and the SSH -L forward itself).\n```\n\n**Observed result after fix**: The `ensurePortAvailable` call in `startSshPortForward` now pins to `127.0.0.1`, matching the exact same IPv4 scope as the SSH `-L` forward it guards. If an IPv4-only occupant holds the port, the probe correctly reports it as busy and the caller falls back to `pickEphemeralPort()`.\n\n**What was not tested**: Live dual-stack host with an actual IPv4-only port occupant was not driven — this requires a dual-stack Linux environment. The probe behavior is verified through the existing ports test infrastructure which covers the IPv4 loopback binding path.\n\n**Repro confirmation**: The fix mirrors the exact pattern applied to the Chrome CDP caller in #94394 — same root cause, same one-line fix. The SSH tunnel test suite and ports test suite pass without regression.\n\n### Risk / Mitigation\n\n- **Risk**: None. This is a scoped alignment fix matching the existing IPv4 convention in the same module.\n  **Mitigation**: Every other probe in `ssh-tunnel.ts` already uses `127.0.0.1`. The `EADDRINUSE` fallback to `pickEphemeralPort()` remains in place.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] infra\n\n### Regression Test Plan\n\n- `npx vitest run src/infra/ssh-tunnel.test.ts`\n- `npx vitest run src/infra/ports.test.ts`\n\n### Review Findings Addressed\n\nN/A (initial submission)\n\n### Linked Issue/PR\n\nFixes #94596\n",
-        "branch": "fix/issue-94596-ssh-port-available-ipv4",
-        "head_sha": "2cc2777b5cf1cbfd22acb6d76d62ae828d359a63",
-        "author": "zenglingbiao",
-        "labels": [
-          "size: XS",
-          "proof: supplied",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/infra/ssh-tunnel.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 1,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94611",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94611.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 34,
-          "gatingTotal": 29,
-          "counts": {
-            "SUCCESS": 10,
-            "QUEUED": 10,
-            "SKIPPED": 14
-          },
-          "blockers": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2303,
+    "total_ms": 717,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 303
+        "ms": 385
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1793
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 189
+        "ms": 321
       },
       {
         "name": "append_ledger",
