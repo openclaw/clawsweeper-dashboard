@@ -1,21 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T06:58:29.335Z",
+  "generated_at": "2026-06-18T06:58:50.379Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T03:58:26.462Z",
+  "since": "2026-06-18T03:58:49.563Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    94107
+    94032
+  ],
+  "comment_ids": [
+    4738864232
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -275,208 +278,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(outbound): reject reserved Telegram targets before directory/default fallback",
-        "body": "## Summary\n\nWhat problem does this PR solve?\n\n- Fixes Telegram outbound target resolution for provider-reserved words such as `current`, `self`, `this`, and `me`.\n- A reserved word that is also a real configured Telegram group/channel target now resolves through the directory first, instead of being rejected before lookup.\n- A reserved word with no directory match still fails closed before plugin/default fallback.\n- Target validation failures now clear `resolvedTo`, so downstream delivery code cannot accidentally keep using the original unsafe input next to `targetResolutionError`.\n\nWhy does this matter now?\n\n- The previous PR shape protected session-reference words, but it could break existing Telegram routes if a real configured group/channel was named or handled as one of those words.\n- It also left an error-path footgun: callers that did not check `targetResolutionError` first could still see the original unresolved target in `resolvedTo`.\n- The practical user impact is message-delivery correctness: real Telegram directory entries should remain routable, while missing reserved literals should not be treated as literal Telegram destinations.\n\nWhat is the intended outcome?\n\n- `current` resolves to a configured Telegram directory entry when that entry exists.\n- `telegram:current` follows the same directory-first behavior as bare `current`.\n- `current` fails closed with a reserved-target error when there is no matching Telegram directory entry.\n- Gateway delivery planning uses the same directory-aware target result, and failed target validation removes `resolvedTo`.\n\nWhat is intentionally out of scope?\n\n- No Telegram schema, migration, permission, auth, or live-send behavior changes.\n- No new public target syntax beyond using the already introduced plugin reserved-literal contract.\n- No attempt to make bare reserved words literal Telegram usernames after a directory miss; users must use explicit handle/id syntax for literal destinations.\n- No live Telegram network send in this proof environment.\n\nWhat does success look like?\n\n- Directory-backed Telegram targets named/handled as `current` keep working.\n- Reserved words that are not directory entries remain blocked before fallback normalization.\n- Delivery-plan error paths do not expose unsafe original inputs as resolved destinations.\n- Focused regression tests and production-path resolver/gateway proof both pass on the current head.\n\nWhat should reviewers focus on?\n\n- The routing order in `resolveMessagingTarget`: directory matches are preserved before reserved-literal rejection, and reserved literals cannot continue to plugin/default fallback after a miss.\n- The session-route preparation path in `resolveAgentDeliveryPlanWithSessionRoute`: it now uses the directory-aware resolver and clears `resolvedTo` on target-resolution errors.\n- The compatibility boundary for Telegram users with literal reserved-word usernames: explicit handle/id syntax remains the intended path when there is no directory match.\n\nFix classification: root-cause compatibility and safety fix for Telegram outbound target resolution, not a fallback-only mitigation.\n\nRoot cause: reserved-literal rejection ran before directory lookup, so core could not distinguish a real Telegram directory entry named `current` from an unsafe session-reference literal. A separate error-path issue kept `resolvedTo` populated when target validation failed.\n\nWhy this is the root cause: both failures come from target-resolution ownership boundaries. The resolver must first identify whether the input is a configured destination, then apply provider-reserved literal safety before fallback resolution; delivery planning must only expose a destination after successful target validation.\n\nRelated PR scan: this is a repair/update to the existing PR #94107 for #91372. I did not open a competing PR; the remaining public-contract questions are disclosed below for maintainer review.\n\n## Linked context\n\nCloses #91372\n\nRelated #94107\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: Telegram reserved targets like `current` should route to a real configured Telegram group/channel named or handled as `current`, but still fail closed when no directory entry exists.\n- Real environment tested: production OpenClaw modules with the real Telegram plugin, config-backed Telegram groups, the production target resolver, and the gateway delivery-plan/session-route path.\n- Exact steps or command run after this patch:\n\n```bash\nnode --import tsx --eval '<loads telegramPlugin, resolveChannelTarget, and resolveAgentDeliveryPlanWithSessionRoute; resolves current, telegram:current, a directory miss, and the gateway delivery plan>'\n```\n\n- Evidence after fix:\n\n```json\n{\n  \"directoryHit\": {\n    \"ok\": true,\n    \"to\": \"telegram:@current\",\n    \"source\": \"directory\",\n    \"resolutionSource\": \"directory\",\n    \"kind\": \"group\"\n  },\n  \"prefixedHit\": {\n    \"ok\": true,\n    \"to\": \"telegram:@current\",\n    \"source\": \"directory\",\n    \"resolutionSource\": \"directory\",\n    \"kind\": \"group\"\n  },\n  \"reservedMiss\": {\n    \"ok\": false,\n    \"error\": \"Error: Reserved target \\\"current\\\" for Telegram cannot be used as a literal destination. Provide an explicit id or handle. Hint: <chatId>\",\n    \"candidates\": 0\n  },\n  \"gatewayPlan\": {\n    \"resolvedChannel\": \"telegram\",\n    \"resolvedTo\": \"telegram:@current\",\n    \"targetResolutionError\": null\n  }\n}\n```\n\n- Observed result after fix: bare `current` and prefixed `telegram:current` both resolve through the Telegram directory when a real directory entry exists; the same delivery target flows into gateway delivery planning as `telegram:@current`; a missing directory entry still returns the reserved-target error instead of normalizing to an unintended literal destination.\n- What was not tested: no outbound Telegram message was sent to the public Telegram network.\n- Proof limitations or environment constraints: this proof exercises the production Telegram plugin and OpenClaw resolver/delivery-plan path with config-backed directory data; it does not require or use a Telegram bot token.\n- Before evidence: the regression test failed because `current` was rejected before directory lookup, and the delivery-plan error path retained `resolvedTo: \"current\"` after target validation failed.\n\n## Tests and validation\n\nWhich commands did you run?\n\n```bash\nnode scripts/test-projects.mjs src/infra/outbound/target-resolver.test.ts src/infra/outbound/agent-delivery.test.ts src/infra/outbound/targets.shared-test.ts\n```\n\nResult:\n\n```text\nTest Files  3 passed (3)\nTests       108 passed (108)\n```\n\nWhat regression coverage was added or updated?\n\n- `target-resolver.test.ts` now covers directory-first resolution for both `current` and `telegram:current`, plus fail-closed behavior after a directory miss.\n- `agent-delivery.test.ts` now covers clearing `resolvedTo` when route preparation/target validation fails, preserving the stored target error, and falling back to the normalized target only when session-route canonicalization itself cannot produce a route.\n- `targets.shared-test.ts` stayed green, confirming the direct outbound fallback still rejects bare Telegram reserved literals instead of treating them as normal literal targets.\n\nWhat failed before this fix, if known?\n\n- `current` returned a reserved-target error before the resolver checked configured Telegram directory entries.\n- A session-route target validation error could leave the original unsafe `resolvedTo` value visible next to `targetResolutionError`.\n\nIf no test was added, why not?\n\n- Tests were added/updated for the directory-first behavior, directory-miss fail-closed behavior, and delivery-plan error path.\n\nTest guardrail rationale:\n\n- The resolver tests protect both sides of the compatibility boundary: existing real Telegram directory entries keep routing, while missing reserved literals still stop before fallback.\n- The delivery tests protect the safety boundary: failed target validation cannot leave a destination-shaped `resolvedTo` for downstream code to reuse.\n- The shared target tests protect direct outbound behavior so this repair does not accidentally re-enable reserved words as literal fallback destinations.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes. A real Telegram directory entry named/handled as `current`, `self`, `this`, or `me` can now be reached instead of being rejected before lookup; missing entries still fail closed.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo new network/auth/tool execution behavior. The safety posture is preserved for directory misses and strengthened on validation errors by clearing `resolvedTo`.\n\nWhat is the highest-risk area?\n\nTelegram target routing order for provider-reserved literals, especially compatibility between real directory entries and fail-closed reserved words.\n\nHow is that risk mitigated?\n\nThe resolver only allows reserved literals after a concrete directory match. If the directory does not contain a matching Telegram group/channel, the reserved literal still fails closed before plugin/default fallback. Error paths no longer expose the original unsafe target as `resolvedTo`.\n\nScope boundary and patch quality notes:\n\n- The word \"fallback\" in this PR refers to the existing plugin/default target-resolution stages, not to a silent mitigation path.\n- The larger diff size comes from the existing PR's SDK contract/tests plus this repair's resolver/delivery regression coverage; this update stays within the existing PR scope and does not add a second feature.\n- The public contract risk is the existing optional plugin reserved-literal field. This update narrows the behavior by preserving directory compatibility before applying that reserved-literal guard.\n\n## Current review state\n\nWhat is the next action?\n\nReady for maintainer review after the PR branch/body update and fresh checks.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\nNo known author-side code or test follow-up remains. The only proof limitation is that the production-path Telegram proof does not send a live Telegram network message. Maintainers still need to accept the existing SDK contract and compatibility choice for reserved Telegram literals.\n\nWhich bot or reviewer comments were addressed?\n\n- RF-001 `triage: mock-only-proof`: addressed with production-path proof using the real Telegram plugin, production resolver, and gateway delivery-plan path; live Telegram network send remains disclosed as not tested.\n- RF-002 real gateway/message-action or Telegram proof for `target: \"current\"`: addressed with current-head production-path proof showing directory hit for `current` and a fail-closed reserved error on directory miss.\n- RF-003 real behavior proof request: addressed by replacing mock-only proof with production module proof and copied runtime output in this PR body.\n- RF-004 new optional SDK field requires maintainer acceptance: disclosed as a maintainer contract decision; this repair does not expand that API further.\n- RF-005 compatibility risk for bare Telegram reserved targets: addressed by preserving real directory matches before fail-closed rejection, and disclosed that literal non-directory destinations still need explicit handle/id syntax.\n- RF-006 proof still helper/mock based: addressed with production Telegram plugin + resolver + gateway delivery-plan proof after the patch.\n- RF-007 maintainer review needed for SDK field and compatibility choice: disclosed; author-side code/test/proof updates are complete, maintainer contract review remains.\n",
-        "branch": "feat/issue-91372",
-        "head_sha": "e499f25149694fc36cd1b7d18e371f3bb029f97c",
-        "author": "zhangguiping-xydt",
-        "labels": [
-          "docs",
-          "channel: telegram",
-          "gateway",
-          "size: M",
-          "proof: supplied",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/plugins/architecture-internals.md",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/sdk-channel-plugins.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/channel.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/contracts/test-helpers/surface-contract-suite.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/types.core.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent.ts",
-            "additions": 22,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/agent-delivery.test.ts",
-            "additions": 125,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/agent-delivery.ts",
-            "additions": 31,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/target-errors.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/target-normalization.ts",
-            "additions": 52,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/target-resolver.test.ts",
-            "additions": 83,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/target-resolver.ts",
-            "additions": 13,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/targets-resolve-shared.ts",
-            "additions": 14,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/targets.shared-test.ts",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 14,
-        "additions": 430,
-        "deletions": 29,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94107",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94107.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 172,
-          "gatingTotal": 167,
-          "counts": {
-            "SUCCESS": 121,
-            "SKIPPED": 30,
-            "QUEUED": 20,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-commands-doctor-device:QUEUED",
-            "checks-node-agentic-commands-doctor-gateway:QUEUED",
-            "checks-node-agentic-commands-doctor-platform:QUEUED",
-            "checks-node-agentic-commands-doctor-shared:QUEUED",
-            "checks-node-agentic-commands-doctor-whatsapp:QUEUED",
-            "checks-node-agentic-commands-doctor-workspace:QUEUED",
-            "checks-node-agentic-commands-status-tools:QUEUED",
-            "checks-node-agentic-agents-core-auth:QUEUED",
-            "checks-node-agentic-agents-core-models:QUEUED",
-            "checks-node-agentic-agents-core-tools:QUEUED",
-            "checks-node-agentic-agents-core-subagents:QUEUED",
-            "checks-node-agentic-agents-core-runner:QUEUED",
-            "checks-node-agentic-agents-core-runtime:QUEUED",
-            "checks-node-agentic-agents-embedded:QUEUED",
-            "checks-node-agentic-agents-support:QUEUED",
-            "checks-node-agentic-gateway-core:QUEUED",
-            "checks-node-auto-reply-core-top-level:QUEUED",
-            "checks-node-auto-reply-reply-commands:QUEUED",
-            "checks-node-auto-reply-reply-dispatch:QUEUED",
-            "checks-node-auto-reply-reply-state-routing:QUEUED"
-          ],
-          "pending": [
-            "checks-node-agentic-commands-doctor-device:QUEUED",
-            "checks-node-agentic-commands-doctor-gateway:QUEUED",
-            "checks-node-agentic-commands-doctor-platform:QUEUED",
-            "checks-node-agentic-commands-doctor-shared:QUEUED",
-            "checks-node-agentic-commands-doctor-whatsapp:QUEUED",
-            "checks-node-agentic-commands-doctor-workspace:QUEUED",
-            "checks-node-agentic-commands-status-tools:QUEUED",
-            "checks-node-agentic-agents-core-auth:QUEUED",
-            "checks-node-agentic-agents-core-models:QUEUED",
-            "checks-node-agentic-agents-core-tools:QUEUED",
-            "checks-node-agentic-agents-core-subagents:QUEUED",
-            "checks-node-agentic-agents-core-runner:QUEUED",
-            "checks-node-agentic-agents-core-runtime:QUEUED",
-            "checks-node-agentic-agents-embedded:QUEUED",
-            "checks-node-agentic-agents-support:QUEUED",
-            "checks-node-agentic-gateway-core:QUEUED",
-            "checks-node-auto-reply-core-top-level:QUEUED",
-            "checks-node-auto-reply-reply-commands:QUEUED",
-            "checks-node-auto-reply-reply-dispatch:QUEUED",
-            "checks-node-auto-reply-reply-state-routing:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3118,
+    "total_ms": 2489,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 299
+        "ms": 805
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2558
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 234
+        "ms": 1671
       },
       {
         "name": "append_ledger",
