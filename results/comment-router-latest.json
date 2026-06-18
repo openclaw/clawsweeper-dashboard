@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T01:24:31.750Z",
+  "generated_at": "2026-06-18T01:24:50.555Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T22:24:29.381Z",
+  "since": "2026-06-17T22:24:48.176Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94328
+    92577
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4736988830
+  ],
+  "status_comment_id": 4736989043,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94328:4736959355:2026-06-18T01:24:26Z:clawsweeper_needs_human",
-      "comment_id": "4736959355",
-      "comment_version_key": "4736959355:2026-06-18T01:24:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94328#issuecomment-4736959355",
+      "idempotency_key": "comment-router:openclaw/openclaw:92577:4736988830:2026-06-18T01:23:53Z:re_review",
+      "comment_id": "4736988830",
+      "comment_version_key": "4736988830:2026-06-18T01:23:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92577#issuecomment-4736988830",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 94328,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": "main",
+      "issue_number": 92577,
+      "author": "xydt-tanshanshan",
+      "author_id": 291969148,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-18T01:19:10Z",
-      "comment_updated_at": "2026-06-18T01:24:26Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "comment_created_at": "2026-06-18T01:23:53Z",
+      "comment_updated_at": "2026-06-18T01:23:53Z",
+      "status_comment_id": 4736989043,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -60,92 +62,113 @@
       "visual_lens": null,
       "expected_head_sha": "0aad450aabd6480423869327509870b8d16805ea",
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-18T01:24:51.436Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 92577
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-18T01:24:53.754Z",
+          "response_comment_id": "4728101046",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): keep post-compaction user re-issue of a kept-tail prompt during compaction rotation",
-        "body": "## Summary\n\nWith `agents.defaults.compaction.truncateAfterCompaction` enabled, OpenClaw rotates the compacted session into a successor transcript. A genuine post-compaction user instruction that repeats a prompt kept in the pre-compaction tail, and arrives within the 60s duplicate window, is deleted from the rotated transcript. Its assistant reply is left orphaned (two consecutive assistant messages with no parent user turn), so the user instruction is lost and the turn structure is corrupted, which strict providers reject on the next request.\n\nTrigger: compaction keeps a tail user prompt P; within 60s the user (or a cron/heartbeat/retry loop) re-issues P and the agent does new work; on rotation the post-compaction copy of P is dropped.\n\n## Root cause\n\n`src/agents/embedded-agent-runner/compaction-successor-transcript.ts` ran one duplicate-user dedup window across both the kept pre-compaction tail and all post-compaction entries:\n\n```ts\n// before\nconst keptBranchEntries = branch.filter((entry) => !summarizedBranchIds.has(entry.id));\nconst duplicateUserMessageIds =\n  collectDuplicateUserMessageEntryIdsForCompaction(keptBranchEntries);\n```\n\n`collectDuplicateUserMessageEntryIdsForCompaction` keeps the first occurrence of a user prompt and drops later repeats within 60s. Because `keptBranchEntries` spans the compaction boundary, a kept-tail prompt becomes the dedup \"first seen\" and suppresses a real post-compaction re-issue of the same text. The post-compaction turn is genuine new work, not a pre-compaction retry, so it must survive rotation.\n\nThis is a regression of #93732. That PR correctly narrowed the dedup input from the full `branch` to `keptBranchEntries = branch.filter(!summarized)` to fix the summarized+kept double-removal case, but the narrowed set still crosses the boundary.\n\n## Fix\n\nDedup the pre-compaction kept tail and the post-compaction tail independently, resetting the window at the boundary:\n\n```ts\n// after\nconst keptPreCompactionEntries = branch\n  .slice(0, latestCompactionIndex)\n  .filter((entry) => !summarizedBranchIds.has(entry.id));\nconst postCompactionEntries = branch.slice(latestCompactionIndex + 1);\nconst duplicateUserMessageIds = new Set<string>([\n  ...collectDuplicateUserMessageEntryIdsForCompaction(keptPreCompactionEntries),\n  ...collectDuplicateUserMessageEntryIdsForCompaction(postCompactionEntries),\n]);\n```\n\nEach side still removes its own intra-window duplicate retries (the behavior #93732 and the existing dedup test protect), but a kept-tail prompt no longer reaches across the boundary to suppress a real post-compaction turn.\n\n## Why this is the right boundary\n\nThe defect is in how the successor builder feeds entries to the dedup helper, so the fix stays in `buildSuccessorEntries`; the helper itself is unchanged and reused. The compaction index is already computed (`latestCompactionIndex`), so splitting at it adds no new lookup. The only behavior change is that the dedup window resets at the compaction boundary, matching the semantic boundary between summarized history and new work. This is distinct from #84139 (compaction safeguard over-keeping duplicates on sessions_send, the opposite direction) and from #93732's own summarized+kept case.\n\n## Verification\n\nFrom a deps-enabled worktree, against the changed files:\n\n- `node scripts/run-vitest.mjs compaction-successor-transcript.post-compaction-duplicate-prompt.test.ts` plus the adjacent suites `compaction-successor-transcript.test.ts`, `compaction-duplicate-user-messages.test.ts`, `compaction-successor-transcript.duplicate-prompt-loss.test.ts`: all pass with the patch.\n- The existing intended-dedup test (\"drops duplicate user messages from the rotated active branch tail\") stays green; both of its duplicates are post-compaction and are still deduped by the post-compaction window.\n- New regression test fails on pristine `main` and passes with the patch.\n- `oxlint` and `oxfmt --check` clean on both changed files; `tsgo` core and core-test lanes clean.\n\n## Real behavior proof\n\nBehavior addressed: post-compaction user re-issue of a kept-tail prompt is dropped from the rotated successor transcript under `truncateAfterCompaction`.\nReal environment tested: drove the real `rotateTranscriptAfterCompaction` end to end over a real `SessionManager` transcript (summarized prefix, kept-tail prompt P, compaction entry, then a post-compaction re-issue of P inside the 60s window with a new assistant reply), then read the rotated successor file back with `readTranscriptFileState` and counted surviving copies of P.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/compaction-successor-transcript.post-compaction-duplicate-prompt.test.ts`\nEvidence after fix:\n```\n# BEFORE (pristine main b02b05d134)\nAssertionError: expected 1 to be 2\n  surviving copies of the post-compaction prompt P in the successor transcript: 1\n  (post-compaction re-issue dropped; its assistant reply orphaned)\n\n# AFTER (this patch, identical inputs)\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n  surviving copies of the post-compaction prompt P in the successor transcript: 2\n```\nObserved result after fix: both the kept-tail prompt and the real post-compaction re-issue survive rotation; no orphaned assistant turn.\nWhat was not tested: no live strict-provider request was issued against the corrupted-vs-fixed transcript; the orphaned-turn rejection is the documented consequence, not separately reproduced here. Full `pnpm build` was not run (no dynamic-import or packaging surface touched).\n\nNote: open PR #90641 touches the same region for a different concern (assistant boundary replies) and is based pre-#93732; if it lands first this branch rebases cleanly since the changes are adjacent, not overlapping.\n",
-        "branch": "fix/compaction-postcompaction-duplicate-prompt",
-        "head_sha": "0aad450aabd6480423869327509870b8d16805ea",
-        "author": "yetval",
+        "title": "fix: deduplicate consecutive assistant messages in session-memory hook",
+        "body": "## Summary\n\nWhen using a model with thinking/reasoning enabled (e.g. DeepSeek), the session JSONL may contain two entries for the same assistant response:\n1. The raw version with thinking blocks (`[{type: \"thinking\", text: \"...\"}, {type: \"text\", text: \"Hi there!\"}]`)\n2. A cleaned text-only version (`[{type: \"text\", text: \"Hi there!\"}]`)\n\nThe `session-memory` hook's `getRecentSessionContent()` reads both entries via `extractTextMessageContent()`, which extracts the same text from each. This produces duplicate `assistant:` lines in memory files.\n\nNow the raw thinking entry's cleaned child (linked via `parentId`) is skipped during transcript extraction. Non-consecutive duplicates and unrelated same-text entries (no `parentId` lineage) are preserved. This fix is in the `session-memory` hook only — the storage layer is untouched.\n\n- Problem: session-memory files show every `assistant:` line twice when the model uses thinking/reasoning\n- Solution: `getRecentSessionContent()` skips an assistant entry when its `parentId` matches the previous assistant's `id` AND the extracted text is identical\n- What changed: `src/hooks/bundled/session-memory/transcript.ts` (+16 lines), new test file `transcript.test.ts` (5 tests)\n- What did NOT change: Storage layer, session JSONL format, `session-memory` hook persistence\n\n## Change Type\n\n- [x] Bug fix\n\n## Scope\n\n- [x] Memory / hooks\n\n## Linked Issue\n\n- Fixes #92563\n\n## Motivation\n\nIssue #92563 reports duplicate assistant lines in session-memory files when using thinking/reasoning models. The session JSONL stores both a raw message (with thinking blocks + text) and a cleaned text-only version for the same response. `getRecentSessionContent()` reads both via `extractTextMessageContent()`, which extracts text from the first `type: \"text\"` block — the same text appears in both entries, producing duplicates.\n\nThe fix applies deduplication at the transcript extraction layer, constrained to the raw/cleaned assistant **lineage** (via `parentId`): only the cleaned child of a raw thinking entry is skipped. This is the safest location because:\n1. It doesn't change storage behavior (affects other consumers like `/new` context)\n2. Lineage constraint ensures legitimate repeated assistant text without parent-child relationship is preserved\n3. Non-consecutive duplicates are preserved (legitimate repeated messages)\n\n## Changes\n\n**File**: `src/hooks/bundled/session-memory/transcript.ts`\n\n`getRecentSessionContent()` now tracks `lastAssistantId` and `lastAssistantText`. When the next assistant entry's `parentId` matches `lastAssistantId` AND its extracted text matches `lastAssistantText`, it's skipped as the cleaned child of a raw thinking entry. This uses the session entry's lineage (`id`/`parentId`) rather than purely text equality, so unrelated same-text assistant messages are preserved.\n\n**Test**: `src/hooks/bundled/session-memory/transcript.test.ts` (new, 5 tests)\n\n1. Deduplicates consecutive assistant messages with identical text (thinking scenario)\n2. Keeps distinct assistant messages unchanged\n3. Does not skip non-consecutive duplicates (separated by user message)\n4. Does not skip unrelated assistant messages with same text but no `parentId` lineage\n5. Does not skip assistant child with different text than parent\n\n## Real Behavior Proof\n\n- **Behavior addressed**: `getRecentSessionContent()` produces duplicate `assistant:` lines when the session JSONL contains both raw (with thinking blocks) and cleaned (text-only) versions of the same assistant message\n- **Real environment tested**: Linux, Node.js v24.13.1, pnpm 9.15.9, local checkout on branch `pr/session-memory-dedup-92563` at commit `567858ef3`\n- **Exact steps or command run after this patch**: `node --import tsx src/hooks/bundled/session-memory/proof.mts` — standalone proof script that calls `getRecentSessionContent()` with the exact JSONL shape produced by thinking-enabled models (raw thinking+text entry followed by cleaned text-only child, linked via `parentId`)\n- **Evidence after fix**: Terminal output from proof.mts showing all 5 scenarios pass with the fix applied:\n  ```console\n  ── Scenario 1: Raw thinking + cleaned child (the #92563 bug) ──\n    Before fix (simulated main): 6 assistant lines (2 raw + 2 cleaned = 4 duplicates)\n    After fix  (#92577):          2 assistant lines\n    ✓ 2 turns with thinking: 4 lines, no duplicates\n\n  ── Scenario 2: Distinct assistant messages (no thinking) ──\n    ✓ 4 distinct messages preserved\n\n  ── Scenario 3: Legitimate same-text across different turns ──\n    ✓ Both \"assistant: OK\" preserved (user message breaks chain)\n\n  ── Scenario 4: Same text, no parentId chain ──\n    ✓ Both \"assistant: ok\" preserved (no parentId chain)\n\n  ── Scenario 5: Cleaned child with DIFFERENT text kept ──\n    ✓ Both assistant lines kept (child text differs from parent)\n\n  ── FULL OUTPUT: Realistic DeepSeek session with thinking ──\n    user: What is 2+2?\n    assistant: 2+2 equals 4.\n    user: What about 3+3?\n    assistant: 3+3 equals 6.\n    ✓ No duplicate assistant lines in output\n    raw entries: 6 → deduped output lines: 4 (2 duplicates removed)\n\n  ── SUMMARY ──\n    All 5 scenarios pass (0 false positives, 2 true positives)\n  ```\n- **Observed result after fix**: When the JSONL contains a raw thinking entry followed by its cleaned child (same `parentId` lineage, same text), only the first is included. Unrelated assistant messages with the same text but no `parentId` relationship are preserved. A cleaned child with different text than its parent is preserved. All 5 proof scenarios pass with 0 false positives.\n- **What was not tested**: Full OpenClaw E2E `/new` or `/reset` with a live thinking-enabled provider (DeepSeek, Claude). The proof script simulates the exact JSONL shape that such a session produces, and the dedup logic is verified at the `getRecentSessionContent()` boundary.\n\n## Risks\n\n- **Low risk**: The change only affects the `session-memory` hook's transcript extraction. It doesn't change storage, JSONL format, or other consumers of session data.\n- **Lineage-constrained dedup**: Only skips when the previous assistant entry's `parentId` chain links to the raw thinking entry AND text matches. Unrelated same-text entries are preserved.\n- **Regression covered**: 2 new tests for non-lineage duplicates and different-text children.\n- **No config/default surface changes**: No new config keys, env vars, or defaults introduced.\n\n## User-visible / Behavior Changes\n\nUsers of thinking/reasoning models (DeepSeek, Claude with thinking enabled, etc.) will no longer see duplicate `assistant:` lines in their session-memory files.\n\n## Security Impact\n\n- [x] New permissions/capabilities? No\n- [x] Secrets/tokens handling changed? No\n- [x] New/changed network calls? No\n- [x] Command/tool execution surface changed? No\n- [x] Data access scope changed? No\n\n## Human Verification\n\n- Verified scenarios: Consecutive thinking duplicate dedup (test 1), distinct messages preserved (test 2), non-consecutive duplicates preserved (test 3), unrelated same-text entries preserved (test 4), different-text child preserved (test 5)\n- Edge cases checked: User message between duplicates (dedup reset), empty text, text starting with `/`, non-assistant messages, `parentId` mismatch, text mismatch with same `parentId`\n- What you did NOT verify: Live session with thinking-enabled model\n\n## Compatibility / Migration\n\n- [x] Backward compatible? Yes\n- [x] Config/env changes? No\n- [x] Migration needed? No\n\n## AI Assistance 🤖\n\n- **AI-assisted**: Yes\n- **Human confirmed understanding of code changes**: Yes\n- **AI prompts / session excerpts**: Issue #92563 analysis → source code exploration of `getRecentSessionContent()` and `extractTextMessageContent()` in `src/hooks/bundled/session-memory/transcript.ts` → root cause identified as no dedup between consecutive duplicate assistant messages → minimal fix adding consecutive duplicate detection\n\n## Competing Fix Justification\n\nThis PR is one of four open PRs targeting #92563. Below is why this `parentId`-constrained approach is the optimal canonical fix:\n\n| Approach | PR | Precision | Prod Δ | Codex Quality | False Positive Risk |\n|----------|----|-----------|--------|---------------|---------------------|\n| parentId + id + text (this PR) | #92577 | ✅ Lineage-aware | +5 lines | 🐚 platinum hermit | Low |\n| Map-based parentId lookup | #92571 | ✅ Lineage-aware | +25 lines | 🐚 platinum hermit | Low |\n| Pure text matching | #92966 | ❌ Too broad | +5 lines | 🦪 silver shellfish | Medium |\n| Pure text + delivery-mirror | #93267 | ❌ Too broad | +8 lines | 🦐 gold shrimp | Medium |\n\n**Key advantages of #92577:**\n1. **Lineage-aware**: only skips when `parentId` confirms the entry is a cleaned child of a raw thinking entry — pure-text approaches (#92966, #93267) can falsely suppress legitimate consecutive same-text assistants\n2. **Minimal surface**: +5 lines production code (vs +25 for #92571)\n3. **Isolated unit tests**: 5 edge-case tests in `transcript.test.ts` cover all relevant transcript shapes — only PR with separate unit-level coverage\n4. **Best Codex rating**: 🐚 platinum hermit with NO correctness findings (both #92966 and #93267 received \"patch is incorrect\")\n5. **Edge-case complete**: behaves correctly on all 8 transcript shapes (see [canonical analysis](./92577-canonical-analysis.md))\n\n---\n\nFixes #92563",
+        "branch": "fix/session-memory-dedup-92563",
+        "head_sha": "930f2b6014e9719728af90ffdc03b2064be3779f",
+        "author": "xydt-tanshanshan",
         "labels": [
-          "agents",
           "size: S",
           "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
+          "P2",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/compaction-successor-transcript.post-compaction-duplicate-prompt.test.ts",
-            "additions": 82,
+            "path": "src/hooks/bundled/session-memory/transcript.test.ts",
+            "additions": 117,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
-            "additions": 8,
-            "deletions": 3,
+            "path": "src/hooks/bundled/session-memory/transcript.ts",
+            "additions": 16,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 90,
-        "deletions": 3,
+        "additions": 133,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94328",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94328.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92577",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92577.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 170,
-          "gatingTotal": 165,
+          "total": 168,
+          "gatingTotal": 163,
           "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 137,
-            "SKIPPED": 31,
+            "SUCCESS": 133,
+            "SKIPPED": 32,
+            "FAILURE": 2,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "checks-node-core-fast:FAILURE",
+            "check-test-types:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "checks-node-core-fast:FAILURE",
+            "check-test-types:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2631,
+    "total_ms": 6230,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 305
+        "ms": 554
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2050
+        "ms": 1807
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 251
+        "ms": 3841
       },
       {
         "name": "append_ledger",
