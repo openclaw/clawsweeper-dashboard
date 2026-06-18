@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T07:41:59.573Z",
+  "generated_at": "2026-06-18T07:43:04.527Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T04:41:57.452Z",
+  "since": "2026-06-18T04:43:03.875Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4739305735
   ],
-  "status_comment_id": 4739306344,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4739305735:2026-06-18T07:40:59Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/94484#issuecomment-4739305735",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 94484,
       "author": "zenglingbiao",
       "author_id": 290951975,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-18T07:40:59Z",
       "comment_updated_at": "2026-06-18T07:40:59Z",
-      "status_comment_id": 4739306344,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,123 +62,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-18T07:42:00.349Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 94484
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-18T07:42:01.485Z",
-          "response_comment_id": "4739306344",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): deliver workspace runtime context through collaboration instructions instead of user input text (fixes #84662)",
-        "body": "### Summary\n\n- **Problem**: Codex app-server prepends `OpenClaw runtime context for this turn:` (workspace prompt context) to every turn's user input text sent via `turn/start.input[0].text`. Codex native history persists this decorated text as a normal user item, so each subsequent turn replays all prior copies. After enough turns most of the model input is repeated runtime context rather than the current user request.\n- **Root Cause**: `buildCodexOpenClawPromptContext()` in `attempt-context.ts` generates the runtime-context block, `prependCodexOpenClawPromptContext()` wraps it into the user prompt, and the resulting `codexTurnPromptText` is passed directly as `promptText` to `buildTurnStartParams()` → `buildUserInput()` → `input[0].text`, which Codex stores in native thread history for replay on every `response.create`.\n- **Fix**: Route the workspace prompt context through the collaboration mode `developer_instructions` instead of the user input text. The `codexTurnPromptText` (including delivery metadata formatting) is still used for LLM-facing prompt construction and transcript mirroring; only the `turn/start` user input text is kept free of the runtime context block.\n- **What changed**:\n  - `extensions/codex/src/app-server/thread-lifecycle.ts` — accept `workspacePromptContext` in `buildTurnStartParams` and include it in `buildTurnCollaborationMode` developer instructions\n  - `extensions/codex/src/app-server/run-attempt.ts` — pass clean prompt text (with delivery hint formatting but without runtime context) as `promptText`, route `openClawPromptContext` through the new `workspacePromptContext` parameter\n  - `extensions/codex/src/app-server/run-attempt.test.ts` — update memory injection test to verify runtime context appears in collaboration instructions, not user input\n- **What did NOT change (scope boundary)**:\n  - `buildCodexOpenClawPromptContext` / `prependCodexOpenClawPromptContext` — unchanged; the runtime context is still built and prepended for LLM-facing prompt paths\n  - `codexTurnPromptText` — still used for `buildCodexUserPromptMessage`, transcript mirroring, and model prompt construction\n  - Codex thread/resume protocol — only `turn/start.input[0].text` is affected\n  - Collaboration mode behavior for non-workspace-context scenarios — unchanged when `workspacePromptContext` is undefined\n\n### Reproduction\n\n1. Configure a Codex app-server workspace with a `MEMORY.md` file (or any workspace prompt context).\n2. Start a Codex agent turn via OpenClaw.\n3. Inspect the `turn/start` request `input[0].text`.\n4. **Before this PR**: `input[0].text` contains `OpenClaw runtime context for this turn:\\nTreat this OpenClaw-provided context as supporting project/user reference...\\n\\n## OpenClaw Workspace Context\\n\\n<workspace prompt context>\\n\\nCurrent user request:\\n<user prompt>` — the full runtime context block is persisted in Codex history.\n5. **After this PR**: `input[0].text` contains only the user prompt and delivery metadata (if any), without the runtime context block. The runtime context is delivered through `collaborationMode.settings.developer_instructions`.\n\n### Real behavior proof\n\n**Behavior or issue addressed (#84662)**: Codex app-server persisted the per-turn OpenClaw runtime context wrapper inside the Codex native user history via `turn/start.input[0].text`, causing runaway input growth as every subsequent turn replayed all prior copies. After the fix, the runtime context is routed through collaboration mode developer instructions and no longer appears in the persisted user input text.\n\n**Real environment tested**: Linux, Node 22 — Codex extension integration test harness exercising the full `runCodexAppServerAttempt` path against workspace MEMORY.md injection and delivery hint scenarios with fake timers.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts extensions/codex/src/app-server/thread-lifecycle.test.ts extensions/codex/src/app-server/attempt-context.test.ts`\n\n**Evidence before fix**:\n```text\n$ node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts\nThe integration test \"injects bounded MEMORY.md when memory tools are unavailable\"\nasserted inputText contained memorySummary, confirming the runtime context wrapper\nwas placed in the user input text that Codex persists in native history.\n```\n\n**Evidence after fix**:\n```text\n$ node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts extensions/codex/src/app-server/thread-lifecycle.test.ts extensions/codex/src/app-server/attempt-context.test.ts\nAll three test files complete without failure. The updated \"injects bounded\nMEMORY.md\" test now asserts developerInstructions contains memorySummary instead of\ninputText, confirming the runtime context is delivered through collaboration\ninstructions and excluded from the persisted user input text.\n```\n\n**Observed result after fix**: The runtime context (including workspace MEMORY.md content) is delivered to the model through `collaborationMode.settings.developer_instructions` while `turn/start.input[0].text` contains only the user prompt and any delivery metadata formatting. Delivery hint formatting (OpenClaw delivery metadata wrapper) is preserved in the prompt text so Codex can distinguish routing guidance from user requests.\n\n**What was not tested**: Live Codex app-server end-to-end round-trip with accumulated multi-turn history was not driven. The fix is verified through the existing integration test harness which exercises the full `runCodexAppServerAttempt` path including `turn/start` parameter construction, collaboration mode assembly, and memory injection.\n\n**Repro confirmation**: The \"injects bounded MEMORY.md\" test on origin/main asserts `inputText` contains the memory summary (old behavior: context in user input). After the patch it asserts `developerInstructions` contains the memory summary and `inputText` no longer contains it (new behavior: context in collaboration instructions, user input stays clean).\n\n### Risk / Mitigation\n\n- **Risk**: Runtime context that previously appeared in the user input text is now in collaboration developer instructions; model behavior may differ if Codex handles these fields differently.\n  **Mitigation**: The collaboration mode `developer_instructions` field is the standard mechanism for delivering per-turn workspace context to Codex. The existing test suite verifies the context still reaches the model in this field.\n- **Risk**: `promptText` now calls `prependCodexOpenClawPromptContext` with `undefined` context instead of using the decorated `codexTurnPromptText`; delivery hint handling could diverge.\n  **Mitigation**: The `prependCodexOpenClawPromptContext` call with `undefined` context and `preservePromptWithoutContext` flag mirrors the existing delivery hint formatting logic. The \"keeps leading delivery hints out of the Codex current user request\" test passes unchanged.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] extensions: codex\n- [x] agents (Codex app-server run attempt)\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts`\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/thread-lifecycle.test.ts`\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/attempt-context.test.ts`\n\n### Review Findings Addressed\n\nN/A (initial submission)\n\n### Linked Issue/PR\n\nFixes #84662\n",
-        "branch": "fix/issue-84662-codex-runtime-context",
-        "head_sha": "80097b3a845580a780f67bb00f569f5f571437c7",
-        "author": "zenglingbiao",
-        "labels": [
-          "size: XS",
-          "extensions: codex",
-          "proof: supplied"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/thread-lifecycle.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 17,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94484",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94484.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 30,
-          "gatingTotal": 25,
-          "counts": {
-            "SUCCESS": 12,
-            "QUEUED": 4,
-            "SKIPPED": 14
-          },
-          "blockers": [
-            "preflight:QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4629,
+    "total_ms": 2607,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 514
+        "ms": 638
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1591
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2496
+        "ms": 1956
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
