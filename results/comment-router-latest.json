@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T03:54:47.704Z",
+  "generated_at": "2026-06-18T03:55:27.040Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T00:54:47.309Z",
+  "since": "2026-06-18T00:55:24.775Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94372
+    94346
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,129 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94346:4737229882:2026-06-18T03:55:21Z:clawsweeper_auto_repair",
+      "comment_id": "4737229882",
+      "comment_version_key": "4737229882:2026-06-18T03:55:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94346#issuecomment-4737229882",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 94346,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-18T02:16:18Z",
+      "comment_updated_at": "2026-06-18T03:55:21Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=55e74b24454ae22e639c9b1fe40e0eb6d7a47b7e)",
+      "review_summary": "The PR stores startup overflow cron catch-up deferral job IDs in cron service state and passes that Set to selected read and timer maintenance recomputes.\n\nPR surface: Source +29. Total +29 across 3 files.\n\nReproducibility: yes. The linked issue and current source show startup can defer an overflow cron job, then read/status or timer maintenance can call future-slot repair without that deferral skip before the staggered tick; I did not execute tests because this review is read-only.",
+      "review_followup": "- [P1] The PR has a blocking code defect and insufficient real behavior proof, so contributor or maintainer branch work is needed before merge rather than a cleanup close or automated repair lane.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "55e74b24454ae22e639c9b1fe40e0eb6d7a47b7e",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): persist startup overflow deferral in service state to prevent silent drop",
+        "body": "## Summary\n\nWhen a cron job's startup catch-up overflows the per-restart budget (`maxMissedJobsPerRestart`), it is deferred to a near-future staggered slot (`now + stagger`). However, every caller of `recomputeNextRunsForMaintenance` other than `start()`'s immediate post-catchup pass ran future-slot repair without the deferred-job exemption, silently advancing the deferred job's `nextRunAtMs` to its natural schedule.\n\nThis meant that any read RPC (`cron list`/`status`), timer maintenance tick, or finalization of another job would drop the deferred run entirely — the staggered catch-up slot never fired.\n\n## Fix\n\n1. **Add `deferredCatchupJobIds` (Set\\<string\\>) to `CronServiceState`** — the set lives in mutable service state so every caller can access it\n2. **Store the deferred IDs in state** immediately after `runMissedJobs()` returns them during startup\n3. **Pass `state.deferredCatchupJobIds` as `skipFutureRepairJobIds`** in every `recomputeNextRunsForMaintenance` call across both `ops.ts` and `timer.ts`, not only the post-startup locked block\n\nThe three `timer.ts` call sites with `repairFutureCronNextRunAtMs: false` are intentionally left unchanged — they already skip future-slot repair at the policy level.\n\n## Changes\n\n| File | Change |\n|---|---|\n| `src/cron/service/state.ts` | Added `deferredCatchupJobIds: Set\\<string\\>` to state type and initialization |\n| `src/cron/service/ops.ts` | Store deferred IDs in state; pass them in `ensureLoadedForRead` |\n| `src/cron/service/timer.ts` | Pass deferred IDs in 4 maintenance recompute call sites |\n\n## Real behavior proof\n\nBehavior or issue addressed: Deferred cron catch-up jobs are silently dropped when read RPCs (cron list/status), timer maintenance ticks, or finalization of other jobs trigger `recomputeNextRunsForMaintenance` without `skipFutureRepairJobIds`. The staggered catch-up slot never fires.\n\nReal environment tested: Isolated simulation of `recomputeNextRunsForMaintenance` with the same call-site logic pattern used in `ops.ts` and `timer.ts`. The simulation covers both the unfixed behavior (no `skipFutureRepairJobIds`) and the fixed behavior (`state.deferredCatchupJobIds` passed to every call site), plus backward compatibility when no deferred jobs exist.\n\nExact steps or command run after this patch:\n\n```\n// Cron state with 4 jobs: 2 normal, 2 deferred (after catch-up overflow)\nstate.jobs = [\n  { id: \"job-normal-1\", state: { scheduleMs: 60000 }, nextRunAtMs: 1000 },\n  { id: \"job-deferred-1\", state: { scheduleMs: 60000 }, nextRunAtMs: 2000 },\n  { id: \"job-deferred-2\", state: { scheduleMs: 120000 }, nextRunAtMs: 3000 },\n  { id: \"job-normal-2\", state: { scheduleMs: 60000 }, nextRunAtMs: 4000 },\n];\nstate.deferredCatchupJobIds = new Set([\"job-deferred-1\", \"job-deferred-2\"]);\n\n// WITHOUT FIX: read RPC (cron list) → ensureLoadedForRead\n// recomputeNextRunsForMaintenance(state) ← no skipFutureRepairJobIds\n//   job-deferred-1: nextRunAtMs=2000 → 62000  ❌ STAGGERED SLOT LOST\n//   job-deferred-2: nextRunAtMs=3000 → 123000 ❌ STAGGERED SLOT LOST\n\n// WITH FIX: read RPC → ensureLoadedForRead\n// recomputeNextRunsForMaintenance(state, {\n//   skipFutureRepairJobIds: state.deferredCatchupJobIds,\n// })\n//   job-deferred-1: nextRunAtMs=2000 → 2000  ✅ STAGGERED SLOT PRESERVED\n//   job-deferred-2: nextRunAtMs=3000 → 3000  ✅ STAGGERED SLOT PRESERVED\n\n// Backward compatible: no deferred IDs ever set\n//   skipFutureRepairJobIds: deferredCatchupJobIds.size > 0 ? deferredCatchupJobIds : undefined\n//   → skipFutureRepairJobIds=undefined (empty set)\n//   Normal jobs still repaired: job-normal: nextRunAtMs=5000 → 65000 ✅\n```\n\nEvidence after fix: Terminal output from the simulation confirms the fix behavior:\n\n- Without fix: deferred jobs' `nextRunAtMs` is advanced past their staggered slot after any read RPC or timer maintenance — the catch-up never fires ❌\n- With fix: deferred jobs' `nextRunAtMs` is preserved across all call sites (ensureLoadedForRead, onTimer timer tick, onTimer finalization, onTimer normal path) — staggered catch-up fires as intended ✅\n- Backward compatible: no deferred IDs → empty set → `skipFutureRepairJobIds` is `undefined` → normal jobs repaired as before ✅\n\nThe fix is minimal: 3 files, +33/-4 lines. The core logic stores `deferredCatchupJobIds` from `runMissedJobs()` return value into `state` (one line in `ops.ts:start()`), and passes `state.deferredCatchupJobIds` as `skipFutureRepairJobIds` in every `recomputeNextRunsForMaintenance` call site (1 in `ops.ts` + 4 in `timer.ts`).\n\nObserved result after the fix: Deferred catch-up job IDs are persisted in service state and exempted from future-slot repair across all callers of `recomputeNextRunsForMaintenance` — not only the immediate post-startup pass. The staggered catch-up slot is preserved and will fire as intended.\n\nWhat was not tested: Full integration test with live OpenClaw cron scheduler, Docker deployments, or multi-node setups. The change is a pure state-passing fix: store a Set in state → pass it as a parameter to an existing function that already supports `skipFutureRepairJobIds`. No new code paths, side effects, or behavioral changes to non-deferred jobs.\n\n## Related\n\nFixes #93935\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+        "branch": "fix/issue-93935-cron-deferral-persist",
+        "head_sha": "55e74b24454ae22e639c9b1fe40e0eb6d7a47b7e",
+        "author": "xydttsw",
+        "labels": [
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cron/service/ops.ts",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/state.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 14,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 33,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94346",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94346.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 17,
+          "gatingTotal": 12,
+          "counts": {
+            "SUCCESS": 7,
+            "SKIPPED": 10
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 769,
+    "total_ms": 2599,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 385
+        "ms": 354
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1896
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 375
+        "ms": 321
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
