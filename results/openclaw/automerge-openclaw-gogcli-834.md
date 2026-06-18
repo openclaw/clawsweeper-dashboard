@@ -2,21 +2,21 @@
 repo: "openclaw/gogcli"
 cluster_id: "automerge-openclaw-gogcli-834"
 mode: "autonomous"
-run_id: "27745553593"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27745553593"
-head_sha: "f84e575ec6e1fe796be723a856fbd67f8b7caa29"
-workflow_conclusion: "failure"
+run_id: "27746316258"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27746316258"
+head_sha: "e0d595ca3b5e15ef1aacba6cb46982095b7065a0"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-06-18T08:18:49.646Z"
+published_at: "2026-06-18T09:31:31.558Z"
 canonical: "#834"
 canonical_issue: null
 canonical_pr: "#834"
 actions_total: 1
-fix_executed: 1
+fix_executed: 0
 fix_failed: 0
-fix_blocked: 1
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/gogcli
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27745553593](https://github.com/openclaw/clawsweeper/actions/runs/27745553593)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27746316258](https://github.com/openclaw/clawsweeper/actions/runs/27746316258)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -42,11 +42,11 @@ Make PR #834 merge-ready for ClawSweeper automerge. Rebase onto latest main, add
 | Metric | Count |
 | --- | ---: |
 | Worker actions | 1 |
-| Fix executed | 1 |
+| Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 1 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,14 +54,13 @@ Make PR #834 merge-ready for ClawSweeper automerge. Rebase onto latest main, add
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | blocked |  |  | source PR branch changed while the repair worker was preparing its push; requeue against the latest head |
-| automerge_repair_outcome_comment | executed | #834 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/gogcli/pull/834 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #834 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
