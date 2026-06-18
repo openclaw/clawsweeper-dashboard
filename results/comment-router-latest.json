@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T16:00:58.439Z",
+  "generated_at": "2026-06-18T16:02:51.384Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T13:00:54.635Z",
+  "since": "2026-06-18T13:02:49.168Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     94633
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4743755355
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -62,101 +64,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(feishu): replace empty bitable record value schema rejected by strict validators",
-        "body": "## Summary\n- The bitable write tools (`feishu_bitable_create_record`, `feishu_bitable_update_record`, `feishu_bitable_create_field`) declared their free-form record-typed parameters as `Type.Record(Type.String(), Type.Any())`. `Type.Any()` serializes to the empty schema `{}`, so each tool's parameter schema contained `patternProperties: { \"^.*$\": {} }` with an **empty value sub-schema**.\n- AWS Bedrock enforces strict JSON Schema draft 2020-12 and rejects empty sub-schemas, which fails the **entire** tool list (not just bitable) for any agent routing Anthropic through Bedrock. The Anthropic direct API tolerates the empty sub-schema, so this only manifests under strict validators like Bedrock.\n- Modeled the field value as a non-empty union of the types a bitable field value can take (string, number, boolean, null, array of primitives, open object). Every branch serializes to a non-empty schema, so `patternProperties` values are no longer empty `{}`. The open-object branch (`Type.Object({}, { additionalProperties: true })`) mirrors the existing pattern already used by other Anthropic-facing tools (e.g. `extensions/browser/src/browser-tool.schema.ts`).\n- Note: `Type.Unknown()` was not used because it also serializes to `{}` (same empty schema), so it would not fix the issue.\n\n## Change Type\n- [x] Bug fix\n\n## Scope\n- [x] Integrations (Feishu plugin)\n\n## Root Cause\n- Root cause: `Type.Any()` (and `Type.Unknown()`) serializes to `{}`, an empty JSON Schema with no `type`. Used as the value of `Type.Record(Type.String(), ...)`, it produces `patternProperties: { \"^.*$\": {} }`. Strict draft 2020-12 validators (Bedrock) reject empty sub-schemas and fail the whole request.\n- Missing detection/guardrail: OpenClaw's per-provider tool-schema normalization scrubs unsupported keywords for Gemini/xAI but has no empty-sub-schema sanitization for Anthropic-bound schemas; the Anthropic direct API's tolerance masked the issue until routing through a strict validator.\n\n## Real behavior proof\n\n**Behavior addressed:** The three bitable write tools no longer emit an empty `{}` sub-schema as the value of their `patternProperties` record parameters; the value is now a non-empty `anyOf` union.\n\n**Environment tested:** Node 24.13.1 on Linux, vitest 4.1.8, serializing the actual registered tool parameter schemas from source via `node --import tsx`.\n\n**Steps run after the patch:** Registered the bitable tools through the production `registerFeishuBitableTools` entry point and serialized each tool's `parameters` schema, checking for the regression marker `patternProperties\":{\"^.*$\":{}}` (empty value sub-schema):\n\n```bash\nnode --import tsx --no-warnings -e \"\nimport { registerFeishuBitableTools } from './extensions/feishu/src/bitable.ts';\nconst registered = [];\nconst api = { config: { channels: { feishu: { enabled: true, accounts: { default: { appId: 'x', appSecret: 's' } } } } }, logger: { info(){}, warn(){}, error(){}, debug(){} }, registerTool: (fn, opts) => registered.push({ tool: fn, opts }) };\nregisterFeishuBitableTools(api);\nfor (const name of ['feishu_bitable_create_record','feishu_bitable_update_record','feishu_bitable_create_field']) {\n  const e = registered.find(r => r.opts?.name === name);\n  const params = e.tool({}).parameters;\n  console.log(name, '-> empty {} sub-schema:', JSON.stringify(params).includes('\\\"patternProperties\\\":{\\\"^.*$\\\":{}}'));\n}\n\"\n```\n\n**Evidence after fix:**\n\n```text\nfeishu_bitable_create_record -> empty {} sub-schema: false\nfeishu_bitable_update_record -> empty {} sub-schema: false\nfeishu_bitable_create_field -> empty {} sub-schema: false\n```\n\nThe `patternProperties` value for each tool's record parameter now serializes to a non-empty `anyOf` union, e.g. for `feishu_bitable_create_record`:\n\n```text\n\"fields\": {\n  \"type\": \"object\",\n  \"patternProperties\": {\n    \"^.*$\": {\n      \"anyOf\": [\n        { \"type\": \"string\" },\n        { \"type\": \"number\" },\n        { \"type\": \"boolean\" },\n        { \"type\": \"null\" },\n        { \"type\": \"array\", \"items\": { \"anyOf\": [ ... ] } },\n        { \"type\": \"object\", \"properties\": {}, \"additionalProperties\": true }\n      ]\n    }\n  }\n}\n```\n\n(Before the patch this was `patternProperties: { \"^.*$\": {} }`.)\n\n**Observed result after the fix:** No bitable write tool emits an empty `{}` value sub-schema; unit tests pass: `vitest run extensions/feishu/src/bitable.test.ts` → 5 passed.\n\n**Not tested:** A live request through an actual AWS Bedrock Anthropic endpoint was not exercised (requires a Bedrock-proxied Anthropic provider); the fix is verified by schema serialization against the strict-validator rejection criterion (empty sub-schema) reported in the issue. Other plugins were not audited for the same `Type.Record(Type.String(), Type.Any())` pattern beyond feishu (a repo-wide grep found no other occurrences).\n\n## Regression Test Plan\n- `extensions/feishu/src/bitable.test.ts` — new `describe(\"feishu bitable write tool schemas\")` with three cases (create_record, update_record, create_field), each asserting the `patternProperties` value sub-schema is non-empty and matches `{ anyOf: [...] }`, and that the serialized schema contains no `patternProperties\":{\"^.*$\":{}}` regression marker.\n\n## User-visible / Behavior Changes\nAgents routing Anthropic through AWS Bedrock (or other strict draft 2020-12 validators) with feishu bitable write tools enabled no longer have every LLM call rejected with `tools.N.custom.input_schema: JSON schema is invalid`. The bitable field-value schema is now a typed union rather than the unconstrained `Type.Any()`.\n\n## Security Impact\n- New permissions? No\n- Secrets handling changed? No\n- New network calls? No\n\nCloses #94547\n",
-        "branch": "fix/94547-feishu-bitable-empty-schema",
-        "head_sha": "5e0fb8962ad387bb6f1d1a3d14deadeec495c450",
-        "author": "zoowh",
-        "labels": [
-          "channel: feishu",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "rating: 🧂 unranked krab",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "extensions/feishu/src/bitable.test.ts",
-            "additions": 52,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/bitable.ts",
-            "additions": 20,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 72,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94633",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94633.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 30,
-          "gatingTotal": 25,
-          "counts": {
-            "CANCELLED": 2,
-            "QUEUED": 4,
-            "SKIPPED": 14,
-            "SUCCESS": 10
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "preflight:QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4019,
+    "total_ms": 3001,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 273
+        "ms": 2203
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3517
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 204
+        "ms": 784
       },
       {
         "name": "append_ledger",
