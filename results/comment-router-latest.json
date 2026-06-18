@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T14:52:11.850Z",
+  "generated_at": "2026-06-18T14:53:33.999Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T11:52:09.324Z",
+  "since": "2026-06-18T11:53:33.678Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    94593
+    94570
   ],
-  "comment_ids": [
-    4743171284
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,185 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:94593:4743171284:2026-06-18T14:50:12Z:re_review",
-      "comment_id": "4743171284",
-      "comment_version_key": "4743171284:2026-06-18T14:50:12Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94593#issuecomment-4743171284",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 94593,
-      "author": "Pick-cat",
-      "author_id": 266665499,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-18T14:50:12Z",
-      "comment_updated_at": "2026-06-18T14:50:12Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(sessions): preserve trajectory on reset for outbound forensics (fixes #90707)",
-        "body": "## Summary\n\nCloses #90707.\n\nOn `/new` and `/reset`, OpenClaw archives the session transcript as\n`<sid>.jsonl.reset.<ts>` but the sibling **trajectory** file\n`<sid>.trajectory.jsonl` (the assistant's tool calls and tool results) and its\n`<sid>.trajectory-path.json` pointer are lost — overwritten when the session\nfile path is reused, or left at their live names and then reclaimed by the\nlifecycle cleanup for the now-unreferenced old session id. For sessions that\nissued outbound communications (WhatsApp/email/SMS/Telegram), this makes\npost-incident forensics impossible: after a wrong send there is no record of the\nexact tool args or the tool result that preceded the send.\n\nThis change mirrors the transcript-archive behavior for the trajectory. In the\nshared reset path `archiveSessionTranscriptsDetailed` (used by **both** reset\nentry points — the auto-reply session rollover in\n`src/auto-reply/reply/session.ts` and the gateway reset service in\n`src/gateway/session-reset-service.ts`), when `reason === \"reset\"` the\ntrajectory runtime file and its pointer are renamed to `.reset.<ts>` archives\ninstead of being left to be deleted.\n\n### Why this shape\n\n- **Single owner.** Both reset flows funnel through\n  `archiveSessionTranscriptsDetailed`, so one gated branch covers both rather\n  than patching each call site.\n- **No new retention code / no unbounded growth.** The reset retention sweep\n  (`cleanupArchivedSessionTranscripts` →\n  `parseSessionArchiveTimestamp(name, \"reset\")`) keys on the generic\n  `.reset.<ts>` suffix, so `<sid>.trajectory.jsonl.reset.<ts>` and\n  `<sid>.trajectory-path.json.reset.<ts>` are pruned by the existing\n  `resetArchiveRetentionMs` rule automatically.\n- **No re-deletion.** `isTrajectoryRuntimeArtifactName` requires an exact\n  `.trajectory.jsonl` ending, so the archived form is no longer treated as a\n  live trajectory and the existing `removeSessionTrajectoryArtifacts` cleanup\n  leaves it alone.\n- **Deleted/pruned sessions unchanged.** The branch is gated on\n  `reason === \"reset\"`; `reason === \"deleted\"` still hands the trajectory to the\n  existing removal path.\n\n## Real behavior proof\n\n- **Behavior addressed:** A real session reset deleted the sibling\n  `<sid>.trajectory.jsonl` and its `<sid>.trajectory-path.json` pointer while\n  preserving the transcript; after this change both are archived as `.reset.<ts>`\n  next to the transcript and survive the lifecycle cleanup.\n- **Real environment tested:** Local OpenClaw checkout on Linux (Node 22),\n  driving the actual production reset + cleanup functions against a real\n  on-disk session directory (no stubs): `archiveSessionTranscriptsDetailed`\n  (the function the gateway `/reset` service calls) followed by the real\n  `removeSessionTrajectoryArtifacts` lifecycle cleanup.\n- **Exact steps or command run after this patch:** Seed a real session dir with\n  `<sid>.jsonl`, `<sid>.trajectory.jsonl` (recording a `wacli send` line), and\n  `<sid>.trajectory-path.json`, then run `node --import tsx repro-90707.mjs`\n  first on `origin/main`, then on this branch.\n- **Evidence after fix:** Copied live console output below.\n\n  On `origin/main` (current shipped behavior):\n\n  ```\n  BEFORE reset:                 [ '<sid>.jsonl', '<sid>.trajectory-path.json', '<sid>.trajectory.jsonl', 'sessions.json' ]\n  AFTER real reset archive:     [ '<sid>.jsonl.reset.2026-06-18T14-11-18.709Z', '<sid>.trajectory-path.json', '<sid>.trajectory.jsonl', 'sessions.json' ]\n  Lifecycle cleanup removed:    [ '<sid>.trajectory.jsonl', '<sid>.trajectory-path.json' ]\n  FINAL on disk:                [ '<sid>.jsonl.reset.2026-06-18T14-11-18.709Z', 'sessions.json' ]\n  RESULT: trajectory LOST\n  ```\n\n  On this branch:\n\n  ```\n  BEFORE reset:                 [ '<sid>.jsonl', '<sid>.trajectory-path.json', '<sid>.trajectory.jsonl', 'sessions.json' ]\n  AFTER real reset archive:     [ '<sid>.jsonl.reset.2026-06-18T14-11-06.546Z', '<sid>.trajectory-path.json.reset.2026-06-18T14-11-06.546Z', '<sid>.trajectory.jsonl.reset.2026-06-18T14-11-06.546Z', 'sessions.json' ]\n  Lifecycle cleanup removed:    []\n  FINAL on disk:                [ '<sid>.jsonl.reset.2026-06-18T14-11-06.546Z', '<sid>.trajectory-path.json.reset.2026-06-18T14-11-06.546Z', '<sid>.trajectory.jsonl.reset.2026-06-18T14-11-06.546Z', 'sessions.json' ]\n  RESULT: trajectory PRESERVED for forensics\n  ```\n\n- **Observed result after fix:** On `origin/main` the trajectory and pointer are\n  removed by the lifecycle cleanup (`RESULT: trajectory LOST`). On this branch\n  both are archived as `.reset.<ts>` next to the transcript and the cleanup\n  removes nothing (`RESULT: trajectory PRESERVED for forensics`).\n- **What was not tested:** A full live gateway round-trip with a real model\n  turn, and the `OPENCLAW_TRAJECTORY_DIR` override placement (intentionally out\n  of scope — the fix targets the default sibling placement described in the\n  issue).\n\n## Automated checks\n\nColocated regression cases were added in\n`src/gateway/session-transcript-files.fs.archive-events.test.ts` (reset\npreserves trajectory + pointer; a deleted reason leaves the live siblings for\nthe existing removal path). The full archive-events suite, the trajectory\ncleanup / prune-integration suites, `tsgo:core` + `tsgo:core:test`, oxlint,\noxfmt, and `check:import-cycles` were all run locally and are green.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "fix/issue-90707-preserve-trajectory-on-reset",
-        "head_sha": "06b965ecdaba7577c14728f6b18e92476bbe32b5",
-        "author": "pick-cat",
-        "labels": [
-          "gateway",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 security-boundary",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/session-transcript-files.fs.archive-events.test.ts",
-            "additions": 63,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-transcript-files.fs.ts",
-            "additions": 38,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/README.md",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
-            "additions": 26,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
-            "additions": 26,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md",
-            "additions": 26,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/helpers/agents/happy-path-prompt-snapshots.ts",
-            "additions": 53,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/prompt-snapshots.test.ts",
-            "additions": 20,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 101,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94593",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94593.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 28,
-          "gatingTotal": 23,
-          "counts": {
-            "QUEUED": 10,
-            "SKIPPED": 8,
-            "SUCCESS": 10
-          },
-          "blockers": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2764,
+    "total_ms": 582,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 812
+        "ms": 310
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1699
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 239
+        "ms": 262
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
