@@ -258,9 +258,13 @@ Other contributor commands are ignored without a reply. Scheduled comment routin
 `CLAWSWEEPER_COMMENT_ROUTER_EXECUTE=1`; workflow dispatch with `execute=true`
 can be used for one-off live routing.
 For fast intake, the ClawSweeper GitHub App webhook can post the same queued
-status comment and dispatch exact `clawsweeper_comment` or `clawsweeper_item`
-runs from eligible public `openclaw/*` and `steipete/*` repositories. The
-target-side dispatcher remains the fallback when the webhook is unavailable.
+status comment and enqueue exact `clawsweeper_comment` or `clawsweeper_item`
+work from eligible public `openclaw/*` and `steipete/*` repositories. Exact
+item work is coalesced and leased by the dashboard Worker before it dispatches
+an executor, so webhook bursts do not create capacity-waiting Actions runners.
+The target-side dispatcher remains a scheduled-intake fallback until it adopts
+the queue lease contract. Legacy target dispatches are bridged into that queue
+before any Codex executor starts.
 
 ## Dashboard
 
@@ -612,10 +616,9 @@ repair/issue implementation lanes use 40% of `workers.max`, currently 51 live
 workers. Imported gitcrawl cluster repair allows 2 live workers by default.
 Exact-item review, repair, and issue implementation are priority work; normal
 review, hot intake, and commit review are background work and automatically
-yield when priority work is active. Exact-item runs also wait for deterministic
-live Actions admission before Codex starts, with at most four concurrent exact
-reviews and no state-repository lease. Other lanes retain the existing global
-128-worker scheduling model.
+yield when priority work is active. Exact-item runs use a durable Worker queue
+that coalesces item deliveries and leases at most 32 concurrent reviews. Other
+lanes retain the existing global 128-worker scheduling model.
 Use `workers.max` first when turning total Codex usage up or down; use
 `lanes.repair.cluster_max_live_runs` to tune the imported legacy cluster-repair
 lane separately, and individual environment overrides only for temporary
