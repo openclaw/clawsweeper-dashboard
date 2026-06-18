@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T08:11:31.738Z",
+  "generated_at": "2026-06-18T08:12:14.885Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T05:11:28.531Z",
+  "since": "2026-06-18T05:12:14.584Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    94326
+    94468
   ],
-  "comment_ids": [
-    4739543876
-  ],
-  "status_comment_id": 4739544327,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,164 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:94326:4739543876:2026-06-18T08:10:20Z:re_review",
-      "comment_id": "4739543876",
-      "comment_version_key": "4739543876:2026-06-18T08:10:20Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94326#issuecomment-4739543876",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 94326,
-      "author": "yetval",
-      "author_id": 102706514,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-18T08:10:20Z",
-      "comment_updated_at": "2026-06-18T08:10:20Z",
-      "status_comment_id": 4739544327,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-18T08:11:32.479Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 94326
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-18T08:11:33.503Z",
-          "response_comment_id": "4739544327",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(memory-wiki): reserve compiler-owned page stems (index, log) in slug layer",
-        "body": "## Summary\n\nA memory-wiki `create_synthesis` or source `ingest` whose title slugifies to a compiler-reserved stem (`index` or `log`) silently loses the stored fact. The page is written to `<dir>/index.md`, which is the auto-generated directory-index file: it is excluded from all page scanning (so `wiki_search` / `wiki_get` / digest never see it) and is destructively overwritten by the generated directory-index block on the next compile, which the same call triggers. The result is that the content is both unretrievable and clobbered on disk. \"Index\" is a natural title for an overview page, so this is reachable in normal usage.\n\n## Root cause\n\n`extensions/memory-wiki/src/markdown.ts` `slugifyWikiSegment` has no reserved-stem guard, so a title like \"Index\" maps straight to the slug `index`:\n\n```ts\n// before\nexport function slugifyWikiSegment(raw: string): string {\n  const slug = normalizeLowercaseStringOrEmpty(raw)\n    .replace(/[^\\p{L}\\p{N}\\p{M}]+/gu, \"-\")\n    .replace(/-+/g, \"-\")\n    .replace(/^-+|-+$/g, \"\");\n  if (!slug) {\n    return \"page\";\n  }\n  return capWikiValueWithHash(slug, MAX_WIKI_SEGMENT_BYTES, \"page\");\n}\n```\n\n`apply.ts` (`applyCreateSynthesisMutation`) and `ingest.ts` (`ingestMemoryWikiSource`) build the page path straight from that slug (`syntheses/index.md`, `sources/index.md`). Every scanner excludes `index.md` (`compile.ts:368`, `query.ts:251`, `status.ts:94`), and `compile.ts:1413` overwrites `<dir>/index.md` with the generated directory index. The invariant is already encoded for the OKF import path (`okf.ts:25` reserves `{\"index.md\",\"log.md\"}`) but never on the user-facing synthesis/ingest slug.\n\n## Fix\n\nReserve the compiler-owned stems in the canonical slug layer, mirroring `OKF_RESERVED_FILENAMES`, so any caller that turns a title into a page slug is disambiguated once:\n\n```ts\n// after\nconst WIKI_RESERVED_PAGE_STEMS = new Set([\"index\", \"log\"]);\n\nexport function slugifyWikiSegment(raw: string): string {\n  const slug = normalizeLowercaseStringOrEmpty(raw)\n    .replace(/[^\\p{L}\\p{N}\\p{M}]+/gu, \"-\")\n    .replace(/-+/g, \"-\")\n    .replace(/^-+|-+$/g, \"\");\n  if (!slug) {\n    return \"page\";\n  }\n  const capped = capWikiValueWithHash(slug, MAX_WIKI_SEGMENT_BYTES, \"page\");\n  if (WIKI_RESERVED_PAGE_STEMS.has(capped)) {\n    const suffix = createHash(\"sha1\").update(raw).digest(\"hex\").slice(0, WIKI_SEGMENT_HASH_BYTES);\n    return `${capped}-${suffix}`;\n  }\n  return capped;\n}\n```\n\nA title of \"Index\" now slugifies to `index-<hash>`, a normal scannable page, while the generated `<dir>/index.md` stays owned by the compiler.\n\n## Why this is the right boundary\n\n`slugifyWikiSegment` is the single canonical function that converts a title to a page-filename stem; both the synthesis and ingest paths route through it, so guarding it once covers every user-facing surface rather than patching each caller. The change is purely additive and deterministic (SHA1 of the raw title), so no migration is needed. Hash-appending callers (bridge, unsafe-local, OKF concept/producer slugs) already produce suffixed stems and never land on a bare `index`/`log`, so they are unaffected. The related open PR #93843 (distinct titles colliding to the same slug) adds a separate `resolveTitleKeyedWikiSlug` wrapper that itself computes `slugifyWikiSegment(title)` as its base slug, so it inherits this guard rather than duplicating it; the two changes compose. Possible rebase overlap with #93843 in `markdown.ts` near `slugifyWikiSegment`, but the edits are independent (this one is inside the function body, that one adds new functions after it).\n\n## Verification\n\nFrom a deps-enabled checkout against an identical copy of the changed files:\n\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/reserved-index-collision.repro.test.ts` - 2 failed on pristine main, 2 passed with patch\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/markdown.test.ts apply.test.ts ingest.test.ts okf.test.ts` - 23 passed\n- `node scripts/run-oxlint.mjs <changed files>` - clean\n- `oxfmt --check <changed files>` - all files correctly formatted\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json` - clean\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json` - clean\n\n## Real behavior proof\n\nBehavior addressed: a memory-wiki synthesis or source ingest titled \"Index\" (or \"Log\") is silently lost; after the fix it stays retrievable.\nReal environment tested: drove the real `applyMemoryWikiMutation`, `ingestMemoryWikiSource`, `searchMemoryWiki`, and `getMemoryWikiPage` against a real on-disk vault via `createMemoryWikiTestHarness` (no mocks), on pristine `origin/main` and on the patched tree with identical inputs.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs extensions/memory-wiki/src/reserved-index-collision.repro.test.ts`\nEvidence after fix:\n```\n# BEFORE (pristine main b02b05d134)\n Test Files  1 failed (1)\n      Tests  2 failed (2)\n - true\n + false   (searchMemoryWiki could not find the saved synthesis/source body)\n\n# AFTER (this patch, identical inputs)\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n```\nObserved result after fix: the synthesis body and the ingested source body are both found by `searchMemoryWiki`, fetchable by `getMemoryWikiPage`, and present on disk at the disambiguated page path.\nWhat was not tested: a full `pnpm build` and broad cross-suite run were not run on this OOM-constrained box; scope is one slug helper plus two callers, covered by the memory-wiki suites above.\n",
-        "branch": "fix/memory-wiki-reserved-page-stem",
-        "head_sha": "1821f8e7e930fe9b219094a0a9ef6ffdfcac13e2",
-        "author": "yetval",
-        "labels": [
-          "size: S",
-          "extensions: memory-wiki",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "extensions/memory-wiki/src/apply.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-wiki/src/ingest.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-wiki/src/markdown.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-wiki/src/reserved-index-collision.repro.test.ts",
-            "additions": 68,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 82,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94326",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94326.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 22,
-          "gatingTotal": 17,
-          "counts": {
-            "QUEUED": 4,
-            "SUCCESS": 11,
-            "SKIPPED": 7
-          },
-          "blockers": [
-            "preflight:QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5466,
+    "total_ms": 496,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1875
+        "ms": 291
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1318
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2248
+        "ms": 195
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
