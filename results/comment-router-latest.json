@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T01:23:45.890Z",
+  "generated_at": "2026-06-18T01:24:31.750Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-17T22:23:45.322Z",
+  "since": "2026-06-17T22:24:29.381Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    94255
+    94328
   ],
-  "comment_ids": [
-    4736975985
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,63 +31,125 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:94255:4736975985:2026-06-18T01:21:43Z:re_review",
-      "comment_id": "4736975985",
-      "comment_version_key": "4736975985:2026-06-18T01:21:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/issues/94255#issuecomment-4736975985",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94328:4736959355:2026-06-18T01:24:26Z:clawsweeper_needs_human",
+      "comment_id": "4736959355",
+      "comment_version_key": "4736959355:2026-06-18T01:24:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94328#issuecomment-4736959355",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 94255,
-      "author": "Nas01010101",
-      "author_id": 156536069,
+      "issue_number": 94328,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-18T01:21:43Z",
-      "comment_updated_at": "2026-06-18T01:21:43Z",
+      "comment_created_at": "2026-06-18T01:19:10Z",
+      "comment_updated_at": "2026-06-18T01:24:26Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=0aad450aabd6480423869327509870b8d16805ea)",
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "0aad450aabd6480423869327509870b8d16805ea",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): keep post-compaction user re-issue of a kept-tail prompt during compaction rotation",
+        "body": "## Summary\n\nWith `agents.defaults.compaction.truncateAfterCompaction` enabled, OpenClaw rotates the compacted session into a successor transcript. A genuine post-compaction user instruction that repeats a prompt kept in the pre-compaction tail, and arrives within the 60s duplicate window, is deleted from the rotated transcript. Its assistant reply is left orphaned (two consecutive assistant messages with no parent user turn), so the user instruction is lost and the turn structure is corrupted, which strict providers reject on the next request.\n\nTrigger: compaction keeps a tail user prompt P; within 60s the user (or a cron/heartbeat/retry loop) re-issues P and the agent does new work; on rotation the post-compaction copy of P is dropped.\n\n## Root cause\n\n`src/agents/embedded-agent-runner/compaction-successor-transcript.ts` ran one duplicate-user dedup window across both the kept pre-compaction tail and all post-compaction entries:\n\n```ts\n// before\nconst keptBranchEntries = branch.filter((entry) => !summarizedBranchIds.has(entry.id));\nconst duplicateUserMessageIds =\n  collectDuplicateUserMessageEntryIdsForCompaction(keptBranchEntries);\n```\n\n`collectDuplicateUserMessageEntryIdsForCompaction` keeps the first occurrence of a user prompt and drops later repeats within 60s. Because `keptBranchEntries` spans the compaction boundary, a kept-tail prompt becomes the dedup \"first seen\" and suppresses a real post-compaction re-issue of the same text. The post-compaction turn is genuine new work, not a pre-compaction retry, so it must survive rotation.\n\nThis is a regression of #93732. That PR correctly narrowed the dedup input from the full `branch` to `keptBranchEntries = branch.filter(!summarized)` to fix the summarized+kept double-removal case, but the narrowed set still crosses the boundary.\n\n## Fix\n\nDedup the pre-compaction kept tail and the post-compaction tail independently, resetting the window at the boundary:\n\n```ts\n// after\nconst keptPreCompactionEntries = branch\n  .slice(0, latestCompactionIndex)\n  .filter((entry) => !summarizedBranchIds.has(entry.id));\nconst postCompactionEntries = branch.slice(latestCompactionIndex + 1);\nconst duplicateUserMessageIds = new Set<string>([\n  ...collectDuplicateUserMessageEntryIdsForCompaction(keptPreCompactionEntries),\n  ...collectDuplicateUserMessageEntryIdsForCompaction(postCompactionEntries),\n]);\n```\n\nEach side still removes its own intra-window duplicate retries (the behavior #93732 and the existing dedup test protect), but a kept-tail prompt no longer reaches across the boundary to suppress a real post-compaction turn.\n\n## Why this is the right boundary\n\nThe defect is in how the successor builder feeds entries to the dedup helper, so the fix stays in `buildSuccessorEntries`; the helper itself is unchanged and reused. The compaction index is already computed (`latestCompactionIndex`), so splitting at it adds no new lookup. The only behavior change is that the dedup window resets at the compaction boundary, matching the semantic boundary between summarized history and new work. This is distinct from #84139 (compaction safeguard over-keeping duplicates on sessions_send, the opposite direction) and from #93732's own summarized+kept case.\n\n## Verification\n\nFrom a deps-enabled worktree, against the changed files:\n\n- `node scripts/run-vitest.mjs compaction-successor-transcript.post-compaction-duplicate-prompt.test.ts` plus the adjacent suites `compaction-successor-transcript.test.ts`, `compaction-duplicate-user-messages.test.ts`, `compaction-successor-transcript.duplicate-prompt-loss.test.ts`: all pass with the patch.\n- The existing intended-dedup test (\"drops duplicate user messages from the rotated active branch tail\") stays green; both of its duplicates are post-compaction and are still deduped by the post-compaction window.\n- New regression test fails on pristine `main` and passes with the patch.\n- `oxlint` and `oxfmt --check` clean on both changed files; `tsgo` core and core-test lanes clean.\n\n## Real behavior proof\n\nBehavior addressed: post-compaction user re-issue of a kept-tail prompt is dropped from the rotated successor transcript under `truncateAfterCompaction`.\nReal environment tested: drove the real `rotateTranscriptAfterCompaction` end to end over a real `SessionManager` transcript (summarized prefix, kept-tail prompt P, compaction entry, then a post-compaction re-issue of P inside the 60s window with a new assistant reply), then read the rotated successor file back with `readTranscriptFileState` and counted surviving copies of P.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/compaction-successor-transcript.post-compaction-duplicate-prompt.test.ts`\nEvidence after fix:\n```\n# BEFORE (pristine main b02b05d134)\nAssertionError: expected 1 to be 2\n  surviving copies of the post-compaction prompt P in the successor transcript: 1\n  (post-compaction re-issue dropped; its assistant reply orphaned)\n\n# AFTER (this patch, identical inputs)\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n  surviving copies of the post-compaction prompt P in the successor transcript: 2\n```\nObserved result after fix: both the kept-tail prompt and the real post-compaction re-issue survive rotation; no orphaned assistant turn.\nWhat was not tested: no live strict-provider request was issued against the corrupted-vs-fixed transcript; the orphaned-turn rejection is the documented consequence, not separately reproduced here. Full `pnpm build` was not run (no dynamic-import or packaging surface touched).\n\nNote: open PR #90641 touches the same region for a different concern (assistant boundary replies) and is based pre-#93732; if it lands first this branch rebases cleanly since the changes are adjacent, not overlapping.\n",
+        "branch": "fix/compaction-postcompaction-duplicate-prompt",
+        "head_sha": "0aad450aabd6480423869327509870b8d16805ea",
+        "author": "yetval",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/compaction-successor-transcript.post-compaction-duplicate-prompt.test.ts",
+            "additions": 82,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
+            "additions": 8,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 90,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94328",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94328.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 170,
+          "gatingTotal": 165,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 137,
+            "SKIPPED": 31,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1659,
+    "total_ms": 2631,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 557
+        "ms": 305
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2050
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1091
+        "ms": 251
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
