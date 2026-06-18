@@ -2,12 +2,12 @@
 repo: "openclaw/gogcli"
 cluster_id: "automerge-openclaw-gogcli-834"
 mode: "autonomous"
-run_id: "27746316258"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27746316258"
+run_id: "27748073244"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27748073244"
 head_sha: "e0d595ca3b5e15ef1aacba6cb46982095b7065a0"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-06-18T09:31:31.558Z"
+published_at: "2026-06-18T10:53:14.873Z"
 canonical: "#834"
 canonical_issue: null
 canonical_pr: "#834"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/gogcli
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27746316258](https://github.com/openclaw/clawsweeper/actions/runs/27746316258)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27748073244](https://github.com/openclaw/clawsweeper/actions/runs/27748073244)
 
 Workflow conclusion: success
 
