@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T18:05:43.563Z",
+  "generated_at": "2026-06-18T18:05:43.387Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T15:05:43.277Z",
+  "since": "2026-06-18T15:05:41.327Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94667
+    94563
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +29,254 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94563:4741503036:2026-06-18T18:05:37Z:clawsweeper_needs_human",
+      "comment_id": "4741503036",
+      "comment_version_key": "4741503036:2026-06-18T18:05:37Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94563#issuecomment-4741503036",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 94563,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-18T11:31:48Z",
+      "comment_updated_at": "2026-06-18T18:05:37Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Manual review remains because the remaining blockers are contributor real-behavior proof and maintainer acceptance of the transcript persistence tradeoff, not a narrow automated code repair.; Cleared: The diff changes TypeScript cron dispatch logic and tests only, with no new dependency, workflow, package, secret, permission, or code-execution surface. (sha=ce6f898b0ccdb18c87cf32d4b5023ee98142aea9)",
+      "review_summary": "The PR changes isolated cron direct delivery to classify routed non-main sessions and skip transcript mirrors for routed peer sessions while updating adjacent cron delivery tests.\n\nPR surface: Source +34, Tests -3. Total +31 across 2 files.\n\nReproducibility: yes. source inspection gives a high-confidence path: isolated cron direct delivery can resolve to a per-channel-peer session, append a transcript mirror, and trip the embedded prompt-release session fence. I did not verify a live Telegram or WhatsApp run in this read-only review.",
+      "review_followup": "- [P1] Manual review remains because the remaining blockers are contributor real-behavior proof and maintainer acceptance of the transcript persistence tradeoff, not a narrow automated code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "ce6f898b0ccdb18c87cf32d4b5023ee98142aea9",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): skip delivery mirror for routed peer sessions to prevent session lock races (fixes #84583)",
+        "body": "### Summary\n\n- **Problem**: Cron delivery mirror writes to routed per-channel-peer sessions can race the embedded runner session lock, triggering `EmbeddedAttemptSessionTakeoverError` and aborting in-flight user chat responses.\n- **Root Cause**: `resolveDirectCronDeliverySessionKey` resolves delivery target sessions through outbound routing. For `dmScope=\"per-channel-peer\"`, the resolved session is a per-channel-peer session distinct from the main session. The existing `mirrorWouldBypassIsolatedAwarenessPolicy` guard only protects main-session mirrors for isolated announce deliveries, leaving per-channel-peer session mirrors vulnerable to the race.\n- **Fix**: Extend `resolveDirectCronDeliverySessionKey` to detect routed peer sessions (non-main, non-threaded-main) and skip the transcript mirror for these sessions. The direct channel send is unaffected — messages still reach their destination.\n- **What changed**:\n  - `src/cron/isolated-agent/delivery-dispatch.ts` — new `ResolvedDirectCronDeliverySession` type with `isRoutedPeerSession` flag; `resolveDirectCronDeliverySessionKey` now returns session key + peer detection; mirror condition skips routed peer sessions\n- **What did NOT change (scope boundary)**:\n  - Session lock controller (`attempt.session-lock.ts`) — the owned write path added in `5df0ed3b9f` already handles same-process announcement writes correctly\n  - Subagent announce flow — announce delivery via gateway agent dispatch is unaffected\n  - Direct channel send — the outbound message is still delivered; only the transcript mirror is skipped\n\n### Reproduction\n\n1. Configure a cron job with `sessionTarget=\"isolated\"`, `delivery.mode=\"direct\"`, and `session.dmScope=\"per-channel-peer\"`\n2. Start a user chat session on the same channel\n3. Wait for the cron job to complete and deliver\n4. **Before this PR**: mirror `appendAssistantMessageToSessionTranscript` writes to the per-channel-peer session file while the embedded runner holds the session lock → `EmbeddedAttemptSessionTakeoverError` aborts the user's in-flight response\n5. **After this PR**: mirror is skipped for the routed peer session; the direct channel send delivers the message and awareness is queued to the main session\n\n### Real behavior proof\n\n**Behavior or issue addressed (84583)**: The cron delivery-dispatch mirror path writes to per-channel-peer session files via `appendAssistantMessageToSessionTranscript`, bypassing the owned-session-write path. When a per-channel-peer session is concurrently locked by an active EmbeddedAttempt, the mirror write changes the file fingerprint, triggering takeover detection and aborting the user's in-flight chat response. This fix skips the mirror for routed peer sessions where the write would be unsafe, while preserving mirror behavior for main-session and threaded-main-session deliveries.\n\n**Real environment tested**: Linux, Node 22 — the project's CI shard runner against delivery-dispatch and session-lock test suites\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n\n**Evidence before fix**:\n```text\nThe cron delivery-dispatch mirror path writes to per-channel-peer session\nfiles via appendAssistantMessageToSessionTranscript, bypassing the owned-session-write\npath. When the same session is locked by an active EmbeddedAttempt, the mirror\nwrite changes the file fingerprint, triggering EmbeddedAttemptSessionTakeoverError\nand aborting the in-flight user chat response.\n\nTest evidence: 'skips transcript mirror for routed channel sessions'\ntest verifies the guard correctly prevents mirror writes for routed peer sessions.\n```\n\n**Evidence after fix**:\n```text\n$ node scripts/run-vitest.mjs src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts\n\n[test] delivery-dispatch shard: all delivery-dispatch double-announce guard scenarios pass,\n     including the two new \"skips transcript mirror for routed channel sessions\" cases\n     and the updated mirror-failure-survival case for main-session deliveries\n\n[test] session-lock shard: all session lock lifecycle scenarios pass,\n     including owned-write publication, takeover detection, and post-takeover lock release\n\n[test] both shards completed successfully\n```\n\n**Observed result after fix**: Two new test cases verify that transcript mirror is skipped for routed per-channel-peer sessions (`agent:main:telegram:direct:123456` and `agent:main:whatsapp:direct:+15551234567`), while mirror is still attempted for main-session deliveries (confirmed by the mirror-failure-survival test using `sessionKey: \"agent:main:main\"` with `sessionTarget: \"current\"`). The full cron test suite and the session-lock test suite complete without regressions — all delivery-dispatch scenarios pass, all session lock lifecycle scenarios including owned-write publication and takeover detection pass.\n\n**What was not tested**: Live Gateway round-trip with a real Telegram/WhatsApp channel and concurrent cron delivery was not driven — this test requires channel credentials and a running Gateway instance. The per-channel-peer session routing logic is verified through the existing outbound session route mock infrastructure, which exercises the same code paths.\n\n**Repro confirmation**: The \"skips transcript mirror for routed channel sessions\" test cases confirm that `appendAssistantMessageToSessionTranscript` is not called for routed peer sessions (verified with `.not.toHaveBeenCalled()`), while the \"keeps successful direct delivery delivered when the transcript mirror append fails\" test confirms that mirror is still attempted and failures are handled for main-session deliveries.\n\n### Risk / Mitigation\n\n- **Risk**: Skipping the transcript mirror means per-channel-peer sessions won't have a local transcript record of the cron delivery.\n  **Mitigation**: The direct channel send still delivers the message to the user. Awareness is queued to the main session. The existing `mirrorWouldBypassIsolatedAwarenessPolicy` guard already skips mirror for isolated announce deliveries targeting the main session — this fix extends the same principle to per-channel-peer sessions where the race risk is highest.\n- **Risk**: Custom session targets that happen to resolve through outbound routing could be misclassified.\n  **Mitigation**: Custom session targets (`isCustomCronSessionTarget`) bypass routing entirely and return `isRoutedPeerSession: false`, preserving existing mirror behavior unchanged.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] cron\n- [x] sessions\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts`\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n- Full cron test suite completes without regression\n\n### Review Findings Addressed\n\nN/A (initial submission)\n\n### Linked Issue/PR\n\nFixes #84583\n",
+        "branch": "fix/issue-84583-cron-mirror-session-lock-race",
+        "head_sha": "ce6f898b0ccdb18c87cf32d4b5023ee98142aea9",
+        "author": "zenglingbiao",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts",
+            "additions": 18,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/delivery-dispatch.ts",
+            "additions": 40,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 58,
+        "deletions": 27,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94563",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94563.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 28,
+          "gatingTotal": 23,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 11,
+            "SKIPPED": 7
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:94563:4744685942:2026-06-18T17:50:14Z:re_review",
+      "comment_id": "4744685942",
+      "comment_version_key": "4744685942:2026-06-18T17:50:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94563#issuecomment-4744685942",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 94563,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-18T17:50:14Z",
+      "comment_updated_at": "2026-06-18T17:50:14Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): skip delivery mirror for routed peer sessions to prevent session lock races (fixes #84583)",
+        "body": "### Summary\n\n- **Problem**: Cron delivery mirror writes to routed per-channel-peer sessions can race the embedded runner session lock, triggering `EmbeddedAttemptSessionTakeoverError` and aborting in-flight user chat responses.\n- **Root Cause**: `resolveDirectCronDeliverySessionKey` resolves delivery target sessions through outbound routing. For `dmScope=\"per-channel-peer\"`, the resolved session is a per-channel-peer session distinct from the main session. The existing `mirrorWouldBypassIsolatedAwarenessPolicy` guard only protects main-session mirrors for isolated announce deliveries, leaving per-channel-peer session mirrors vulnerable to the race.\n- **Fix**: Extend `resolveDirectCronDeliverySessionKey` to detect routed peer sessions (non-main, non-threaded-main) and skip the transcript mirror for these sessions. The direct channel send is unaffected — messages still reach their destination.\n- **What changed**:\n  - `src/cron/isolated-agent/delivery-dispatch.ts` — new `ResolvedDirectCronDeliverySession` type with `isRoutedPeerSession` flag; `resolveDirectCronDeliverySessionKey` now returns session key + peer detection; mirror condition skips routed peer sessions\n- **What did NOT change (scope boundary)**:\n  - Session lock controller (`attempt.session-lock.ts`) — the owned write path added in `5df0ed3b9f` already handles same-process announcement writes correctly\n  - Subagent announce flow — announce delivery via gateway agent dispatch is unaffected\n  - Direct channel send — the outbound message is still delivered; only the transcript mirror is skipped\n\n### Reproduction\n\n1. Configure a cron job with `sessionTarget=\"isolated\"`, `delivery.mode=\"direct\"`, and `session.dmScope=\"per-channel-peer\"`\n2. Start a user chat session on the same channel\n3. Wait for the cron job to complete and deliver\n4. **Before this PR**: mirror `appendAssistantMessageToSessionTranscript` writes to the per-channel-peer session file while the embedded runner holds the session lock → `EmbeddedAttemptSessionTakeoverError` aborts the user's in-flight response\n5. **After this PR**: mirror is skipped for the routed peer session; the direct channel send delivers the message and awareness is queued to the main session\n\n### Real behavior proof\n\n**Behavior or issue addressed (84583)**: The cron delivery-dispatch mirror path writes to per-channel-peer session files via `appendAssistantMessageToSessionTranscript`, bypassing the owned-session-write path. When a per-channel-peer session is concurrently locked by an active EmbeddedAttempt, the mirror write changes the file fingerprint, triggering takeover detection and aborting the user's in-flight chat response. This fix skips the mirror for routed peer sessions where the write would be unsafe, while preserving mirror behavior for main-session and threaded-main-session deliveries.\n\n**Real environment tested**: Linux, Node 22 — the project's CI shard runner against delivery-dispatch and session-lock test suites\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n\n**Evidence before fix**:\n```text\nThe cron delivery-dispatch mirror path writes to per-channel-peer session\nfiles via appendAssistantMessageToSessionTranscript, bypassing the owned-session-write\npath. When the same session is locked by an active EmbeddedAttempt, the mirror\nwrite changes the file fingerprint, triggering EmbeddedAttemptSessionTakeoverError\nand aborting the in-flight user chat response.\n\nTest evidence: 'skips transcript mirror for routed channel sessions'\ntest verifies the guard correctly prevents mirror writes for routed peer sessions.\n```\n\n**Evidence after fix**:\n```text\n$ node scripts/run-vitest.mjs src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts\n\n[test] delivery-dispatch shard: all delivery-dispatch double-announce guard scenarios pass,\n     including the two new \"skips transcript mirror for routed channel sessions\" cases\n     and the updated mirror-failure-survival case for main-session deliveries\n\n[test] session-lock shard: all session lock lifecycle scenarios pass,\n     including owned-write publication, takeover detection, and post-takeover lock release\n\n[test] both shards completed successfully\n```\n\n**Observed result after fix**: Two new test cases verify that transcript mirror is skipped for routed per-channel-peer sessions (`agent:main:telegram:direct:123456` and `agent:main:whatsapp:direct:+15551234567`), while mirror is still attempted for main-session deliveries (confirmed by the mirror-failure-survival test using `sessionKey: \"agent:main:main\"` with `sessionTarget: \"current\"`). The full cron test suite and the session-lock test suite complete without regressions — all delivery-dispatch scenarios pass, all session lock lifecycle scenarios including owned-write publication and takeover detection pass.\n\n**What was not tested**: Live Gateway round-trip with a real Telegram/WhatsApp channel and concurrent cron delivery was not driven — this test requires channel credentials and a running Gateway instance. The per-channel-peer session routing logic is verified through the existing outbound session route mock infrastructure, which exercises the same code paths.\n\n**Repro confirmation**: The \"skips transcript mirror for routed channel sessions\" test cases confirm that `appendAssistantMessageToSessionTranscript` is not called for routed peer sessions (verified with `.not.toHaveBeenCalled()`), while the \"keeps successful direct delivery delivered when the transcript mirror append fails\" test confirms that mirror is still attempted and failures are handled for main-session deliveries.\n\n### Risk / Mitigation\n\n- **Risk**: Skipping the transcript mirror means per-channel-peer sessions won't have a local transcript record of the cron delivery.\n  **Mitigation**: The direct channel send still delivers the message to the user. Awareness is queued to the main session. The existing `mirrorWouldBypassIsolatedAwarenessPolicy` guard already skips mirror for isolated announce deliveries targeting the main session — this fix extends the same principle to per-channel-peer sessions where the race risk is highest.\n- **Risk**: Custom session targets that happen to resolve through outbound routing could be misclassified.\n  **Mitigation**: Custom session targets (`isCustomCronSessionTarget`) bypass routing entirely and return `isRoutedPeerSession: false`, preserving existing mirror behavior unchanged.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] cron\n- [x] sessions\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts`\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n- Full cron test suite completes without regression\n\n### Review Findings Addressed\n\nN/A (initial submission)\n\n### Linked Issue/PR\n\nFixes #84583\n",
+        "branch": "fix/issue-84583-cron-mirror-session-lock-race",
+        "head_sha": "ce6f898b0ccdb18c87cf32d4b5023ee98142aea9",
+        "author": "zenglingbiao",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts",
+            "additions": 18,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/delivery-dispatch.ts",
+            "additions": 40,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 58,
+        "deletions": 27,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94563",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94563.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 28,
+          "gatingTotal": 23,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 11,
+            "SKIPPED": 7
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 484,
+    "total_ms": 2393,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 277
+        "ms": 470
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1574
       },
       {
         "name": "classify_commands",
@@ -48,7 +284,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 196
+        "ms": 321
       },
       {
         "name": "append_ledger",
