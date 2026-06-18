@@ -1,20 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T07:52:13.865Z",
+  "generated_at": "2026-06-18T07:53:14.086Z",
   "repo": "openclaw/clawhub",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T04:52:11.845Z",
+  "since": "2026-06-18T04:53:13.487Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     2727
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4739358527
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -62,109 +64,28 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "Add skill install backfill migration",
-        "body": "## Summary\n- Adds a privacy-preserving one-time skill install backfill model based only on aggregate `skillDailyStats` and all-time download counts.\n- Adds a Convex migrations-component migration that bumps `statsInstallsAllTime` and syncs `skillSearchDigest` for affected skills.\n- Stores an `installBackfill` audit object on bumped skill rows with the model version, clean-window counts, rate inputs, previous installs, target installs, and bump amount.\n\n## Migration Strategy\n- Clean install window: `2026-06-12` through `2026-06-18` UTC, the first clean install-telemetry period after the old `clawhub sync` signal was excluded.\n- Global clean rate: `407 installs / 10,777 downloads = 3.78%`.\n- Per-skill rate: smoothed with `priorDownloads = 1000`, minimum clean downloads `100`, and capped at `10%`.\n- Estimated all-time installs: `all_time_downloads * smoothed_rate`.\n- Applied bump: `max(0, estimated_all_time_installs - current_statsInstallsAllTime)`.\n\nThis does not read user-level install rows, dedupe rows, IP hashes, or private telemetry.\n\n## Backfill Logic\n| Stage | Logic | Effect |\n| --- | --- | --- |\n| Inputs | Read all-time downloads and current all-time installs from the canonical skill stat fields. Sum only aggregate `skillDailyStats.downloads` and `skillDailyStats.installs` for days `20616..20622`. | Uses skill-level totals only; no user/device/session-level data is queried. |\n| Global fallback | `global_clean_rate = 407 / 10,777 = 3.78%`. | Gives sparse skills a neutral baseline from the clean telemetry period. |\n| Per-skill rate | If clean-window downloads are at least `100`, use `(clean_installs + global_clean_rate * 1000) / (clean_downloads + 1000)`. Otherwise use the global clean rate. | Skills with enough recent data can move above or below global, but the `1000` download prior prevents a tiny clean window from dominating old downloads. |\n| Cap | `smoothed_rate = min(10%, per_skill_rate)`. | Prevents an extreme clean-window ratio from creating an outsized historical bump. |\n| Target | `estimated = round(all_time_downloads * smoothed_rate)`, then `target = max(current_all_time_installs, estimated)`. | Backfill can only raise install totals; it never lowers a skill that already has more installs than the estimate. |\n| Write | Patch both `statsInstallsAllTime` and `stats.installsAllTime`, store the `installBackfill` audit object, then sync `skillSearchDigest`. | Keeps migrated stat fields and search/ranking digest in sync. |\n| Idempotency | Skip when the estimated bump is `0`, or when the same model version and target have already been applied. | Safe to dry-run and safe to avoid double-applying the same estimate. |\n| Operator guard | The runner dry-runs by default. Applying requires `confirm=\"apply-skill-install-backfill\"` and runs through `@convex-dev/migrations`. | Gives operators preview, batching, resume tracking, and an explicit apply step. |\n\n## Expected Impact\n\nThese numbers use the production aggregate snapshot used to choose the model. The production apply will recompute from live `skills` and `skillDailyStats` rows at run time.\n\n| Skill | Clean-window downloads | Clean-window installs | Raw clean rate | Smoothed rate | Current all-time installs | Expected all-time installs | Expected bump |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n| `self-improving-agent` | 2,189 | 84 | 3.84% | 3.82% | 6,926 | 17,648 | +10,722 |\n| `skill-vetter` | 1,641 | 76 | 4.63% | 4.31% | 4,679 | 11,142 | +6,463 |\n| `github` | 1,078 | 44 | 4.08% | 3.93% | 4,500 | 7,500 | +3,000 |\n| `ontology` | 781 | 29 | 3.71% | 3.75% | 1,420 | 7,115 | +5,695 |\n| `proactive-agent` | 903 | 42 | 4.65% | 4.19% | 3,047 | 7,099 | +4,052 |\n| `self-improving` | 1,124 | 37 | 3.29% | 3.52% | 2,205 | 7,036 | +4,831 |\n| `weather` | 844 | 36 | 4.27% | 4.00% | 3,892 | 6,446 | +2,554 |\n| `skillscan` | 245 | 4 | 1.63% | 3.35% | 17 | 5,978 | +5,961 |\n| `gog` | 871 | 19 | 2.18% | 3.03% | 3,664 | 5,654 | +1,990 |\n| `multi-search-engine` | 1,101 | 36 | 3.27% | 3.51% | 2,176 | 5,393 | +3,217 |\n\nExpected top order by all-time installs after this one-time estimate: `self-improving-agent`, `skill-vetter`, `github`, `ontology`, `proactive-agent`, `self-improving`, `weather`, `skillscan`, `gog`, `multi-search-engine`.\n\n## Operator Flow\n| Step | Command | Purpose |\n| --- | --- | --- |\n| Dry run | `bunx convex run migrations:runSkillInstallBackfill '{\"dryRun\":true}'` | Runs one tracked dry-run batch and returns the model config plus `confirmRequired`. |\n| Apply | `bunx convex run migrations:runSkillInstallBackfill '{\"dryRun\":false,\"confirm\":\"apply-skill-install-backfill\"}'` | Runs the migration to completion through `@convex-dev/migrations`. |\n\nBefore production apply, create a manual Convex dashboard backup for the target deployment and confirm it completed.\n\n## Proof\n| Evidence | Claim Proved | Result |\n| --- | --- | --- |\n| Backfill logic table | Reviewers can trace how aggregate clean-window stats become the final install bump. | Included above |\n| Expected impact table | Reviewers can see the intended ranking and install-count shape before production apply. | Included above |\n| `convex/lib/skillInstallBackfill.test.ts` | Skillscan-style low clean-window conversion gets historical credit, while ontology-style higher clean conversion ranks higher. Tiny clean windows fall back to the global rate. Existing higher install totals are not lowered. | Passed |\n| `convex/migrations.test.ts` | The runner defaults to dry-run and requires `confirm=\"apply-skill-install-backfill\"` before apply. | Passed |\n| Dev Convex dry run | The new internal action is callable through Convex and returns the expected clean-window model config. | Passed |\n| `@convex-dev/migrations` | Backfill is tracked, batched, resumable, and dry-runnable. | Used by `backfillSkillInstallEstimates` |\n\n## Verification\n```text\nbun run test convex/lib/skillInstallBackfill.test.ts convex/migrations.test.ts\n# 2 files passed, 11 tests passed\n\nbunx tsc --noEmit --pretty false\n# passed\n\nbunx convex dev --once --typecheck=disable\n# Convex functions ready\n\nbunx convex run migrations:runSkillInstallBackfill '{\"dryRun\":true}'\n# returned ok=true, dryRun=true, confirmRequired=\"apply-skill-install-backfill\"\n\nbun run ci:static\n# passed\n\nbun run ci:unit\n# 282 files passed, 3600 tests passed, coverage thresholds met\n\n.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main --engine claude --model claude-sonnet-4-6\n# clean: no accepted/actionable findings reported\n```\n",
-        "branch": "jesse/people-complaining-about-their",
-        "head_sha": "434ab0c8117c756bd055bc9fc118d78e510e7776",
-        "author": "jesse-merhi",
-        "labels": [
-          "P2",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author",
-          "rating: 🦐 gold shrimp"
-        ],
-        "files": [
-          {
-            "path": "convex/_generated/api.d.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "convex/lib/skillInstallBackfill.test.ts",
-            "additions": 134,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "convex/lib/skillInstallBackfill.ts",
-            "additions": 148,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "convex/migrations.test.ts",
-            "additions": 35,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "convex/migrations.ts",
-            "additions": 95,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "convex/schema.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 433,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-clawhub-2727",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawhub-2727.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 19,
-          "gatingTotal": 17,
-          "counts": {
-            "CANCELLED": 1,
-            "SKIPPED": 1,
-            "SUCCESS": 17
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2340,
+    "total_ms": 1211,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 563
+        "ms": 585
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1443
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 309
+        "ms": 613
       },
       {
         "name": "append_ledger",
