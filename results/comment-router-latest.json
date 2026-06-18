@@ -1,23 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-18T12:23:08.256Z",
+  "generated_at": "2026-06-18T12:23:15.673Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T09:23:04.801Z",
+  "since": "2026-06-18T09:23:15.009Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    94323
+    94575
   ],
   "comment_ids": [
-    4741877666
+    4741872430
   ],
-  "status_comment_id": 4741878080,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:94323:4741877666:2026-06-18T12:21:51Z:re_review",
-      "comment_id": "4741877666",
-      "comment_version_key": "4741877666:2026-06-18T12:21:51Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94323#issuecomment-4741877666",
+      "idempotency_key": "comment-router:openclaw/openclaw:94575:4741872430:2026-06-18T12:21:12Z:re_review",
+      "comment_id": "4741872430",
+      "comment_version_key": "4741872430:2026-06-18T12:21:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94575#issuecomment-4741872430",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 94323,
-      "author": "yetval",
-      "author_id": 102706514,
+      "target_branch": null,
+      "issue_number": 94575,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-18T12:21:51Z",
-      "comment_updated_at": "2026-06-18T12:21:51Z",
-      "status_comment_id": 4741878080,
+      "comment_created_at": "2026-06-18T12:21:12Z",
+      "comment_updated_at": "2026-06-18T12:21:12Z",
+      "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-run",
+      "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -62,102 +62,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-18T12:23:09.514Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 94323
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-18T12:23:10.966Z",
-          "response_comment_id": "4741878080",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): stop add/remove from dropping a due recurring job's pending run",
-        "body": "## Summary\n\nAdding a cron job advances every other already-due recurring job past its pending run without executing it. The scheduled occurrence is silently lost: no error, no log. `cron.add` is both an agent-callable tool and a user dashboard action, and `wakeMode: \"next-heartbeat\"` jobs sit in a due-but-not-yet-fired state until the next heartbeat, so the window where an `add` lands on a due sibling is wide.\n\nTrigger: a recurring (`every`) job has run at least once, its next slot is already due (`now >= nextRunAtMs`), and the timer/heartbeat has not fired yet. Any `cron.add` in that window jumps the due job's `nextRunAtMs` one full interval forward while `lastRunAtMs` stays unchanged, so the occurrence never runs.\n\n## Root cause\n\n`src/cron/service/ops.ts` `add()` explicitly recomputes every job's next-run time after appending the new job:\n\n```ts\n// before\nexport async function add(state: CronServiceState, input: CronJobCreate) {\n  return await locked(state, async () => {\n    warnIfDisabled(state, \"add\");\n    await ensureLoaded(state);\n    const job = createJob(state, input);\n    state.store?.jobs.push(job);\n\n    // Defensive: recompute all next-run times to ensure consistency\n    recomputeNextRuns(state);\n    ...\n```\n\n`recomputeNextRuns` (`src/cron/service/jobs.ts:646`) advances `nextRunAtMs` whenever `now >= nextRun`:\n\n```ts\nconst isDueOrMissing = !hasScheduledNextRunAtMs(nextRun) || now >= nextRun;\nif (isDueOrMissing || shouldRepairFutureCronNextRunAtMs(...)) {\n  recomputeJobNextRunAtMs({ state, job, nowMs: now });\n}\n```\n\nSo an unrelated `add` recomputes a sibling whose slot is merely due-but-not-yet-fired and discards that slot.\n\nEvery other runtime path that touches the store on a warm process was deliberately switched to `recomputeNextRunsForMaintenance` for exactly this invariant (timer tick / read ops / finalize / startup; see #13992, #16156, #17852). `recomputeNextRunsForMaintenance` only fills in `nextRunAtMs` that is missing (or repairs future-cron / already-executed slots), and never advances a present past-due slot. `add()` and `remove()` were the only two callers still on the recompute-everything path.\n\n## Fix\n\nMove `add`/`remove` onto the same maintenance convention as every sibling caller:\n\n```ts\n// after (add)\nwarnIfDisabled(state, \"add\");\nawait ensureLoaded(state, { skipRecompute: true });\nconst job = createJob(state, input);\nstate.store?.jobs.push(job);\n\nrecomputeNextRunsForMaintenance(state);\n```\n\n```ts\n// after (remove)\nwarnIfDisabled(state, \"remove\");\nawait ensureLoaded(state, { skipRecompute: true });\n```\n\n`recomputeNextRunsForMaintenance` still backfills any job missing a `nextRunAtMs` (including the freshly created one, though `createJob` already computes it), so consistency is preserved while a present due slot is left intact. The `skipRecompute: true` on `ensureLoaded` matters on the cold-load path: a fresh load would otherwise run `recomputeNextRuns` inside `ensureLoaded` and advance the due slot before the maintenance pass runs.\n\n## Why this is the right boundary\n\n`ops.ts` owns the cron mutation entry points; the recompute-vs-maintenance choice is the established invariant for this file. After this change `add` and `remove` join the seven other `ensureLoaded` callers in `ops.ts` (read ops, update, finalize, reload, startup) that already pass `skipRecompute: true`, so there is one canonical \"never advance a due slot on a warm store\" path instead of two stragglers.\n\nSibling-surface note on `remove()`: `ensureLoaded` short-circuits on a warm store (`src/cron/service/store.ts:99`, `if (state.store && !opts?.forceReload) return;`), and `state.store` is loaded at `start()` and never reset to null afterward, so in a normal warm process `remove()` never reaches the recompute and cannot drop a slot. I could not reproduce a dropped run through `remove()` for that reason. The `remove()` change is included to (a) close the cold-load path where `ensureLoaded` would recompute, and (b) keep `add`/`remove` consistent rather than leaving `remove` as the lone bare `ensureLoaded(state)` caller. The reproduced, user-visible bug is the `add()` path.\n\n## Verification\n\nCommands (run from a deps-enabled checkout, Node at `/opt/node/bin`):\n\n- New regression test: `node scripts/run-vitest.mjs src/cron/service.add-recompute-drops-due-every.test.ts`\n  - Fails on pristine `main`: `AssertionError: expected 1765585830000 to be less than or equal to 1765585820055` (the due slot advanced a full 10s interval, no execution).\n  - Passes with this patch.\n- Adjacent suites green (148 tests): `service.add-recompute-drops-due-every`, `service.issue-13992-regression`, `service.issue-17852-daily-skip`, `service.issue-16156-list-skips-cron`, `service.issue-regressions`, `service.jobs`, `service.prevents-duplicate-timers`, `service.restart-catchup`, `service.startup-overflow-clobber`, `service.every-jobs-fire`, `store`.\n- `oxlint` and `oxfmt --check` clean on both changed files.\n- `tsgo -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json` clean.\n\n## Real behavior proof\n\nBehavior addressed: an unrelated `cron.add` no longer advances a due recurring job past its pending run.\nReal environment tested: the real `CronService` runtime (`src/cron/service`) driven end to end with the persisted store, real timer, and `recomputeNextRuns`/`recomputeNextRunsForMaintenance` scheduling code; an `every: 10s` job is created, fired once via the timer, left in its due-but-not-fired state, then an unrelated daily job is added.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/cron/service.add-recompute-drops-due-every.test.ts`\nEvidence after fix:\n```\n# BEFORE (pristine main b02b05d134)\n× preserves a due every-job nextRunAtMs when an unrelated job is added\nAssertionError: expected 1765585830000 to be less than or equal to 1765585820055\n Test Files  1 failed (1)\n      Tests  1 failed (1)\n\n# AFTER (this patch, identical inputs)\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n```\nObserved result after fix: the due job keeps its pending `nextRunAtMs` (<= now) and `lastRunAtMs` is unchanged, so the occurrence still runs.\nWhat was not tested: a standalone reproduction of `remove()` dropping a slot (unreachable on a warm store because `ensureLoaded` short-circuits, as explained above); no full `pnpm build` (no dynamic-import/packaging surface touched).\n",
-        "branch": "fix/cron-add-remove-drops-due-run",
-        "head_sha": "7b4cf98e5829085a82dcbf7a11a706a145b2ac43",
-        "author": "yetval",
-        "labels": [
-          "size: S",
-          "proof: supplied"
-        ],
-        "files": [
-          {
-            "path": "src/cron/service.add-recompute-drops-due-every.test.ts",
-            "additions": 73,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 3,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 76,
-        "deletions": 5,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94323",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94323.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 170,
-          "gatingTotal": 165,
-          "counts": {
-            "SUCCESS": 137,
-            "SKIPPED": 32,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7054,
+    "total_ms": 2149,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 957
+        "ms": 652
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2483
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3583
+        "ms": 1486
       },
       {
         "name": "append_ledger",
