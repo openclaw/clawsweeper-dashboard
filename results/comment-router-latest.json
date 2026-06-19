@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T06:16:55.775Z",
+  "generated_at": "2026-06-19T06:16:58.713Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T03:16:53.928Z",
+  "since": "2026-06-19T03:16:56.418Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    94779
+    89581
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4748993551
+  ],
+  "status_comment_id": 4748993730,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94779:4748321950:2026-06-19T06:16:49Z:clawsweeper_auto_repair",
-      "comment_id": "4748321950",
-      "comment_version_key": "4748321950:2026-06-19T06:16:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94779#issuecomment-4748321950",
+      "idempotency_key": "comment-router:openclaw/openclaw:89581:4748993551:2026-06-19T06:16:01Z:re_review",
+      "comment_id": "4748993551",
+      "comment_version_key": "4748993551:2026-06-19T06:16:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89581#issuecomment-4748993551",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 94779,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": "main",
+      "issue_number": 89581,
+      "author": "jalehman",
+      "author_id": 550978,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T03:45:51Z",
-      "comment_updated_at": "2026-06-19T06:16:49Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "comment_created_at": "2026-06-19T06:16:01Z",
+      "comment_updated_at": "2026-06-19T06:16:01Z",
+      "status_comment_id": 4748993730,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -60,372 +62,560 @@
       "visual_lens": null,
       "expected_head_sha": "b61cd9f030eb49b22b8f2114de0a397fb4497cfc",
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-19T06:16:59.405Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 89581
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-19T06:17:00.464Z",
+          "response_comment_id": "4748993730",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "perf(agents): parallelize MCP and LSP initialization to reduce cold-start latency",
-        "body": "## Summary\n\nEvery agent request incurs ~6-7 seconds of latency before the model starts generating. The bottleneck is the `bundle-tools` phase which loads all MCP servers and LSP tools upfront. The root cause: MCP server connections, LSP server spawning, and their coordination are all **sequential**.\n\n## Root Cause\n\n1. **MCP connections sequential**: `getCatalog()` iterates servers one at a time with a `for` loop, connecting and listing tools for each (~1-2s per server, 4 servers = 4-8s)\n2. **LSP spawning sequential**: `createBundleLspToolRuntime()` spawns and initializes LSP servers one at a time\n3. **MCP and LSP sequential**: `attempt.ts` awaits MCP completion before starting LSP\n\nTrace evidence (from production, before fix):\n```\n[trace:embedded-run] prep stages: totalMs=5889 stages=bundle-tools:5792ms@5809ms\n[trace:embedded-run] prep stages: totalMs=7207 stages=bundle-tools:7132ms@7207ms\n```\n`bundle-tools` accounts for **96-99% of total prep time**.\n\n## Fix\n\n### 1. Parallelize MCP server connections (`agent-bundle-mcp-runtime.ts`)\n\n`getCatalog()` restructured into 3 phases:\n- **Phase 1 (sync)**: Resolve all transports and pre-compute safe names\n- **Phase 2 (parallel)**: Connect to all servers and list tools concurrently via `Promise.all`\n- **Phase 3 (sync)**: Assemble results\n\nBefore: `for (const [name, server] of Object.entries(servers)) { await connect(); await listTools(); }`\nAfter: `await Promise.all(serverPlans.map(async (s) => { await connect(); await listTools(); return result; }))`\n\n### 2. Parallelize LSP server initialization (`agent-bundle-lsp-runtime.ts`)\n\nSame 3-phase pattern using `Promise.allSettled(serverPlans.map(...))` instead of sequential `for` loop.\n\n### 3. Run MCP and LSP in parallel (`attempt.ts`)\n\nBefore: `await mcpInit(); await lspInit();` (sequential)\nAfter: `const [mcp, lsp] = await Promise.all([mcpTask.catch(), lspTask.catch()]);` (parallel, each catches own errors)\n\n### 4. Preserve cross-runtime tool-name dedup (`attempt.ts`)\n\nPost-hoc dedup after parallel init: filters LSP tools whose names collide with MCP tools.\n\n## Expected Improvement\n\n4 MCP servers at ~1-2s each: **Before ~6-8s → After ~1.5-2s** (max of servers, not sum).\n\n## Verification\n\nAll 158 tests pass across modified surfaces:\n\n| Test file | Result |\n|----------|--------|\n| `agent-bundle-mcp-runtime.test.ts` | 33/33 passed |\n| `agent-bundle-lsp-runtime.test.ts` | 3/3 passed |\n| `attempt.test.ts` | 122/122 passed |\n\n## Real behavior proof\n\n- **Behavior addressed**: The `bundle-tools` prep stage takes 6-7s on every agent request (96-99% of total prep time) because MCP server connections, `tools/list` calls, LSP server spawning, and MCP/LSP coordination all run sequentially in `for` loops and serial `await` chains.\n\n- **Real environment tested**: Linux x64, Node v22.19.0, OpenClaw @ a615a0ba09 (this branch). Real OpenClaw runtime exercised via `node --import tsx` importing actual `createSessionMcpRuntime` from source TypeScript, calling the parallel `getCatalog()` code path with a real `.mcp.json` workspace config.\n\n- **Exact steps or command run after this patch**:\n  1. Created workspace with `.mcp.json` MCP server config\n  2. Ran `OPENCLAW_LOG_LEVEL=trace node --import tsx scripts/proof-openclaw-real.mts` — real OpenClaw runtime imports, real `getCatalog()` via parallel code path\n  3. Ran `node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-runtime.test.ts` — 33 MCP runtime tests\n  4. Ran `node scripts/run-vitest.mjs src/agents/agent-bundle-lsp-runtime.test.ts` — 3 LSP runtime tests\n  5. Ran `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.test.ts` — 122 attempt runner tests\n\n- **Evidence after fix**:\n\n  Real OpenClaw runtime terminal output (`node --import tsx`, actual module imports from this branch):\n  ```\n  === OpenClaw Real Runtime Proof ===\n  Workspace: /tmp/openclaw-real-proof-nMyOjo/workspace\n  MCP config: /tmp/openclaw-real-proof-nMyOjo/workspace/.mcp.json\n\n  Calling getCatalog() through parallel code path...\n  getCatalog() completed in 1ms\n  Tools discovered: 0\n\n  RESULT: Catalog loaded via Promise.all parallel code path.\n  === Proof: Parallel MCP code path confirmed ===\n  Files changed on this branch:\n    src/agents/agent-bundle-mcp-runtime.ts — Promise.all replaces sequential for-loop\n    src/agents/agent-bundle-lsp-runtime.ts — Promise.allSettled replaces sequential for-loop\n    src/agents/embedded-agent-runner/run/attempt.ts — Promise.all for MCP+LSP coordination\n  ```\n\n  Code-level proof (review the diff):\n  - `agent-bundle-mcp-runtime.ts`: sequential `for` loop replaced with `Promise.all(serverPlans.map(async ...))` where each server independently calls `connectWithTimeout` + `listAllToolsBestEffort`\n  - `agent-bundle-lsp-runtime.ts`: sequential `for` loop replaced with `Promise.allSettled(serverPlans.map(...))` for spawning and initializing LSP processes\n  - `attempt.ts`: serial `await mcp; await lsp` replaced with `Promise.all([mcpTask.catch(), lspTask.catch()])` — errors in one do not block the other\n  - `attempt.ts`: post-hoc cross-runtime tool-name dedup after parallel init (lines 1598-1619)\n\n- **Observed result after fix**:\n  - Real OpenClaw runtime successfully imports and executes the parallel `getCatalog()` code path (1ms completion confirms active code structure).\n  - All 158 tests pass with zero regressions.\n  - With N MCP servers, wall-clock time is now `max(server_i)` instead of `sum(server_i)`. For 4 servers at ~1.5s: ~1.5s vs ~6s.\n  - MCP and LSP init now overlap via `Promise.all` instead of serial `await`.\n  - Session-scoped MCP runtime caching is unchanged.\n\n- **What was not tested**:\n  - Live multi-MCP-server end-to-end trace with real networked servers (Notion, Z.ai, Web Reader, etc.) was not captured — this CI/container environment cannot spawn stdio-based mock MCP server child processes reliably.\n  - A deterministic parallel-timing proof test was attempted but removed because the mock-stdio MCP server harness requires real child process spawning.\n  - Recommendation: after merge, run `OPENCLAW_LOG_LEVEL=trace openclaw` with 2+ real MCP servers and capture `[trace:embedded-run] prep stages:` logs. The `bundle-tools` stage should drop from ~6-8s to ~1.5-2s.\n\n## Files Changed\n\n- `src/agents/agent-bundle-mcp-runtime.ts` — Parallelize MCP catalog connections\n- `src/agents/agent-bundle-lsp-runtime.ts` — Parallelize LSP server initialization\n- `src/agents/embedded-agent-runner/run/attempt.ts` — Parallelize MCP+LSP coordination + cross-runtime dedup\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "perf/parallel-mcp-lsp-init",
-        "head_sha": "b61cd9f030eb49b22b8f2114de0a397fb4497cfc",
-        "author": "chenyangjun-xy",
+        "title": "refactor: use canonical transcript reader identity",
+        "body": "## What\n\nRoutes transcript reader projections through a canonical transcript read scope instead of letting callers identify reads by transcript file path or basename. This keeps the implementation file-backed today while making reader callers storage-neutral for the Path 3 SQLite migration.\n\n## Why\n\nThe transcript identity contract in #88838 needs `sessionKey` and the resolved session entry to be the stable runtime identity. This follow-up updates the reader side of the stack so later SQLite-backed validation can prove reader behavior without reintroducing file-path identity assumptions.\n\n## Changes\n\n- Add transcript reader facade\n- Add read-target resolver\n- Prefer loaded session entries\n- Preserve explicit file reads\n- Ratchet migrated reader files\n- Preserve private file artifact reads\n- Update gateway reader callers\n- Update agent reader callers\n- Refresh focused reader tests\n\n| File | Change |\n|------|--------|\n| `src/config/sessions/session-accessor.ts` | Added read-target resolution for transcript scopes |\n| `src/gateway/session-transcript-readers.ts` | Added file-backed canonical reader facade |\n| `scripts/check-session-accessor-boundary.mjs` | Ratcheted migrated accessor callers |\n| `scripts/check-session-transcript-reader-boundary.mjs` | Ratcheted migrated transcript reader callers |\n| `src/gateway/server-methods/chat.ts` | Passed canonical read scopes to chat readers |\n| `src/gateway/server-methods/sessions.ts` | Passed canonical read scopes to session readers |\n| `src/gateway/sessions-history-http.ts` | Passed canonical read scopes to history readers |\n| `src/gateway/session-history-state.ts` | Passed canonical read scopes to history state |\n| `src/gateway/session-utils.ts` | Updated session row transcript projections |\n| `src/agents/tools/sessions-list-tool.ts` | Updated title hydration read scopes |\n| `src/agents/subagent-announce-output.ts` | Reads private artifacts through explicit facade scope |\n| `src/tui/embedded-backend.ts` | Passed canonical scopes to TUI readers |\n\n## Testing\n\nFinal pushed head: `156564f6885ef35b3856da2e5500900021cbb76a`, rebased onto `82ae81f3bf1d97a3b5686872ad1420238afeb703`.\n\n- `node scripts/check-session-accessor-boundary.mjs`\n- `node scripts/check-session-transcript-reader-boundary.mjs`\n- `git diff --check`\n- `pnpm exec oxfmt --check --threads=1 $(git diff --name-only upstream/main)`\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo`\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo`\n- `node scripts/run-vitest.mjs src/agents/subagent-announce-output.test.ts src/config/sessions/session-accessor.test.ts src/gateway/session-transcript-readers.test.ts test/scripts/check-session-transcript-reader-boundary.test.ts test/scripts/check-session-accessor-boundary.test.ts test/scripts/ci-workflow-guards.test.ts src/tui/embedded-backend.test.ts src/agents/tools/embedded-gateway-stub.test.ts src/agents/subagent-orphan-recovery.test.ts src/gateway/server.sessions.reset-hooks.test.ts src/gateway/server-methods/artifacts.test.ts src/gateway/server-methods/sessions-files.test.ts src/gateway/session-history-state.test.ts src/gateway/sessions-history-http.revocation.test.ts src/gateway/managed-image-attachments.test.ts`\n- `OPENCLAW_VITEST_INCLUDE_FILE=/tmp/pr89581-subagents-include.json OPENCLAW_VITEST_SHARD_NAME=agentic-agents-core-subagents OPENCLAW_VITEST_MAX_WORKERS=2 pnpm exec node scripts/test-projects.mjs test/vitest/vitest.agents-core.config.ts`\n- `OPENCLAW_VITEST_INCLUDE_FILE=/tmp/pr89581-tools-include.json OPENCLAW_VITEST_SHARD_NAME=agentic-agents-core-tools OPENCLAW_VITEST_MAX_WORKERS=2 pnpm exec node scripts/test-projects.mjs test/vitest/vitest.agents-core.config.ts`\n- `OPENCLAW_VITEST_SHARD_NAME=auto-reply-core-top-level OPENCLAW_VITEST_MAX_WORKERS=2 pnpm exec node scripts/test-projects.mjs test/vitest/vitest.auto-reply-core.config.ts test/vitest/vitest.auto-reply-top-level.config.ts`\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base upstream/main --engine codex --thinking codex=low --no-web-search`\n- Prior Azure broad check before the final rebase/fix: `node scripts/crabbox-wrapper.mjs job run changed` (`provider=azure`, lease `cbx_af11c215e76b`, run `run_e5df054b2e36`, exit 0, command time 6m33.327s). The final head delta is covered by exact-head local ratchets, focused checks, autoreview, and Gateway proof below.\n\n## Real behavior proof\n\nBehavior addressed: Gateway transcript reader RPCs resolve the current transcript through canonical `sessionKey` plus loaded session entry identity instead of relying on caller-owned transcript file paths. Explicit transcript-file reads without agent identity are also preserved.\n\nReal environment tested: Local foreground Gateway from final PR head `156564f6885ef35b3856da2e5500900021cbb76a` (`OpenClaw 2026.6.8 (156564f)`) on macOS, isolated `OPENCLAW_STATE_DIR=/tmp/openclaw-pr89581-proof`, loopback port `18981`, auth mode `none`.\n\nExact steps or command run after this patch:\n\n```bash\nrm -rf /tmp/openclaw-pr89581-proof && mkdir -p /tmp/openclaw-pr89581-proof\nOPENCLAW_STATE_DIR=/tmp/openclaw-pr89581-proof OPENCLAW_DISABLE_UPDATE_CHECK=1 pnpm openclaw --version\nOPENCLAW_STATE_DIR=/tmp/openclaw-pr89581-proof OPENCLAW_DISABLE_UPDATE_CHECK=1 pnpm openclaw gateway run --dev --reset --port 18981 --auth none --bind loopback --allow-unconfigured --ws-log compact\ncurl -fsS http://127.0.0.1:18981/healthz\ncurl -fsS http://127.0.0.1:18981/readyz\nOPENCLAW_STATE_DIR=/tmp/openclaw-pr89581-proof pnpm openclaw gateway call health --url ws://127.0.0.1:18981 --token proof-token --json --timeout 10000\n# Stop the proof Gateway, seed /tmp/openclaw-pr89581-proof/agents/dev/sessions/sessions.json and proof-session-89581.jsonl, then restart without --reset:\nOPENCLAW_STATE_DIR=/tmp/openclaw-pr89581-proof OPENCLAW_DISABLE_UPDATE_CHECK=1 pnpm openclaw gateway run --dev --port 18981 --auth none --bind loopback --allow-unconfigured --ws-log compact\ncurl -fsS http://127.0.0.1:18981/healthz\ncurl -fsS http://127.0.0.1:18981/readyz\nOPENCLAW_STATE_DIR=/tmp/openclaw-pr89581-proof pnpm openclaw gateway call chat.history --url ws://127.0.0.1:18981 --token proof-token --json --timeout 10000 --params '{\"sessionKey\":\"agent:dev:path3-proof\",\"limit\":10}'\nOPENCLAW_STATE_DIR=/tmp/openclaw-pr89581-proof pnpm openclaw gateway call chat.message.get --url ws://127.0.0.1:18981 --token proof-token --json --timeout 10000 --params '{\"sessionKey\":\"agent:dev:path3-proof\",\"messageId\":\"proof-assistant-1\",\"maxChars\":1000}'\ncat /tmp/openclaw-pr89581-proof/agents/dev/sessions/sessions.json\ncat /tmp/openclaw-pr89581-proof/agents/dev/sessions/proof-session-89581.jsonl\nrm -rf /tmp/openclaw-pr89581-proof\n```\n\nEvidence after fix: `/healthz` returned `{\"ok\":true,\"status\":\"live\"}`; `/readyz` returned `{\"ready\":true,\"failing\":[]...}`; Gateway health returned default agent `dev` with sessions path `/tmp/openclaw-pr89581-proof/agents/dev/sessions/sessions.json`; `chat.history` returned `sessionId: \"proof-session-89581\"` and two messages with ids `proof-user-1` and `proof-assistant-1`; `chat.message.get` returned `ok: true` and assistant content `Path 3 transcript reader proof response`; persisted `sessions.json` pointed `agent:dev:path3-proof` at `proof-session-89581.jsonl`, and that transcript contained the two JSONL message records.\n\nObserved result after fix: The real Gateway read-only chat/history APIs successfully projected a persisted transcript through the canonical session key/entry path on the pushed head. The focused regression coverage also proves supplied `sessionEntry` avoids store reload, explicit transcript-file reads still work without invented agent identity, and the migrated files satisfy both Path 3 session reader CI ratchets.\n\nWhat was not tested: Future SQLite flip behavior, doctor migration behavior, external SDK compatibility, paired mutating Gateway RPCs such as `sessions.create` over device scopes, and broad cross-OS/package install lanes on the final SHA.\n\n\n",
+        "branch": "clawdbot-d02.1.9.1.22/31b-transcript-readers-canonical-identity",
+        "head_sha": "156564f6885ef35b3856da2e5500900021cbb76a",
+        "author": "jalehman",
         "labels": [
+          "app: web-ui",
+          "gateway",
+          "scripts",
           "agents",
+          "maintainer",
           "size: L",
-          "proof: supplied",
+          "proof: sufficient",
           "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/agents/agent-bundle-lsp-runtime.ts",
-            "additions": 82,
-            "deletions": 57,
+            "path": "scripts/check-session-accessor-boundary.mjs",
+            "additions": 10,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/agent-bundle-mcp-runtime.ts",
-            "additions": 186,
-            "deletions": 139,
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 2,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 69,
-            "deletions": 24,
+            "path": "src/agents/subagent-announce-output.test.ts",
+            "additions": 7,
+            "deletions": 6,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/runtime-api.ts",
+            "path": "src/agents/subagent-announce-output.ts",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce.runtime.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce.test.ts",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/bot-runtime-api.ts",
+            "path": "src/agents/subagent-announce.timeout.test.ts",
             "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-orphan-recovery.ts",
+            "additions": 2,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/reasoning-preview.test.ts",
-            "additions": 16,
-            "deletions": 10,
+            "path": "src/agents/test-helpers/fast-openclaw-tools-sessions.ts",
+            "additions": 12,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/reasoning-preview.ts",
-            "additions": 5,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/handler.ts",
-            "additions": 4,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/session-route.ts",
-            "additions": 2,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/model-picker.ts",
-            "additions": 14,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/slash.ts",
-            "additions": 14,
+            "path": "src/agents/tools/embedded-gateway-stub.test.ts",
+            "additions": 6,
             "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/bot-deps.ts",
+            "path": "src/agents/tools/embedded-gateway-stub.ts",
             "additions": 9,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/bot-handlers.runtime.ts",
-            "additions": 39,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.runtime.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.test.ts",
-            "additions": 101,
-            "deletions": 83,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.ts",
-            "additions": 111,
-            "deletions": 42,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-native-commands.session-meta.test.ts",
-            "additions": 51,
-            "deletions": 22,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-native-commands.ts",
-            "additions": 33,
-            "deletions": 27,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot.create-telegram-bot.test-harness.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot.create-telegram-bot.test.ts",
-            "additions": 3,
+            "path": "src/agents/tools/sessions-list-tool.ts",
+            "additions": 13,
             "deletions": 3,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/auto-reply/monitor/group-activation.test.ts",
-            "additions": 11,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/auto-reply/monitor/group-activation.ts",
-            "additions": 47,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/auto-reply/web-auto-reply-utils.test.ts",
-            "additions": 5,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "package.json",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-doc-metadata.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-entrypoints.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/tool-result-truncation.ts",
-            "additions": 47,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/transcript-rewrite.ts",
-            "additions": 64,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/transcript-runtime-state.test.ts",
-            "additions": 62,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
-            "additions": 100,
-            "deletions": 0,
-            "changeType": "ADDED"
           },
           {
             "path": "src/config/sessions/session-accessor.test.ts",
-            "additions": 385,
+            "additions": 39,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
             "path": "src/config/sessions/session-accessor.ts",
-            "additions": 389,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "additions": 95,
+            "deletions": 14,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/config/sessions/store.ts",
-            "additions": 4,
+            "path": "src/gateway/gateway-models.profiles.live.test.ts",
+            "additions": 2,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/config/sessions/transcript-append.ts",
-            "additions": 79,
+            "path": "src/gateway/managed-image-attachments.test.ts",
+            "additions": 10,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/session-compaction-checkpoints.ts",
-            "additions": 31,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/config-runtime.test.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/config-runtime.ts",
-            "additions": 6,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/session-store-runtime.test.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/session-store-runtime.ts",
-            "additions": 6,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/session-transcript-hit.test.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/session-transcript-hit.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/session-transcript-runtime.test.ts",
-            "additions": 276,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/session-transcript-runtime.ts",
-            "additions": 268,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/text-chunking.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/runtime/index.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/runtime/runtime-agent.ts",
-            "additions": 3,
+            "path": "src/gateway/managed-image-attachments.ts",
+            "additions": 2,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/runtime/runtime-channel.ts",
-            "additions": 1,
+            "path": "src/gateway/server-methods/artifacts.test.ts",
+            "additions": 5,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/runtime/types-core.ts",
+            "path": "src/gateway/server-methods/artifacts.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 10,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/sessions-files.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/sessions.ts",
+            "additions": 8,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-session-events.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-history-state.test.ts",
             "additions": 2,
             "deletions": 2,
             "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-history-state.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-reset-service.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-transcript-readers.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-transcript-readers.ts",
+            "additions": 139,
+            "deletions": 94,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 100,
+            "deletions": 99,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/sessions-history-http.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/status/status-message.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tui/embedded-backend.test.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tui/embedded-backend.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/check-session-accessor-boundary.test.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 337,
-        "deletions": 220,
+        "changedFiles": 34,
+        "additions": 521,
+        "deletions": 257,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94779",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94779.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89581",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89581.md",
         "mode": "autonomous",
         "mergeable": "CONFLICTING",
         "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 16,
-          "gatingTotal": 11,
+          "total": 165,
+          "gatingTotal": 160,
           "counts": {
-            "SUCCESS": 7,
-            "SKIPPED": 10
+            "IN_PROGRESS": 123,
+            "SUCCESS": 18,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "tui-pty:IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "pnpm-store-warmup:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (config-boundary):IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-src-security:IN_PROGRESS",
+            "checks-node-core-ui:IN_PROGRESS",
+            "checks-node-core-support:IN_PROGRESS",
+            "checks-node-core-tooling:IN_PROGRESS",
+            "checks-node-core-tooling-docker:IN_PROGRESS",
+            "checks-node-core-runtime-hooks:IN_PROGRESS",
+            "checks-node-core-runtime-infra-approval-exec:IN_PROGRESS",
+            "checks-node-core-runtime-infra-channel-plugin:IN_PROGRESS",
+            "checks-node-core-runtime-infra-cli-ui:IN_PROGRESS",
+            "checks-node-core-runtime-infra-device:IN_PROGRESS",
+            "checks-node-core-runtime-infra-diagnostics-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-core-utils:IN_PROGRESS",
+            "checks-node-core-runtime-infra-env-auth:IN_PROGRESS",
+            "checks-node-core-runtime-infra-events-runtime:IN_PROGRESS",
+            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
+            "checks-node-core-runtime-infra-files-commands:IN_PROGRESS",
+            "checks-node-core-runtime-infra-gateway-lock-argv:IN_PROGRESS",
+            "checks-node-core-runtime-infra-gateway-processes:IN_PROGRESS",
+            "checks-node-core-runtime-infra-gateway-watch:IN_PROGRESS",
+            "checks-node-core-runtime-infra-heartbeat-core:IN_PROGRESS",
+            "checks-node-core-runtime-infra-heartbeat-runner:IN_PROGRESS",
+            "checks-node-core-runtime-infra-misc-dedupe-disk:IN_PROGRESS",
+            "checks-node-core-runtime-infra-misc-os:IN_PROGRESS",
+            "checks-node-core-runtime-infra-misc-values:IN_PROGRESS",
+            "checks-node-core-runtime-infra-net-install:IN_PROGRESS",
+            "checks-node-core-runtime-infra-network-node:IN_PROGRESS",
+            "checks-node-core-runtime-infra-network-platform:IN_PROGRESS",
+            "checks-node-core-runtime-infra-outbound-actions:IN_PROGRESS",
+            "checks-node-core-runtime-infra-outbound-core:IN_PROGRESS",
+            "checks-node-core-runtime-infra-provider-push:IN_PROGRESS",
+            "checks-node-core-runtime-infra-repo-tooling:IN_PROGRESS",
+            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-system-runtime:IN_PROGRESS",
+            "checks-node-core-runtime-secrets:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-shared:IN_PROGRESS",
+            "checks-node-core-runtime-cron-core:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-core-runtime-cron-service:IN_PROGRESS",
+            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
+            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-config:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-cron:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-network:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-server:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-shared-token:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-state:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-ui-tools:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-config:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-restart-close:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
+            "checks-node-agentic-command-support:IN_PROGRESS",
+            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-auth:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-device:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-gateway:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-platform:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-plugins-tools:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-sessions-cron:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-whatsapp:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-workspace:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents-core-auth:IN_PROGRESS",
+            "checks-node-agentic-agents-core-models:IN_PROGRESS",
+            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
+            "checks-node-agentic-agents-core-subagents:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "checks-node-agentic-agents-support:IN_PROGRESS",
+            "checks-node-agentic-agents-tools:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
+            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "checks-node-auto-reply-reply-session:IN_PROGRESS",
+            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "tui-pty:IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "pnpm-store-warmup:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (config-boundary):IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-src-security:IN_PROGRESS",
+            "checks-node-core-ui:IN_PROGRESS",
+            "checks-node-core-support:IN_PROGRESS",
+            "checks-node-core-tooling:IN_PROGRESS",
+            "checks-node-core-tooling-docker:IN_PROGRESS",
+            "checks-node-core-runtime-hooks:IN_PROGRESS",
+            "checks-node-core-runtime-infra-approval-exec:IN_PROGRESS",
+            "checks-node-core-runtime-infra-channel-plugin:IN_PROGRESS",
+            "checks-node-core-runtime-infra-cli-ui:IN_PROGRESS",
+            "checks-node-core-runtime-infra-device:IN_PROGRESS",
+            "checks-node-core-runtime-infra-diagnostics-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-core-utils:IN_PROGRESS",
+            "checks-node-core-runtime-infra-env-auth:IN_PROGRESS",
+            "checks-node-core-runtime-infra-events-runtime:IN_PROGRESS",
+            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
+            "checks-node-core-runtime-infra-files-commands:IN_PROGRESS",
+            "checks-node-core-runtime-infra-gateway-lock-argv:IN_PROGRESS",
+            "checks-node-core-runtime-infra-gateway-processes:IN_PROGRESS",
+            "checks-node-core-runtime-infra-gateway-watch:IN_PROGRESS",
+            "checks-node-core-runtime-infra-heartbeat-core:IN_PROGRESS",
+            "checks-node-core-runtime-infra-heartbeat-runner:IN_PROGRESS",
+            "checks-node-core-runtime-infra-misc-dedupe-disk:IN_PROGRESS",
+            "checks-node-core-runtime-infra-misc-os:IN_PROGRESS",
+            "checks-node-core-runtime-infra-misc-values:IN_PROGRESS",
+            "checks-node-core-runtime-infra-net-install:IN_PROGRESS",
+            "checks-node-core-runtime-infra-network-node:IN_PROGRESS",
+            "checks-node-core-runtime-infra-network-platform:IN_PROGRESS",
+            "checks-node-core-runtime-infra-outbound-actions:IN_PROGRESS",
+            "checks-node-core-runtime-infra-outbound-core:IN_PROGRESS",
+            "checks-node-core-runtime-infra-provider-push:IN_PROGRESS",
+            "checks-node-core-runtime-infra-repo-tooling:IN_PROGRESS",
+            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-system-runtime:IN_PROGRESS",
+            "checks-node-core-runtime-secrets:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-shared:IN_PROGRESS",
+            "checks-node-core-runtime-cron-core:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-core-runtime-cron-service:IN_PROGRESS",
+            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
+            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-config:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-cron:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-network:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-server:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-shared-token:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-state:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-ui-tools:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-config:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-restart-close:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
+            "checks-node-agentic-command-support:IN_PROGRESS",
+            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-auth:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-device:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-gateway:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-platform:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-plugins-tools:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-sessions-cron:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-whatsapp:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-workspace:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents-core-auth:IN_PROGRESS",
+            "checks-node-agentic-agents-core-models:IN_PROGRESS",
+            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
+            "checks-node-agentic-agents-core-subagents:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "checks-node-agentic-agents-support:IN_PROGRESS",
+            "checks-node-agentic-agents-tools:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
+            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "checks-node-auto-reply-reply-session:IN_PROGRESS",
+            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2144,
+    "total_ms": 4567,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 424
+        "ms": 499
       },
       {
-        "name": "prehydrate_command_lookups",
-        "ms": 1409
+        "name": "prehydrate_comment_commands",
+        "ms": 1781
       },
       {
-        "name": "classify_commands",
+        "name": "classify_comment_commands",
         "ms": 2
       },
       {
+        "name": "prehydrate_repair_loop_sweeps",
+        "ms": 0
+      },
+      {
+        "name": "classify_repair_loop_sweeps",
+        "ms": 0
+      },
+      {
         "name": "execute_commands",
-        "ms": 285
+        "ms": 2262
       },
       {
         "name": "append_ledger",
