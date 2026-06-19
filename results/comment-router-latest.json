@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T09:10:41.044Z",
+  "generated_at": "2026-06-19T09:10:46.065Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T06:10:39.192Z",
+  "since": "2026-06-19T06:10:43.621Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94779
+    94883
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94779:4748321950:2026-06-19T09:10:35Z:clawsweeper_auto_repair",
-      "comment_id": "4748321950",
-      "comment_version_key": "4748321950:2026-06-19T09:10:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94779#issuecomment-4748321950",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94883:4750088656:2026-06-19T09:10:37Z:clawsweeper_needs_human",
+      "comment_id": "4750088656",
+      "comment_version_key": "4750088656:2026-06-19T09:10:37Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94883#issuecomment-4750088656",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 94779,
+      "issue_number": 94883,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T03:45:51Z",
-      "comment_updated_at": "2026-06-19T09:10:35Z",
+      "comment_created_at": "2026-06-19T08:57:49Z",
+      "comment_updated_at": "2026-06-19T09:10:37Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -53,76 +53,84 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=b61cd9f030eb49b22b8f2114de0a397fb4497cfc)",
-      "review_summary": "The PR parallelizes bundled MCP catalog loading, bundled LSP startup, and top-level MCP-vs-LSP initialization in the embedded attempt runner.\n\nPR surface: Source +117. Total +117 across 3 files.\n\nReproducibility: yes. from source inspection for the review findings: current main awaits MCP/LSP startup directly while PR head catches rejected initialization tasks and returns undefined. I did not run a live configured gateway workload to reproduce the claimed timing magnitude.",
-      "review_followup": "- [P1] Manual review remains because maintainers must choose the startup failure semantics and the contributor still needs full-path real behavior proof.",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=f51bd0c0b93192ba03dd95a540b4c095ed2e7822)",
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "b61cd9f030eb49b22b8f2114de0a397fb4497cfc",
+      "expected_head_sha": "f51bd0c0b93192ba03dd95a540b4c095ed2e7822",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "perf(agents): parallelize MCP and LSP initialization to reduce cold-start latency",
-        "body": "## Summary\n\nEvery agent request incurs ~6-7 seconds of latency before the model starts generating. The bottleneck is the `bundle-tools` phase which loads all MCP servers and LSP tools upfront. The root cause: MCP server connections, LSP server spawning, and their coordination are all **sequential**.\n\n## Root Cause\n\n1. **MCP connections sequential**: `getCatalog()` iterates servers one at a time with a `for` loop\n2. **LSP spawning sequential**: `createBundleLspToolRuntime()` spawns LSP servers one at a time\n3. **MCP and LSP sequential**: `attempt.ts` awaits MCP completion before starting LSP\n\nTrace evidence (from production, before fix):\n```\n[trace:embedded-run] prep stages: totalMs=5889 stages=bundle-tools:5792ms@5809ms\n[trace:embedded-run] prep stages: totalMs=7207 stages=bundle-tools:7132ms@7207ms\n```\n`bundle-tools` accounts for **96-99% of total prep time**.\n\n## Fix\n\n### 1. Parallelize MCP server connections (`agent-bundle-mcp-runtime.ts`)\n\n`getCatalog()`: Phase 1 (sync resolve) → Phase 2 (`Promise.all` parallel connect) → Phase 3 (assemble)\n\n### 2. Parallelize LSP server initialization (`agent-bundle-lsp-runtime.ts`)\n\n`createBundleLspToolRuntime()`: Phase 1 (sync validate) → Phase 2 (`Promise.allSettled` parallel spawn) → Phase 3 (assemble)\n\n### 3. Run MCP and LSP in parallel (`attempt.ts`)\n\n`Promise.all([mcpTask.catch(), lspTask.catch()])` replaces sequential `await mcp; await lsp`. Each catches own errors.\n\n### 4. Preserve cross-runtime tool-name dedup (`attempt.ts`)\n\nPost-hoc dedup after parallel init filters LSP tools colliding with MCP tool names.\n\n## Expected Improvement\n\n4 MCP servers at ~1-2s each: **Before ~6-8s → After ~1.5-2s** (max of servers, not sum).\n\n## Real behavior proof\n\n- **Behavior addressed**: The `bundle-tools` prep stage takes 6-7s on every agent request (96-99% of total prep time) because MCP server connections, `tools/list` calls, LSP server spawning, and MCP/LSP coordination all run sequentially in `for` loops and serial `await` chains.\n\n- **Real environment tested**: Linux x64, Node v22.19.0, OpenClaw @ a615a0ba09 (this branch). Real `createSessionMcpRuntime` with real `getCatalog()` parallel code path. Mock MCP servers are real Node.js child processes speaking the MCP JSON-RPC protocol over stdin/stdout — the same transport used by production stdio MCP servers.\n\n- **Exact steps or command run after this patch**:\n  1. `node --import tsx scripts/verify-parallel-mcp.mts` — 2 MCP servers, 250ms tools/list delay each\n  2. `node --import tsx scripts/verify-parallel-3srv.mts` — 3 MCP servers, 200ms tools/list delay each\n  3. `node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-runtime.test.ts` — 33 tests passed\n  4. `node scripts/run-vitest.mjs src/agents/agent-bundle-lsp-runtime.test.ts` — 3 tests passed\n  5. `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.test.ts` — 122 tests passed\n\n- **Evidence after fix**:\n\n  **Local verification run 1** — 2 servers × 250ms delay:\n  ```\n  ============================================================\n    OpenClaw Parallel MCP Verification\n  ============================================================\n  MCP servers: 2\n  Per-server tools/list delay: 250ms\n  Sequential expected: 500ms\n  Parallel expected: ~250ms (max of servers)\n\n  Calling getCatalog() ...\n  getCatalog() returned in 339ms\n  Servers in catalog: 2\n  Tools discovered: 2\n    - verify_tool_0 (from verifySrv0)\n    - verify_tool_1 (from verifySrv1)\n\n  Result:\n    Tools found: 2/2 ✓\n    Wall time: 339ms (sequential would be ~500ms+)\n    Parallel threshold: <425ms ✓\n\n  ✓✓✓ PARALLELISM CONFIRMED ✓✓✓\n  ============================================================\n  ```\n\n  **Local verification run 2** — 3 servers × 200ms delay:\n  ```\n  === 3-server verification: 3 servers × 200ms delay ===\n  Sequential expected: 600ms | Parallel expected: ~200ms\n\n  getCatalog() = 291ms | Tools: 3/3\n  Servers: 3\n    vt3_0 (vs3_0)\n    vt3_1 (vs3_1)\n    vt3_2 (vs3_2)\n\n  ✓✓✓ PARALLEL: 291ms < 480ms threshold\n  ```\n\n  **Code-level proof**:\n  - `agent-bundle-mcp-runtime.ts`: sequential `for` loop → `Promise.all(serverPlans.map(...))`\n  - `agent-bundle-lsp-runtime.ts`: sequential `for` loop → `Promise.allSettled(serverPlans.map(...))`\n  - `attempt.ts`: serial `await mcp; await lsp` → `Promise.all([mcpTask.catch(), lspTask.catch()])`\n  - `attempt.ts`: post-hoc cross-runtime tool-name dedup (lines 1598-1619)\n\n- **Observed result after fix**:\n  - **Run 1**: 2 servers × 250ms → 339ms wall time (vs 500ms+ sequential). **2.0x speedup** (parallelism confirmed).\n  - **Run 2**: 3 servers × 200ms → 291ms wall time (vs 600ms+ sequential). **2.1x speedup** (parallelism confirmed).\n  - Both runs discovered all tools from all servers — correctness preserved.\n  - Wall-clock time scales with `max(server_i)` not `sum(server_i)`. For 4 production servers at ~1.5s each: ~1.5s instead of ~6s.\n  - MCP and LSP init now overlap via `Promise.all`.\n  - Session-scoped MCP runtime caching is unchanged.\n  - All 158 tests pass with zero regressions.\n\n- **What was not tested**:\n  - Live end-to-end trace with real networked MCP servers (Notion, Z.ai, Web Reader) — requires a production OpenClaw setup with actual API credentials.\n  - The mock servers use local stdio transport (same protocol as production stdio MCP servers). Networked servers would show even larger relative gains since network RTT typically dominates.\n\n## Files Changed\n\n- `src/agents/agent-bundle-mcp-runtime.ts` — Parallelize MCP catalog connections\n- `src/agents/agent-bundle-lsp-runtime.ts` — Parallelize LSP server initialization\n- `src/agents/embedded-agent-runner/run/attempt.ts` — Parallelize MCP+LSP coordination + cross-runtime dedup\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "perf/parallel-mcp-lsp-init",
-        "head_sha": "b61cd9f030eb49b22b8f2114de0a397fb4497cfc",
-        "author": "chenyangjun-xy",
+        "title": "[AI-assisted] Filter soft-archived cards by default in workboard list CLI",
+        "body": "### Summary\nThis PR updates the \\openclaw workboard list\\ CLI command to filter out soft-archived cards by default (cards where \\metadata.archivedAt\\ is present). It also introduces a new \\--include-archived\\ option to explicitly show archived cards if desired.\n\n### Real behavior proof\n- **Setup tested:** Local unit test suite.\n- **Command run:** \\pnpm test:extension workboard\\\n- **Observed result:** \n  The new unit test case \\\filters out archived cards by default in list command\\ passed successfully. Output:\n  \\\\\\\n  ✓  extensions  extensions/workboard/src/cli.test.ts (5 tests) 23ms\n  \\\\\\\n",
+        "branch": "fix/workboard-cli-hide-archived",
+        "head_sha": "f51bd0c0b93192ba03dd95a540b4c095ed2e7822",
+        "author": "aniruddhaadak80",
         "labels": [
-          "agents",
-          "size: L",
-          "proof: supplied",
+          "size: S",
+          "triage: needs-real-behavior-proof",
           "P2",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: 📣 needs proof",
+          "plugin: workboard"
         ],
         "files": [
           {
-            "path": "src/agents/agent-bundle-lsp-runtime.ts",
-            "additions": 82,
-            "deletions": 57,
+            "path": "extensions/workboard/src/cli.test.ts",
+            "additions": 46,
+            "deletions": 6,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/agent-bundle-mcp-runtime.ts",
-            "additions": 186,
-            "deletions": 139,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 69,
-            "deletions": 24,
+            "path": "extensions/workboard/src/cli.ts",
+            "additions": 19,
+            "deletions": 7,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 337,
-        "deletions": 220,
+        "changedFiles": 2,
+        "additions": 65,
+        "deletions": 13,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94779",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94779.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94883",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94883.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 17,
-          "gatingTotal": 12,
+          "total": 28,
+          "gatingTotal": 23,
           "counts": {
-            "SUCCESS": 8,
-            "SKIPPED": 9
+            "FAILURE": 1,
+            "SUCCESS": 9,
+            "QUEUED": 4,
+            "SKIPPED": 14
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "preflight:QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
@@ -133,15 +141,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2093,
+    "total_ms": 2793,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 343
+        "ms": 420
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1496
+        "ms": 2010
       },
       {
         "name": "classify_comment_commands",
@@ -157,7 +165,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 230
+        "ms": 332
       },
       {
         "name": "append_ledger",
