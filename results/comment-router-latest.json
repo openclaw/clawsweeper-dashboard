@@ -1,20 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T07:16:53.349Z",
-  "repo": "openclaw/wacli",
+  "generated_at": "2026-06-19T07:16:59.308Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T04:16:51.727Z",
+  "since": "2026-06-19T04:16:56.011Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    283
+    41299
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4324181947
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/wacli:283:4748591950:2026-06-19T07:16:48Z:clawsweeper_auto_repair",
-      "comment_id": "4748591950",
-      "comment_version_key": "4748591950:2026-06-19T07:16:48Z",
-      "comment_url": "https://github.com/openclaw/wacli/pull/283#issuecomment-4748591950",
-      "repo": "openclaw/wacli",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:41299:4324181947:2026-06-19T07:15:54Z:clawsweeper_auto_repair",
+      "comment_id": "4324181947",
+      "comment_version_key": "4324181947:2026-06-19T07:15:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/41299#issuecomment-4324181947",
+      "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 283,
+      "issue_number": 41299,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T04:52:41Z",
-      "comment_updated_at": "2026-06-19T07:16:48Z",
+      "comment_created_at": "2026-04-27T04:43:49Z",
+      "comment_updated_at": "2026-06-19T07:15:54Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -53,53 +55,50 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=35d25600277d14f5e06940898e5949295810146d)",
-      "review_summary": "The branch adds sync global presence sends, a WhatsApp SendPresence wrapper and fake tests, sends unavailable presence after sync, detaches WhatsApp ConnectContext from caller cancellation, and edits CHANGELOG.md.\n\nReproducibility: no. live current-main reproduction was run in this read-only review. Source inspection plus the PR body's redacted live SIGTERM logs give a high-confidence path for the reported shutdown presence failure and for the introduced cancellation/order risks.",
-      "review_followup": "- [P2] A focused repair can preserve connect cancellation, fix final presence ordering, and drop release-owned changelog edits without a product decision.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=b69cb795855f88281809c57dd50d6d121733e656)",
+      "review_summary": "The PR inserts `---openclaw:user-msg---` in `buildCurrentInboundPrompt`, strips that marker after inbound metadata sanitization, and adds separator-focused sanitizer tests.\n\nPR surface: Source +14, Tests +42. Total +56 across 3 files.\n\nReproducibility: yes. Source inspection shows the changed helper is shared by compact current-message and room-event contexts, and current tests pin those outputs without a marker.",
+      "review_followup": "- [P1] The blocker is a concrete prompt-helper repair, although maintainers may still choose to close this branch in favor of the broader runtime-context PRs.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "35d25600277d14f5e06940898e5949295810146d",
-      "finding_id": "review-feedback",
+      "expected_head_sha": "b69cb795855f88281809c57dd50d6d121733e656",
+      "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(sync): presence handling for linked-device active status and phone push notifications",
-        "body": "## Problem\n\nA `wacli sync` linked device stays connected but never tells WhatsApp it is active, and when sync exits it fails to tell WhatsApp it is inactive. This causes two user-visible issues:\n\n1. **Stale \"last active\" timestamp** — WhatsApp's Linked Devices screen shows the device as inactive even while `sync --follow` is running. The websocket is open and messages flow, but no `<presence type=\"available\"/>` stanza is sent.\n2. **Phone stops receiving push notifications** — after sync exits, the device stays marked \"available\" because the `<presence type=\"unavailable\"/>` send fails every time.\n\n### Root causes\n\n**Missing available presence.** The upstream `main` added `sendInitialAvailablePresence` in `ConnectContext`, but it only runs once at initial connect and only when the pushname is already set. It misses:\n- **Reconnects** inside a running sync session fire `*events.Connected` again, but `ConnectContext` is not re-entered.\n- **Late-arriving pushname** delivered as `*events.PushNameSetting` after connect. If the pushname was empty at connect time, the upstream path never sends presence.\n\n**Unavailable presence fails on SIGTERM.** `wa.Client.Connect` passed the caller's (signal-cancellable) context to `cli.ConnectContext(ctx)`. whatsmeow associates the websocket lifecycle with that context — when the signal handler cancels it (e.g., `timeout` sending SIGTERM), the websocket is torn down **before** `sync.go:207` can send the unavailable presence. The send fails with:\n- `\"not connected\"`\n- `\"failed to write msg: use of closed network connection\"`\n- `\"failed to write msg: failed to acquire lock: context canceled\"`\n\n## Solution\n\n### 1. Send available presence on connect and pushname\n\nOn `*events.Connected` and `*events.PushNameSetting`, call `SendPresence(ctx, types.PresenceAvailable)` so the WhatsApp server records an accurate last-active timestamp for the linked device.\n\n### 2. Send unavailable presence after sync exit\n\nAfter a successful sync run (`sync.go:207`), call `sendPresence(context.WithoutCancel(ctx), types.PresenceUnavailable)` so the phone resumes push notifications for new messages.\n\n### 3. Detach websocket context from caller context\n\nUse `context.Background()` for `cli.ConnectContext()` instead of the caller's context, so the websocket is not closed by context cancellation. The websocket is closed explicitly by `Disconnect()`/`Close()` via `closeApp` in the command layer. The retry loop in `ReconnectWithBackoff` still uses the passed context for cancellation control — only the websocket lifecycle is decoupled.\n\n## Files changed\n\n- `internal/wa/client.go` — adds `(Client).SendPresence()` wrapper (concurrency-safe); uses `context.Background()` for `ConnectContext` so the websocket survives signal-induced context cancellation.\n- `internal/app/app.go` — adds `SendPresence()` to the `WAClient` interface.\n- `internal/app/sync_events.go` — on `*events.Connected` and `*events.PushNameSetting`, calls `go a.sendPresence(ctx, types.PresenceAvailable)`; adds `App.sendPresence()` helper that logs failures as NDJSON warning events (`send_presence_failed`) and never aborts sync.\n- `internal/app/sync.go` — after a successful sync run, calls `a.sendPresence(context.WithoutCancel(ctx), types.PresenceUnavailable)`.\n- `internal/app/fake_wa_test.go` — adds `SendPresence()` fake implementation and tracking fields.\n- `internal/app/sync_presence_test.go` — regression tests for connected, push-name setting, failure-warning, synchronous behavior, and the final unavailable send.\n- `CHANGELOG.md` — updated the unreleased version entry under `### Fixed`.\n\n## Tests\n\nThe full gate passes locally:\n\n```bash\npnpm format:check && pnpm lint && pnpm test && pnpm build && git diff --check\n```\n\nNew regression tests:\n\n```bash\ngo test ./internal/app -run TestSyncSendsAvailablePresence -count=1\ngo test ./internal/app -run TestSyncPresenceFailureWarnsAndContinues -count=1\ngo test ./internal/app -run TestSyncSendsAvailablePresenceOnConnectedIsSynchronous -count=1\n```\n\n> **Note on websocket-context test coverage:** the unavailable-send-on-SIGTERM fix lives in `wa.Client.Connect` (which calls `cli.ConnectContext`). The app-level tests use a fake WA client whose `SendPresence` always succeeds, so they verify the *call sequence* (available → unavailable) but cannot catch the real `cli.IsConnected()` failure path. A unit test for the detached-context fix would require refactoring `wa.Client` to accept an interface for the whatsmeow client. The fix was verified with a live WhatsApp account (see below).\n\n## Live verification\n\nTested on a real linked-device account with a `timeout 30s` cron job:\n\n**Before fix — every unavailable send failed:**\n```\n{\"event\":\"signal\",\"action\":\"shutdown\",\"signal\":\"terminated\"}\n{\"event\":\"stopping\",\"messages_synced\":19}\n{\"event\":\"warning\",\"code\":\"send_presence_failed\",\"error\":\"...context canceled\"}\nMessages stored: 19\n```\n\n**After fix — unavailable send succeeds on SIGTERM:**\n```\n{\"event\":\"signal\",\"action\":\"shutdown\",\"signal\":\"terminated\"}\n{\"event\":\"stopping\",\"messages_synced\":11}\nMessages stored: 11\n```\n\nNo `send_presence_failed` warning — the unavailable presence was sent successfully because the websocket stayed open.\n\n## Operational notes\n\nNo new flags or env vars. The compiled `dist/wacli` binary is already deployed at `~/.local/bin/wacli`.\n\nFor continuous sync via cron, a `timeout 30s wacli sync --idle-exit 10s` cron entry now works correctly: sync runs for ~30s, exits on SIGTERM, sends unavailable presence, and the phone receives push notifications for the remaining ~30s of each minute.\n\n## Checklist\n\n- [x] Code compiles / builds.\n- [x] Tests pass (`pnpm test` and FTS path).\n- [x] Lint / formatting checks pass.\n- [x] `git diff --check` clean.\n- [x] Commits squashed into one.\n- [x] CHANGELOG updated.\n- [x] Live WhatsApp behavior proof included.\n",
-        "branch": "fix/presence-unavailable-on-shutdown",
-        "head_sha": "35d25600277d14f5e06940898e5949295810146d",
-        "author": "dovocoder",
+        "title": "fix: add clear separator between metadata and user message",
+        "body": "## Summary\n\n- **Problem:** When a user message is passed to the LLM, the metadata blocks (sender info, conversation info, etc.) and the actual user message content are joined with only double newlines. This causes the LLM to sometimes misinterpret the message structure, treating the metadata as the entire message and ignoring the actual user content (\"message is empty\" replies).\n- **Why it matters:** Users intermittently get incorrect \"message is empty\" responses even though their message was correctly stored in session history.\n- **What changed:**\n  - `runtime-context-prompt.ts`: When inbound metadata is present, `buildCurrentInboundPrompt()` injects `---openclaw:user-msg---` separator between the context prefix and the user prompt.\n  - `strip-inbound-meta.ts`: Add `stripUserMessageSeparator()` post-processing in both `stripInboundMetadata` (webchat/API/gateway) and `stripLeadingInboundMetadata` (TUI) to remove the separator after metadata blocks are stripped. Gated on `didStripMetadata` flag for defense-in-depth.\n  - `strip-inbound-meta.test.ts`: 7 new tests covering separator stripping and legacy preservation.\n- **What did NOT change (scope boundary):** No API changes, no new types, no changes to `buildInboundUserContextPrefix`, no metadata format changes.\n\n### Why `---openclaw:user-msg---` instead of `---\\n**User Message:**`\n\nThe separator is a program-generated marker that **cannot exist** in any legacy stored message or user-typed content. This eliminates the need for complex detection logic (`_sep` markers, `seenUserContent` flags, structural JSON parsing) and makes legacy message compatibility trivial: the stripper only removes `---openclaw:user-msg---`, which legacy data never contains.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- None\n\n## User-visible / Behavior Changes\n\n- LLM now receives a clear `---openclaw:user-msg---` separator between metadata and user content, reducing \"message is empty\" false positives.\n- The separator is stripped in all user-facing surfaces (TUI, webchat, gateway API, session cost logs).\n- Legacy messages (pre-upgrade) are completely unaffected — the unique marker cannot appear in historical data.\n\n## Security Impact (required)\n\n- New permissions/capabilities? `No`\n- Secrets/tokens handling changed? `No`\n- New/changed network calls? `No`\n- Command/tool execution surface changed? `No`\n- Data access scope changed? `No`\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux (Ubuntu 24.04)\n- Runtime: Node v24.15.0, pnpm 10.23.0\n\n### Steps\n\n1. Send a message to the LLM through any channel with metadata (group chat, sender info, etc.)\n2. Observe the prompt construction in `buildCurrentInboundPrompt()`\n3. Verify the separator appears between metadata and user content\n4. Verify `stripInboundMetadata` / `stripLeadingInboundMetadata` removes the separator in user-facing views\n\n### Expected\n\n- LLM correctly distinguishes metadata from user message content\n- No separator visible in TUI/webchat/gateway/session logs\n\n### Actual\n\n- Confirmed working as expected in unit tests and live CLI verification (see Real behavior proof below)\n\n## Evidence\n\n- [x] Passing tests: 39 strip-inbound-meta tests pass (7 new separator-specific tests)\n- New tests cover: separator after single/multiple metadata blocks, no-metadata preservation, non-separator `---` preservation, sentinel-without-metadata-block edge case, legacy message preservation\n\n## Real behavior proof\n\nLive CLI verification on the rebased branch (`b69cb795`):\n\n**Behavior or issue addressed:** Metadata and user message content are joined with only double newlines, causing the LLM to misinterpret the message structure and ignore actual user content.\n\n**Real environment tested:** Local OpenClaw development setup on Ubuntu 24.04 with Node v24.15.0.\n\n**Exact steps or command run after this patch:**\n\n1. `npx tsx proof-test.mjs` - Live CLI verification of separator injection and stripping\n2. `pnpm test strip-inbound-meta` - Unit tests for the new separator logic\n\n**Evidence after fix:**\n\n```\n=== Real Behavior Proof: User Message Separator ===\n\n1. buildCurrentInboundPrompt WITH metadata:\n---\nConversation info (untrusted metadata):\n```json\n{\"channel\": \"#general\", \"sender\": \"Alice\"}\n```\n\n---openclaw:user-msg---\nHello, how are you?\n---\n✅ Separator ---openclaw:user-msg--- is present between metadata and user message\n\n2. buildCurrentInboundPrompt WITHOUT metadata:\n---\nHello, how are you?\n---\n✅ No separator injected when metadata is absent\n\n3. stripInboundMetadata (metadata + separator):\nInput: (metadata + separator + user message)\nOutput: Hello, how are you?\n✅ Metadata and separator both removed\n\n4. stripLeadingInboundMetadata (metadata + separator):\nInput: (metadata + separator + user message)\nOutput: Hello, how are you?\n✅ Metadata and separator both removed in leading-only strip mode\n\n5. Legacy message (no metadata, user has --- in content):\nInput: Hello\\n\\n---\\nSome user markdown\nOutput: Hello\\n\\n---\\nSome user markdown (preserved intact)\n✅ Legacy user content preserved, no false stripping\n\n=== All checks passed ===\n```\n\nAll tests (39 total) pass.\n\n**Observed result after fix:** The separator is correctly injected when metadata is present and correctly stripped in all user-facing surfaces. Legacy messages without metadata are completely unaffected.\n\n**What was not tested:** Live end-to-end with real LLM provider (simulated in unit tests).\n\n## Human Verification (required)\n\n- Verified scenarios: metadata with separator injection, separator stripping after single/multiple metadata blocks, preservation when no metadata present, preservation of `---` in non-separator context\n- Edge cases checked: legacy messages with `---\\n**User Message:**` user content (preserved intact), sentinel text without metadata fences, user content starting with generic `---`\n- What you did **not** verify: Live end-to-end with real LLM provider\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? `Yes` — legacy messages are unaffected; the unique marker cannot appear in pre-upgrade data\n- Config/env changes? `No`\n- Migration needed? `No`\n\n## Failure Recovery (if this breaks)\n\n- How to disable/revert this change quickly: Revert the single commit\n- Files/config to restore: `runtime-context-prompt.ts`, `strip-inbound-meta.ts`\n- Known bad symptoms: `---openclaw:user-msg---` appearing in TUI/webchat/session history\n\n## Risks and Mitigations\n\n- Risk: LLM treats `---openclaw:user-msg---` as confusing noise\n  - Mitigation: The marker reads like a boundary tag; LLMs routinely handle similar delimiters in system/user prompts. It's a single line and less disruptive than the metadata blocks themselves.",
+        "branch": "fix/add-user-message-separator",
+        "head_sha": "b69cb795855f88281809c57dd50d6d121733e656",
+        "author": "puppylpg",
         "labels": [
-          "rating: 🧂 unranked krab",
+          "agents",
+          "size: S",
+          "triage: refactor-only",
+          "triage: needs-real-behavior-proof",
           "P2",
-          "merge-risk: 🚨 availability",
-          "proof: sufficient",
-          "status: ⏳ waiting on author",
-          "merge-risk: 🚨 other"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
+            "path": "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
             "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/strip-inbound-meta.test.ts",
+            "additions": 42,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "internal/app/app.go",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/fake_wa_test.go",
-            "additions": 12,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/sync.go",
-            "additions": 3,
-            "deletions": 0,
+            "path": "src/auto-reply/reply/strip-inbound-meta.ts",
+            "additions": 15,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
@@ -121,29 +120,40 @@
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 7,
-        "additions": 226,
-        "deletions": 4,
+        "changedFiles": 3,
+        "additions": 59,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-wacli-283",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-wacli-283.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-41299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-41299.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 3,
-          "gatingTotal": 3,
+          "total": 162,
+          "gatingTotal": 157,
           "counts": {
-            "SUCCESS": 3
+            "FAILURE": 3,
+            "SUCCESS": 128,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-agents-embedded:FAILURE",
+            "checks-node-agentic-agents-support:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-agents-embedded:FAILURE",
+            "checks-node-agentic-agents-support:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
@@ -154,23 +164,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1942,
+    "total_ms": 3560,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 380
+        "ms": 548
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1228
+        "ms": 2734
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 4
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -178,11 +188,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 310
+        "ms": 251
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
