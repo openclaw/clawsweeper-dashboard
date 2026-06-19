@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T04:39:43.515Z",
+  "generated_at": "2026-06-19T04:39:46.077Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T01:39:42.347Z",
+  "since": "2026-06-19T01:39:43.010Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    94779
+    87898
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4570895277
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -31,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94779:4748321950:2026-06-19T04:39:39Z:clawsweeper_auto_repair",
-      "comment_id": "4748321950",
-      "comment_version_key": "4748321950:2026-06-19T04:39:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94779#issuecomment-4748321950",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87898:4570895277:2026-06-19T04:39:03Z:clawsweeper_needs_human",
+      "comment_id": "4570895277",
+      "comment_version_key": "4570895277:2026-06-19T04:39:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87898#issuecomment-4570895277",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 94779,
+      "issue_number": 87898,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T03:45:51Z",
-      "comment_updated_at": "2026-06-19T04:39:39Z",
+      "comment_created_at": "2026-05-29T05:17:30Z",
+      "comment_updated_at": "2026-06-19T04:39:03Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -53,108 +55,105 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=1b8b97eae3f7c8bdb98ee9c3b620cbf106b21419)",
-      "review_summary": "The PR parallelizes bundled MCP catalog loading, bundled LSP server startup, and top-level MCP/LSP initialization in embedded agent attempts, with post-hoc LSP tool deduplication.\n\nPR surface: Source +117. Total +117 across 3 files.\n\nReproducibility: yes. from source for the latency shape: current main serializes MCP materialization before LSP startup, and the MCP catalog loop awaits each configured server in order. I did not run a live slow-server before/after trace in this read-only review.",
-      "review_followup": "- [P1] The next action is contributor real-behavior proof plus maintainer review of failure semantics and startup fan-out, not an autonomous repair lane.",
+      "repair_reason": "- [P2] The remaining blocker is a narrow mechanical repair to the PR predicate and regression coverage, so it is safe for a promoted repair lane.; Needs attention: The diff changes a credential-audit suppression rule and remains broad enough to create false negatives on unrelated apiKey surfaces.; Review finding: [P1] Restrict marker skips to model-provider apiKey targets — src/secrets/audit.ts:230 (sha=ee6ce783eb4aeb0c801a8c99ffdc1047815b78fb)",
+      "review_summary": "This PR adds a secrets-audit skip for known non-secret apiKey markers in `openclaw.json` and adds regression tests.\n\nPR surface: Source +6, Tests +139. Total +145 across 2 files.\n\nReproducibility: yes. source inspection gives a high-confidence path: current main reports non-SecretRef config `apiKey` marker strings as `PLAINTEXT_FOUND`, while the PR changes that reporting gate. I did not run the CLI in this read-only review.",
+      "review_followup": "- [P2] The remaining blocker is a narrow mechanical repair to the PR predicate and regression coverage, so it is safe for a promoted repair lane.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "1b8b97eae3f7c8bdb98ee9c3b620cbf106b21419",
+      "expected_head_sha": "ee6ce783eb4aeb0c801a8c99ffdc1047815b78fb",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "perf(agents): parallelize MCP and LSP initialization to reduce cold-start latency",
-        "body": "## Summary\n\nEvery agent request incurs ~6-7 seconds of latency before the model starts generating. The bottleneck is the `bundle-tools` phase which loads all MCP servers and LSP tools upfront. The root cause: MCP server connections, LSP server spawning, and their coordination are all **sequential**.\n\n## Root Cause\n\n1. **MCP connections sequential**: `getCatalog()` iterates servers one at a time with a `for` loop, connecting and listing tools for each (~1-2s per server, 4 servers = 4-8s)\n2. **LSP spawning sequential**: `createBundleLspToolRuntime()` spawns and initializes LSP servers one at a time\n3. **MCP and LSP sequential**: `attempt.ts` awaits MCP completion before starting LSP\n\nTrace evidence (from production, before fix):\n```\n[trace:embedded-run] prep stages: totalMs=5889 stages=bundle-tools:5792ms@5809ms\n[trace:embedded-run] prep stages: totalMs=6020 stages=bundle-tools:5898ms@5915ms\n[trace:embedded-run] prep stages: totalMs=6527 stages=bundle-tools:6435ms@6449ms\n[trace:embedded-run] prep stages: totalMs=7207 stages=bundle-tools:7132ms@7207ms\n```\n\nIn all cases, `bundle-tools` accounts for **96-99% of total prep time**.\n\n## Fix\n\n### 1. Parallelize MCP server connections (`agent-bundle-mcp-runtime.ts`)\n\n`getCatalog()` is restructured into 3 phases:\n- **Phase 1 (sync)**: Resolve all transports and pre-compute safe names\n- **Phase 2 (parallel)**: Connect to all servers and list tools concurrently via `Promise.all`\n- **Phase 3 (sync)**: Assemble results\n\nCold-start wall-clock time is now bounded by the **slowest server** instead of the **sum of all servers**.\n\n### 2. Parallelize LSP server initialization (`agent-bundle-lsp-runtime.ts`)\n\n`createBundleLspToolRuntime()` uses the same 3-phase pattern:\n- **Phase 1 (sync)**: Validate all configs\n- **Phase 2 (parallel)**: Spawn and initialize all LSP servers via `Promise.allSettled`\n- **Phase 3 (sync)**: Assemble results, deduplicate tool names\n\n### 3. Run MCP and LSP in parallel (`attempt.ts`)\n\nInstead of:\n```ts\nbundleMcpRuntime = await getOrCreateSessionMcpRuntime(...);\nbundleMcpRuntime = await materializeBundleMcpToolsForRun(...);\nbundleLspRuntime = await createBundleLspToolRuntime(...);\n```\n\nNow uses:\n```ts\nconst [mcpResult, lspResult] = await Promise.all([\n  mcpInitTask?.catch(err => { log.warn(...); return undefined; }),\n  lspInitTask?.catch(err => { log.warn(...); return undefined; }),\n]);\n```\n\nEach task catches its own errors so one failure does not block the other.\n\n### 4. Preserve cross-runtime tool-name deduplication (`attempt.ts`)\n\nWhen MCP and LSP initialize in parallel, LSP construction no longer sees materialized MCP tool names. A post-hoc dedup step filters LSP tools whose names collide with MCP tools after both complete, preserving the pre-existing priority (MCP names win, duplicate LSP tools are skipped with a warning log).\n\n## Expected Improvement\n\nFor a typical setup with 4 MCP servers each taking ~1-2s to connect and list tools:\n- **Before**: 6-8s (4 servers × ~1.5s + LSP time, sequential)\n- **After**: ~1.5-2s (max server time + LSP time in parallel)\n\nThe `bundle-tools` prep stage should drop from dominating 96-99% of prep time to a much smaller fraction.\n\n## Verification\n\nAll 158 tests pass across the modified surfaces:\n\n| Test file | Result |\n|----------|--------|\n| `agent-bundle-mcp-runtime.test.ts` | 33/33 ✅ |\n| `agent-bundle-lsp-runtime.test.ts` | 3/3 ✅ |\n| `attempt.test.ts` | 122/122 ✅ |\n\nTypeScript (`tsgo`), lint (`oxlint`), and formatting (`oxfmt`) all pass.\n\n## Real behavior proof\n\n- **Behavior addressed**: The `bundle-tools` prep stage takes 6-7s on every agent request, accounting for 96-99% of total prep time, because MCP server connections (`connect()` + `tools/list`) and LSP server spawning run sequentially. Simple text-only requests pay the full tool-init cost even when no tools are called.\n- **Real environment tested**: Linux x64, Node v22.19.0, OpenClaw main @ f91350485c33, `node scripts/run-vitest.mjs` test runner.\n- **Exact steps or command run after this patch**:\n  1. `node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-runtime.test.ts` — 33 MCP runtime tests (covers catalog loading, tool materialization, transport lifecycle, backoff, idle sweep, lease management)\n  2. `node scripts/run-vitest.mjs src/agents/agent-bundle-lsp-runtime.test.ts` — 3 LSP runtime tests\n  3. `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.test.ts` — 122 embedded attempt runner tests\n  4. `pnpm tsgo` — full-project typecheck (passes)\n  5. `oxfmt` — formatting check on all changed files (passes)\n- **Evidence after fix**:\n  - All 158 tests pass with zero regressions.\n  - Code review confirms the sequential `for` loop in `getCatalog()` was replaced with `Promise.all(serverPlans.map(async ...))`. Each server connects and lists tools independently; the slowest server determines total wall-clock time.\n  - Code review confirms the sequential MCP-then-LSP await chain in `attempt.ts` was replaced with `Promise.all([mcpTask, lspTask])`.\n  - Cross-runtime tool-name dedup was preserved: after parallel init, LSP tools that collide with MCP names are filtered with a warning log (same behavior as before, just deferred from construction time to post-init).\n- **Observed result after fix**:\n  - MCP server connections now fire concurrently. With N servers each taking T ms, wall-clock time drops from `N × T` to `max(T)`. For a 4-server setup at ~1-2s each, this means ~1.5-2s instead of ~6-8s.\n  - MCP and LSP initialization no longer block each other; they run in the same `Promise.all`.\n  - Bundle MCP runtime caching (session-scoped, idle-TTL-gated) is unchanged — warm-request tool preparation remains near-instant.\n- **What was not tested**:\n  - Live multi-MCP-server end-to-end trace with real networked MCP servers (e.g., Notion, Z.ai, Web Reader) was not captured in this environment because spawning external MCP server processes in this CI/container context is unreliable.\n  - The deterministic parallel-timing proof test (`\"connects to multiple MCP servers in parallel\"`) was attempted but removed because the mock-stdio MCP server harness requires real `node:child_process` spawning that does not complete reliably under this environment's resource constraints.\n  - Recommendation: after merge, a maintainer or contributor with a real slow-MCP setup should capture `[trace:embedded-run] prep stages:` logs before and after to confirm the ~4-5s reduction in `bundle-tools` wall time.\n\n## Files Changed\n\n- `src/agents/agent-bundle-mcp-runtime.ts` — Parallelize MCP catalog connections\n- `src/agents/agent-bundle-lsp-runtime.ts` — Parallelize LSP server initialization\n- `src/agents/embedded-agent-runner/run/attempt.ts` — Parallelize MCP+LSP coordination + preserve cross-runtime dedup\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "perf/parallel-mcp-lsp-init",
-        "head_sha": "1b8b97eae3f7c8bdb98ee9c3b620cbf106b21419",
-        "author": "chenyangjun-xy",
+        "title": "fix(secrets): skip PLAINTEXT_FOUND for apiKey values that look like env var references",
+        "body": "## Summary\n\nWhen `apiKey` config fields contain environment variable names (e.g. `OPENCLAW_DEEPSEEK_API_KEY`, `OPENAI_API_KEY`) instead of actual secret values, `openclaw secrets audit --check` still reports PLAINTEXT_FOUND warnings. Users with multiple providers see several false positives on every audit run.\n\nThis change adds a heuristic to skip env-var-like values: a string matching `^[A-Z_][A-Z0-9_]*$` that ends in `_KEY`, `_TOKEN`, `_SECRET`, or `_PASSWORD` is treated as an environment variable reference and skipped.\n\nCloses #87723\n\n## Change Type\n\n- [x] Bug fix\n\n## Scope\n\n- [x] Secrets / audit\n\n**Behavior or issue addressed**: `openclaw secrets audit --check` reports PLAINTEXT_FOUND for apiKey fields whose values are environment variable names (e.g. `OPENCLAW_DEEPSEEK_API_KEY`) instead of actual secret values.\n\n**Real environment tested**: macOS 26.6, Node v22.22.0, OpenClaw 2026.5.27 source checkout\n\n**Exact steps or command run after this patch**:\n\n1. Configure a model provider with an env-var-like apiKey value in openclaw.json:\n```json\n{\n  \"models\": {\n    \"providers\": {\n      \"deepseek\": {\n        \"baseUrl\": \"https://api.deepseek.com/v1\",\n        \"apiKey\": \"OPENCLAW_DEEPSEEK_API_KEY\"\n      }\n    }\n  }\n}\n```\n2. Run: `openclaw secrets audit --check`\n\n**Evidence after fix**:\n\nBefore (on main):\n```\n[PLAINTEXT_FOUND] warn models.providers.deepseek.apiKey is stored as plaintext.\n# exit code: 1\n```\n\nAfter (this PR):\n```\n// No finding for deepseek.apiKey — recognized as env var reference\n# exit code: 0\n```\n\nRegression test: `vitest src/secrets/audit.test.ts`\n```\n ✓ does not flag bare env-var-style apiKey values as plaintext\n ✓ keeps request headers in openclaw config covered by plaintext audit\n Test Files  1 passed (1)\n      Tests  26 passed (26)\n```\n\n**Observed result after fix**: Env-var-style apiKey values (`OPENAI_API_KEY`, `OPENCLAW_DEEPSEEK_API_KEY`) no longer trigger PLAINTEXT_FOUND. Real secret values continue to be flagged as before.\n\n**What was not tested**: Non-ASCII env var names, edge cases with mixed-case suffixes.\n\n@clawsweeper re-review\n",
+        "branch": "fix/secrets-audit-env-var-plaintext",
+        "head_sha": "ee6ce783eb4aeb0c801a8c99ffdc1047815b78fb",
+        "author": "1052326311",
         "labels": [
-          "agents",
-          "size: L",
-          "triage: mock-only-proof",
+          "size: S",
+          "proof: sufficient",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/agents/agent-bundle-lsp-runtime.ts",
-            "additions": 82,
-            "deletions": 57,
+            "path": "src/secrets/audit.test.ts",
+            "additions": 139,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/agent-bundle-mcp-runtime.ts",
-            "additions": 186,
-            "deletions": 139,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 69,
-            "deletions": 24,
+            "path": "src/secrets/audit.ts",
+            "additions": 6,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 337,
-        "deletions": 220,
+        "changedFiles": 2,
+        "additions": 145,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94779",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94779.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87898",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87898.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 11,
-          "gatingTotal": 6,
+          "total": 168,
+          "gatingTotal": 163,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 7,
-            "SKIPPED": 3
+            "FAILURE": 3,
+            "SUCCESS": 133,
+            "SKIPPED": 31,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1396,
+    "total_ms": 3421,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 260
+        "ms": 673
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 895
+        "ms": 2381
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 217
+        "ms": 343
       },
       {
         "name": "append_ledger",
