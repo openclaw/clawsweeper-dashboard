@@ -1,22 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T11:01:24.689Z",
+  "generated_at": "2026-06-19T11:01:50.604Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T08:01:24.093Z",
+  "since": "2026-06-19T08:01:49.240Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94855
+    94827
   ],
-  "comment_ids": [
-    4750902839
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
+  "scanned_comments": 3,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -33,55 +31,118 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:94855:4750902839:2026-06-19T10:59:17Z:re_review",
-      "comment_id": "4750902839",
-      "comment_version_key": "4750902839:2026-06-19T10:59:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94855#issuecomment-4750902839",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94827:4749098182:2026-06-19T08:56:23Z:clawsweeper_needs_human",
+      "comment_id": "4749098182",
+      "comment_version_key": "4749098182:2026-06-19T08:56:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94827#issuecomment-4749098182",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 94855,
-      "author": "LiLan0125",
-      "author_id": 274403989,
+      "issue_number": 94827,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T10:59:17Z",
-      "comment_updated_at": "2026-06-19T10:59:17Z",
+      "comment_created_at": "2026-06-19T06:33:03Z",
+      "comment_updated_at": "2026-06-19T08:56:23Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=28092235e0fee097ef0d7c186536e1efee618973)",
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "28092235e0fee097ef0d7c186536e1efee618973",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "Fix is401Error misclassification of Telegram rate limits (issue #94787)",
+        "body": "## Summary\nFixes issue #94787 where `is401Error` incorrectly classified Telegram 429 rate limits with retry_after=401 as 401 auth failures.\n\n---\n\n## Real Behavior Proof\n\n### content%3A behavior\n**Before fix:** The `is401Error()` function used substring matching on error messages. When Telegram returned a 429 rate limit error with `retry_after: 401` (401 seconds), the message contained \"401\" and was misclassified as HTTP 401 Unauthorized. This caused:\n- Bots incorrectly suspended after maxConsecutive401 failures\n- False alarms about invalid bot tokens\n- Unnecessary exponential backoff for transient rate limits\n\n**After fix:** The function now checks structured `error_code` field first. Only exact `error_code === 401` matches as auth failure. Rate limits (429) are correctly identified regardless of retry_after value.\n\n### environment\n- OpenClaw Gateway with Telegram channel plugin enabled\n- Bot configured with valid Telegram token\n- Heartbeat/checks running with sendChatAction calls\n- Error scenarios: 429 rate limits, 401 auth failures, 5xx server errors\n\n### steps\n1. Configure Telegram bot in OpenClaw\n2. Trigger sendChatAction calls that may fail\n3. Simulate Telegram API responses:\n   - 429 Too Many Requests with parameters.retry_after=401\n   - 401 Unauthorized with description=\"Unauthorized\"\n4. Observe error classification and bot suspension behavior\n\n### evidence\n**Console output from Node.js test:**\n```javascript\n// Test case: Telegram 429 rate limit with retry_after=401 seconds\nconst rateLimitError = {\n  error_code: 429,\n  description: \"Too Many Requests\",\n  parameters: { retry_after: 401 }\n};\n\nconsole.log(\"Before fix:\", is401ErrorOld(rateLimitError)); // true ❌ BUG\nconsole.log(\"After fix:\", is401ErrorNew(rateLimitError));  // false ✅ FIXED\n\n// Verification: Real 401 still detected\nconst telegram401Error = { error_code: 401, description: \"Unauthorized\" };\nconsole.log(\"401 detection:\", is401ErrorNew(telegram401Error)); // true ✅\n```\n\n**Code change in `extensions/telegram/src/sendchataction-401-backoff.ts`:**\n```typescript\nexport function is401Error(error: unknown): boolean {\n  if (!error) return false;\n  \n  // Check structured error_code field first\n  if (typeof error === \"object\" && error !== null) {\n    const err = error as Record<string, unknown>;\n    const errorCode = err.error_code;\n    if (typeof errorCode === \"number\") {\n      if (errorCode === 401) return true;\n      if (\"description\" in err || \"parameters\" in err) return false;\n    }\n    // ... HTTP status checks ...\n  }\n  \n  // Fallback to \"unauthorized\" message matching\n  const message = error instanceof Error ? error.message : JSON.stringify(error);\n  return normalizeLowercaseStringOrEmpty(message).includes(\"unauthorized\");\n}\n```\n\n### observedResult\n**Before fix:**\n- 429 error with retry_after=401 → is401Error returns `true` ❌\n- Bot suspension triggered incorrectly\n- Logs show \"CRITICAL: sendChatAction suspended after 10 consecutive 401 errors\"\n\n**After fix:**\n- 429 error with retry_after=401 → is401Error returns `false` ✅\n- Rate limit handled with cooldown, not suspension\n- Real 401 errors still detected correctly\n\n### notTested\n- Live Telegram API tests: Not performed (requires bot token setup)\n- Integration tests: Existing test suite covers handler behavior\n- Unit tests: Added comprehensive test cases in sendchataction-401-backoff.test.ts\n- CI: TypeScript compilation passes, no type errors\n\nThe fix has been verified through direct code execution showing correct classification of 429 vs 401 errors.\n\nCo-Authored-By: iCodeMate",
+        "branch": "fix/telegram-is401error-misclassification",
+        "head_sha": "28092235e0fee097ef0d7c186536e1efee618973",
+        "author": "moguangyu5-design",
+        "labels": [
+          "channel: telegram",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/telegram/src/sendchataction-401-backoff.test.ts",
+            "additions": 98,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/sendchataction-401-backoff.ts",
+            "additions": 34,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 132,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94827",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94827.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 17,
+          "gatingTotal": 12,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 7,
+            "SKIPPED": 9
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2516,
+    "total_ms": 1564,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 585
+        "ms": 290
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1060
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -93,7 +154,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1919
+        "ms": 188
       },
       {
         "name": "append_ledger",
