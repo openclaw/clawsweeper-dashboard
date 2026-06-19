@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T11:14:06.686Z",
-  "repo": "openclaw/notcrawl",
+  "generated_at": "2026-06-19T11:14:20.485Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T08:14:06.254Z",
+  "since": "2026-06-19T08:14:18.758Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    51
+    94928
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,139 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94928:4750907756:2026-06-19T11:14:15Z:clawsweeper_auto_repair",
+      "comment_id": "4750907756",
+      "comment_version_key": "4750907756:2026-06-19T11:14:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94928#issuecomment-4750907756",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 94928,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-19T11:00:07Z",
+      "comment_updated_at": "2026-06-19T11:14:15Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=c234de2901b71f3135d40f2a5f59c54c70c1d568)",
+      "review_summary": "The branch catches post-turn CLI compaction errors in `agentCommandInternal` and adds a regression test for delivery after a generated reply.\n\nPR surface: Source +8, Tests +34. Total +42 across 2 files.\n\nReproducibility: yes. Source inspection shows current main awaits post-turn CLI compaction before delivery, while the PR catches those failures after transcript persistence; the no-reply edge is also source-reproducible through transcript persistence and delivery handling.",
+      "review_followup": "- [P2] A narrow automated repair can gate the existing catch on deliverable reply text and add the missing no-reply regression without changing the product direction.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "c234de2901b71f3135d40f2a5f59c54c70c1d568",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): keep delivering reply when post-turn compaction fails",
+        "body": "### Summary\n\n- **Problem**: Issue #94688 reports that in a long-lived CLI-backed (Codex/OpenAI) fixed session, the assistant reply is generated and written into the live session transcript, but the post-turn CLI compaction that runs afterwards can fail with `CLI transcript compaction failed for openai/gpt-5.4: Summarization failed: Connection error.`. When that happens the whole turn is surfaced as a post-turn error and channel delivery is skipped, so a user-visible success is turned into a delivery/runtime failure after the fact — the already-generated reply is discarded unless the caller separately salvages it from the transcript.\n- **Root Cause**: In `agentCommandInternal` (`src/agents/agent-command.ts`), the post-run `try` block runs three steps in order, all before the outer `catch` that re-throws: (1) persist the CLI turn transcript — wrapped in its own best-effort `try/catch` that only warns; (2) `runCliTurnCompactionLifecycle` — **not** guarded; it `throw`s on compaction failure (`CLI transcript compaction failed …` / `CLI native harness compaction failed …`); (3) persist `pendingFinalDelivery` and call `deliverAgentCommandResult`. Because compaction sits *before* delivery inside the same `try`, a compaction throw jumps straight to the outer `catch`, which calls `emitLifecyclePostTurnError` (emitting a lifecycle `error` event with the compaction message) and re-throws. Delivery never runs, and the reply that already exists in `result.payloads` and the transcript is dropped. The transcript-persistence step immediately above is deliberately best-effort, but the compaction step that follows it is not — and post-turn compaction is pure future-turn context maintenance, with no bearing on the validity of the reply just produced. That asymmetry is the bug.\n- **Fix**: Make post-turn compaction best-effort relative to delivery by wrapping the `runCliTurnCompactionLifecycle` call in a `try/catch` that logs and continues, mirroring the transcript-persistence guard directly above it. On failure `sessionEntry` keeps its pre-compaction value, which is correct: there was no successful compaction to record, so the prior entry is what the lifecycle would have returned for a no-op anyway. The guard catches throws from every compaction engine (context-engine summarization and native harness), so no compaction failure can abort delivery of an already-generated reply.\n- **What changed**:\n  - `src/agents/agent-command.ts` — wrap the post-turn `runCliTurnCompactionLifecycle` call in a `try/catch` that warns and proceeds to delivery; a comment records the invariant (post-turn compaction trims context for future turns and must not abort delivery of the reply already persisted above).\n  - `src/agents/agent-command.compaction-rotation.test.ts` — add a regression test: a post-turn compaction failure no longer aborts the turn; the already-generated reply is still delivered.\n- **What did NOT change (scope boundary)**:\n  - The compaction lifecycle itself (`runCliTurnCompactionLifecycle` and the `compactCliTranscript` / native-harness paths) is unchanged; it still throws to signal compaction failure. Only the turn-lifecycle owner now treats that failure as non-fatal to delivery.\n  - Transcript persistence, `pendingFinalDelivery` durability, delivery, and the rotated-successor session bookkeeping are unchanged.\n  - No attempt is made to repair the underlying compaction `Connection error` or to change retry/rotation behavior; that is upstream/transient and out of scope.\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - Gateway protocol unchanged.\n\n### Reproduction\n\n1. A long-lived CLI-backed fixed session (e.g. `openai/gpt-5.4` room brain) generates an assistant reply; the reply is written into the live transcript and exists in `result.payloads`.\n2. OpenClaw then runs post-turn CLI compaction for that session.\n3. The compaction summarization call fails transiently (`Summarization failed: Connection error.`), so `runCliTurnCompactionLifecycle` throws `CLI transcript compaction failed for openai/gpt-5.4: …`.\n4. **Before this PR**: the throw escapes to the outer `catch`, which emits a lifecycle `error` event and re-throws; `deliverAgentCommandResult` never runs, so the already-generated reply is not delivered and the turn surfaces as unavailable.\n5. **After this PR**: the throw is caught at the compaction call site, logged as a warning, and the turn proceeds to persist the pending final delivery and deliver the reply; only context compaction (a future-turn optimization) was skipped.\n\n### Real behavior proof\n\n**Behavior addressed (#94688)**: when a CLI-backed turn has already generated and persisted its reply, a subsequent post-turn compaction failure no longer reclassifies the turn as failed/unavailable; the reply is delivered and only compaction is skipped.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production `agentCommandInternal` post-run path)**: the real turn-lifecycle code in `src/agents/agent-command.ts` driving transcript persistence, the post-turn compaction call, and `deliverAgentCommandResult`, with `runCliTurnCompactionLifecycle` made to throw the exact reported error and the real delivery ordering exercised.\n\n**Exact steps or command run after this patch**: `pnpm test src/agents/agent-command.compaction-rotation.test.ts`; `pnpm tsgo:core`; `oxfmt --write` and `node scripts/run-oxlint.mjs` on the two changed files.\n\n**Evidence after fix (Vitest output for the touched test file)**:\n\n```text\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n**Observed result after fix**: with the post-turn compaction lifecycle throwing `CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.`, `agentCommand` resolves instead of rejecting, `deliverAgentCommandResult` is invoked exactly once, and the delivery result reports `deliverySucceeded: true` — the generated reply is delivered. Reverting only the `try/catch` guard makes the same test fail with that exact error and zero delivery calls, confirming the guard is what restores delivery.\n\n**What was not tested**: the live gateway round-trip on the reporter's deployment with a real network `Connection error` during compaction. The turn-lifecycle ordering and the delivery-after-compaction-failure path are covered deterministically against the production `agentCommandInternal`; an end-to-end gateway repro with a real transient summarization failure was not driven.\n\n**Repro confirmation**: the new test fails on the unpatched tree (`agentCommand` rejects with `CLI transcript compaction failed … Summarization failed: Connection error.`, delivery never reached) and passes with the fix (delivery reached, reply delivered), so it covers the production change.\n\n### Risk / Mitigation\n\n- **Risk**: Swallowing a compaction failure could hide a session that genuinely needs compaction, letting context keep growing. **Mitigation**: the failure is still logged (`Post-turn CLI compaction failed … delivering reply without compaction: <error>`), and compaction is retried on the next turn; the prior behavior already failed the whole turn instead of compacting, so this strictly improves delivery without removing any compaction that previously succeeded.\n- **Risk**: Keeping the pre-compaction `sessionEntry` on failure could skip a needed session-store update. **Mitigation**: on a compaction throw there is no successful compaction (no rotated session id, no recorded tokens) to persist; the lifecycle would have returned the same pre-compaction entry for a no-op, so no successful state is lost.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Agents / runtime\n- [x] Sessions / storage\n\n### Linked Issue/PR\n\nFixes #94688\n",
+        "branch": "fix/94688-post-turn-compaction-delivery",
+        "head_sha": "c234de2901b71f3135d40f2a5f59c54c70c1d568",
+        "author": "openperf",
+        "labels": [
+          "agents",
+          "size: S",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/agent-command.compaction-rotation.test.ts",
+            "additions": 36,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-command.ts",
+            "additions": 30,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 66,
+        "deletions": 24,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94928",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94928.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 36,
+          "gatingTotal": 31,
+          "counts": {
+            "SUCCESS": 12,
+            "QUEUED": 10,
+            "SKIPPED": 14
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 731,
+    "total_ms": 1978,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 421
+        "ms": 266
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1446
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +173,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 299
+        "ms": 239
       },
       {
         "name": "append_ledger",
