@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T11:53:59.587Z",
+  "generated_at": "2026-06-19T11:54:09.436Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T08:53:54.521Z",
+  "since": "2026-06-19T08:54:07.097Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    94779
+    93985
   ],
   "comment_ids": [
-    4751285308
+    4751278415
   ],
-  "status_comment_id": 4751285563,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:94779:4751285308:2026-06-19T11:52:56Z:re_review",
-      "comment_id": "4751285308",
-      "comment_version_key": "4751285308:2026-06-19T11:52:56Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94779#issuecomment-4751285308",
+      "idempotency_key": "comment-router:openclaw/openclaw:93985:4751278415:2026-06-19T11:51:54Z:re_review",
+      "comment_id": "4751278415",
+      "comment_version_key": "4751278415:2026-06-19T11:51:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93985#issuecomment-4751278415",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 94779,
+      "target_branch": null,
+      "issue_number": 93985,
       "author": "chenyangjun-xy",
       "author_id": 294178215,
       "author_association": "NONE",
-      "comment_created_at": "2026-06-19T11:52:56Z",
-      "comment_updated_at": "2026-06-19T11:52:56Z",
-      "status_comment_id": 4751285563,
+      "comment_created_at": "2026-06-19T11:51:54Z",
+      "comment_updated_at": "2026-06-19T11:51:54Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,73 +62,87 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-19T11:54:00.687Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 94779
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-19T11:54:01.836Z",
-          "response_comment_id": "4751285563",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "perf(agents): parallelize MCP and LSP initialization to reduce cold-start latency",
-        "body": "## Summary\n\nEvery agent request incurs ~6-7 seconds of latency before the model starts generating. The bottleneck is the `bundle-tools` phase which loads all MCP servers and LSP tools upfront. The root cause: MCP server connections, LSP server spawning, and their coordination are all **sequential**.\n\n## Root Cause\n\n1. **MCP connections sequential**: `getCatalog()` iterates servers one at a time with a `for` loop\n2. **LSP spawning sequential**: `createBundleLspToolRuntime()` spawns LSP servers one at a time\n3. **MCP and LSP sequential**: `attempt.ts` awaits MCP completion before starting LSP\n\nTrace evidence (from production, before fix):\n```\n[trace:embedded-run] prep stages: totalMs=5889 stages=bundle-tools:5792ms@5809ms\n[trace:embedded-run] prep stages: totalMs=7207 stages=bundle-tools:7132ms@7207ms\n```\n`bundle-tools` accounts for **96-99% of total prep time**.\n\n## Fix\n\n### 1. Parallelize MCP server connections (`agent-bundle-mcp-runtime.ts`)\n\n`getCatalog()`: Phase 1 (sync resolve) → Phase 2 (`Promise.all` parallel connect) → Phase 3 (assemble)\n\n### 2. Parallelize LSP server initialization (`agent-bundle-lsp-runtime.ts`)\n\n`createBundleLspToolRuntime()`: Phase 1 (sync validate) → Phase 2 (`Promise.allSettled` parallel spawn) → Phase 3 (assemble)\n\n### 3. Run MCP and LSP in parallel (`attempt.ts`)\n\n`Promise.all([mcpTask.catch(), lspTask.catch()])` replaces sequential `await mcp; await lsp`. Each catches own errors.\n\n### 4. Preserve cross-runtime tool-name dedup (`attempt.ts`)\n\nPost-hoc dedup after parallel init filters LSP tools colliding with MCP tool names.\n\n## Expected Improvement\n\n4 MCP servers at ~1-2s each: **Before ~6-8s → After ~1.5-2s** (max of servers, not sum).\n\n## Real behavior proof\n\n- **Behavior addressed**: The `bundle-tools` prep stage takes 6-7s on every agent request (96-99% of total prep time) because MCP server connections, `tools/list` calls, LSP server spawning, and MCP/LSP coordination all run sequentially in `for` loops and serial `await` chains.\n\n- **Real environment tested**: Linux x64, Node v22.19.0, OpenClaw @ a615a0ba09 (this branch). Real `createSessionMcpRuntime` with real `getCatalog()` parallel code path. Mock MCP servers are real Node.js child processes speaking the MCP JSON-RPC protocol over stdin/stdout — the same transport used by production stdio MCP servers.\n\n- **Exact steps or command run after this patch**:\n  1. `node --import tsx scripts/verify-parallel-mcp.mts` — 2 MCP servers, 250ms tools/list delay each\n  2. `node --import tsx scripts/verify-parallel-3srv.mts` — 3 MCP servers, 200ms tools/list delay each\n  3. `node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-runtime.test.ts` — 33 tests passed\n  4. `node scripts/run-vitest.mjs src/agents/agent-bundle-lsp-runtime.test.ts` — 3 tests passed\n  5. `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.test.ts` — 122 tests passed\n\n- **Evidence after fix**:\n\n  **Local verification run 1** — 2 servers × 250ms delay:\n  ```\n  ============================================================\n    OpenClaw Parallel MCP Verification\n  ============================================================\n  MCP servers: 2\n  Per-server tools/list delay: 250ms\n  Sequential expected: 500ms\n  Parallel expected: ~250ms (max of servers)\n\n  Calling getCatalog() ...\n  getCatalog() returned in 339ms\n  Servers in catalog: 2\n  Tools discovered: 2\n    - verify_tool_0 (from verifySrv0)\n    - verify_tool_1 (from verifySrv1)\n\n  Result:\n    Tools found: 2/2 ✓\n    Wall time: 339ms (sequential would be ~500ms+)\n    Parallel threshold: <425ms ✓\n\n  ✓✓✓ PARALLELISM CONFIRMED ✓✓✓\n  ============================================================\n  ```\n\n  **Local verification run 2** — 3 servers × 200ms delay:\n  ```\n  === 3-server verification: 3 servers × 200ms delay ===\n  Sequential expected: 600ms | Parallel expected: ~200ms\n\n  getCatalog() = 291ms | Tools: 3/3\n  Servers: 3\n    vt3_0 (vs3_0)\n    vt3_1 (vs3_1)\n    vt3_2 (vs3_2)\n\n  ✓✓✓ PARALLEL: 291ms < 480ms threshold\n  ```\n\n  **Code-level proof**:\n  - `agent-bundle-mcp-runtime.ts`: sequential `for` loop → `Promise.all(serverPlans.map(...))`\n  - `agent-bundle-lsp-runtime.ts`: sequential `for` loop → `Promise.allSettled(serverPlans.map(...))`\n  - `attempt.ts`: serial `await mcp; await lsp` → `Promise.all([mcpTask.catch(), lspTask.catch()])`\n  - `attempt.ts`: post-hoc cross-runtime tool-name dedup (lines 1598-1619)\n\n- **Observed result after fix**:\n  - **Run 1**: 2 servers × 250ms → 339ms wall time (vs 500ms+ sequential). **2.0x speedup** (parallelism confirmed).\n  - **Run 2**: 3 servers × 200ms → 291ms wall time (vs 600ms+ sequential). **2.1x speedup** (parallelism confirmed).\n  - Both runs discovered all tools from all servers — correctness preserved.\n  - Wall-clock time scales with `max(server_i)` not `sum(server_i)`. For 4 production servers at ~1.5s each: ~1.5s instead of ~6s.\n  - MCP and LSP init now overlap via `Promise.all`.\n  - Session-scoped MCP runtime caching is unchanged.\n  - All 158 tests pass with zero regressions.\n\n- **What was not tested**:\n  - Live end-to-end trace with real networked MCP servers (Notion, Z.ai, Web Reader) — requires a production OpenClaw setup with actual API credentials.\n  - The mock servers use local stdio transport (same protocol as production stdio MCP servers). Networked servers would show even larger relative gains since network RTT typically dominates.\n\n## Files Changed\n\n- `src/agents/agent-bundle-mcp-runtime.ts` — Parallelize MCP catalog connections\n- `src/agents/agent-bundle-lsp-runtime.ts` — Parallelize LSP server initialization\n- `src/agents/embedded-agent-runner/run/attempt.ts` — Parallelize MCP+LSP coordination + cross-runtime dedup\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "perf/parallel-mcp-lsp-init",
-        "head_sha": "b61cd9f030eb49b22b8f2114de0a397fb4497cfc",
+        "title": "fix(sandbox): skip read-only skill mounts when user binds target the same container path",
+        "body": "## Summary\n\n- Problem: `openclaw.json` `sandbox.docker.binds` entries targeting reserved container paths (e.g. `/workspace/.agents/skills`) cause the Docker daemon to reject container creation with `Duplicate mount point`. The internal `resolveReadOnlyWorkspaceSkillMounts` unconditionally appends read-only skill mounts without checking whether a user-defined bind already targets the same container path.\n- Why now: Any user with custom docker binds that happen to overlap a skill mount path cannot launch sandbox containers at all. The gateway fails before the agent can start.\n- What changed:\n  - New `filterReadOnlyWorkspaceSkillMountsByBinds()` in `workspace-mounts.ts` parses user bind specs and excludes skill mounts whose container path is already targeted\n  - `ensureSandboxContainer` applies the filter before config hash computation and container creation\n  - `ensureSandboxBrowser` applies the filter before browser container creation\n  - `buildSandboxFsMounts` applies the filter to keep the FS path resolution table consistent\n- What did NOT change: Guard mounts in `agent-tools.ts` are unchanged — they don't generate Docker `-v` args. The `appendWorkspaceMountArgs` fallback path is untouched because production callers always pass `includeReadOnlyWorkspaceSkillMounts: false`. No new dependencies added.\n- Outcome: User binds that conflict with skill mount paths no longer cause `Duplicate mount point`. User binds take precedence. Config hashes are computed from the effective mount list.\n- Reviewer focus: `workspace-mounts.ts` `filterReadOnlyWorkspaceSkillMountsByBinds` function, and the three integration points in `docker.ts`, `browser.ts`, `fs-paths.ts`.\n\n## Linked context\n\nCloses #93854\n\nWas this requested by a maintainer?\n- No, but the issue has clear reproduction steps and root cause analysis.\n\n## Root Cause\n\n- Root cause: `resolveReadOnlyWorkspaceSkillMounts` unconditionally appends internal read-only skill mounts for `rw` workspaces. When a user bind targets the same container path, `appendReadOnlyWorkspaceSkillMountArgs` adds a second `-v` spec for the same Docker target, and the daemon rejects the container.\n- Missing detection / guardrail: No pre-existing check for container-path overlap between user binds and internal skill mounts. The project's comment-based mount ordering tests assumed Docker would accept duplicate targets and \"last one wins\", but Docker 29.x rejects duplicate mount points outright.\n\n## Real behavior proof\n\n- Behavior or issue addressed: `openclaw.json` `sandbox.docker.binds` with `/host/custom-skills:/workspace/skills:rw` must not produce a second `-v ...:/workspace/skills:ro,z` — that second mount would cause Docker to reject the container with `Duplicate mount point`.\n- Real environment tested: Linux x64, Node 22.19.0, pnpm 11.2.2, branch `fix/sandbox-bind-conflict`.\n- Exact steps or command run after this patch:\n  ```bash\n  node scripts/demo-sandbox-bind-filter.mjs\n  pnpm test src/agents/sandbox/\n  ```\n- Evidence after fix:\n  ```text\n  $ node scripts/demo-sandbox-bind-filter.mjs\n  Workspace: /tmp/openclaw-proof-h4CJtd\n\n  Resolved skill mounts (no binds):\n    /tmp/openclaw-proof-h4CJtd/skills -> /workspace/skills\n\n  User binds: [ '/host/custom-skills:/workspace/skills:rw' ]\n\n  Filtered skill mounts (after skipping conflicts):\n    (none — conflicting mount was filtered out)\n\n  Docker -v args that WOULD be generated (one per mount):\n    -v /tmp/openclaw-proof-h4CJtd/skills:/workspace/skills:ro,z\n\n  Docker -v args that ARE generated (after filtering):\n\n  Conflicting mount at /workspace/skills in filtered output: false\n  ✅ PASS: Conflicting skill mount filtered out — no Duplicate mount point from Docker\n\n  $ pnpm test src/agents/sandbox/\n   Test Files  22 passed (22)\n        Tests  224 passed (224)\n     Start at  17:40:41\n     Duration  9.90s\n  ```\n- Observed result after fix: The conflicting `/workspace/skills` skill mount is absent from the filtered output. Docker receives only the user's bind, avoiding the `Duplicate mount point` error. All 224 sandbox tests pass.\n- What was not tested: Live end-to-end Docker container creation against a real Docker 29.x daemon. The proof shows the function correctly filters the mount list that would be passed to `docker create`.\n- Proof limitations or environment constraints: Sandbox environment without a Docker daemon — the proof exercises the exact `-v` argument list that would be sent to Docker.\n\n## Tests and validation\n\nWhich commands did you run?\n- `node scripts/demo-sandbox-bind-filter.mjs`\n- `pnpm test src/agents/sandbox/`\n- `pnpm test src/agents/sandbox/workspace-mounts.test.ts`\n- `pnpm test src/agents/sandbox/fs-paths.test.ts`\n- `pnpm test src/agents/agent-tools.sandbox-mounted-paths.workspace-only.test.ts`\n\nWhat regression coverage was added or updated?\n- Added 8 new unit tests for `filterReadOnlyWorkspaceSkillMountsByBinds`:\n  1. `returns all mounts when binds is undefined`\n  2. `returns all mounts when binds is empty`\n  3. `filters out a mount whose container path matches a user bind`\n  4. `filters out multiple mounts when multiple binds conflict`\n  5. `returns all mounts when no bind targets conflict`\n  6. `filters out all mounts when every container path is targeted by a bind`\n  7. `handles rw binds (no ro option) correctly`\n  8. `normalizes container paths before comparing`\n- Updated 2 existing integration tests:\n  1. `docker.config-hash-recreate.test.ts`: asserts conflicting mount is absent instead of appended last\n  2. `browser.create.test.ts`: same update for the browser sandbox path\n- Added 1 live proof script: `scripts/demo-sandbox-bind-filter.mjs`\n\nWhat failed before this fix, if known?\n- Docker daemon returned `Duplicate mount point` error when a user bind targeted the same container path as an internal skill mount. Container creation failed entirely — the agent could not start.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "fix/sandbox-bind-conflict",
+        "head_sha": "f9f8b87603b1e4fc0cd35002fbd664449b9ebf2d",
         "author": "chenyangjun-xy",
         "labels": [
+          "scripts",
           "agents",
-          "size: L",
+          "size: M",
           "proof: supplied",
           "P2",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
+          "merge-risk: 🚨 security-boundary",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/agent-bundle-lsp-runtime.ts",
-            "additions": 82,
-            "deletions": 57,
+            "path": "scripts/demo-sandbox-bind-filter.mjs",
+            "additions": 81,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/sandbox/browser.create.test.ts",
+            "additions": 6,
+            "deletions": 7,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/agent-bundle-mcp-runtime.ts",
-            "additions": 186,
-            "deletions": 139,
+            "path": "src/agents/sandbox/browser.ts",
+            "additions": 11,
+            "deletions": 7,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 69,
-            "deletions": 24,
+            "path": "src/agents/sandbox/docker.config-hash-recreate.test.ts",
+            "additions": 6,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sandbox/docker.ts",
+            "additions": 11,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sandbox/fs-paths.ts",
+            "additions": 14,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sandbox/workspace-mounts.test.ts",
+            "additions": 74,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sandbox/workspace-mounts.ts",
+            "additions": 30,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 337,
-        "deletions": 220,
+        "changedFiles": 8,
+        "additions": 233,
+        "deletions": 38,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94779",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94779.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93985",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93985.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -137,8 +151,8 @@
           "total": 17,
           "gatingTotal": 12,
           "counts": {
-            "SUCCESS": 8,
-            "SKIPPED": 9
+            "SUCCESS": 7,
+            "SKIPPED": 10
           },
           "blockers": [],
           "pending": [],
@@ -147,20 +161,21 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 8159,
+    "total_ms": 2592,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2351
+        "ms": 699
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2701
+        "ms": 1628
       },
       {
         "name": "classify_comment_commands",
@@ -176,7 +191,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3082
+        "ms": 254
       },
       {
         "name": "append_ledger",
