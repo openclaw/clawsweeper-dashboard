@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T03:26:43.545Z",
+  "generated_at": "2026-06-19T03:27:33.421Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T00:26:40.330Z",
+  "since": "2026-06-19T00:27:32.848Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     94602
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4742986592
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -62,186 +64,32 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(infra): pin ensurePortAvailable to 127.0.0.1 in startSshPortForward",
-        "body": "Fixes #94596\r\n\r\n## Summary\r\n\r\n- Problem: `startSshPortForward` in `ssh-tunnel.ts` calls `ensurePortAvailable(localPort)` without a host argument. On dual-stack hosts the host-less probe binds the IPv6 wildcard `::` and misses an IPv4-only occupant, reporting a busy port as free.\r\n- Why now: This is the exact same flaw as #94379 (fixed in #94394 for Chrome CDP), but on the SSH-tunnel surface. #94394 fixed the caller-scoped `ensurePortAvailable(port, host?)` API but missed this call site.\r\n- What changed: Pass `\"127.0.0.1\"` to `ensurePortAvailable` in `startSshPortForward`, matching every other probe in the module.\r\n- What did NOT change: No changes to `ensurePortAvailable` itself, `pickEphemeralPort`, `canConnectLocal`, or the SSH forward args. This is a one-line caller-side fix.\r\n- Outcome: The SSH-tunnel port probe now correctly detects IPv4-only occupants on dual-stack hosts, consistent with the rest of the module.\r\n- Reviewer focus: The single-line change in `src/infra/ssh-tunnel.ts` line 122.\r\n\r\n## Verification\r\n\r\n```bash\r\n# Verify the fix pins to 127.0.0.1\r\nnode --input-type=module -e \"\r\nimport { readFileSync } from 'node:fs';\r\nconst src = readFileSync('src/infra/ssh-tunnel.ts', 'utf8');\r\nconst lines = src.split('\\n');\r\nconst idx = lines.findIndex(l => l.includes('ensurePortAvailable(localPort'));\r\nconst line = lines[idx].trim();\r\nconsole.log('Fixed line:', line);\r\nconsole.log('Has 127.0.0.1:', line.includes('127.0.0.1'));\r\nconsole.log('Still host-less:', line === 'await ensurePortAvailable(localPort);');\r\n\"\r\n\r\n# Verify consistency with other probes\r\nnode --input-type=module -e \"\r\nimport { readFileSync } from 'node:fs';\r\nconst src = readFileSync('src/infra/ssh-tunnel.ts', 'utf8');\r\nconst checks = {\r\n  'pickEphemeralPort uses 127.0.0.1': src.includes('listen(0, \\\"127.0.0.1\\\")'),\r\n  'canConnectLocal uses 127.0.0.1': src.includes('connect({ host: \\\"127.0.0.1\\\"') || src.includes('host: \\\"127.0.0.1\\\"'),\r\n  'forward uses 127.0.0.1': src.includes('127.0.0.1:\\${opts.remotePort}'),\r\n  'ensurePortAvailable uses 127.0.0.1': src.includes('ensurePortAvailable(localPort, \\\"127.0.0.1\\\")'),\r\n};\r\nfor (const [k, v] of Object.entries(checks)) console.log(k + ':', v);\r\n\"\r\n```\r\n\r\n## Real behavior proof\r\n\r\n**Behavior addressed:** SSH tunnel port preflight on dual-stack hosts now correctly detects IPv4-only occupants, preventing false-free reports.\r\n\r\n**Environment tested:** Windows 11 (x64, dual-stack), Node.js v24.16.0.\r\n\r\n**Steps run after the patch:**\r\n\r\n```bash\r\n# Bind an IPv4-only server, then test old vs new probe behavior\r\nnode -e \"\r\nimport { createServer } from 'node:net';\r\nconst server = createServer();\r\nconst port = 19876;\r\nawait new Promise((resolve, reject) => {\r\n  server.listen(port, '127.0.0.1', () => { console.log('[setup] IPv4-only server on 127.0.0.1:' + port); resolve(); });\r\n  server.on('error', reject);\r\n});\r\nfunction tryListenOnPort({ port, host }) {\r\n  return new Promise((resolve, reject) => {\r\n    const s = createServer();\r\n    const opts = host ? { port, host } : { port };\r\n    s.listen(opts, () => { const addr = s.address(); s.close(() => resolve(addr)); });\r\n    s.on('error', reject);\r\n  });\r\n}\r\nconsole.log('\\n=== host-less probe (old code) ===');\r\ntry { await tryListenOnPort({ port }); console.log('FREE (bug - misses IPv4-only occupant)'); }\r\ncatch (err) { console.log('BUSY (' + err.code + ')'); }\r\nconsole.log('\\n=== scoped probe 127.0.0.1 (new code) ===');\r\ntry { await tryListenOnPort({ port, host: '127.0.0.1' }); console.log('FREE (unexpected)'); }\r\ncatch (err) { console.log('BUSY (' + err.code + ') - fix works!'); }\r\nconsole.log('\\n=== IPv6 probe ===');\r\ntry { await tryListenOnPort({ port, host: '::1' }); console.log('FREE on IPv6 (expected - why old code misses)'); }\r\ncatch (err) { console.log('BUSY on IPv6 (' + err.code + ')'); }\r\nserver.close();\r\n\"\r\n```\r\n\r\n**Evidence after fix (console output):**\r\n\r\n<img width=\"954\" height=\"394\" alt=\"image\" src=\"https://github.com/user-attachments/assets/b62f66de-660c-4739-bd7e-2bd7c6279df7\" />\r\n\r\n```text\r\n[setup] IPv4-only server on 127.0.0.1:19876\r\n\r\n=== host-less probe (old code) ===\r\nFREE (bug - misses IPv4-only occupant)\r\n\r\n=== scoped probe 127.0.0.1 (new code) ===\r\nBUSY (EADDRINUSE) - fix works!\r\n\r\n=== IPv6 probe ===\r\nFREE on IPv6 (expected - why old code misses)\r\n```\r\n\r\n**Observed result:** The host-less probe (old code) reports the port as FREE despite an IPv4-only listener — the exact bug. The scoped probe with `127.0.0.1` (new code) correctly detects `EADDRINUSE`. The IPv6 probe confirms the root cause: IPv6 wildcard bind does not conflict with IPv4-only listeners on dual-stack hosts.\r\n\r\n**Not tested:** Live SSH tunnel (requires a real SSH server). The fix is a one-line argument addition following the exact pattern from #94394.\r\n",
-        "branch": "fix/issue-94596",
-        "head_sha": "5e7d8fff11e510fade251d0430ae815806e424a8",
-        "author": "xzh-xydt",
-        "labels": [
-          "size: XS",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author",
-          "clownfish:automerge"
-        ],
-        "files": [
-          {
-            "path": "src/infra/ssh-tunnel.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 2,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94602",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94602.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 170,
-          "gatingTotal": 165,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 136,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:94602:4743158265:2026-06-18T14:48:45Z:re_review",
-      "comment_id": "4743158265",
-      "comment_version_key": "4743158265:2026-06-18T14:48:45Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94602#issuecomment-4743158265",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 94602,
-      "author": "xzh-xydt",
-      "author_id": 279172199,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-18T14:48:45Z",
-      "comment_updated_at": "2026-06-18T14:48:45Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(infra): pin ensurePortAvailable to 127.0.0.1 in startSshPortForward",
-        "body": "Fixes #94596\r\n\r\n## Summary\r\n\r\n- Problem: `startSshPortForward` in `ssh-tunnel.ts` calls `ensurePortAvailable(localPort)` without a host argument. On dual-stack hosts the host-less probe binds the IPv6 wildcard `::` and misses an IPv4-only occupant, reporting a busy port as free.\r\n- Why now: This is the exact same flaw as #94379 (fixed in #94394 for Chrome CDP), but on the SSH-tunnel surface. #94394 fixed the caller-scoped `ensurePortAvailable(port, host?)` API but missed this call site.\r\n- What changed: Pass `\"127.0.0.1\"` to `ensurePortAvailable` in `startSshPortForward`, matching every other probe in the module.\r\n- What did NOT change: No changes to `ensurePortAvailable` itself, `pickEphemeralPort`, `canConnectLocal`, or the SSH forward args. This is a one-line caller-side fix.\r\n- Outcome: The SSH-tunnel port probe now correctly detects IPv4-only occupants on dual-stack hosts, consistent with the rest of the module.\r\n- Reviewer focus: The single-line change in `src/infra/ssh-tunnel.ts` line 122.\r\n\r\n## Verification\r\n\r\n```bash\r\n# Verify the fix pins to 127.0.0.1\r\nnode --input-type=module -e \"\r\nimport { readFileSync } from 'node:fs';\r\nconst src = readFileSync('src/infra/ssh-tunnel.ts', 'utf8');\r\nconst lines = src.split('\\n');\r\nconst idx = lines.findIndex(l => l.includes('ensurePortAvailable(localPort'));\r\nconst line = lines[idx].trim();\r\nconsole.log('Fixed line:', line);\r\nconsole.log('Has 127.0.0.1:', line.includes('127.0.0.1'));\r\nconsole.log('Still host-less:', line === 'await ensurePortAvailable(localPort);');\r\n\"\r\n\r\n# Verify consistency with other probes\r\nnode --input-type=module -e \"\r\nimport { readFileSync } from 'node:fs';\r\nconst src = readFileSync('src/infra/ssh-tunnel.ts', 'utf8');\r\nconst checks = {\r\n  'pickEphemeralPort uses 127.0.0.1': src.includes('listen(0, \\\"127.0.0.1\\\")'),\r\n  'canConnectLocal uses 127.0.0.1': src.includes('connect({ host: \\\"127.0.0.1\\\"') || src.includes('host: \\\"127.0.0.1\\\"'),\r\n  'forward uses 127.0.0.1': src.includes('127.0.0.1:\\${opts.remotePort}'),\r\n  'ensurePortAvailable uses 127.0.0.1': src.includes('ensurePortAvailable(localPort, \\\"127.0.0.1\\\")'),\r\n};\r\nfor (const [k, v] of Object.entries(checks)) console.log(k + ':', v);\r\n\"\r\n```\r\n\r\n## Real behavior proof\r\n\r\n**Behavior addressed:** SSH tunnel port preflight on dual-stack hosts now correctly detects IPv4-only occupants, preventing false-free reports.\r\n\r\n**Environment tested:** Windows 11 (x64, dual-stack), Node.js v24.16.0.\r\n\r\n**Steps run after the patch:**\r\n\r\n```bash\r\n# Bind an IPv4-only server, then test old vs new probe behavior\r\nnode -e \"\r\nimport { createServer } from 'node:net';\r\nconst server = createServer();\r\nconst port = 19876;\r\nawait new Promise((resolve, reject) => {\r\n  server.listen(port, '127.0.0.1', () => { console.log('[setup] IPv4-only server on 127.0.0.1:' + port); resolve(); });\r\n  server.on('error', reject);\r\n});\r\nfunction tryListenOnPort({ port, host }) {\r\n  return new Promise((resolve, reject) => {\r\n    const s = createServer();\r\n    const opts = host ? { port, host } : { port };\r\n    s.listen(opts, () => { const addr = s.address(); s.close(() => resolve(addr)); });\r\n    s.on('error', reject);\r\n  });\r\n}\r\nconsole.log('\\n=== host-less probe (old code) ===');\r\ntry { await tryListenOnPort({ port }); console.log('FREE (bug - misses IPv4-only occupant)'); }\r\ncatch (err) { console.log('BUSY (' + err.code + ')'); }\r\nconsole.log('\\n=== scoped probe 127.0.0.1 (new code) ===');\r\ntry { await tryListenOnPort({ port, host: '127.0.0.1' }); console.log('FREE (unexpected)'); }\r\ncatch (err) { console.log('BUSY (' + err.code + ') - fix works!'); }\r\nconsole.log('\\n=== IPv6 probe ===');\r\ntry { await tryListenOnPort({ port, host: '::1' }); console.log('FREE on IPv6 (expected - why old code misses)'); }\r\ncatch (err) { console.log('BUSY on IPv6 (' + err.code + ')'); }\r\nserver.close();\r\n\"\r\n```\r\n\r\n**Evidence after fix (console output):**\r\n\r\n<img width=\"954\" height=\"394\" alt=\"image\" src=\"https://github.com/user-attachments/assets/b62f66de-660c-4739-bd7e-2bd7c6279df7\" />\r\n\r\n```text\r\n[setup] IPv4-only server on 127.0.0.1:19876\r\n\r\n=== host-less probe (old code) ===\r\nFREE (bug - misses IPv4-only occupant)\r\n\r\n=== scoped probe 127.0.0.1 (new code) ===\r\nBUSY (EADDRINUSE) - fix works!\r\n\r\n=== IPv6 probe ===\r\nFREE on IPv6 (expected - why old code misses)\r\n```\r\n\r\n**Observed result:** The host-less probe (old code) reports the port as FREE despite an IPv4-only listener — the exact bug. The scoped probe with `127.0.0.1` (new code) correctly detects `EADDRINUSE`. The IPv6 probe confirms the root cause: IPv6 wildcard bind does not conflict with IPv4-only listeners on dual-stack hosts.\r\n\r\n**Not tested:** Live SSH tunnel (requires a real SSH server). The fix is a one-line argument addition following the exact pattern from #94394.\r\n",
-        "branch": "fix/issue-94596",
-        "head_sha": "5e7d8fff11e510fade251d0430ae815806e424a8",
-        "author": "xzh-xydt",
-        "labels": [
-          "size: XS",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author",
-          "clownfish:automerge"
-        ],
-        "files": [
-          {
-            "path": "src/infra/ssh-tunnel.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 1,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94602",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94602.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 170,
-          "gatingTotal": 165,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 136,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3583,
+    "total_ms": 1168,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 435
+        "ms": 561
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2759
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 7
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 357
+        "ms": 594
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
