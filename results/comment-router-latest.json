@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T14:00:15.008Z",
-  "repo": "openclaw/crabbox",
+  "generated_at": "2026-06-19T14:00:27.633Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T11:00:14.625Z",
+  "since": "2026-06-19T11:00:24.199Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    468
+    90226
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 5,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,524 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90226:4620070764:2026-06-19T14:00:21Z:clawsweeper_auto_repair",
+      "comment_id": "4620070764",
+      "comment_version_key": "4620070764:2026-06-19T14:00:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90226#issuecomment-4620070764",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 90226,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-04T07:43:23Z",
+      "comment_updated_at": "2026-06-19T14:00:21Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=10b94b50c37e122a55dbeaf27591aabd03fafab3)",
+      "review_summary": "This PR changes unconfigured thread sessions to idle/no-expiry reset by default, documents that default, and adds a `sessionClosedAt` marker so archived Discord threads roll over through the session lifecycle.\n\nPR surface: Source +11, Tests +160, Docs +7. Total +178 across 14 files.\n\nReproducibility: yes. Current main falls back to daily reset for unconfigured thread sessions, while PR head changes that branch to idle/no-expiry; the PR body and Mantis screenshots show the changed runtime behavior.",
+      "review_followup": "- The remaining blocker is maintainer product/compatibility judgment plus a lifecycle defect; automation should not choose the default-retention policy for maintainers.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "10b94b50c37e122a55dbeaf27591aabd03fafab3",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "[AI-assisted] Preserve thread sessions across daily reset by default",
+        "body": "## Problem\n\nThread-scoped chat sessions currently inherit the global implicit daily reset policy when users do not configure `session.resetByType.thread`. For long-running Telegram/Slack/Discord topics this can rotate the OpenClaw session after the daily boundary even though the human-facing thread is still the same conversation. That breaks continuity before normal context-budget compaction has a chance to manage the history.\n\n## Fix\n\nDefault implicit `thread` reset policy to `idle` with the existing default idle window (`0`, no inactivity expiry), while preserving all explicit configuration behavior:\n\n- `session.reset` still applies when configured.\n- `session.resetByType.thread` still overrides thread behavior.\n- Direct/group sessions keep the existing implicit daily default.\n- Legacy `session.idleMinutes` behavior is unchanged.\n\nThis lets long-running threads stay in the same session by default and rely on the existing compaction/context-budget path instead of being rotated daily.\n\n## Validation\n\n- `npm test -- --run src/config/sessions/sessions.test.ts src/auto-reply/reply/session.test.ts`\n  - 2 Vitest shards passed\n  - 142 tests passed\n- `npm run tsgo:test:src`\n  - passed\n- `git diff --check`\n  - passed\n\n`npm run check:test-types` could not run in this local environment because `pnpm` is not installed; I ran the src type gate directly with `npm run tsgo:test:src`.\n\n## Real Behavior Proof\n\n- **Behavior or issue addressed:** A thread-scoped Telegram session that started before the daily reset boundary should remain the same OpenClaw session after the boundary when there is no explicit thread reset config. This preserves conversation continuity so the existing compaction/context-budget path can manage long-running threads.\n- **Real environment tested:** Local OpenClaw checkout on this PR branch, run from a clean temporary session store under `/tmp` using the real `initSessionState` runtime path via `node_modules/.bin/tsx`. No mocks, no test runner, and no private production transcript data were used.\n- **Exact steps or command run after this patch:**\n  1. Created a temporary `sessions.json`.\n  2. Seeded `agent:main:telegram:group:-100123:topic:456` with `sessionId: \"proof-thread-session\"`.\n  3. Set `sessionStartedAt`, `lastInteractionAt`, and `updatedAt` to 03:00.\n  4. Invoked `initSessionState` at 05:00 with `Provider: \"telegram\"`, `Surface: \"telegram\"`, `ChatType: \"group\"`, and `MessageThreadId: 456`.\n  5. Left `session.reset` and `session.resetByType.thread` unset.\n- **Evidence after fix:** Terminal output from the local runtime smoke command:\n  ```json\n  {\"isNewSession\":false,\"sessionId\":\"proof-thread-session\",\"reusedExisting\":true}\n  ```\n- **Observed result after fix:** The thread session reused the existing `sessionId` after the 04:00 daily reset boundary. Before this change, the implicit daily reset policy would classify the same thread session as stale and rotate it to a new `sessionId`.\n- **What was not tested:** I did not run a live Telegram bot conversation or the full CI matrix. I also did not add family-history retrieval APIs such as `includeFamily` / `resetAncestors`; that is a separate follow-up if maintainers want tool-visible history stitching.\n",
+        "branch": "fix/thread-reset-continuity",
+        "head_sha": "10b94b50c37e122a55dbeaf27591aabd03fafab3",
+        "author": "simplyclever914",
+        "labels": [
+          "docs",
+          "channel: discord",
+          "gateway",
+          "commands",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author",
+          "proof: 📸 screenshot"
+        ],
+        "files": [
+          {
+            "path": "docs/concepts/session.md",
+            "additions": 9,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/config-agents.md",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/reference/session-management-compaction.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/thread-session-close.test.ts",
+            "additions": 66,
+            "deletions": 33,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/thread-session-close.ts",
+            "additions": 14,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session.test.ts",
+            "additions": 88,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-gateway-health.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/reset-policy.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/sessions.test.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/host-hook-runtime.ts",
+            "additions": 6,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/session-entry-slot-keys.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/security/audit-config-include-perms.test.ts",
+            "additions": 31,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 14,
+        "additions": 244,
+        "deletions": 66,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90226",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90226.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 169,
+          "gatingTotal": 164,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 27,
+            "SUCCESS": 104,
+            "QUEUED": 29,
+            "IN_PROGRESS": 6,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-runtime-infra-events-runtime:QUEUED",
+            "checks-node-core-runtime-infra-file-safety:QUEUED",
+            "checks-node-core-runtime-infra-heartbeat-runner:QUEUED",
+            "checks-node-core-runtime-infra-outbound-actions:QUEUED",
+            "checks-node-core-runtime-infra-storage-state:QUEUED",
+            "checks-node-agentic-control-plane-agent-chat:QUEUED",
+            "checks-node-agentic-control-plane-http-models:QUEUED",
+            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-shared-token:QUEUED",
+            "checks-node-agentic-control-plane-startup-core:QUEUED",
+            "checks-node-agentic-commands-doctor-device:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-gateway:QUEUED",
+            "checks-node-agentic-commands-doctor-platform:QUEUED",
+            "checks-node-agentic-commands-doctor-sessions-cron:QUEUED",
+            "checks-node-agentic-commands-doctor-whatsapp:QUEUED",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:QUEUED",
+            "checks-node-agentic-commands-status-tools:QUEUED",
+            "checks-node-agentic-agents-core-auth:QUEUED",
+            "checks-node-agentic-agents-core-models:IN_PROGRESS",
+            "checks-node-agentic-agents-core-tools:QUEUED",
+            "checks-node-agentic-agents-core-subagents:QUEUED",
+            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runtime:QUEUED",
+            "checks-node-agentic-agents-embedded:QUEUED",
+            "checks-node-agentic-agents-support:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:QUEUED",
+            "checks-node-agentic-gateway-methods:QUEUED",
+            "checks-node-agentic-plugin-sdk:QUEUED",
+            "checks-node-auto-reply-core-top-level:QUEUED",
+            "checks-node-auto-reply-reply-agent-runner:QUEUED",
+            "checks-node-auto-reply-reply-commands:QUEUED",
+            "checks-node-auto-reply-reply-dispatch:QUEUED",
+            "checks-node-auto-reply-reply-session:QUEUED",
+            "checks-node-auto-reply-reply-state-routing:QUEUED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-runtime-infra-events-runtime:QUEUED",
+            "checks-node-core-runtime-infra-file-safety:QUEUED",
+            "checks-node-core-runtime-infra-heartbeat-runner:QUEUED",
+            "checks-node-core-runtime-infra-outbound-actions:QUEUED",
+            "checks-node-core-runtime-infra-storage-state:QUEUED",
+            "checks-node-agentic-control-plane-agent-chat:QUEUED",
+            "checks-node-agentic-control-plane-http-models:QUEUED",
+            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-shared-token:QUEUED",
+            "checks-node-agentic-control-plane-startup-core:QUEUED",
+            "checks-node-agentic-commands-doctor-device:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-gateway:QUEUED",
+            "checks-node-agentic-commands-doctor-platform:QUEUED",
+            "checks-node-agentic-commands-doctor-sessions-cron:QUEUED",
+            "checks-node-agentic-commands-doctor-whatsapp:QUEUED",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:QUEUED",
+            "checks-node-agentic-commands-status-tools:QUEUED",
+            "checks-node-agentic-agents-core-auth:QUEUED",
+            "checks-node-agentic-agents-core-models:IN_PROGRESS",
+            "checks-node-agentic-agents-core-tools:QUEUED",
+            "checks-node-agentic-agents-core-subagents:QUEUED",
+            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runtime:QUEUED",
+            "checks-node-agentic-agents-embedded:QUEUED",
+            "checks-node-agentic-agents-support:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:QUEUED",
+            "checks-node-agentic-gateway-methods:QUEUED",
+            "checks-node-agentic-plugin-sdk:QUEUED",
+            "checks-node-auto-reply-core-top-level:QUEUED",
+            "checks-node-auto-reply-reply-agent-runner:QUEUED",
+            "checks-node-auto-reply-reply-commands:QUEUED",
+            "checks-node-auto-reply-reply-dispatch:QUEUED",
+            "checks-node-auto-reply-reply-session:QUEUED",
+            "checks-node-auto-reply-reply-state-routing:QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90226:4752141116:2026-06-19T13:51:10Z:re_review",
+      "comment_id": "4752141116",
+      "comment_version_key": "4752141116:2026-06-19T13:51:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90226#issuecomment-4752141116",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 90226,
+      "author": "simplyclever914",
+      "author_id": 280986376,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-19T13:51:10Z",
+      "comment_updated_at": "2026-06-19T13:51:10Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "[AI-assisted] Preserve thread sessions across daily reset by default",
+        "body": "## Problem\n\nThread-scoped chat sessions currently inherit the global implicit daily reset policy when users do not configure `session.resetByType.thread`. For long-running Telegram/Slack/Discord topics this can rotate the OpenClaw session after the daily boundary even though the human-facing thread is still the same conversation. That breaks continuity before normal context-budget compaction has a chance to manage the history.\n\n## Fix\n\nDefault implicit `thread` reset policy to `idle` with the existing default idle window (`0`, no inactivity expiry), while preserving all explicit configuration behavior:\n\n- `session.reset` still applies when configured.\n- `session.resetByType.thread` still overrides thread behavior.\n- Direct/group sessions keep the existing implicit daily default.\n- Legacy `session.idleMinutes` behavior is unchanged.\n\nThis lets long-running threads stay in the same session by default and rely on the existing compaction/context-budget path instead of being rotated daily.\n\n## Validation\n\n- `npm test -- --run src/config/sessions/sessions.test.ts src/auto-reply/reply/session.test.ts`\n  - 2 Vitest shards passed\n  - 142 tests passed\n- `npm run tsgo:test:src`\n  - passed\n- `git diff --check`\n  - passed\n\n`npm run check:test-types` could not run in this local environment because `pnpm` is not installed; I ran the src type gate directly with `npm run tsgo:test:src`.\n\n## Real Behavior Proof\n\n- **Behavior or issue addressed:** A thread-scoped Telegram session that started before the daily reset boundary should remain the same OpenClaw session after the boundary when there is no explicit thread reset config. This preserves conversation continuity so the existing compaction/context-budget path can manage long-running threads.\n- **Real environment tested:** Local OpenClaw checkout on this PR branch, run from a clean temporary session store under `/tmp` using the real `initSessionState` runtime path via `node_modules/.bin/tsx`. No mocks, no test runner, and no private production transcript data were used.\n- **Exact steps or command run after this patch:**\n  1. Created a temporary `sessions.json`.\n  2. Seeded `agent:main:telegram:group:-100123:topic:456` with `sessionId: \"proof-thread-session\"`.\n  3. Set `sessionStartedAt`, `lastInteractionAt`, and `updatedAt` to 03:00.\n  4. Invoked `initSessionState` at 05:00 with `Provider: \"telegram\"`, `Surface: \"telegram\"`, `ChatType: \"group\"`, and `MessageThreadId: 456`.\n  5. Left `session.reset` and `session.resetByType.thread` unset.\n- **Evidence after fix:** Terminal output from the local runtime smoke command:\n  ```json\n  {\"isNewSession\":false,\"sessionId\":\"proof-thread-session\",\"reusedExisting\":true}\n  ```\n- **Observed result after fix:** The thread session reused the existing `sessionId` after the 04:00 daily reset boundary. Before this change, the implicit daily reset policy would classify the same thread session as stale and rotate it to a new `sessionId`.\n- **What was not tested:** I did not run a live Telegram bot conversation or the full CI matrix. I also did not add family-history retrieval APIs such as `includeFamily` / `resetAncestors`; that is a separate follow-up if maintainers want tool-visible history stitching.\n",
+        "branch": "fix/thread-reset-continuity",
+        "head_sha": "10b94b50c37e122a55dbeaf27591aabd03fafab3",
+        "author": "simplyclever914",
+        "labels": [
+          "docs",
+          "channel: discord",
+          "gateway",
+          "commands",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author",
+          "proof: 📸 screenshot"
+        ],
+        "files": [
+          {
+            "path": "docs/concepts/session.md",
+            "additions": 9,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/config-agents.md",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/reference/session-management-compaction.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/thread-session-close.test.ts",
+            "additions": 66,
+            "deletions": 33,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/thread-session-close.ts",
+            "additions": 14,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session.test.ts",
+            "additions": 88,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-gateway-health.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/reset-policy.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/sessions.test.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/host-hook-runtime.ts",
+            "additions": 6,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/session-entry-slot-keys.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/security/audit-config-include-perms.test.ts",
+            "additions": 31,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 14,
+        "additions": 244,
+        "deletions": 66,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90226",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90226.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 169,
+          "gatingTotal": 164,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 27,
+            "SUCCESS": 104,
+            "QUEUED": 29,
+            "IN_PROGRESS": 6,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-runtime-infra-events-runtime:QUEUED",
+            "checks-node-core-runtime-infra-file-safety:QUEUED",
+            "checks-node-core-runtime-infra-heartbeat-runner:QUEUED",
+            "checks-node-core-runtime-infra-outbound-actions:QUEUED",
+            "checks-node-core-runtime-infra-storage-state:QUEUED",
+            "checks-node-agentic-control-plane-agent-chat:QUEUED",
+            "checks-node-agentic-control-plane-http-models:QUEUED",
+            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-shared-token:QUEUED",
+            "checks-node-agentic-control-plane-startup-core:QUEUED",
+            "checks-node-agentic-commands-doctor-device:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-gateway:QUEUED",
+            "checks-node-agentic-commands-doctor-platform:QUEUED",
+            "checks-node-agentic-commands-doctor-sessions-cron:QUEUED",
+            "checks-node-agentic-commands-doctor-whatsapp:QUEUED",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:QUEUED",
+            "checks-node-agentic-commands-status-tools:QUEUED",
+            "checks-node-agentic-agents-core-auth:QUEUED",
+            "checks-node-agentic-agents-core-models:IN_PROGRESS",
+            "checks-node-agentic-agents-core-tools:QUEUED",
+            "checks-node-agentic-agents-core-subagents:QUEUED",
+            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runtime:QUEUED",
+            "checks-node-agentic-agents-embedded:QUEUED",
+            "checks-node-agentic-agents-support:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:QUEUED",
+            "checks-node-agentic-gateway-methods:QUEUED",
+            "checks-node-agentic-plugin-sdk:QUEUED",
+            "checks-node-auto-reply-core-top-level:QUEUED",
+            "checks-node-auto-reply-reply-agent-runner:QUEUED",
+            "checks-node-auto-reply-reply-commands:QUEUED",
+            "checks-node-auto-reply-reply-dispatch:QUEUED",
+            "checks-node-auto-reply-reply-session:QUEUED",
+            "checks-node-auto-reply-reply-state-routing:QUEUED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-runtime-infra-events-runtime:QUEUED",
+            "checks-node-core-runtime-infra-file-safety:QUEUED",
+            "checks-node-core-runtime-infra-heartbeat-runner:QUEUED",
+            "checks-node-core-runtime-infra-outbound-actions:QUEUED",
+            "checks-node-core-runtime-infra-storage-state:QUEUED",
+            "checks-node-agentic-control-plane-agent-chat:QUEUED",
+            "checks-node-agentic-control-plane-http-models:QUEUED",
+            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-shared-token:QUEUED",
+            "checks-node-agentic-control-plane-startup-core:QUEUED",
+            "checks-node-agentic-commands-doctor-device:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-gateway:QUEUED",
+            "checks-node-agentic-commands-doctor-platform:QUEUED",
+            "checks-node-agentic-commands-doctor-sessions-cron:QUEUED",
+            "checks-node-agentic-commands-doctor-whatsapp:QUEUED",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:QUEUED",
+            "checks-node-agentic-commands-status-tools:QUEUED",
+            "checks-node-agentic-agents-core-auth:QUEUED",
+            "checks-node-agentic-agents-core-models:IN_PROGRESS",
+            "checks-node-agentic-agents-core-tools:QUEUED",
+            "checks-node-agentic-agents-core-subagents:QUEUED",
+            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runtime:QUEUED",
+            "checks-node-agentic-agents-embedded:QUEUED",
+            "checks-node-agentic-agents-support:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:QUEUED",
+            "checks-node-agentic-gateway-methods:QUEUED",
+            "checks-node-agentic-plugin-sdk:QUEUED",
+            "checks-node-auto-reply-core-top-level:QUEUED",
+            "checks-node-auto-reply-reply-agent-runner:QUEUED",
+            "checks-node-auto-reply-reply-commands:QUEUED",
+            "checks-node-auto-reply-reply-dispatch:QUEUED",
+            "checks-node-auto-reply-reply-session:QUEUED",
+            "checks-node-auto-reply-reply-state-routing:QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 710,
+    "total_ms": 3683,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 372
+        "ms": 255
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 3162
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 4
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +558,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 327
+        "ms": 236
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
