@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T08:46:54.066Z",
-  "repo": "openclaw/wacli",
+  "generated_at": "2026-06-19T08:47:33.635Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T05:46:51.292Z",
+  "since": "2026-06-19T05:47:30.792Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    283
+    94663
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4750001160
+  ],
+  "status_comment_id": 4750001516,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 2,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,134 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/wacli:283:4748591950:2026-06-19T08:46:47Z:clawsweeper_auto_repair",
-      "comment_id": "4748591950",
-      "comment_version_key": "4748591950:2026-06-19T08:46:47Z",
-      "comment_url": "https://github.com/openclaw/wacli/pull/283#issuecomment-4748591950",
-      "repo": "openclaw/wacli",
-      "target_branch": null,
-      "issue_number": 283,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "idempotency_key": "comment-router:openclaw/openclaw:94663:4750001160:2026-06-19T08:46:33Z:re_review",
+      "comment_id": "4750001160",
+      "comment_version_key": "4750001160:2026-06-19T08:46:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94663#issuecomment-4750001160",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 94663,
+      "author": "yu-xin-c",
+      "author_id": 175149126,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T04:52:41Z",
-      "comment_updated_at": "2026-06-19T08:46:47Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=7fffe765158964da6edf516113a9f0a0f1a0eb91)",
-      "review_summary": "The PR adds sync global presence sends on connect and pushname events, sends final unavailable presence after successful sync exit, adds a DetachSocket connect option, and covers the app-level call sequence with fake-client tests.\n\nReproducibility: yes. for a source-reproducible path: current main ties the websocket to the signal-cancellable context and lacks the sync event-loop presence sends, while the PR body includes redacted live SIGTERM logs showing the before/after behavior. I did not run a live WhatsApp reproduction in this read-only review.",
-      "review_followup": "- [P2] A focused repair can address the remaining cancellation and presence-lifetime defects on the PR branch without a product decision.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "7fffe765158964da6edf516113a9f0a0f1a0eb91",
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(sync): presence handling for linked-device active status and phone push notifications",
-        "body": "## Problem\n\nA `wacli sync` linked device stays connected but never tells WhatsApp it is active, and when sync exits it fails to tell WhatsApp it is inactive. This causes two user-visible issues:\n\n1. **Stale \"last active\" timestamp** — WhatsApp's Linked Devices screen shows the device as inactive even while `sync --follow` is running.\n2. **Phone stops receiving push notifications** — after sync exits, the device stays marked \"available\" because the `<presence type=\"unavailable\"/>` send fails every time.\n\n### Root causes\n\n**Missing available presence.** The upstream `main` added `sendInitialAvailablePresence` in `ConnectContext`, but it only runs once at initial connect and only when the pushname is already set. It misses reconnects and late-arriving pushname events.\n\n**Unavailable presence fails on SIGTERM.** `wa.Client.Connect` passed the caller's (signal-cancellable) context to `cli.ConnectContext(ctx)`. When the signal handler cancels it (e.g., `timeout` sending SIGTERM), whatsmeow closes the websocket before `sync.go:207` can send the unavailable presence.\n\n## Solution\n\n### 1. Send available presence on connect and pushname\n\nOn `*events.Connected` and `*events.PushNameSetting`, call `sendPresence(ctx, types.PresenceAvailable)` synchronously so the WhatsApp server records an accurate last-active timestamp. Sends are synchronous (not goroutines) so a delayed available send cannot run after the final unavailable cleanup send.\n\n### 2. Send unavailable presence after sync exit\n\nAfter a successful sync run (`sync.go:207`), call `sendPresence(context.WithoutCancel(ctx), types.PresenceUnavailable)` so the phone resumes push notifications.\n\n### 3. Detach websocket context for sync only\n\nAdd a `DetachSocket bool` field to `ConnectOptions`. When `true` (set by `connectForSync` and `ReconnectWithBackoff` — sync only), `ConnectContext` uses `context.Background()` so the websocket survives signal cancellation and the unavailable presence can be sent during graceful shutdown. Other commands (auth, history, etc.) keep the default `false` so `--timeout` and signal cancellation still bound the connection.\n\nThe websocket is closed explicitly by `Disconnect()`/`Close()` via `closeApp` in the command layer. The retry loop in `ReconnectWithBackoff` still uses the passed context for cancellation control.\n\n## Files changed\n\n- `internal/wa/client.go` — adds `DetachSocket` field to `ConnectOptions`; adds `(Client).SendPresence()` wrapper; uses `context.Background()` for `ConnectContext` when `DetachSocket` is true.\n- `internal/app/app.go` — adds `SendPresence()` to the `WAClient` interface.\n- `internal/app/sync_events.go` — on `*events.Connected` and `*events.PushNameSetting`, calls `sendPresence(ctx, types.PresenceAvailable)` synchronously; adds `App.sendPresence()` helper.\n- `internal/app/sync.go` — after a successful sync run, calls `sendPresence(context.WithoutCancel(ctx), types.PresenceUnavailable)`; sets `DetachSocket: true` in `connectForSync`.\n- `internal/app/fake_wa_test.go` — adds `SendPresence()` fake implementation and tracking fields.\n- `internal/app/sync_presence_test.go` — regression tests for connected, push-name setting, failure-warning, synchronous behavior, and the final unavailable send.\n\n## Tests\n\nThe full gate passes locally:\n\n```bash\npnpm format:check && pnpm lint && pnpm test && pnpm build && git diff --check\n```\n\nNew regression tests:\n\n```bash\ngo test ./internal/app -run TestSyncSendsAvailablePresence -count=1\ngo test ./internal/app -run TestSyncPresenceFailureWarnsAndContinues -count=1\ngo test ./internal/app -run TestSyncSendsAvailablePresenceOnConnectedIsSynchronous -count=1\n```\n\n> **Note on websocket-context test coverage:** the unavailable-send-on-SIGTERM fix lives in `wa.Client.Connect` (which calls `cli.ConnectContext`). The app-level tests use a fake WA client whose `SendPresence` always succeeds, so they verify the *call sequence* (available → unavailable) but cannot catch the real `cli.IsConnected()` failure path. A unit test for the detached-context fix would require refactoring `wa.Client` to accept an interface for the whatsmeow client. The fix was verified with a live WhatsApp account (see below).\n\n## Live verification\n\nTested on a real linked-device account with a `timeout 30s` cron job:\n\n**Before fix — every unavailable send failed:**\n```\n{\"event\":\"signal\",\"action\":\"shutdown\",\"signal\":\"terminated\"}\n{\"event\":\"stopping\",\"messages_synced\":19}\n{\"event\":\"warning\",\"code\":\"send_presence_failed\",\"error\":\"...context canceled\"}\nMessages stored: 19\n```\n\n**After fix — unavailable send succeeds on SIGTERM:**\n```\n{\"event\":\"signal\",\"action\":\"shutdown\",\"signal\":\"terminated\"}\n{\"event\":\"stopping\",\"messages_synced\":3}\nMessages stored: 3\n```\n\nNo `send_presence_failed` warning — the unavailable presence was sent successfully because the websocket stayed open (DetachSocket).\n\n## Operational notes\n\nNo new flags or env vars. The compiled `dist/wacli` binary is already deployed.\n\nFor continuous sync via cron, a `timeout 30s wacli sync --idle-exit 10s` cron entry now works correctly: sync runs for ~30s, exits on SIGTERM, sends unavailable presence, and the phone receives push notifications for the remaining ~30s of each minute.\n\n## Checklist\n\n- [x] Code compiles / builds.\n- [x] Tests pass (`pnpm test` and FTS path).\n- [x] Lint / formatting checks pass.\n- [x] `git diff --check` clean.\n- [x] Commits squashed into one.\n- [x] No release-owned CHANGELOG.md edits.\n- [x] Live WhatsApp behavior proof included.\n- [x] Available presence sends are synchronous (no goroutine race).\n- [x] `DetachSocket` is sync-only; other commands keep caller-cancellation.\n",
-        "branch": "fix/presence-unavailable-on-shutdown",
-        "head_sha": "7fffe765158964da6edf516113a9f0a0f1a0eb91",
-        "author": "dovocoder",
-        "labels": [
-          "P2",
-          "merge-risk: 🚨 availability",
-          "proof: sufficient",
-          "status: ⏳ waiting on author",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 other"
-        ],
-        "files": [
-          {
-            "path": "internal/app/app.go",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/fake_wa_test.go",
-            "additions": 12,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/sync.go",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/sync_events.go",
-            "additions": 18,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/sync_presence_test.go",
-            "additions": 173,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/wa/client.go",
-            "additions": 28,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 236,
-        "deletions": 5,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-wacli-283",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-wacli-283.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 3,
-          "gatingTotal": 3,
-          "counts": {
-            "SUCCESS": 3
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/wacli:283:4749926925:2026-06-19T08:37:40Z:re_review",
-      "comment_id": "4749926925",
-      "comment_version_key": "4749926925:2026-06-19T08:37:40Z",
-      "comment_url": "https://github.com/openclaw/wacli/pull/283#issuecomment-4749926925",
-      "repo": "openclaw/wacli",
-      "target_branch": null,
-      "issue_number": 283,
-      "author": "dovocoder",
-      "author_id": 277543805,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T08:37:40Z",
-      "comment_updated_at": "2026-06-19T08:37:40Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-19T08:46:33Z",
+      "comment_updated_at": "2026-06-19T08:46:33Z",
+      "status_comment_id": 4750001516,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -175,81 +62,98 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-19T08:47:34.299Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 94663
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-19T08:47:35.354Z",
+          "response_comment_id": "4750001516",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(sync): presence handling for linked-device active status and phone push notifications",
-        "body": "## Problem\n\nA `wacli sync` linked device stays connected but never tells WhatsApp it is active, and when sync exits it fails to tell WhatsApp it is inactive. This causes two user-visible issues:\n\n1. **Stale \"last active\" timestamp** — WhatsApp's Linked Devices screen shows the device as inactive even while `sync --follow` is running.\n2. **Phone stops receiving push notifications** — after sync exits, the device stays marked \"available\" because the `<presence type=\"unavailable\"/>` send fails every time.\n\n### Root causes\n\n**Missing available presence.** The upstream `main` added `sendInitialAvailablePresence` in `ConnectContext`, but it only runs once at initial connect and only when the pushname is already set. It misses reconnects and late-arriving pushname events.\n\n**Unavailable presence fails on SIGTERM.** `wa.Client.Connect` passed the caller's (signal-cancellable) context to `cli.ConnectContext(ctx)`. When the signal handler cancels it (e.g., `timeout` sending SIGTERM), whatsmeow closes the websocket before `sync.go:207` can send the unavailable presence.\n\n## Solution\n\n### 1. Send available presence on connect and pushname\n\nOn `*events.Connected` and `*events.PushNameSetting`, call `sendPresence(ctx, types.PresenceAvailable)` synchronously so the WhatsApp server records an accurate last-active timestamp. Sends are synchronous (not goroutines) so a delayed available send cannot run after the final unavailable cleanup send.\n\n### 2. Send unavailable presence after sync exit\n\nAfter a successful sync run (`sync.go:207`), call `sendPresence(context.WithoutCancel(ctx), types.PresenceUnavailable)` so the phone resumes push notifications.\n\n### 3. Detach websocket context for sync only\n\nAdd a `DetachSocket bool` field to `ConnectOptions`. When `true` (set by `connectForSync` and `ReconnectWithBackoff` — sync only), `ConnectContext` uses `context.Background()` so the websocket survives signal cancellation and the unavailable presence can be sent during graceful shutdown. Other commands (auth, history, etc.) keep the default `false` so `--timeout` and signal cancellation still bound the connection.\n\nThe websocket is closed explicitly by `Disconnect()`/`Close()` via `closeApp` in the command layer. The retry loop in `ReconnectWithBackoff` still uses the passed context for cancellation control.\n\n## Files changed\n\n- `internal/wa/client.go` — adds `DetachSocket` field to `ConnectOptions`; adds `(Client).SendPresence()` wrapper; uses `context.Background()` for `ConnectContext` when `DetachSocket` is true.\n- `internal/app/app.go` — adds `SendPresence()` to the `WAClient` interface.\n- `internal/app/sync_events.go` — on `*events.Connected` and `*events.PushNameSetting`, calls `sendPresence(ctx, types.PresenceAvailable)` synchronously; adds `App.sendPresence()` helper.\n- `internal/app/sync.go` — after a successful sync run, calls `sendPresence(context.WithoutCancel(ctx), types.PresenceUnavailable)`; sets `DetachSocket: true` in `connectForSync`.\n- `internal/app/fake_wa_test.go` — adds `SendPresence()` fake implementation and tracking fields.\n- `internal/app/sync_presence_test.go` — regression tests for connected, push-name setting, failure-warning, synchronous behavior, and the final unavailable send.\n\n## Tests\n\nThe full gate passes locally:\n\n```bash\npnpm format:check && pnpm lint && pnpm test && pnpm build && git diff --check\n```\n\nNew regression tests:\n\n```bash\ngo test ./internal/app -run TestSyncSendsAvailablePresence -count=1\ngo test ./internal/app -run TestSyncPresenceFailureWarnsAndContinues -count=1\ngo test ./internal/app -run TestSyncSendsAvailablePresenceOnConnectedIsSynchronous -count=1\n```\n\n> **Note on websocket-context test coverage:** the unavailable-send-on-SIGTERM fix lives in `wa.Client.Connect` (which calls `cli.ConnectContext`). The app-level tests use a fake WA client whose `SendPresence` always succeeds, so they verify the *call sequence* (available → unavailable) but cannot catch the real `cli.IsConnected()` failure path. A unit test for the detached-context fix would require refactoring `wa.Client` to accept an interface for the whatsmeow client. The fix was verified with a live WhatsApp account (see below).\n\n## Live verification\n\nTested on a real linked-device account with a `timeout 30s` cron job:\n\n**Before fix — every unavailable send failed:**\n```\n{\"event\":\"signal\",\"action\":\"shutdown\",\"signal\":\"terminated\"}\n{\"event\":\"stopping\",\"messages_synced\":19}\n{\"event\":\"warning\",\"code\":\"send_presence_failed\",\"error\":\"...context canceled\"}\nMessages stored: 19\n```\n\n**After fix — unavailable send succeeds on SIGTERM:**\n```\n{\"event\":\"signal\",\"action\":\"shutdown\",\"signal\":\"terminated\"}\n{\"event\":\"stopping\",\"messages_synced\":3}\nMessages stored: 3\n```\n\nNo `send_presence_failed` warning — the unavailable presence was sent successfully because the websocket stayed open (DetachSocket).\n\n## Operational notes\n\nNo new flags or env vars. The compiled `dist/wacli` binary is already deployed.\n\nFor continuous sync via cron, a `timeout 30s wacli sync --idle-exit 10s` cron entry now works correctly: sync runs for ~30s, exits on SIGTERM, sends unavailable presence, and the phone receives push notifications for the remaining ~30s of each minute.\n\n## Checklist\n\n- [x] Code compiles / builds.\n- [x] Tests pass (`pnpm test` and FTS path).\n- [x] Lint / formatting checks pass.\n- [x] `git diff --check` clean.\n- [x] Commits squashed into one.\n- [x] No release-owned CHANGELOG.md edits.\n- [x] Live WhatsApp behavior proof included.\n- [x] Available presence sends are synchronous (no goroutine race).\n- [x] `DetachSocket` is sync-only; other commands keep caller-cancellation.\n",
-        "branch": "fix/presence-unavailable-on-shutdown",
-        "head_sha": "7fffe765158964da6edf516113a9f0a0f1a0eb91",
-        "author": "dovocoder",
+        "title": "[codex] feat(mcp): stage binary tool content for relay",
+        "body": "## Summary\n\nPart of #87023.\n\nThis adds a conservative relay foundation for MCP binary content:\n\n- stage MCP `image`, `audio`, and blob-backed `resource` content into OpenClaw-owned outbound media attachments\n- expose those staged files through `details.media.attachments` so the existing channel relay extractor can hand them off\n- add a process-local host-owned MCP media registry so only files staged by OpenClaw can bypass the external-tool local-path filter\n\nThe model-facing transcript behavior stays compatible: valid MCP images still remain image blocks, while audio/resource blocks continue to degrade to text summaries for providers that do not accept those block types.\n\n## Safety\n\n- MCP-provenance arbitrary local paths remain blocked by the existing external-tool filter.\n- MCP servers cannot bless their own local paths; only host-staged media paths are registered.\n- Staging uses the existing outbound media store and media-core MIME/size caps, plus per-tool-result attachment-count and aggregate decoded-byte budgets with sequential staging.\n- Staging failures degrade to the existing tool-result content instead of failing the MCP tool call.\n\n## Validation\n\n- `node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-tools.materialize.test.ts src/agents/embedded-agent-subscribe.tools.media.test.ts --reporter=verbose`\n- `pnpm lint --threads=8`\n- `pnpm tsgo:test:src`\n- `git diff --check`\n- `pnpm openclaw --version`\n\n`$autoreview` was requested by the contributor guide, but no autoreview tool is available in this Codex session.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: After the unpadded-base64 follow-up, MCP `ImageContent`, `AudioContent`, and blob-backed binary `Content` from a real MCP stdio server are preserved as OpenClaw-owned outbound media attachments in MCP content order, then relayed through the existing tool-result media extractor/filter. The same run verifies that unstaged MCP local paths are still rejected.\n- **Real environment tested**: Local OpenClaw checkout at commit `303b6bc` on macOS, Node `25.9.0`, isolated `OPENCLAW_CONFIG_PATH=/tmp/openclaw-real-mcp-relay-unpadded.vXTPGT/openclaw.json`. `pnpm openclaw --version` started the real CLI and reported `OpenClaw 2026.6.8 (303b6bc)`.\n- **Exact steps or command run after this patch**: Ran `pnpm openclaw --version`, then ran a live `node --import tsx` smoke that started a local stdio MCP server with `@modelcontextprotocol/sdk`, connected via OpenClaw `createSessionMcpRuntime`, materialized the MCP tool through `materializeBundleMcpToolsForRun`, executed it with unpadded base64 payloads `TQ`, `TWE`, and `SGVsbG8`, and passed the result through `extractToolResultMediaArtifact` plus `filterToolResultMediaUrls`.\n- **Evidence after fix**: Terminal output from the live OpenClaw smoke at the latest pushed head:\n\n```text\nOPENCLAW_REAL_MCP_RELAY_PROOF_START\nopenclaw_config_path=/tmp/openclaw-real-mcp-relay-unpadded.vXTPGT/openclaw.json\nopenclaw_state_dir=/tmp/openclaw-real-mcp-relay-unpadded.vXTPGT\nmedia_dir=/tmp/openclaw-real-mcp-relay-unpadded.vXTPGT/media\ncatalog_servers=binaryProof\ncatalog_tools=binaryProof/relay_binary\nmaterialized_tool=binaryProof__relay_binary\nmodel_content_types=text,image,text,text\ndetails_media_source=mcp\ndetails_media_host_owned=true\nattachment_count=3\nattachment=image:image/png:binaryProof-relay_binary-1---8d9887df-929d-4e5d-9e16-260f3074ac11.png\nattachment=audio:audio/mpeg:binaryProof-relay_binary-2---cb761f22-5159-4938-9960-4961bea92fb9.mp3\nattachment=resource:application/pdf:binaryProof-relay_binary-3---5c8a2574-5f8e-4b9f-a384-cbbc251f0689.pdf\nextractor_media_count=3\nrelay_filtered_count=3\nstaged_file=binaryProof-relay_binary-1---8d9887df-929d-4e5d-9e16-260f3074ac11.png:exists=true:bytes=1\nstaged_file=binaryProof-relay_binary-2---cb761f22-5159-4938-9960-4961bea92fb9.mp3:exists=true:bytes=2\nstaged_file=binaryProof-relay_binary-3---5c8a2574-5f8e-4b9f-a384-cbbc251f0689.pdf:exists=true:bytes=5\nstaged_file_payloads=M|Ma|Hello\nspoofed_local_mcp_path_allowed=0\nOPENCLAW_REAL_MCP_RELAY_PROOF_END\n```\n\n- **Observed result after fix**: OpenClaw connected to the real MCP stdio server, listed `binaryProof/relay_binary`, executed it, accepted SDK-compatible unpadded base64 for image/audio/resource blocks, staged one `image/png`, one `audio/mpeg`, and one `application/pdf` resource into the isolated OpenClaw media store, exposed all three through `details.media` with `source=mcp` and `hostOwned=true`, preserved content order, and the relay filter allowed exactly those three host-staged attachments while rejecting a spoofed MCP local path.\n- **Regression proof**: Focused unit coverage verifies unpadded MCP image/audio/resource base64 staging, invalid-character rejection, the 8-attachment cap, and aggregate decoded-byte capping before additional base64 blocks are decoded.\n- **CI follow-up proof**: Locally reran `pnpm lint --threads=8`, `node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-tools.materialize.test.ts src/agents/embedded-agent-subscribe.tools.media.test.ts --reporter=verbose`, `pnpm tsgo:test:src`, `git diff --check`, and `pnpm openclaw --version` after commit `303b6bc`.\n- **What was not tested**: Native Telegram/iMessage/Signal delivery was not exercised in this local proof; this PR intentionally stops at the shared OpenClaw MCP-to-tool-result media relay seam and leaves channel-specific UX/product behavior for follow-up review.\n",
+        "branch": "codex/87023-mcp-binary-content-relay",
+        "head_sha": "303b6bc7400f181aa046d92ae79860c005b3e15d",
+        "author": "yu-xin-c",
         "labels": [
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
           "P2",
-          "merge-risk: 🚨 availability",
-          "proof: sufficient",
-          "status: ⏳ waiting on author",
           "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 other"
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "internal/app/app.go",
-            "additions": 1,
-            "deletions": 0,
+            "path": "src/agents/agent-bundle-mcp-materialize.ts",
+            "additions": 305,
+            "deletions": 15,
             "changeType": "MODIFIED"
           },
           {
-            "path": "internal/app/fake_wa_test.go",
-            "additions": 12,
+            "path": "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
+            "additions": 298,
             "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "internal/app/sync.go",
-            "additions": 4,
-            "deletions": 0,
+            "path": "src/agents/embedded-agent-subscribe.tools.ts",
+            "additions": 7,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "internal/app/sync_events.go",
-            "additions": 18,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/sync_presence_test.go",
-            "additions": 173,
+            "path": "src/agents/mcp-tool-result-media.ts",
+            "additions": 36,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "internal/wa/client.go",
-            "additions": 28,
-            "deletions": 2,
+            "path": "src/scripts/test-projects.test.ts",
+            "additions": 11,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 6,
-        "additions": 236,
-        "deletions": 5,
+        "changedFiles": 5,
+        "additions": 657,
+        "deletions": 20,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-wacli-283",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-wacli-283.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94663",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94663.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 3,
-          "gatingTotal": 3,
+          "total": 28,
+          "gatingTotal": 23,
           "counts": {
-            "SUCCESS": 3
+            "QUEUED": 10,
+            "SUCCESS": 11,
+            "SKIPPED": 7
           },
           "blockers": [],
           "pending": [],
@@ -258,21 +162,20 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3074,
+    "total_ms": 5098,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 481
+        "ms": 1556
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2279
+        "ms": 1273
       },
       {
         "name": "classify_comment_commands",
@@ -288,7 +191,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 290
+        "ms": 2244
       },
       {
         "name": "append_ledger",
