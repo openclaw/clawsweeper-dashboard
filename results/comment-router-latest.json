@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T00:42:46.317Z",
+  "generated_at": "2026-06-19T00:43:17.738Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T21:42:44.602Z",
+  "since": "2026-06-18T21:43:17.029Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     94718
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4747274569
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -37,16 +39,16 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/94718#issuecomment-4747225069",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 94718,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 90239,
+      "author": "simplyclever914",
+      "author_id": 280986376,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T00:29:39Z",
-      "comment_updated_at": "2026-06-19T00:42:41Z",
+      "comment_created_at": "2026-06-19T00:41:18Z",
+      "comment_updated_at": "2026-06-19T00:41:18Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -62,131 +64,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(supervisor): resolve Windows CLI shims via PATHEXT walk and trusted cmd.exe wrapper",
-        "body": "## Summary\n\nOn Windows, the supervisor fails to spawn any npm-installed global CLI — `claude`, `codex`, `gemini` — with two compounding bugs:\n\n1. **ENOENT** — `resolveWindowsCommandShim` only appends `.cmd` for a hardcoded allowlist (`npm`, `pnpm`, `yarn`, `npx`). `claude` is not in it, so `child_process.spawn(\"claude\", ...)` throws ENOENT.\n2. **EINVAL** — Even when a caller resolves `claude` to `claude.CMD`, passing an absolute `.cmd` path to `spawnWithFallback` with `shell: false` throws EINVAL on Node 18+ (Windows security restriction: batch files require `shell: true` or explicit cmd.exe invocation).\n\nThis PR fixes both bugs by adding `resolveWindowsBatchSpawnArgv` to `src/process/windows-command.ts` — a PATHEXT-aware resolver that wraps `.cmd`/`.bat` results in a trusted `cmd.exe /d /s /c` invocation (never `shell: true`).\n\nCloses #92054. Related: #91489.\n\n## Root Cause\n\n```\nsrc/process/supervisor/adapters/child.ts\n  └── resolveCommand(command)\n       └── resolveWindowsCommandShim({ command: \"claude\", cmdCommands: [\"npm\",\"pnpm\",\"yarn\",\"npx\"] })\n            returns: \"claude\"  ← bare name, not in allowlist → ENOENT\n       └── spawnWithFallback({ argv: [\"claude.CMD\", ...], shell: false })\n            ← even if resolved externally, shell:false on a .cmd → EINVAL\n```\n\n`src/infra/executable-path.ts` already exports `resolveExecutablePath` (PATHEXT-aware, `existsSync`-backed). `src/process/exec.ts` already has a trusted `cmd.exe /d /s /c` pattern. This PR reuses both — no new abstractions.\n\n## Changes\n\n| File | Change |\n|---|---|\n| `src/process/windows-command.ts` | Add `resolveWindowsBatchSpawnArgv` — PATHEXT walker + trusted cmd.exe wrapper |\n| `src/process/supervisor/adapters/child.ts` | Remove `resolveCommand` (allowlist approach); use `resolveWindowsBatchSpawnArgv` at spawn boundary |\n| `src/process/windows-command.test.ts` | 6 new tests for `resolveWindowsBatchSpawnArgv` (real .cmd shims via temp dir) |\n\n## Why This Approach vs. Competing PRs\n\n| | #91490 | #92119 / #94576 | **This PR** |\n|---|---|---|---|\n| Resolution | `shell: true` toggle | Adds `claude`/`gemini` to allowlist | Reuses `resolveExecutablePath` (canonical PATHEXT walker) |\n| PATHEXT order | Honors via `.cmd` append | Hardcodes `.cmd` suffix | Honors `PATHEXT` env var order via `resolveWindowsExecutableExtensions` |\n| Spawn boundary | `shell: true` | Not addressed | Trusted `cmd.exe /d /s /c` wrapper, `shell: false` |\n| Injection safety | ❌ shell parses argv | ❌ not applicable | ✅ `escapeCmdToken` rejects `&\\|<>^%` (same policy as `exec.ts`) |\n| CVE-2024-27980 | ❌ `shell:true` path | N/A | ✅ avoids `shell: true` entirely |\n| New CLI backends | ❌ allowlist must be updated | ❌ allowlist must be updated | ✅ any npm global resolves automatically |\n| Tested on real Windows | ❌ mocked platform | ❌ mocked platform | ✅ Windows 11, Node v24, live supervisor spawn |\n\n**Re: `clawsweeper:no-new-fix-pr` on #92054 / #91489:** That label targets automated AI-generated PRs that don't add new evidence. This PR is a manual implementation with a fundamentally different approach — the only one addressing both ENOENT and EINVAL without `shell: true`. The competing PRs leave the EINVAL bug open.\n\n## Live Proof (Windows 11, Node v24.15.0)\n\n**PATHEXT walk resolves claude:**\n\n```\nRESOLVED: claude → C:\\Users\\[redacted]\\AppData\\Roaming\\npm\\claude.CMD\n```\n\n**Without fix — ENOENT:**\n\n```\n[WITHOUT FIX] spawn(\"claude\", {shell:false}): Error ENOENT\n```\n\n**With fix — cmd.exe wrapper, shell:false:**\n\n```\n[WITH FIX] cmd.exe /d /s /c <resolved.CMD> (shell:false):\n  exit: 0 | stdout: 2.1.177 (Claude Code)\n```\n\n**Live supervisor proof (2026-06-12, same host, supervisor path):**\n\n- Subagent dispatched on `model: sonnet` → returned `claude --version = 2.1.170 (Claude Code)` after patch applied ✅\n- `npm` resolves to absolute `.CMD` path ✅; `npx` resolves to absolute `.CMD` path ✅\n\n## Acceptance Criteria\n\n```\npnpm test src/process/windows-command.test.ts\npnpm test src/process/supervisor/adapters/child.test.ts\npnpm build\npnpm check\n```\n\n## Maintainer Questions\n\n1. **Should `escapeCmdToken` be moved to `exec.ts` alongside `escapeForCmdExe`?** The logic is nearly identical. Happy to consolidate if preferred — would export `escapeForCmdExe` from `exec.ts` and call it here. Current choice keeps the diff smaller.\n\n2. **Should `resolveWindowsBatchSpawnArgv` return `undefined` for unresolvable commands, or throw?** Current: return `undefined` and let `spawnWithFallback` surface ENOENT naturally. Throwing earlier gives a better error message but changes the error-surface contract.\n\n3. **`resolveWindowsCommandShim` allowlist is now unused by the supervisor.** Should it be removed from `child.ts` entirely? This PR removes it only from the supervisor path; the function itself stays in `windows-command.ts` for any other callers.\n\n4. **`/d` flag on `cmd.exe`**: disables AutoRun registry commands — prevents user-configured startup commands from running in the supervisor's cmd.exe child. Recommended for security.\n\n---\n\n*Submitted by SPRIC76 via Mifrand.*",
-        "branch": "windows-spawn-v02",
-        "head_sha": "c5b57c3e037f6e901465fcc2a4840e95dcff6575",
-        "author": "spric76",
-        "labels": [
-          "docs",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/pr-artifacts/windows-spawn-enoent-fix.html",
-            "additions": 374,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/process/supervisor/adapters/child.ts",
-            "additions": 16,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/windows-command.test.ts",
-            "additions": 84,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/windows-command.ts",
-            "additions": 55,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 529,
-        "deletions": 17,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94718",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94718.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 35,
-          "gatingTotal": 30,
-          "counts": {
-            "CANCELLED": 2,
-            "QUEUED": 10,
-            "SKIPPED": 13,
-            "SUCCESS": 10
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1991,
+    "total_ms": 2727,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 397
+        "ms": 698
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1304
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 265
+        "ms": 2018
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
