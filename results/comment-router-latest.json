@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T16:10:01.252Z",
+  "generated_at": "2026-06-19T16:10:11.294Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T13:09:59.717Z",
+  "since": "2026-06-19T13:10:10.912Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    94935
+    95011
   ],
-  "comment_ids": [
-    4753168211
-  ],
-  "status_comment_id": 4753168497,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,211 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:94935:4753168211:2026-06-19T16:09:00Z:re_review",
-      "comment_id": "4753168211",
-      "comment_version_key": "4753168211:2026-06-19T16:09:00Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94935#issuecomment-4753168211",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 94935,
-      "author": "ZOOWH",
-      "author_id": 265460861,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T16:09:00Z",
-      "comment_updated_at": "2026-06-19T16:09:00Z",
-      "status_comment_id": 4753168497,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-19T16:10:02.061Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 94935
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-19T16:10:03.253Z",
-          "response_comment_id": "4753168497",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(slack,msteams): omit inbound preview from system events (matching Feishu pattern)",
-        "body": "Fixes #94549\n\n## What\n\nRemove the 160-character truncated inbound message preview from Slack and Microsoft Teams system events, matching the existing Feishu inbound pattern.\n\n## Why\n\nThe Slack and Teams inbound handlers enqueued `${inboundLabel}: ${preview}` as system events, where `preview = rawBody.replace(/\\s+/g, \" \").slice(0, 160)`. This caused three defects identified in #94549:\n\n1. **Truncation mid-word at 160 chars** — no ellipsis, no trailing separator.\n2. **Fusion into next prompt block** — the truncated `System:` line runs straight into `Conversation info (untrusted metadata)` in the runtime-context path.\n3. **Redundant body echo** — the preview duplicates content that the full inbound body already delivers through normal turn context.\n\nThe Feishu handler already avoids this pattern (bot.ts:1013-1016):\n```\n// Do not enqueue inbound user previews as system events.\n// System events are prepended to future prompts and can be misread as\n// authoritative transcript turns.\n```\nFeishu logs the preview but does not enqueue it. This change aligns Slack and Teams with the same design.\n\n## Root cause\n\nThe 160-char preview was added as a diagnostic snippet to system-event labels, but system events are prepended to model-facing prompts. The truncated preview confuses the model, fuses into the metadata block, and duplicates content already available in the full inbound body.\n\n## Changes\n\n- **`extensions/slack/src/monitor/message-handler/prepare.ts`**: `enqueueSystemEvent(inboundLabel, ...)` instead of `enqueueSystemEvent(`${inboundLabel}: ${preview}`, ...)`. Preview logged via `logVerbose()` (using the existing Slack verbose logger, gated by `shouldLogVerbose()`) for diagnostic visibility.\n- **`extensions/msteams/src/monitor-handler/message-handler.ts`**: Same change — `enqueuePrimaryMessageSystemEvent()` now logs preview via the existing `log()` dep and enqueues only `inboundLabel`.\n- **Test updates**: Slack assertion updated from `\"Slack DM from Alice: hi\"` to `\"Slack DM from Alice\"`. Teams `.includes()` checks updated to match `inboundLabel` instead of preview text.\n\n## Real behavior proof\n\n### Behavior addressed\nSlack/Teams inbound handler enqueues 160-char truncated preview as system event, causing truncation, fusion, and duplication in model-facing prompts.\n\n### Environment tested\nOpenClaw main branch (27f702d6) and PR branch (8e26d60a), Node.js.\n\n### Evidence before fix (upstream/main)\n```\nBEFORE Slack system event:\nSlack DM from Alice: Hey, can you pull together a quick summary of the deployment we discussed yesterday and include the rollback steps, the health checks we ran, and the follow-u\nLength: 179 (>160 chars, truncated mid-word)\nNo trailing separator, no ellipsis\n\nBEFORE runtime-context fusion:\nSlack DM from Alice: Hey, can you pull together a quick summary of the deployment we discussed yesterday and include the rollback steps, the health checks we ran, and the follow-u\nConversation info (untrusted metadata):\n{ ... }\n→ truncated System: line fuses directly into Conversation info block\n\nBEFORE duplication count: 3\n  1. runtime-context: System: Slack DM from Alice: <truncated preview>\n  2. turn context: System: Slack DM from Alice: <truncated preview>\n  3. turn context: full body (Hey, can you pull together...)\n```\n\n### Evidence after fix (PR branch)\n```\nAFTER Slack system event:\nSlack DM from Alice\nLength: 19\nNo truncation, no fusion issue\n\nAFTER Teams system event:\nTeams DM from Bob\nLength: 17\nNo truncation, no fusion issue\n\nAFTER duplication count: 1\n  1. turn context: full body only\n  (system event notification: Slack DM from Alice — no body content)\n\nAFTER runtime-context:\nSlack DM from Alice\n\nConversation info (untrusted metadata):\n{ ... }\n→ system event line has clear boundary, no fusion with Conversation info\n```\n\n### Consistency with Feishu pattern\n```\nFEISHU pattern (existing, unchanged):\n  log: Feishu DM from User: <preview>\n  systemEvent: Feishu DM from User\n\nSLACK pattern (after fix, matching Feishu):\n  logVerbose: slack[accountId]: Slack DM from Alice: <preview>\n  systemEvent: Slack DM from Alice\n\nTEAMS pattern (after fix, matching Feishu):\n  log: msteams: Teams DM from Bob: <preview>\n  systemEvent: Teams DM from Bob\n```\n\n### Observed result after the fix\nAll three defects eliminated: no truncation (system event contains only the notification label), no fusion (label is short and self-contained), no duplication (preview removed from model-facing content, only logged for diagnostics).\n\n### What was not tested\nLive Slack/Teams API end-to-end delivery. Feishu's identical pattern (bot.ts:1013-1016) has been in production since 2026.5.x and is confirmed working. Slack preview logging uses `logVerbose()` gated by `shouldLogVerbose()`, matching the existing Slack diagnostic logging pattern (prepare.ts:1384).\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
-        "branch": "fix/94549-inbound-preview-truncation",
-        "head_sha": "0d4547fdcb186b2806d2a811f670122af24caf64",
-        "author": "zoowh",
-        "labels": [
-          "channel: msteams",
-          "channel: slack",
-          "size: XS",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/msteams/src/monitor-handler/message-handler.authz.test.ts",
-            "additions": 6,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/monitor-handler/message-handler.ts",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/message-handler/prepare.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/openai-http-api.md",
-            "additions": 63,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/tools/tts.md",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/speech-provider.test.ts",
-            "additions": 43,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/speech-provider.ts",
-            "additions": 26,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.gateway.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/audio-speech-http.server.test.ts",
-            "additions": 100,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/audio-speech-http.test.ts",
-            "additions": 247,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/audio-speech-http.ts",
-            "additions": 290,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/models-http.ts",
-            "additions": 32,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/message-handler/prepare.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 23,
-        "deletions": 6,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94935",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94935.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 12,
-          "gatingTotal": 7,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 8,
-            "SKIPPED": 3
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4158,
+    "total_ms": 755,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 533
+        "ms": 371
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 987
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -243,11 +52,11 @@
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2613
+        "ms": 372
       },
       {
         "name": "append_ledger",
