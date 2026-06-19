@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T11:32:15.784Z",
-  "repo": "openclaw/wacli",
+  "generated_at": "2026-06-19T11:32:20.836Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T08:32:14.244Z",
+  "since": "2026-06-19T08:32:19.203Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    283
+    94933
   ],
   "comment_ids": [
     4751136977
@@ -18,7 +18,7 @@
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,34 +33,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/wacli:283:4751136977:2026-06-19T11:31:15Z:re_review",
-      "comment_id": "4751136977",
-      "comment_version_key": "4751136977:2026-06-19T11:31:15Z",
-      "comment_url": "https://github.com/openclaw/wacli/pull/283#issuecomment-4751136977",
-      "repo": "openclaw/wacli",
-      "target_branch": "main",
-      "issue_number": 283,
-      "author": "dovocoder",
-      "author_id": 277543805,
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94933:4751008469:2026-06-19T11:32:16Z:clawsweeper_needs_human",
+      "comment_id": "4751008469",
+      "comment_version_key": "4751008469:2026-06-19T11:32:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94933#issuecomment-4751008469",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 94933,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T11:31:15Z",
-      "comment_updated_at": "2026-06-19T11:31:15Z",
-      "status_comment_id": 4751137324,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "comment_created_at": "2026-06-19T11:15:22Z",
+      "comment_updated_at": "2026-06-19T11:32:16Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The remaining blockers are contributor real-behavior proof and likely focused regression coverage, not an automation-safe code repair on this review pass.; Cleared: The diff changes only one local Feishu option value and does not touch dependencies, secrets, CI, install, or code-execution surfaces. (sha=9989775c9986f3ffc454b9aa9dadabf983096329)",
+      "review_summary": "The PR changes Feishu streaming-card startup to pass the DM-aware `sendReplyToMessageId` value instead of the raw inbound reply id.\n\nPR surface: Source 0. Total 0 across 1 file.\n\nReproducibility: yes. From source, current main suppresses visible reply metadata for ordinary Feishu DMs in non-streaming paths, but the streaming-card start call still passes the original reply id.",
+      "review_followup": "- [P1] The remaining blockers are contributor real-behavior proof and likely focused regression coverage, not an automation-safe code repair on this review pass.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "9989775c9986f3ffc454b9aa9dadabf983096329",
       "finding_id": null,
       "status": "executed",
       "actions": [
@@ -84,115 +84,84 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(sync): presence handling for linked-device active status and phone push notifications",
-        "body": "## Problem\n\nA `wacli sync` linked device stays connected but never tells WhatsApp it is active, and when sync exits it fails to tell WhatsApp it is inactive. This causes two user-visible issues:\n\n1. **Stale \"last active\" timestamp** — WhatsApp's Linked Devices screen shows the device as inactive even while `sync --follow` is running.\n2. **Phone stops receiving push notifications** — after sync exits, the device stays marked \"available\" because the `<presence type=\"unavailable\"/>` send fails every time.\n\n### Root causes\n\n**Missing available presence.** The upstream `main` added `sendInitialAvailablePresence` in `ConnectContext`, but it only runs once at initial connect and only when the pushname is already set. It misses reconnects and late-arriving pushname events.\n\n**Unavailable presence fails on SIGTERM.** `wa.Client.Connect` passed the caller's (signal-cancellable) context to `cli.ConnectContext(ctx)`. When the signal handler cancels it (e.g., `timeout` sending SIGTERM), whatsmeow closes the websocket before `sync.go:207` can send the unavailable presence.\n\n## Solution\n\n### 1. Send available presence on connect and pushname\n\nOn `*events.Connected` and `*events.PushNameSetting`, call `sendPresence(ctx, types.PresenceAvailable)` synchronously (not in goroutines) so a delayed available send cannot run after the final unavailable cleanup send.\n\n### 2. Send unavailable presence after sync exit\n\nAfter a successful sync run, call `sendPresence(ctx, types.PresenceUnavailable)` so the phone resumes push notifications. The event handler is removed before this send so no late `Connected`/`PushNameSetting` event can fire an available presence after cleanup. The cleanup send uses a 5-second timeout context so a stalled WhatsApp write cannot block shutdown.\n\n### 3. Detach websocket context for sync only with bounded dial\n\nAdd a `DetachSocket bool` field to `ConnectOptions`. When `true` (set by `connectForSync` and `ReconnectWithBackoff` — sync only), `ConnectContext` uses a detached context with a **30-second dial timeout** (`time.AfterFunc`). The dial is bounded so a hanging connect cannot outlive SIGTERM indefinitely; after the dial succeeds, the timer is stopped so the websocket stays open until `Disconnect()`/`Close()`. Other commands keep the default `false` so `--timeout` and signal cancellation still bound the connection.\n\nThe retry loop in `ReconnectWithBackoff` still uses the passed context for cancellation control — only the websocket lifetime is decoupled.\n\n## Files changed\n\n- `internal/wa/client.go` — adds `DetachSocket` field to `ConnectOptions`; uses a dial-timeout-bounded detached context for `ConnectContext` when `DetachSocket` is true; adds `(Client).SendPresence()` wrapper.\n- `internal/app/app.go` — adds `SendPresence()` to the `WAClient` interface.\n- `internal/app/sync_events.go` — on `*events.Connected` and `*events.PushNameSetting`, calls `sendPresence(ctx, types.PresenceAvailable)` synchronously; adds `App.sendPresence()` helper.\n- `internal/app/sync.go` — after a successful sync run, removes the event handler, then sends unavailable presence with a 5-second timeout context; sets `DetachSocket: true` in `connectForSync`.\n- `internal/app/fake_wa_test.go` — adds `SendPresence()` fake implementation and tracking fields.\n- `internal/app/sync_presence_test.go` — regression tests for connected, push-name setting, failure-warning, synchronous behavior, and the final unavailable send.\n\n## Tests\n\nThe full gate passes locally:\n\n```bash\npnpm format:check && pnpm lint && pnpm test && pnpm build && git diff --check\n```\n\nNew regression tests:\n\n```bash\ngo test ./internal/app -run TestSyncSendsAvailablePresence -count=1\ngo test ./internal/app -run TestSyncPresenceFailureWarnsAndContinues -count=1\ngo test ./internal/app -run TestSyncSendsAvailablePresenceOnConnectedIsSynchronous -count=1\n```\n\n> **Note on websocket-context test coverage:** the unavailable-send-on-SIGTERM fix lives in `wa.Client.Connect` (which calls `cli.ConnectContext`). The app-level tests use a fake WA client whose `SendPresence` always succeeds, so they verify the *call sequence* (available → unavailable) but cannot catch the real `cli.IsConnected()` failure path. A unit test for the detached-context fix would require refactoring `wa.Client` to accept an interface for the whatsmeow client. The fix was verified with a live WhatsApp account (see below).\n\n## Live verification\n\nTested on a real linked-device account with a `timeout 30s` cron job:\n\n**Before fix — every unavailable send failed:**\n```\n{\"event\":\"signal\",\"action\":\"shutdown\",\"signal\":\"terminated\"}\n{\"event\":\"stopping\",\"messages_synced\":19}\n{\"event\":\"warning\",\"code\":\"send_presence_failed\",\"error\":\"...context canceled\"}\nMessages stored: 19\n```\n\n**After fix — unavailable send succeeds on SIGTERM:**\n```\n{\"event\":\"signal\",\"action\":\"shutdown\",\"signal\":\"terminated\"}\n{\"event\":\"stopping\",\"messages_synced\":9}\nMessages stored: 9\n```\n\nNo `send_presence_failed` warning — the unavailable presence was sent successfully because the websocket stayed open (DetachSocket with bounded dial).\n\n## Operational notes\n\nNo new flags or env vars. The compiled `dist/wacli` binary is already deployed.\n\nFor continuous sync via cron, a `timeout 30s wacli sync --idle-exit 10s` cron entry now works correctly: sync runs for ~30s, exits on SIGTERM, sends unavailable presence, and the phone receives push notifications for the remaining ~30s of each minute.\n\n## Checklist\n\n- [x] Code compiles / builds.\n- [x] Tests pass (`pnpm test` and FTS path).\n- [x] Lint / formatting checks pass.\n- [x] `git diff --check` clean.\n- [x] Commits squashed into one.\n- [x] No release-owned CHANGELOG.md edits.\n- [x] Live WhatsApp behavior proof included.\n- [x] Available presence sends are synchronous (no goroutine race).\n- [x] Event handler removed before unavailable cleanup send.\n- [x] Unavailable cleanup send bounded with 5-second timeout.\n- [x] `DetachSocket` is sync-only; other commands keep caller-cancellation.\n- [x] Detached connect attempt bounded with 30-second dial timeout.\n",
-        "branch": "fix/presence-unavailable-on-shutdown",
-        "head_sha": "6d21bad281f77024d9974f7decab32a832ff816d",
-        "author": "dovocoder",
+        "title": "fix(feishu): use sendReplyToMessageId in streaming card start() for DM chats",
+        "body": "Fixes #94922\n\n## What\n\nChange the streaming card `start()` call in `createFeishuReplyDispatcher` to use `sendReplyToMessageId` instead of the raw `replyToMessageId`.\n\n## Why\n\nIn `reply-dispatcher.ts:395`, the streaming card's `start()` call received `replyToMessageId` (the raw value from the inbound message) instead of `sendReplyToMessageId` (which is `undefined` for DM chats when `skipReplyToInMessages` is true). This meant that even in 1:1 DM conversations, the streaming card was created as a reply to the user's message, causing:\n\n1. A \"Reply to [User]\" label displayed in the Feishu client\n2. Slower message delivery due to reply vs. direct send API overhead\n\nAll other send paths (text, media, structured card) already used `sendReplyToMessageId`. The streaming card was the only outlier.\n\nThe fix aligns the streaming card path with every other delivery path in the dispatcher, ensuring `skipReplyToInMessages` is respected consistently.\n\n## Root cause\n\nThe `skipReplyToInMessages` guard (line 173) computes `sendReplyToMessageId` as `undefined` when `!isGroup && !directThreadReply` (DM sessions). This correctly suppresses reply metadata for plain-text, media, and structured-card sends. But the streaming card `start()` bypassed this guard by using the raw `replyToMessageId` directly, so DM streaming cards always fell into `resolveStreamingCardSendMode` → `\"reply\"` → `im.message.reply` API → visible \"Reply to\" label.\n\n## Real behavior proof\n\n### Behavior addressed\nFeishu streaming card sends messages with `replyToMessageId` in DM chats, causing \"Reply to [User]\" label and unnecessary reply API overhead.\n\n### Environment tested\nOpenClaw main branch (27f702d6) and PR branch (9989775c), Node.js, Feishu extension.\n\n### Steps run after the patch\nCalled `resolveStreamingCardSendMode` (the production function that determines send mode based on `replyToMessageId` presence) with DM and group scenarios.\n\n### Evidence before fix (upstream/main)\n```\nBEFORE: DM with raw replyToMessageId=\"om_msg_dm_from_user\"\n  resolveStreamingCardSendMode: reply\n  → BUG: DM streaming card uses reply mode, shows Reply to [User]\n\nGroup with replyToMessageId=\"om_msg_group\"\n  resolveStreamingCardSendMode: reply\n  → CORRECT: Group uses reply mode\n\nThread with rootId, no replyToMessageId\n  resolveStreamingCardSendMode: root_create\n  → CORRECT: Thread uses root_create mode\n```\n\n### Evidence after fix (PR branch)\n```\nAFTER FIX: DM with sendReplyToMessageId=undefined (skipReplyToInMessages=true)\n  resolveStreamingCardSendMode: create\n  → FIXED: DM streaming card uses create mode, no Reply to [User] label\n\nAFTER FIX: Group with sendReplyToMessageId=replyToMessageId (skipReplyToInMessages=false)\n  resolveStreamingCardSendMode: reply\n  → UNCHANGED: Group still uses reply mode (correct)\n\nAFTER FIX: Thread with rootId, no sendReplyToMessageId\n  resolveStreamingCardSendMode: root_create\n  → UNCHANGED: Thread uses root_create mode (correct)\n\nDM with directThreadReply (skipReplyToInMessages=false)\n  resolveStreamingCardSendMode: reply\n  → CORRECT: DM thread reply uses reply mode (intended)\n```\n\n### Observed result after the fix\nDM streaming cards now use `im.message.create` (no reply metadata) instead of `im.message.reply`, eliminating the \"Reply to [User]\" label in Feishu private chats while preserving correct reply behavior in group chats and thread replies.\n\n### What was not tested\nLive Feishu API end-to-end delivery (requires Feishu bot credentials). The production function `resolveStreamingCardSendMode` was tested directly, which is the exact function that determines the API call path based on the `replyToMessageId` value passed to `streaming.start()`.\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        "branch": "fix/94922-feishu-dm-reply-mode",
+        "head_sha": "9989775c9986f3ffc454b9aa9dadabf983096329",
+        "author": "zoowh",
         "labels": [
+          "channel: feishu",
+          "size: XS",
+          "triage: needs-real-behavior-proof",
           "P2",
-          "merge-risk: 🚨 availability",
-          "proof: sufficient",
-          "status: ⏳ waiting on author",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility"
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "internal/app/app.go",
+            "path": "extensions/feishu/src/reply-dispatcher.ts",
             "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/fake_wa_test.go",
-            "additions": 12,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/heartbeat_test.go",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/sync.go",
-            "additions": 20,
             "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/sync_events.go",
-            "additions": 44,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/sync_presence_test.go",
-            "additions": 173,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/app/sync_test.go",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/wa/client.go",
-            "additions": 56,
-            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 8,
-        "additions": 313,
-        "deletions": 7,
+        "changedFiles": 1,
+        "additions": 1,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-wacli-283",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-wacli-283.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94933",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94933.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 3,
-          "gatingTotal": 3,
+          "total": 28,
+          "gatingTotal": 23,
           "counts": {
-            "IN_PROGRESS": 1,
-            "SUCCESS": 2
+            "CANCELLED": 1,
+            "SUCCESS": 9,
+            "QUEUED": 4,
+            "SKIPPED": 14
           },
           "blockers": [
-            "test:IN_PROGRESS"
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "security-fast:QUEUED"
           ],
           "pending": [
-            "test:IN_PROGRESS"
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "security-fast:QUEUED"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3750,
+    "total_ms": 1844,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 490
+        "ms": 259
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1037
+        "ms": 1361
       },
       {
         "name": "classify_comment_commands",
@@ -208,7 +177,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2200
+        "ms": 199
       },
       {
         "name": "append_ledger",
