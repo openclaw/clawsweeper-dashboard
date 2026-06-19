@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-06-19T13:32:07.043Z
+Generated: 2026-06-19T14:46:31.262Z
 
 ## Summary
 
@@ -31,4 +31,4 @@ Status: report_only
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [#94833](https://github.com/openclaw/openclaw/pull/94833) | fix(codex): release timed-out app-server lanes | automerge-openclaw-openclaw-94685 | CONFLICTING | DIRTY | CANCELLED:3 SKIPPED:53 SUCCESS:141 NEUTRAL:1; blockers:1 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
-| [#94784](https://github.com/openclaw/openclaw/pull/94784) | fix(doctor): stop promising --fix for working isolated shell-prompt cron jobs (#94655) | automerge-openclaw-openclaw-94659 | MERGEABLE | UNSTABLE | CANCELLED:2 IN_PROGRESS:4 SKIPPED:41 SUCCESS:19 QUEUED:115 NEUTRAL:1; blockers:120 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; CodeQL / Security High (core-auth-secrets):IN_PROGRESS; CodeQL / Security High (network-ssrf-boundary):IN_PROGRESS, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#94784](https://github.com/openclaw/openclaw/pull/94784) | fix(doctor): stop promising --fix for working isolated shell-prompt cron jobs (#94655) | automerge-openclaw-openclaw-94659 | MERGEABLE | CLEAN | CANCELLED:2 SKIPPED:41 SUCCESS:139 NEUTRAL:1; blockers:1 | needs_checks:Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
