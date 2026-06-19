@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T15:29:35.099Z",
+  "generated_at": "2026-06-19T15:29:40.522Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T12:29:31.245Z",
+  "since": "2026-06-19T12:29:38.674Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    91156
+    94991
   ],
   "comment_ids": [
-    4642379118
+    4752852328
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4752852614,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91156:4642379118:2026-06-19T15:28:25Z:clawsweeper_needs_human",
-      "comment_id": "4642379118",
-      "comment_version_key": "4642379118:2026-06-19T15:28:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91156#issuecomment-4642379118",
+      "idempotency_key": "comment-router:openclaw/openclaw:94991:4752852328:2026-06-19T15:29:01Z:re_review",
+      "comment_id": "4752852328",
+      "comment_version_key": "4752852328:2026-06-19T15:29:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94991#issuecomment-4752852328",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 91156,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": "main",
+      "issue_number": 94991,
+      "author": "Solvely-Colin",
+      "author_id": 211764741,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-07T11:35:14Z",
-      "comment_updated_at": "2026-06-19T15:28:25Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "comment_created_at": "2026-06-19T15:29:01Z",
+      "comment_updated_at": "2026-06-19T15:29:01Z",
+      "status_comment_id": 4752852614,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -62,89 +62,153 @@
       "visual_lens": null,
       "expected_head_sha": "c51c78325899a40c2a0a6a7cd9696e7c93867d7b",
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-19T15:29:41.208Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 94991
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-19T15:29:42.189Z",
+          "response_comment_id": "4752852614",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(telegram): route outbound sends through configured default account (#61012)",
-        "body": "## Summary\n\nWith multiple Telegram bot accounts configured, outbound sends via `openclaw message send --channel telegram` (and proactive/subagent sends) ignored the configured default account and always routed through the implicit env/top-level `\"default\"` bot. This makes the outbound account resolver honor the configured default when no account is specified, so:\n\n1. `message send --channel telegram` with **no** `--account` uses the configured default bot.\n2. `--account <id>` routes to that bot.\n3. Subagent/proactive sends (which omit `--account`) use the correct bot identity.\n\n## Root cause\n\n`extensions/telegram/src/accounts.ts` → `resolveTelegramAccount()` passed the raw (possibly `undefined`) `accountId` straight into the shared `resolveAccountWithDefaultFallback()` helper:\n\n```ts\nreturn resolveAccountWithDefaultFallback({\n  accountId: params.accountId, // undefined when no --account\n  ...\n});\n```\n\nWhen `accountId` is omitted, the helper normalizes `undefined` → the literal `\"default\"` account id and resolves that **first**. If the implicit `\"default\"` account has any credential — e.g. a top-level `channels.telegram.botToken` or `TELEGRAM_BOT_TOKEN` left over from a single-bot setup — the helper returns it immediately and never consults `resolveDefaultTelegramAccountId()`. So `channels.telegram.defaultAccount` (and the default-agent binding) was silently ignored and every send went out under the `\"default\"` bot. The helper's `resolveDefaultAccountId` fallback only fires when the `\"default\"` account has *no* credential — precisely the case where the bug doesn't bite.\n\nThe outbound path confirms this is the deciding point: the durable send adapter (`outbound-adapter.ts`) calls `sendMessageTelegram(to, text, { cfg, accountId })` with **no** explicit token, so `resolveTelegramAccount()` alone decides the bot/token.\n\nThe sibling channel `extensions/nextcloud-talk/src/accounts.ts` already does this correctly — it pre-resolves `params.accountId ?? resolveDefaultNextcloudTalkAccountId(cfg)` before calling the same helper.\n\n## The fix\n\nMirror the nextcloud-talk resolver: resolve the configured default account id up front when none is provided, then pass that into the helper.\n\n```ts\nconst resolvedAccountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);\nreturn resolveAccountWithDefaultFallback({\n  accountId: resolvedAccountId,\n  ...\n});\n```\n\n`resolveDefaultTelegramAccountId()` already encapsulates the correct precedence (default-agent binding → `channels.telegram.defaultAccount` → first listed / implicit `\"default\"`), so single-bot, env-only, explicit `--account`, and inbound routing are unchanged; only the previously-broken multi-bot default selection changes.\n\nScope note: `inspectTelegramAccount()` uses the same helper for capability/status discovery (not send routing). Its omitted-`accountId` callers either branch to the all-accounts union (`channel-actions.ts`) or are diagnostic, so they don't affect which bot sends; left out of this bug-scoped change.\n\n## Verification\n\nDone in an isolated linked worktree on `fix/issue-61012-telegram-default-account` (based on latest `upstream/main`). **OpenClaw was not run locally** — no gateway/CLI/`pnpm dev`/`openclaw …`. Verified by code review + focused Vitest unit tests only.\n\nAdded a focused colocated test in `extensions/telegram/src/accounts.test.ts` covering default-account selection (no flag) and explicit-account selection, and confirmed it fails before the fix and passes after:\n\n- **Before** (fix one-liner reverted): `routes omitted-account sends through the configured defaultAccount (#61012)` fails — `AssertionError: expected 'default' to be 'secondary'` (1 failed | 35 passed).\n- **After**: `node scripts/run-vitest.mjs extensions/telegram/src/accounts.test.ts` → **36 passed**.\n- **Regression** (send/account/outbound path): `node scripts/run-vitest.mjs` over `send.test.ts action-runtime.test.ts outbound-adapter.test.ts bot-message-dispatch.test.ts channel.gateway.test.ts channel.message-adapter.test.ts send.proxy.test.ts` → **345 passed (7 files)**.\n\nNot tested: live multi-bot Telegram delivery (no real bots/tokens exercised). No tokens or secrets are included in the code, tests, or this PR.\n\nFixes #61012\n",
-        "branch": "fix/issue-61012-telegram-default-account",
-        "head_sha": "c51c78325899a40c2a0a6a7cd9696e7c93867d7b",
-        "author": "sumitaich1998",
+        "title": "fix(ios): reset sidebar navigation stacks",
+        "body": "## Summary\n\n- Fixes the iPad/sidebar navigation regression where a pushed Settings detail could survive after selecting another sidebar root such as Overview, Chat, or Talk.\n- Makes embedded sidebar/phone detail views use their owning shell `NavigationStack` instead of creating competing root stacks.\n- Keeps the iPhone Control hub safe by clearing its local detail path before handing off to root tabs.\n- Keeps the iPad drawer sidebar interactive after a pushed Settings route by moving the dimming tap layer outside the sidebar hit area.\n- Out of scope: broader iOS layout redesign, settings content changes, or unrelated stale source guard expectations.\n\nReview focus: `RootTabs` shell ownership, embedded `ownsNavigationStack` usage, drawer hit-testing, and the regression guards in the RootTabs tests.\n\n## Linked context\n\nCloses: none\n\nRelated: none\n\nRequested by maintainer during iOS 27 navigation crash/bounce investigation.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: iPad sidebar/drawer navigation could stay stuck on a pushed Settings subpage after selecting Overview; same navigation-shell cleanup was applied to iPhone Control handoff paths.\n- Real environment tested: local iOS Simulator via XcodeBuildMCP, iPad profile `OpenClaw iPad Preview` and iPhone 17 Pro profile, screenshot fixture mode.\n- Exact steps or command run after this patch: launched the app with `--openclaw-screenshot-mode --openclaw-initial-destination settings --openclaw-sidebar-visibility visible`, opened Settings -> Channels / Integrations, opened the sidebar drawer, then tapped Overview.\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):\n\nAfter fix, tapping Overview exits the pushed Channels detail and shows the Overview screen:\n\n![After: Settings subpage switches to Overview](https://raw.githubusercontent.com/Solvely-Colin/pr-proof-assets/main/openclaw-ios-navigation-stack-reset/after-ipad-settings-overview.gif)\n\nRaw after recording: https://raw.githubusercontent.com/Solvely-Colin/pr-proof-assets/main/openclaw-ios-navigation-stack-reset/after-ipad-settings-overview.mp4\n\nAfter runtime log: https://raw.githubusercontent.com/Solvely-Colin/pr-proof-assets/main/openclaw-ios-navigation-stack-reset/logs/after-ipad-runtime.log\n\n- Observed result after fix: semantic UI snapshot after tapping Overview contained `Overview`, `Gateway Healthy`, and no longer showed the Channels detail as the active screen.\n- What was not tested: physical iOS 27 device reproduction was not available in this run; simulator coverage used iOS 26.2 profiles.\n- Proof limitations or environment constraints: local `origin/main` required the repo-standard `pnpm ios:gen` project regeneration before XcodeBuildMCP testing because the generated Xcode project had stale WatchExtension paths after the watch app move.\n- Before evidence (optional but encouraged):\n\nBefore fix, the same interaction remains on Channels / Integrations after tapping Overview:\n\n![Before: Settings subpage remains stale after Overview tap](https://raw.githubusercontent.com/Solvely-Colin/pr-proof-assets/main/openclaw-ios-navigation-stack-reset/before-ipad-settings-overview.gif)\n\nRaw before recording: https://raw.githubusercontent.com/Solvely-Colin/pr-proof-assets/main/openclaw-ios-navigation-stack-reset/before-ipad-settings-overview.mp4\n\nBefore runtime log: https://raw.githubusercontent.com/Solvely-Colin/pr-proof-assets/main/openclaw-ios-navigation-stack-reset/logs/before-ipad-runtime.log\n\nProof summary: https://raw.githubusercontent.com/Solvely-Colin/pr-proof-assets/main/openclaw-ios-navigation-stack-reset/proof-summary.md\n\n## Tests and validation\n\nCommands/proof run:\n\n- `pnpm ios:gen`\n- XcodeBuildMCP iPad focused tests: `-only-testing:OpenClawTests/RootTabsSidebarRegressionTests -only-testing:OpenClawTests/RootTabsPresentationTests -only-testing:OpenClawTests/SwiftUIRenderSmokeTests` -> 57 passed, 0 failed.\n- XcodeBuildMCP iPhone focused tests: same focused suite -> 57 passed, 0 failed.\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main` -> clean, no accepted/actionable findings.\n- `git diff --check origin/main...HEAD`\n\nRegression coverage added/updated:\n\n- Settings embedded under a parent navigation stack.\n- Sidebar selection clears the Settings route path before swapping roots.\n- iPad drawer dimming layer does not steal sidebar touches.\n- iPhone Control hub clears its detail path before root-tab handoff.\n\nKnown existing failures/gaps:\n\n- Full `RootTabsSourceGuardTests` had pre-existing stale gateway transport string guard failures during earlier local checks; the touched focused suites above pass.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes. Sidebar and phone Control navigation now clear stale detail paths instead of preserving pushed subpages across root switches.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo.\n\nWhat is the highest-risk area?\n\nSwiftUI navigation ownership across iPad sidebar, iPhone Control hub, and standalone tab contexts.\n\nHow is that risk mitigated?\n\nThe default standalone behavior still owns local stacks; only embedded shell contexts opt out. Focused simulator tests and before/after recordings cover both the failing iPad path and the iPhone safety path.\n\n## Current review state\n\nWhat is the next action?\n\nReady for maintainer review.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\nCI and maintainer review. Physical iOS 27 device confirmation remains a follow-up if maintainers want device-specific proof.\n\nWhich bot or reviewer comments were addressed?\n\nAddressed the review concern about stale Settings detail screens by binding/resetting the sidebar navigation path, and expanded the fix after live proof showed the drawer dimming layer could still intercept sidebar selection.\n\nAI-assisted: Yes. Local Codex/autoreview was run and returned no accepted/actionable findings.\n",
+        "branch": "codex/ios-navigation-stack-reset",
+        "head_sha": "ebbca489cdf16d69e8ac87f9a9ea8d38fd039bcc",
+        "author": "solvely-colin",
         "labels": [
-          "channel: telegram",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "app: ios",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "status: ⏳ waiting on author",
+          "proof: 🎥 video",
+          "merge-risk: 🚨 other"
         ],
         "files": [
           {
-            "path": "extensions/telegram/src/accounts.test.ts",
-            "additions": 44,
+            "path": "apps/ios/Sources/Design/ChatProTab.swift",
+            "additions": 51,
+            "deletions": 38,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+            "additions": 54,
+            "deletions": 35,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
+            "additions": 23,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/ios/Sources/Design/SettingsProTab.swift",
+            "additions": 28,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/ios/Sources/Design/TalkProTab.swift",
+            "additions": 36,
+            "deletions": 23,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/ios/Sources/RootTabs.swift",
+            "additions": 32,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/ios/Tests/RootTabsPresentationTests.swift",
+            "additions": 36,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/accounts.ts",
-            "additions": 6,
-            "deletions": 4,
+            "path": "apps/ios/Tests/RootTabsSidebarRegressionTests.swift",
+            "additions": 77,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/ios/Tests/RootTabsSourceGuardTests.swift",
+            "additions": 24,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 50,
-        "deletions": 4,
+        "changedFiles": 9,
+        "additions": 361,
+        "deletions": 143,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91156",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91156.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94991",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94991.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 158,
-          "gatingTotal": 153,
+          "total": 25,
+          "gatingTotal": 20,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 126,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
+            "SUCCESS": 11,
+            "QUEUED": 3,
+            "SKIPPED": 10,
+            "IN_PROGRESS": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE"
+            "preflight:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "security-fast:QUEUED",
+            "Scan iOS dead code:IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
+          "pending": [
+            "preflight:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "security-fast:QUEUED",
+            "Scan iOS dead code:IN_PROGRESS"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4119,
+    "total_ms": 4003,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 742
+        "ms": 487
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 3099
+        "ms": 1347
       },
       {
         "name": "classify_comment_commands",
@@ -160,7 +224,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 253
+        "ms": 2144
       },
       {
         "name": "append_ledger",
