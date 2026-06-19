@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T16:20:51.064Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-19T16:21:16.169Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T13:20:49.856Z",
+  "since": "2026-06-19T13:21:14.819Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94935
+    1656
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,131 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:94935:4753168211:2026-06-19T16:09:00Z:re_review",
-      "comment_id": "4753168211",
-      "comment_version_key": "4753168211:2026-06-19T16:09:00Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94935#issuecomment-4753168211",
-      "repo": "openclaw/openclaw",
+      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:1656:4752949492:2026-06-19T16:21:12Z:clawsweeper_needs_human",
+      "comment_id": "4752949492",
+      "comment_version_key": "4752949492:2026-06-19T16:21:12Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1656#issuecomment-4752949492",
+      "repo": "steipete/CodexBar",
       "target_branch": null,
-      "issue_number": 94935,
-      "author": "ZOOWH",
-      "author_id": 265460861,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T16:09:00Z",
-      "comment_updated_at": "2026-06-19T16:09:00Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(slack,msteams): omit inbound preview from system events (matching Feishu pattern)",
-        "body": "Fixes #94549\n\n## What\n\nRemove the 160-character truncated inbound message preview from Slack and Microsoft Teams system events, matching the existing Feishu inbound pattern.\n\n## Why\n\nThe Slack and Teams inbound handlers enqueued `${inboundLabel}: ${preview}` as system events, where `preview = rawBody.replace(/\\s+/g, \" \").slice(0, 160)`. This caused three defects identified in #94549:\n\n1. **Truncation mid-word at 160 chars** — no ellipsis, no trailing separator.\n2. **Fusion into next prompt block** — the truncated `System:` line runs straight into `Conversation info (untrusted metadata)` in the runtime-context path.\n3. **Redundant body echo** — the preview duplicates content that the full inbound body already delivers through normal turn context.\n\nThe Feishu handler already avoids this pattern (bot.ts:1013-1016):\n```\n// Do not enqueue inbound user previews as system events.\n// System events are prepended to future prompts and can be misread as\n// authoritative transcript turns.\n```\nFeishu logs the preview but does not enqueue it. This change aligns Slack and Teams with the same design.\n\n## Root cause\n\nThe 160-char preview was added as a diagnostic snippet to system-event labels, but system events are prepended to model-facing prompts. The truncated preview confuses the model, fuses into the metadata block, and duplicates content already available in the full inbound body.\n\n## Changes\n\n- **`extensions/slack/src/monitor/message-handler/prepare.ts`**: `enqueueSystemEvent(inboundLabel, ...)` instead of `enqueueSystemEvent(`${inboundLabel}: ${preview}`, ...)`. Preview logged via `logVerbose()` (using the existing Slack verbose logger, gated by `shouldLogVerbose()`) for diagnostic visibility.\n- **`extensions/msteams/src/monitor-handler/message-handler.ts`**: Same change — `enqueuePrimaryMessageSystemEvent()` now logs preview via the existing `log()` dep and enqueues only `inboundLabel`.\n- **Test updates**: Slack assertion updated from `\"Slack DM from Alice: hi\"` to `\"Slack DM from Alice\"`. Teams `.includes()` checks updated to match `inboundLabel` instead of preview text.\n\n## Real behavior proof\n\n### Behavior addressed\nSlack/Teams inbound handler enqueues 160-char truncated preview as system event, causing truncation, fusion, and duplication in model-facing prompts.\n\n### Environment tested\nOpenClaw main branch (27f702d6) and PR branch (8e26d60a), Node.js.\n\n### Evidence before fix (upstream/main)\n```\nBEFORE Slack system event:\nSlack DM from Alice: Hey, can you pull together a quick summary of the deployment we discussed yesterday and include the rollback steps, the health checks we ran, and the follow-u\nLength: 179 (>160 chars, truncated mid-word)\nNo trailing separator, no ellipsis\n\nBEFORE runtime-context fusion:\nSlack DM from Alice: Hey, can you pull together a quick summary of the deployment we discussed yesterday and include the rollback steps, the health checks we ran, and the follow-u\nConversation info (untrusted metadata):\n{ ... }\n→ truncated System: line fuses directly into Conversation info block\n\nBEFORE duplication count: 3\n  1. runtime-context: System: Slack DM from Alice: <truncated preview>\n  2. turn context: System: Slack DM from Alice: <truncated preview>\n  3. turn context: full body (Hey, can you pull together...)\n```\n\n### Evidence after fix (PR branch)\n```\nAFTER Slack system event:\nSlack DM from Alice\nLength: 19\nNo truncation, no fusion issue\n\nAFTER Teams system event:\nTeams DM from Bob\nLength: 17\nNo truncation, no fusion issue\n\nAFTER duplication count: 1\n  1. turn context: full body only\n  (system event notification: Slack DM from Alice — no body content)\n\nAFTER runtime-context:\nSlack DM from Alice\n\nConversation info (untrusted metadata):\n{ ... }\n→ system event line has clear boundary, no fusion with Conversation info\n```\n\n### Consistency with Feishu pattern\n```\nFEISHU pattern (existing, unchanged):\n  log: Feishu DM from User: <preview>\n  systemEvent: Feishu DM from User\n\nSLACK pattern (after fix, matching Feishu):\n  logVerbose: slack[accountId]: Slack DM from Alice: <preview>\n  systemEvent: Slack DM from Alice\n\nTEAMS pattern (after fix, matching Feishu):\n  log: msteams: Teams DM from Bob: <preview>\n  systemEvent: Teams DM from Bob\n```\n\n### Observed result after the fix\nAll three defects eliminated: no truncation (system event contains only the notification label), no fusion (label is short and self-contained), no duplication (preview removed from model-facing content, only logged for diagnostics).\n\n### What was not tested\nLive Slack/Teams API end-to-end delivery. Feishu's identical pattern (bot.ts:1013-1016) has been in production since 2026.5.x and is confirmed working. Slack preview logging uses `logVerbose()` gated by `shouldLogVerbose()`, matching the existing Slack diagnostic logging pattern (prepare.ts:1384).\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
-        "branch": "fix/94549-inbound-preview-truncation",
-        "head_sha": "0d4547fdcb186b2806d2a811f670122af24caf64",
-        "author": "zoowh",
-        "labels": [
-          "channel: msteams",
-          "channel: slack",
-          "size: XS",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/msteams/src/monitor-handler/message-handler.authz.test.ts",
-            "additions": 6,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/monitor-handler/message-handler.ts",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/message-handler/prepare.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/message-handler/prepare.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 23,
-        "deletions": 6,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94935",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94935.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 13,
-          "gatingTotal": 8,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 8,
-            "SKIPPED": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94935:4751140813:2026-06-19T12:07:16Z:clawsweeper_needs_human",
-      "comment_id": "4751140813",
-      "comment_version_key": "4751140813:2026-06-19T12:07:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94935#issuecomment-4751140813",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 94935,
+      "issue_number": 1656,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T11:31:46Z",
-      "comment_updated_at": "2026-06-19T12:07:16Z",
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-19T15:41:53Z",
+      "comment_updated_at": "2026-06-19T16:21:12Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -166,29 +53,106 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Human follow-up is needed because the code repair is clear, but missing contributor proof and overlapping PR selection must be handled before merge.; Needs attention: The diff does not touch dependencies or secrets, but the Teams preview logging line needs attention so user-authored message text is not added to unguarded normal logs while fixing the logger call.; Review finding: [P1] Call the Teams logger thr... (sha=8e26d60a4d6022ad91f26e7f6231d76fddce7297)",
-      "review_summary": "The branch removes Slack and Microsoft Teams inbound message previews from queued system-event labels, logs the preview instead, and updates focused Slack/Teams assertions.\n\nPR surface: Source +13, Tests 0. Total +13 across 4 files.\n\nReproducibility: yes. Current main source still enqueues Slack and Microsoft Teams body previews into model-visible system-event labels while the full body travels through the normal inbound path; I verified this by source inspection, not live transport.",
-      "review_followup": "- [P1] Human follow-up is needed because the code repair is clear, but missing contributor proof and overlapping PR selection must be handled before merge.",
+      "repair_reason": "- [P2] No repair lane is needed; the latest head resolved the prior compatibility finding and the remaining action is normal maintainer merge/check handling.; Cleared: No concrete security or supply-chain issue was found; the diff only exports existing menu-visible quota counts and does not add dependencies, scripts, raw responses, credentials, or account identifiers. (sha=305edcb600bf5616bc71002efb21f160fdf47596)",
+      "review_summary": "The PR adds MiniMax diagnostic JSON fields for per-service usage, limit, remaining, and unlimited state, plus legacy decode coverage, docs, and changelog text.\n\nReproducibility: yes. Current main's MiniMax diagnostic service export only includes normalized percent/reset metadata, and the linked redacted diagnostic sample shows the same missing usage, limit, remaining, and unlimited-state fields; no live provider probe was run under AGENTS.md guidance.",
+      "review_followup": "- [P2] No repair lane is needed; the latest head resolved the prior compatibility finding and the remaining action is normal maintainer merge/check handling.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "8e26d60a4d6022ad91f26e7f6231d76fddce7297",
+      "expected_head_sha": "305edcb600bf5616bc71002efb21f160fdf47596",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: expose MiniMax quota diagnostics",
+        "body": "## Summary\n\n- include per-service `usage`, `limit`, computed `remaining`, and `isUnlimited` values in redacted MiniMax diagnostics\n- make boosted quota evidence explicit, so a normalized `4%` can be distinguished as `6/150` rather than `4/100`\n- omit `remaining` for unlimited lanes and retain the existing redaction boundary\n- preserve decoding of legacy schema-1.0 diagnostics that predate the new quota fields\n- document the safe fields and credit the #1362 reporter\n\n## Why\n\nThe current #1362 diagnostic reports only normalized percentage and reset metadata. It cannot show whether CodexBar decoded MiniMax's 150% boosted denominator, so the requested diagnostic does not contain enough evidence to distinguish a parser defect from mathematically normalized capacity usage.\n\nThis is a diagnostic prerequisite, not a claim that the underlying quota mismatch is fixed. After release, the reporter can rerun the same command and provide the safe `usage`, `limit`, `remaining`, and `percent` values.\n\n## Safety\n\n- values come from the existing `MiniMaxServiceUsage` already rendered in the menu\n- no raw response, token, cookie, header, email, account ID, org ID, or billing-history detail is added\n- remaining quota is clamped to zero and omitted for unlimited lanes\n- legacy diagnostics decode missing quota fields as safe zero/false/nil values; current exports always populate them\n\n## Verification\n\nExact head: `305edcb600bf5616bc71002efb21f160fdf47596`\n\n- `swift test --filter ProviderDiagnosticExportTests`: 23 tests passed\n- `make check`: passed; SwiftFormat clean and SwiftLint reported zero violations\n- `make test`: all 41 groups passed on the exact head\n- boosted regression exports `percent: 4`, `usage: 6`, `limit: 150`, and `remaining: 144`\n- unlimited regression omits `remaining`\n- legacy schema-1.0 regression decodes without the new fields\n- local autoreview: clean (0.87)\n- whole-branch autoreview: clean (0.86)\n\nRefs #1362.\n",
+        "branch": "fix/minimax-diagnostic-quota-values",
+        "head_sha": "305edcb600bf5616bc71002efb21f160fdf47596",
+        "author": "steipete",
+        "labels": [
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Sources/CodexBarCore/Providers/ProviderDiagnosticExport.swift",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Tests/CodexBarTests/ProviderDiagnosticExportTests.swift",
+            "additions": 62,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/minimax.md",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 98,
+        "deletions": 10,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-steipete-codexbar-1656",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1656.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 8,
+          "gatingTotal": 8,
+          "counts": {
+            "SUCCESS": 4,
+            "QUEUED": 4
+          },
+          "blockers": [
+            "swift-test-macos (0, 4):QUEUED",
+            "swift-test-macos (1, 4):QUEUED",
+            "swift-test-macos (2, 4):QUEUED",
+            "swift-test-macos (3, 4):QUEUED"
+          ],
+          "pending": [
+            "swift-test-macos (0, 4):QUEUED",
+            "swift-test-macos (1, 4):QUEUED",
+            "swift-test-macos (2, 4):QUEUED",
+            "swift-test-macos (3, 4):QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1390,
+    "total_ms": 1665,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 315
+        "ms": 345
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 876
+        "ms": 991
       },
       {
         "name": "classify_comment_commands",
@@ -204,11 +168,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 182
+        "ms": 306
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
