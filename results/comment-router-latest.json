@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T09:11:13.887Z",
-  "repo": "openclaw/wacli",
+  "generated_at": "2026-06-19T09:11:19.847Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T06:11:11.727Z",
+  "since": "2026-06-19T06:11:18.204Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    283
+    94882
   ],
   "comment_ids": [
     4750174355
@@ -33,34 +33,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/wacli:283:4750174355:2026-06-19T09:10:09Z:re_review",
-      "comment_id": "4750174355",
-      "comment_version_key": "4750174355:2026-06-19T09:10:09Z",
-      "comment_url": "https://github.com/openclaw/wacli/pull/283#issuecomment-4750174355",
-      "repo": "openclaw/wacli",
-      "target_branch": "main",
-      "issue_number": 283,
-      "author": "dovocoder",
-      "author_id": 277543805,
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94882:4750087008:2026-06-19T09:11:12Z:clawsweeper_needs_human",
+      "comment_id": "4750087008",
+      "comment_version_key": "4750087008:2026-06-19T09:11:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94882#issuecomment-4750087008",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 94882,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T09:10:09Z",
-      "comment_updated_at": "2026-06-19T09:10:09Z",
-      "status_comment_id": 4750174747,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "comment_created_at": "2026-06-19T08:57:32Z",
+      "comment_updated_at": "2026-06-19T09:11:12Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=05acc191f53d956850b7beb5e725e9fff09d95c0)",
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "05acc191f53d956850b7beb5e725e9fff09d95c0",
       "finding_id": null,
       "status": "executed",
       "actions": [
@@ -84,77 +84,57 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(sync): presence handling for linked-device active status and phone push notifications",
-        "body": "## Problem\n\nA `wacli sync` linked device stays connected but never tells WhatsApp it is active, and when sync exits it fails to tell WhatsApp it is inactive. This causes two user-visible issues:\n\n1. **Stale \"last active\" timestamp** — WhatsApp's Linked Devices screen shows the device as inactive even while `sync --follow` is running.\n2. **Phone stops receiving push notifications** — after sync exits, the device stays marked \"available\" because the `<presence type=\"unavailable\"/>` send fails every time.\n\n### Root causes\n\n**Missing available presence.** The upstream `main` added `sendInitialAvailablePresence` in `ConnectContext`, but it only runs once at initial connect and only when the pushname is already set. It misses reconnects and late-arriving pushname events.\n\n**Unavailable presence fails on SIGTERM.** `wa.Client.Connect` passed the caller's (signal-cancellable) context to `cli.ConnectContext(ctx)`. When the signal handler cancels it (e.g., `timeout` sending SIGTERM), whatsmeow closes the websocket before `sync.go:207` can send the unavailable presence.\n\n## Solution\n\n### 1. Send available presence on connect and pushname\n\nOn `*events.Connected` and `*events.PushNameSetting`, call `sendPresence(ctx, types.PresenceAvailable)` synchronously (not in goroutines) so a delayed available send cannot run after the final unavailable cleanup send.\n\n### 2. Send unavailable presence after sync exit\n\nAfter a successful sync run, call `sendPresence(ctx, types.PresenceUnavailable)` so the phone resumes push notifications. The event handler is removed before this send so no late `Connected`/`PushNameSetting` event can fire an available presence after cleanup. The cleanup send uses a 5-second timeout context so a stalled WhatsApp write cannot block shutdown.\n\n### 3. Detach websocket context for sync only with bounded dial\n\nAdd a `DetachSocket bool` field to `ConnectOptions`. When `true` (set by `connectForSync` and `ReconnectWithBackoff` — sync only), `ConnectContext` uses a detached context with a **30-second dial timeout** (`time.AfterFunc`). The dial is bounded so a hanging connect cannot outlive SIGTERM indefinitely; after the dial succeeds, the timer is stopped so the websocket stays open until `Disconnect()`/`Close()`. Other commands keep the default `false` so `--timeout` and signal cancellation still bound the connection.\n\nThe retry loop in `ReconnectWithBackoff` still uses the passed context for cancellation control — only the websocket lifetime is decoupled.\n\n## Files changed\n\n- `internal/wa/client.go` — adds `DetachSocket` field to `ConnectOptions`; uses a dial-timeout-bounded detached context for `ConnectContext` when `DetachSocket` is true; adds `(Client).SendPresence()` wrapper.\n- `internal/app/app.go` — adds `SendPresence()` to the `WAClient` interface.\n- `internal/app/sync_events.go` — on `*events.Connected` and `*events.PushNameSetting`, calls `sendPresence(ctx, types.PresenceAvailable)` synchronously; adds `App.sendPresence()` helper.\n- `internal/app/sync.go` — after a successful sync run, removes the event handler, then sends unavailable presence with a 5-second timeout context; sets `DetachSocket: true` in `connectForSync`.\n- `internal/app/fake_wa_test.go` — adds `SendPresence()` fake implementation and tracking fields.\n- `internal/app/sync_presence_test.go` — regression tests for connected, push-name setting, failure-warning, synchronous behavior, and the final unavailable send.\n\n## Tests\n\nThe full gate passes locally:\n\n```bash\npnpm format:check && pnpm lint && pnpm test && pnpm build && git diff --check\n```\n\nNew regression tests:\n\n```bash\ngo test ./internal/app -run TestSyncSendsAvailablePresence -count=1\ngo test ./internal/app -run TestSyncPresenceFailureWarnsAndContinues -count=1\ngo test ./internal/app -run TestSyncSendsAvailablePresenceOnConnectedIsSynchronous -count=1\n```\n\n> **Note on websocket-context test coverage:** the unavailable-send-on-SIGTERM fix lives in `wa.Client.Connect` (which calls `cli.ConnectContext`). The app-level tests use a fake WA client whose `SendPresence` always succeeds, so they verify the *call sequence* (available → unavailable) but cannot catch the real `cli.IsConnected()` failure path. A unit test for the detached-context fix would require refactoring `wa.Client` to accept an interface for the whatsmeow client. The fix was verified with a live WhatsApp account (see below).\n\n## Live verification\n\nTested on a real linked-device account with a `timeout 30s` cron job:\n\n**Before fix — every unavailable send failed:**\n```\n{\"event\":\"signal\",\"action\":\"shutdown\",\"signal\":\"terminated\"}\n{\"event\":\"stopping\",\"messages_synced\":19}\n{\"event\":\"warning\",\"code\":\"send_presence_failed\",\"error\":\"...context canceled\"}\nMessages stored: 19\n```\n\n**After fix — unavailable send succeeds on SIGTERM:**\n```\n{\"event\":\"signal\",\"action\":\"shutdown\",\"signal\":\"terminated\"}\n{\"event\":\"stopping\",\"messages_synced\":9}\nMessages stored: 9\n```\n\nNo `send_presence_failed` warning — the unavailable presence was sent successfully because the websocket stayed open (DetachSocket with bounded dial).\n\n## Operational notes\n\nNo new flags or env vars. The compiled `dist/wacli` binary is already deployed.\n\nFor continuous sync via cron, a `timeout 30s wacli sync --idle-exit 10s` cron entry now works correctly: sync runs for ~30s, exits on SIGTERM, sends unavailable presence, and the phone receives push notifications for the remaining ~30s of each minute.\n\n## Checklist\n\n- [x] Code compiles / builds.\n- [x] Tests pass (`pnpm test` and FTS path).\n- [x] Lint / formatting checks pass.\n- [x] `git diff --check` clean.\n- [x] Commits squashed into one.\n- [x] No release-owned CHANGELOG.md edits.\n- [x] Live WhatsApp behavior proof included.\n- [x] Available presence sends are synchronous (no goroutine race).\n- [x] Event handler removed before unavailable cleanup send.\n- [x] Unavailable cleanup send bounded with 5-second timeout.\n- [x] `DetachSocket` is sync-only; other commands keep caller-cancellation.\n- [x] Detached connect attempt bounded with 30-second dial timeout.\n",
-        "branch": "fix/presence-unavailable-on-shutdown",
-        "head_sha": "932b3af5c2bddb1fefff46d37a0af3ccb3445d7c",
-        "author": "dovocoder",
+        "title": "fix(ollama): treat undefined reasoning as potentially reasoning-capable",
+        "body": "## Summary\n\nThe `/think` menu command in Telegram fails to show available thinking levels for live-discovered Ollama models (e.g. `ollama/glm-5.2:cloud`). The menu only lists `default` and `off`, even though the model supports thinking (reported as `capabilities: [\"thinking\", \"completion\", \"tools\"]` by Ollama) and `/think medium` is accepted manually.\n\nRoot cause: `resolveThinkingProfile` in `extensions/ollama/provider-policy-api.ts` used a truthy check (`reasoning ? ... : ...`) that treats `undefined` reasoning (the default for live-discovered models not yet in the catalog) as falsy, forcing the off-only profile.\n\nFix: Change the condition to `reasoning !== false` so only explicitly non-reasoning models (`reasoning: false`) get the off-only profile, while `undefined` (unknown capability) defaults to the full thinking profile.\n\nFixes #93835\n\n## Real behavior proof\n\n**Behavior addressed**: Live-discovered Ollama models with undefined reasoning capability were treated as non-reasoning, showing only \"off\" in /think menu instead of the full thinking levels\n\n**Real environment tested**: Linux 6.8.0-124-generic, Node.js v25.9.0, pnpm 11.8.0\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs extensions/ollama/provider-policy-api.test.ts` (5 tests, all passing); `node /tmp/verify-93835.mjs` (independent behavior verification for all reasoning states)\n\n**After-fix evidence**:\n```\n--- AFTER FIX (explicit check: reasoning !== false ? ... : ...) ---\nreasoning=true:        [ 'off', 'low', 'medium', 'high', 'max' ]\nreasoning=undefined:   [ 'off', 'low', 'medium', 'high', 'max' ]\nreasoning=missing:     [ 'off', 'low', 'medium', 'high', 'max' ]\nreasoning=false:       [ 'off' ]\n\n=== RESULT ===\nBefore fix (reasoning=undefined): [ 'off' ]\nAfter fix  (reasoning=undefined): [ 'off', 'low', 'medium', 'high', 'max' ]\nFix effective: YES ✅\n```\n\n**Observed result after the fix**: `resolveThinkingProfile({})` and `resolveThinkingProfile({ reasoning: undefined })` now return the full thinking profile (off, low, medium, high, max) instead of the off-only profile. This matches the expected behavior — live-discovered Ollama models with thinking capabilities now show all thinking levels in the `/think` menu, while explicitly non-reasoning models still correctly show only \"off\".\n\n**What was not tested**: End-to-end Telegram `/think` menu rendering with a live Ollama instance running `glm-5.2:cloud` (requires Ollama setup with the specific model). The fix targets the policy resolution layer; the menu rendering path consumes the resolved profile and was verified as correct via the existing unit test coverage.\n\n## Tests and validation\n\n### Unit tests\n\n```\n RUN  v4.1.8\n\n Test Files  1 passed (1)\n      Tests  5 passed (5)\n   Start at  16:55:09\n   Duration  405ms\n```\n\nNew test added: `treats undefined reasoning as potentially capable (fix #93835)` — verifies both `{}` and `{reasoning: undefined}` resolve to full thinking profile.\n\n## Risk checklist\n\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [x] I have updated relevant documentation\n- [x] Breaking changes (if any) are documented in Summary\n\n## Current review state\n\n- [x] Self-review completed\n- [ ] At least one maintainer review\n- [ ] All CI checks passed\n",
+        "branch": "fix/issue-93835-telegram-think-menu-ollama",
+        "head_sha": "05acc191f53d956850b7beb5e725e9fff09d95c0",
+        "author": "lzyyzznl",
         "labels": [
+          "size: XS",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "extensions: ollama",
           "P2",
-          "merge-risk: 🚨 availability",
-          "proof: sufficient",
-          "status: ⏳ waiting on author",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 other"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "internal/app/app.go",
-            "additions": 1,
+            "path": "extensions/ollama/provider-policy-api.test.ts",
+            "additions": 11,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "internal/app/fake_wa_test.go",
-            "additions": 12,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/sync.go",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/sync_events.go",
-            "additions": 18,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/app/sync_presence_test.go",
-            "additions": 173,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/wa/client.go",
-            "additions": 39,
-            "deletions": 2,
+            "path": "extensions/ollama/provider-policy-api.ts",
+            "additions": 5,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 6,
-        "additions": 255,
-        "deletions": 5,
+        "changedFiles": 2,
+        "additions": 16,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-wacli-283",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-wacli-283.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94882",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94882.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 3,
-          "gatingTotal": 3,
+          "total": 28,
+          "gatingTotal": 23,
           "counts": {
-            "IN_PROGRESS": 1,
-            "SUCCESS": 2
+            "SUCCESS": 10,
+            "QUEUED": 4,
+            "SKIPPED": 14
           },
           "blockers": [
             "test:IN_PROGRESS"
@@ -172,19 +152,19 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5051,
+    "total_ms": 1876,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 605
+        "ms": 304
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1538
+        "ms": 1323
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -196,7 +176,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2881
+        "ms": 219
       },
       {
         "name": "append_ledger",
