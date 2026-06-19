@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T05:40:15.681Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-19T05:40:18.925Z",
+  "repo": "openclaw/clownfish",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T02:40:10.973Z",
+  "since": "2026-06-19T02:40:18.602Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94810
+    133
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,130 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94810:4748778567:2026-06-19T05:40:05Z:clawsweeper_needs_human",
-      "comment_id": "4748778567",
-      "comment_version_key": "4748778567:2026-06-19T05:40:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94810#issuecomment-4748778567",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 94810,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T05:34:06Z",
-      "comment_updated_at": "2026-06-19T05:40:05Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] The remaining action is maintainer selection among overlapping open PRs, not an automated code repair on this branch.; Cleared: No concrete security or supply-chain concern found; the diff only changes Telegram error classification and colocated tests. (sha=0ffee85d17fbaa76ff6047a6b824bfbf2a7f7531)",
-      "review_summary": "The PR changes Telegram sendChatAction 401 classification to trust structured Telegram `error_code` values before an unauthorized-text fallback, and adds focused regression tests for false 401 suspension cases.\n\nPR surface: Source +14, Tests +90. Total +104 across 2 files.\n\nReproducibility: yes. Source inspection on current main gives a high-confidence reproduction path: a structured 429 whose rendered message contains `401` reaches the broad `is401Error` check before the transient branch.",
-      "review_followup": "- [P2] The remaining action is maintainer selection among overlapping open PRs, not an automated code repair on this branch.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "0ffee85d17fbaa76ff6047a6b824bfbf2a7f7531",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): classify sendChatAction 401 by structured error_code, not bare substring match",
-        "body": "## Summary\n\n- `is401Error` in the Telegram `sendChatAction` handler classified failures with a bare `message.includes(\"401\")` substring check, evaluated before the transient-error branch. A structured 429 rate-limit whose grammY-rendered message contains the substring \"401\" (e.g. `retry_after: 401` seconds) was counted as a consecutive 401, eventually suspending all chat actions and logging a CRITICAL \"token likely invalid, Telegram may DELETE the bot\" alarm for a perfectly valid bot.\n- Fix: when a structured Telegram `error_code` field is present, trust it exclusively — `error_code === 401` is a 401; any other code (429/5xx/4xx) is not. Remove the bare `message.includes(\"401\")` substring check entirely (it was the root cause). Keep `\"unauthorized\"` case-insensitive matching only as a fallback for non-Telegram errors without a structured `error_code`.\n- This matches the classification pattern already used by sibling classifiers in `network-errors.ts` (`hasTelegramErrorCode`-based `isTelegramRateLimitError`, `isTelegramServerError`, etc.).\n\n## Change Type\n\n- [x] Bug fix\n\n## Scope\n\n- [x] Integrations (Telegram)\n\n## Real behavior proof\n\n**Behavior or issue addressed:** `is401Error` misclassified a structured 429 rate-limit (with `retry_after: 401`) as a 401, suspending chat actions and emitting a false CRITICAL alarm for a valid bot token.\n\n**Real environment tested:** Node v24.16.0 on Linux (WSL2), vitest run + node --import tsx calling production `createTelegramSendChatActionHandler`.\n\n**Exact steps or command run after the patch:**\n\n```bash\nnode --import tsx --no-warnings -e \"\nimport { createTelegramSendChatActionHandler } from './extensions/telegram/src/sendchataction-401-backoff.ts';\n\nconst make429WithRetryAfter401 = () =>\n  Object.assign(\n    new Error('Call to sendChatAction failed! (429: Too Many Requests: retry after 401)'),\n    { error_code: 429, parameters: { retry_after: 401 } }\n  );\n\nlet now = 0;\nconst fn = () => Promise.reject(make429WithRetryAfter401());\nconst logs = [];\nconst handler = createTelegramSendChatActionHandler({\n  sendChatActionFn: fn,\n  logger: (msg) => logs.push(msg),\n  maxConsecutive401: 3,\n  now: () => now,\n});\n\ntry { await handler.sendChatAction(123, 'typing'); } catch(e) {}\nnow += 402000;\ntry { await handler.sendChatAction(123, 'typing'); } catch(e) {}\nnow += 402000;\ntry { await handler.sendChatAction(123, 'typing'); } catch(e) {}\n\nconsole.log('isSuspended:', handler.isSuspended());\nconsole.log('hasCritical:', logs.some(l => l.includes('CRITICAL')));\n\"\n```\n\n**Evidence after fix:**\n\n```text\nBefore (upstream/main — bug present):\n  429 with retry_after=401 (the bug scenario): is401=true, expected=false ✗ WRONG\n  plain Error with '401' substring (no error_code): is401=true, expected=false ✗ WRONG\n  RESULT: FAIL — bug present\n\nAfter (PR branch — fixed is401Error):\n  429 with retry_after=401 (the bug scenario): isSuspended=false, hasCritical=false ✓ PASS\n  structured Telegram 401 (error_code=401): isSuspended=true, hasCritical=true ✓ PASS\n  plain Error with '401' substring (no error_code): is401=false, expected=false ✓ PASS\n  RESULT: PASS — bug fixed\n```\n\nProduction handler output from `node --import tsx` on fix branch:\n\n```text\nTest 1: 429 with retry_after=401\n  isSuspended: false (expected: false)\n  hasCriticalAlarm: false (expected: false)\n  ✓ PASS\nTest 2: structured Telegram 401 (error_code=401)\n  isSuspended: true (expected: true)\n  hasCriticalAlarm: true (expected: true)\n  ✓ PASS\n```\n\n**Observed result after the fix:** A structured 429 with `retry_after=401` is correctly treated as a transient rate-limit (not a 401), and the handler no longer suspends or emits a CRITICAL alarm. A true structured 401 (`error_code=401`) still correctly triggers suspension. 18 vitest tests pass (including 4 new tests covering the fix).\n\n**Not tested:** Live Telegram bot connection with a real rate-limit response containing `retry_after: 401` seconds. The proof is via unit tests and production function call from source.\n\n## Root Cause\n\n- Root cause: `is401Error` used `message.includes(\"401\")` — a bare substring match on the rendered error message — before the transient-error branch. The grammY error renderer produces messages like `\"Call to 'sendChatAction' failed! (429: Too Many Requests: retry after 401)\"` where \"401\" appears as the retry_after value, not as the HTTP status code.\n- Missing detection/guardrail: the sibling classifiers in `network-errors.ts` already use `hasTelegramErrorCode` for structured classification, but `is401Error` did not.\n\n## User-visible / Behavior Changes\n\n- Telegram bots that encounter a 429 rate-limit with `retry_after` values containing the substring \"401\" will no longer be incorrectly suspended with a false CRITICAL alarm. Typing indicators will continue working after the transient cooldown expires, instead of being permanently suspended until restart.\n\nCloses #94787\n",
-        "branch": "fix/94787-telegram-sendchataction-401-classifier",
-        "head_sha": "0ffee85d17fbaa76ff6047a6b824bfbf2a7f7531",
-        "author": "zoowh",
-        "labels": [
-          "channel: telegram",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/sendchataction-401-backoff.test.ts",
-            "additions": 90,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/sendchataction-401-backoff.ts",
-            "additions": 17,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 107,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94810",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94810.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "gatingTotal": 159,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 130,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5039,
+    "total_ms": 519,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 415
+        "ms": 312
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 4277
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 321
+        "ms": 196
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
