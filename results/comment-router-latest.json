@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T04:24:44.180Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-19T04:24:57.629Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T01:24:42.765Z",
+  "since": "2026-06-19T01:24:56.620Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94779
+    1645
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94779:4748321950:2026-06-19T04:24:40Z:clawsweeper_needs_human",
-      "comment_id": "4748321950",
-      "comment_version_key": "4748321950:2026-06-19T04:24:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94779#issuecomment-4748321950",
-      "repo": "openclaw/openclaw",
+      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:1645:4748462748:2026-06-19T04:24:55Z:clawsweeper_needs_human",
+      "comment_id": "4748462748",
+      "comment_version_key": "4748462748:2026-06-19T04:24:55Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1645#issuecomment-4748462748",
+      "repo": "steipete/CodexBar",
       "target_branch": null,
-      "issue_number": 94779,
+      "issue_number": 1645,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T03:45:51Z",
-      "comment_updated_at": "2026-06-19T04:24:40Z",
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-19T04:21:21Z",
+      "comment_updated_at": "2026-06-19T04:24:55Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,81 +53,86 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] This is not a safe automated repair lane because the next action is contributor real-behavior proof plus maintainer review of runtime fan-out semantics.; Cleared: The diff is limited to agent runtime TypeScript and does not add dependencies, workflows, package scripts, secret handling, or a new trust boundary. (sha=1b8b97eae3f7c8bdb98ee9c3b620cbf106b21419)",
-      "review_summary": "The branch parallelizes bundled MCP catalog loading, bundled LSP startup, and MCP-vs-LSP initialization in embedded agent attempts while post-filtering LSP tools that collide with MCP names.\n\nPR surface: Source +117. Total +117 across 3 files.\n\nReproducibility: yes. from source for the central latency shape: current main serializes MCP materialization before LSP startup, and the MCP catalog loop awaits each configured server in order. I did not establish a live before/after timing reproduction in this read-only review.",
-      "review_followup": "- [P1] This is not a safe automated repair lane because the next action is contributor real-behavior proof plus maintainer review of runtime fan-out semantics.",
+      "repair_reason": "- [P1] The PR looks narrowly correct but needs contributor real behavior proof and normal maintainer/CI review; there is no concrete automated repair to queue.; Cleared: The diff only changes Swift resolver logic and tests, with no dependency, workflow, secret, signing, or supply-chain surface changed. (sha=5a2f014f68cdb986ce708e1c0a49ac058e02bbdd)",
+      "review_summary": "The branch changes Cursor/MiniMax automatic menu bar metric selection to skip fully exhausted subquota windows when another window remains usable, and adds resolver/display regression tests.\n\nReproducibility: yes. From current main source, an automatic Cursor/MiniMax snapshot with a 100% tertiary window and a still-usable primary window selects the 100% window, which the display path renders as 0% remaining; I did not execute tests in this read-only review.",
+      "review_followup": "- [P1] The PR looks narrowly correct but needs contributor real behavior proof and normal maintainer/CI review; there is no concrete automated repair to queue.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "1b8b97eae3f7c8bdb98ee9c3b620cbf106b21419",
+      "expected_head_sha": "5a2f014f68cdb986ce708e1c0a49ac058e02bbdd",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "perf(agents): parallelize MCP and LSP initialization to reduce cold-start latency",
-        "body": "## Summary\n\nEvery agent request incurs ~6-7 seconds of latency before the model starts generating. The bottleneck is the `bundle-tools` phase which loads all MCP servers and LSP tools upfront. The root cause: MCP server connections, LSP server spawning, and their coordination are all **sequential**.\n\n## Root Cause\n\n1. **MCP connections sequential**: `getCatalog()` iterates servers one at a time with a `for` loop, connecting and listing tools for each (~1-2s per server, 4 servers = 4-8s)\n2. **LSP spawning sequential**: `createBundleLspToolRuntime()` spawns and initializes LSP servers one at a time\n3. **MCP and LSP sequential**: `attempt.ts` awaits MCP completion before starting LSP\n\nTrace evidence (from production, before fix):\n```\n[trace:embedded-run] prep stages: totalMs=5889 stages=bundle-tools:5792ms@5809ms\n[trace:embedded-run] prep stages: totalMs=6020 stages=bundle-tools:5898ms@5915ms\n[trace:embedded-run] prep stages: totalMs=6527 stages=bundle-tools:6435ms@6449ms\n[trace:embedded-run] prep stages: totalMs=7207 stages=bundle-tools:7132ms@7207ms\n```\n\nIn all cases, `bundle-tools` accounts for **96-99% of total prep time**.\n\n## Fix\n\n### 1. Parallelize MCP server connections (`agent-bundle-mcp-runtime.ts`)\n\n`getCatalog()` is restructured into 3 phases:\n- **Phase 1 (sync)**: Resolve all transports and pre-compute safe names\n- **Phase 2 (parallel)**: Connect to all servers and list tools concurrently via `Promise.all`\n- **Phase 3 (sync)**: Assemble results\n\nCold-start wall-clock time is now bounded by the **slowest server** instead of the **sum of all servers**.\n\n### 2. Parallelize LSP server initialization (`agent-bundle-lsp-runtime.ts`)\n\n`createBundleLspToolRuntime()` uses the same 3-phase pattern:\n- **Phase 1 (sync)**: Validate all configs\n- **Phase 2 (parallel)**: Spawn and initialize all LSP servers via `Promise.allSettled`\n- **Phase 3 (sync)**: Assemble results, deduplicate tool names\n\n### 3. Run MCP and LSP in parallel (`attempt.ts`)\n\nInstead of:\n```ts\nbundleMcpRuntime = await getOrCreateSessionMcpRuntime(...);\nbundleMcpRuntime = await materializeBundleMcpToolsForRun(...);\nbundleLspRuntime = await createBundleLspToolRuntime(...);\n```\n\nNow uses:\n```ts\nconst [mcpResult, lspResult] = await Promise.all([\n  mcpInitTask?.catch(err => { log.warn(...); return undefined; }),\n  lspInitTask?.catch(err => { log.warn(...); return undefined; }),\n]);\n```\n\nEach task catches its own errors so one failure does not block the other.\n\n### 4. Preserve cross-runtime tool-name deduplication (`attempt.ts`)\n\nWhen MCP and LSP initialize in parallel, LSP construction no longer sees materialized MCP tool names. A post-hoc dedup step filters LSP tools whose names collide with MCP tools after both complete, preserving the pre-existing priority (MCP names win, duplicate LSP tools are skipped with a warning log).\n\n## Expected Improvement\n\nFor a typical setup with 4 MCP servers each taking ~1-2s to connect and list tools:\n- **Before**: 6-8s (4 servers × ~1.5s + LSP time, sequential)\n- **After**: ~1.5-2s (max server time + LSP time in parallel)\n\nThe `bundle-tools` prep stage should drop from dominating 96-99% of prep time to a much smaller fraction.\n\n## Verification\n\nAll 158 tests pass across the modified surfaces:\n\n| Test file | Result |\n|----------|--------|\n| `agent-bundle-mcp-runtime.test.ts` | 33/33 ✅ |\n| `agent-bundle-lsp-runtime.test.ts` | 3/3 ✅ |\n| `attempt.test.ts` | 122/122 ✅ |\n\nTypeScript (`tsgo`), lint (`oxlint`), and formatting (`oxfmt`) all pass.\n\n## Real behavior proof\n\n- **Behavior addressed**: The `bundle-tools` prep stage takes 6-7s on every agent request, accounting for 96-99% of total prep time, because MCP server connections (`connect()` + `tools/list`) and LSP server spawning run sequentially. Simple text-only requests pay the full tool-init cost even when no tools are called.\n- **Real environment tested**: Linux x64, Node v22.19.0, OpenClaw main @ f91350485c33, `node scripts/run-vitest.mjs` test runner.\n- **Exact steps or command run after this patch**:\n  1. `node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-runtime.test.ts` — 33 MCP runtime tests (covers catalog loading, tool materialization, transport lifecycle, backoff, idle sweep, lease management)\n  2. `node scripts/run-vitest.mjs src/agents/agent-bundle-lsp-runtime.test.ts` — 3 LSP runtime tests\n  3. `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.test.ts` — 122 embedded attempt runner tests\n  4. `pnpm tsgo` — full-project typecheck (passes)\n  5. `oxfmt` — formatting check on all changed files (passes)\n- **Evidence after fix**:\n  - All 158 tests pass with zero regressions.\n  - Code review confirms the sequential `for` loop in `getCatalog()` was replaced with `Promise.all(serverPlans.map(async ...))`. Each server connects and lists tools independently; the slowest server determines total wall-clock time.\n  - Code review confirms the sequential MCP-then-LSP await chain in `attempt.ts` was replaced with `Promise.all([mcpTask, lspTask])`.\n  - Cross-runtime tool-name dedup was preserved: after parallel init, LSP tools that collide with MCP names are filtered with a warning log (same behavior as before, just deferred from construction time to post-init).\n- **Observed result after fix**:\n  - MCP server connections now fire concurrently. With N servers each taking T ms, wall-clock time drops from `N × T` to `max(T)`. For a 4-server setup at ~1-2s each, this means ~1.5-2s instead of ~6-8s.\n  - MCP and LSP initialization no longer block each other; they run in the same `Promise.all`.\n  - Bundle MCP runtime caching (session-scoped, idle-TTL-gated) is unchanged — warm-request tool preparation remains near-instant.\n- **What was not tested**:\n  - Live multi-MCP-server end-to-end trace with real networked MCP servers (e.g., Notion, Z.ai, Web Reader) was not captured in this environment because spawning external MCP server processes in this CI/container context is unreliable.\n  - The deterministic parallel-timing proof test (`\"connects to multiple MCP servers in parallel\"`) was attempted but removed because the mock-stdio MCP server harness requires real `node:child_process` spawning that does not complete reliably under this environment's resource constraints.\n  - Recommendation: after merge, a maintainer or contributor with a real slow-MCP setup should capture `[trace:embedded-run] prep stages:` logs before and after to confirm the ~4-5s reduction in `bundle-tools` wall time.\n\n## Files Changed\n\n- `src/agents/agent-bundle-mcp-runtime.ts` — Parallelize MCP catalog connections\n- `src/agents/agent-bundle-lsp-runtime.ts` — Parallelize LSP server initialization\n- `src/agents/embedded-agent-runner/run/attempt.ts` — Parallelize MCP+LSP coordination + preserve cross-runtime dedup\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "perf/parallel-mcp-lsp-init",
-        "head_sha": "1b8b97eae3f7c8bdb98ee9c3b620cbf106b21419",
-        "author": "chenyangjun-xy",
+        "title": "Fix menu bar quota for exhausted sublimits",
+        "body": "## Summary\n- Skip exhausted Cursor/MiniMax subquota windows for the automatic menu bar metric when another quota window is still usable\n- Keep showing 0% when every subquota window is exhausted\n- Add resolver and menu bar display regression coverage for the Cursor API-exhausted case\n\n## Tests\n- env HOME=$PWD/.home CLANG_MODULE_CACHE_PATH=$PWD/.clang-module-cache swift test --filter 'MenuBarMetricWindowResolverTests|StatusItemBalanceDisplayTests'",
+        "branch": "fix-menu-bar-skip-exhausted-subquotas",
+        "head_sha": "5a2f014f68cdb986ce708e1c0a49ac058e02bbdd",
+        "author": "yuxin-qiao",
         "labels": [
-          "agents",
-          "size: L",
-          "triage: mock-only-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: 📣 needs proof",
+          "rating: 🦪 silver shellfish",
+          "P2"
         ],
         "files": [
           {
-            "path": "src/agents/agent-bundle-lsp-runtime.ts",
-            "additions": 82,
-            "deletions": 57,
+            "path": "Sources/CodexBar/MenuBarMetricWindowResolver.swift",
+            "additions": 14,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/agent-bundle-mcp-runtime.ts",
-            "additions": 186,
-            "deletions": 139,
+            "path": "Tests/CodexBarTests/MenuBarMetricWindowResolverTests.swift",
+            "additions": 52,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 69,
-            "deletions": 24,
+            "path": "Tests/CodexBarTests/StatusItemBalanceDisplayTests.swift",
+            "additions": 23,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 3,
-        "additions": 337,
-        "deletions": 220,
+        "additions": 89,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94779",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94779.md",
+        "automerge_cluster_id": "automerge-steipete-codexbar-1645",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1645.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 11,
-          "gatingTotal": 6,
+          "total": 7,
+          "gatingTotal": 7,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 7,
-            "SKIPPED": 3
+            "QUEUED": 4,
+            "IN_PROGRESS": 2,
+            "SUCCESS": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE"
+            "swift-test-macos (0, 4):QUEUED",
+            "swift-test-macos (1, 4):QUEUED",
+            "swift-test-macos (2, 4):QUEUED",
+            "swift-test-macos (3, 4):QUEUED",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
+          "pending": [
+            "swift-test-macos (0, 4):QUEUED",
+            "swift-test-macos (1, 4):QUEUED",
+            "swift-test-macos (2, 4):QUEUED",
+            "swift-test-macos (3, 4):QUEUED",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
           ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -138,15 +143,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1623,
+    "total_ms": 1181,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 238
+        "ms": 253
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1164
+        "ms": 742
       },
       {
         "name": "classify_commands",
@@ -154,7 +159,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 199
+        "ms": 161
       },
       {
         "name": "append_ledger",
