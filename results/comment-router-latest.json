@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T02:28:44.331Z",
+  "generated_at": "2026-06-19T02:28:48.548Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-18T23:28:41.921Z",
+  "since": "2026-06-18T23:28:47.963Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     94756
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4745148630
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -62,96 +64,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): bound turn/start text when context budget is non-positive",
-        "body": "## Summary\n\nFixes #94748.\n\n`fitCodexProjectedContextForTurnStart` (`extensions/codex/src/app-server/context-engine-projection.ts`) is contractually required to return prompt text no longer than `maxChars`. When the assembled-context header prefix plus the trailing user request already exceed `maxChars`, the context budget went non-positive, the older context dropped to `\"\"`, and the function returned `beforeContext + \"\" + afterContext` **unbounded** — longer than `maxChars`.\n\nThat overflowing string is then rejected by the Codex app-server v2 turn/start input cap `MAX_USER_INPUT_TEXT_CHARS = 1 << 20` (`codex-rs/protocol/src/user_input.rs`), so the turn fails with \"Input exceeds the maximum length\" instead of being sent.\n\nThis restores the postcondition (`result.length <= maxChars`) while keeping the trailing user request — the part that actually matters — intact.\n\n## The bug\n\n`extensions/codex/src/app-server/context-engine-projection.ts:141` (pre-fix):\n\n```ts\nconst contextBudget = maxChars - beforeContext.length - afterContext.length;\nconst fittedContext = truncateOlderContext(context, contextBudget);\nreturn `${beforeContext}${fittedContext}${afterContext}`;\n```\n\nWhen `beforeContext.length + afterContext.length >= maxChars`, `contextBudget <= 0`, so `truncateOlderContext(context, contextBudget)` returns `\"\"` and the function returns `beforeContext + afterContext` with no upper bound. `afterContext` is the request tail `\\n</conversation_context>\\n\\nCurrent user request:\\n${prompt}`, so a large assembled history overflows the return value past `maxChars`.\n\nDownstream, the Codex app-server validates the summed turn/start text against `MAX_USER_INPUT_TEXT_CHARS = 1 << 20` (`codex-rs/protocol/src/user_input.rs`); the app-server turn processor rejects an over-length input rather than truncating it, so the whole turn fails.\n\n## The fix\n\nBound the remaining text in the non-positive-budget branch by reusing `truncateOlderContext`, which keeps the **tail**. This drops the older header text first and preserves the user's actual request — the opposite priority from clamping the front of the string. The happy path (budget positive, or text already under `maxChars`) is unchanged. A truncation marker is still emitted, so dropped context is reported, not silently lost.\n\nAdditionally, `truncateOlderContext`'s kept-tail slice is made surrogate-safe: a raw code-unit `slice` whose boundary lands between a UTF-16 high/low surrogate would orphan the low surrogate into U+FFFD and corrupt the first character. The new boundary advances past a leading low surrogate so a code point is never split; dropping that one unit stays within `maxChars`, so the bound still holds.\n\n```ts\nif (contextBudget > 0) {\n  const fittedContext = truncateOlderContext(context, contextBudget);\n  return `${beforeContext}${fittedContext}${afterContext}`;\n}\n// older context drops entirely; bound the remaining text so Codex app-server\n// does not reject the turn for exceeding MAX_USER_INPUT_TEXT_CHARS.\n// truncateOlderContext keeps the tail, preserving the user's actual request.\nreturn truncateOlderContext(`${beforeContext}${afterContext}`, maxChars);\n```\n\n### Alternative considered\n\nA simpler clamp — concatenating the parts and returning `result.slice(0, maxChars)` when it overflows — also satisfies `length <= maxChars`, but it truncates the **end** of the string. The end is `\\n</conversation_context>\\n\\nCurrent user request:\\n${prompt}`, so a front-`slice(0, maxChars)` drops the user's actual request and keeps stale older context — the wrong priority. A raw code-unit `slice` can also split a UTF-16 surrogate pair at the boundary, corrupting a character. Truncating from the tail (keeping the request) and guarding the surrogate boundary avoids both.\n\n## Tests\n\n`extensions/codex/src/app-server/context-engine-projection.test.ts`, reproduce-first (each fails before the fix):\n\n- `bounds output when the non-context text alone exceeds the turn limit` — small cap (420); asserts `length <= maxChars`, the `Current user request:` label and request tail survive, and the truncation marker is present.\n- `bounds output for a large request under the default Codex turn limit` — real default cap `1 << 20`; asserts the bound holds and the request tail survives.\n- `never splits a UTF-16 surrogate pair at the truncation boundary` — sweeps caps so the cut lands inside an emoji's surrogate pair; asserts no U+FFFD and no lone surrogate in the output.\n\n## Real behavior proof\n\nBehavior addressed: `fitCodexProjectedContextForTurnStart` returned text longer than `maxChars` when the header prefix plus the trailing user request already exceeded the limit, which the Codex app-server then rejects (`MAX_USER_INPUT_TEXT_CHARS = 1 << 20`, `codex-rs/protocol/src/user_input.rs`).\n\nReal environment tested: ran the real exported function from `extensions/codex/src/app-server/context-engine-projection.ts` directly under Node 26 via `tsx` (no mocks, no test harness), on an input whose assembled history overflows the `1 << 20` cap.\n\nExact steps or command run after this patch: built a small driver that imports the real function and ran `node_modules/.bin/tsx repro.mts`, calling `fitCodexProjectedContextForTurnStart({ promptText, contextRange })` with `before = \"OpenClaw assembled context for this turn:\\n\" + \"older history \".repeat(90000)`, a 2,000-char context, and the trailing request `URGENT: delete the staging row id=42 and report back ...`.\n\nEvidence after fix: live `tsx` console output, after fix:\n\n```\ninput promptText length        : 1262183\nCodex MAX_USER_INPUT_TEXT_CHARS : 1048576\noutput length                  : 1048575\noutput <= limit (Codex accepts): true\nuser request survived in tail  : true\noutput tail (last 80 chars)    : \"e the staging row id=42 and report back uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu\"\n```\n\nBefore the fix, the same `tsx` driver on the same input printed `output length : 1260183` and `output <= limit (Codex accepts): false` — an over-length return that the Codex app-server rejects.\n\nObserved result after fix: the real function returns 1,048,575 chars (within the `1 << 20` Codex cap), and the user's request `URGENT: delete the staging row id=42 and report back` is preserved at the tail of the output. A front-clamping `result.slice(0, maxChars)` on the same input instead leaves the tail as stale `older history` text (`user request survived: false`), confirming the tail-preserving direction is the correct one.\n\nWhat was not tested: not exercised against a live Codex app-server process end-to-end; the `MAX_USER_INPUT_TEXT_CHARS` rejection is verified from the Codex source (`codex-rs/protocol/src/user_input.rs`) plus the real function's now-bounded output, not by observing the app-server reject path live.\n",
-        "branch": "fix/codex-turn-start-text-bound",
-        "head_sha": "1510a3d13a2b469997d862247521bd29866a0e79",
-        "author": "nas01010101",
-        "labels": [
-          "size: S",
-          "extensions: codex",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/context-engine-projection.test.ts",
-            "additions": 87,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/context-engine-projection.ts",
-            "additions": 26,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 113,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94756",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94756.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 163,
-          "gatingTotal": 158,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 32,
-            "SUCCESS": 129
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2643,
+    "total_ms": 1081,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 328
+        "ms": 572
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2069
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 221
+        "ms": 497
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
