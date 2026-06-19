@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-19T06:03:37.829Z",
+  "generated_at": "2026-06-19T06:03:47.045Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-19T03:03:36.548Z",
+  "since": "2026-06-19T03:03:44.180Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94779
+    92230
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
+  "scanned_comments": 5,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94779:4748321950:2026-06-19T06:03:32Z:clawsweeper_auto_repair",
-      "comment_id": "4748321950",
-      "comment_version_key": "4748321950:2026-06-19T06:03:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94779#issuecomment-4748321950",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92230:4683232032:2026-06-19T06:03:39Z:clawsweeper_auto_repair",
+      "comment_id": "4683232032",
+      "comment_version_key": "4683232032:2026-06-19T06:03:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92230#issuecomment-4683232032",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 94779,
+      "issue_number": 92230,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T03:45:51Z",
-      "comment_updated_at": "2026-06-19T06:03:32Z",
+      "comment_created_at": "2026-06-11T17:31:59Z",
+      "comment_updated_at": "2026-06-19T06:03:39Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -53,115 +53,110 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=a615a0ba09f168653a8e15d2f85025eec7ffb305)",
-      "review_summary": "The PR parallelizes bundled MCP catalog loading, bundle LSP startup, and top-level MCP/LSP preparation in the embedded attempt runner.\n\nPR surface: Source +117. Total +117 across 3 files.\n\nReproducibility: yes. for the source-level latency shape: current main awaits each MCP server in sequence and awaits MCP before LSP. The submitted proof still does not show an after-fix slow multi-server timing run.",
-      "review_followup": "- [P1] Needs contributor proof and maintainer review or repair of failure semantics; missing real behavior proof is not safe for an automated fix lane.",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=d08ef1836b90eea6b46facd08b32c14b8e279a18)",
+      "review_summary": "The PR adds dynamic configured model choices and an argument menu to the native `/model` command, with registry tests and a catalog display-name type field.\n\nPR surface: Source +27, Tests +35. Total +62 across 3 files.\n\nReproducibility: yes. for the review finding from source inspection: configure multiple `models.providers` rows but allow only a subset in `agents.defaults.models`; the PR menu lists provider catalog rows while the existing switch path enforces `allowedModelKeys`. I did not run a live Slack workspace reproduction.",
+      "review_followup": "- [P2] The blocker is a narrow code/test repair on the PR branch: align `/model` menu choices with existing model visibility before automerge can proceed.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "a615a0ba09f168653a8e15d2f85025eec7ffb305",
-      "finding_id": null,
+      "expected_head_sha": "d08ef1836b90eea6b46facd08b32c14b8e279a18",
+      "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "perf(agents): parallelize MCP and LSP initialization to reduce cold-start latency",
-        "body": "## Summary\n\nEvery agent request incurs ~6-7 seconds of latency before the model starts generating. The bottleneck is the `bundle-tools` phase which loads all MCP servers and LSP tools upfront. The root cause: MCP server connections, LSP server spawning, and their coordination are all **sequential**.\n\n## Root Cause\n\n1. **MCP connections sequential**: `getCatalog()` iterates servers one at a time with a `for` loop, connecting and listing tools for each (~1-2s per server, 4 servers = 4-8s)\n2. **LSP spawning sequential**: `createBundleLspToolRuntime()` spawns and initializes LSP servers one at a time\n3. **MCP and LSP sequential**: `attempt.ts` awaits MCP completion before starting LSP\n\nTrace evidence (from production, before fix):\n```\n[trace:embedded-run] prep stages: totalMs=5889 stages=bundle-tools:5792ms@5809ms\n[trace:embedded-run] prep stages: totalMs=7207 stages=bundle-tools:7132ms@7207ms\n```\n`bundle-tools` accounts for **96-99% of total prep time**.\n\n## Fix\n\n### 1. Parallelize MCP server connections (`agent-bundle-mcp-runtime.ts`)\n\n`getCatalog()` restructured into 3 phases:\n- **Phase 1 (sync)**: Resolve all transports and pre-compute safe names\n- **Phase 2 (parallel)**: Connect to all servers and list tools concurrently via `Promise.all`\n- **Phase 3 (sync)**: Assemble results\n\nBefore: `for (const [name, server] of Object.entries(servers)) { await connect(); await listTools(); }`\nAfter: `await Promise.all(serverPlans.map(async (s) => { await connect(); await listTools(); return result; }))`\n\n### 2. Parallelize LSP server initialization (`agent-bundle-lsp-runtime.ts`)\n\nSame 3-phase pattern using `Promise.allSettled(serverPlans.map(...))` instead of sequential `for` loop.\n\n### 3. Run MCP and LSP in parallel (`attempt.ts`)\n\nBefore: `await mcpInit(); await lspInit();` (sequential)\nAfter: `const [mcp, lsp] = await Promise.all([mcpTask.catch(), lspTask.catch()]);` (parallel, each catches own errors)\n\n### 4. Preserve cross-runtime tool-name dedup (`attempt.ts`)\n\nPost-hoc dedup after parallel init: filters LSP tools whose names collide with MCP tools.\n\n## Expected Improvement\n\n4 MCP servers at ~1-2s each: **Before ~6-8s → After ~1.5-2s** (max of servers, not sum).\n\n## Verification\n\nAll 158 tests pass across modified surfaces:\n\n| Test file | Result |\n|----------|--------|\n| `agent-bundle-mcp-runtime.test.ts` | 33/33 passed |\n| `agent-bundle-lsp-runtime.test.ts` | 3/3 passed |\n| `attempt.test.ts` | 122/122 passed |\n\n## Real behavior proof\n\n- **behavior**: The `bundle-tools` prep stage takes 6-7s on every agent request (96-99% of total prep time) because MCP server connections, `tools/list` calls, LSP server spawning, and MCP/LSP coordination all run sequentially in `for` loops and serial `await` chains.\n\n- **environment**: Linux x64, Node v22.19.0, OpenClaw @ 2c6b5c9d08 (this branch). Real OpenClaw runtime exercised via `node --import tsx` — modules loaded from source TypeScript, real `createSessionMcpRuntime` function, real `getCatalog()` with the parallel `Promise.all` code path, real `.mcp.json` workspace config.\n\n- **steps**:\n  1. Created workspace with `.mcp.json` MCP server config\n  2. Ran `OPENCLAW_LOG_LEVEL=trace node --import tsx scripts/proof-openclaw-real.mts`\n  3. The script imports `createSessionMcpRuntime` from `src/agents/agent-bundle-mcp-runtime.js`, creates a session runtime, calls `getCatalog()` through the parallel code path\n  4. Also ran full test suite: `node scripts/run-vitest.mjs` for all 3 modified surfaces\n\n- **evidence**:\n\n  **Real OpenClaw runtime output** (via `node --import tsx`, actual module imports from this branch):\n  ```\n  === OpenClaw Real Runtime Proof ===\n  Workspace: /tmp/openclaw-real-proof-nMyOjo/workspace\n  MCP config: /tmp/openclaw-real-proof-nMyOjo/workspace/.mcp.json\n\n  Calling getCatalog() through parallel code path...\n  getCatalog() completed in 1ms\n  Servers discovered: 0\n  Tools discovered: 0\n\n  RESULT: Catalog loaded (no tools — server may not have started in this env).\n          The Promise.all parallel code path was exercised.\n\n  === Proof: Parallel MCP code path confirmed ===\n  Files changed on this branch:\n    src/agents/agent-bundle-mcp-runtime.ts — Promise.all replaces sequential for-loop\n    src/agents/agent-bundle-lsp-runtime.ts — Promise.allSettled replaces sequential for-loop\n    src/agents/embedded-agent-runner/run/attempt.ts — Promise.all for MCP+LSP coordination\n  ```\n\n  **Full test suite output** (vitest, verbose reporter, real code execution):\n  ```\n  ✓ src/agents/agent-bundle-mcp-runtime.test.ts (33 tests) 21020ms\n    33 passed (33)\n  [test] passed 1 Vitest shard in 32.05s\n\n  ✓ src/agents/agent-bundle-lsp-runtime.test.ts (3 tests) 5048ms\n    3 passed (3)\n  [test] passed 1 Vitest shard in 15.94s\n\n  ✓ src/agents/embedded-agent-runner/run/attempt.test.ts (122 tests) 30708ms\n    122 passed (122)\n  [test] passed 1 Vitest shard in 42.63s\n  ```\n\n  **Code-level proof** (review the diff):\n  - `agent-bundle-mcp-runtime.ts`: sequential `for` loop → `Promise.all(serverPlans.map(async ...))`\n  - `agent-bundle-lsp-runtime.ts`: sequential `for` loop → `Promise.allSettled(serverPlans.map(...))`\n  - `attempt.ts`: serial `await mcp; await lsp` → `Promise.all([mcpTask, lspTask])`\n  - `attempt.ts`: post-hoc cross-runtime tool-name dedup (lines 1598-1619)\n\n- **observedResult**:\n  - Real OpenClaw runtime successfully imports and executes the parallel `getCatalog()` code path (1ms completion for zero-server config proves the code structure is active).\n  - All 158 tests pass with zero regressions across MCP runtime, LSP runtime, and embedded attempt runner surfaces.\n  - With N MCP servers, wall-clock time is now `max(server_i)` instead of `sum(server_i)`. For 4 servers at ~1.5s: ~1.5s vs ~6s.\n  - MCP and LSP init now overlap via `Promise.all`.\n  - Session-scoped MCP runtime caching is unchanged — warm reuse unaffected.\n\n- **notTested**:\n  - Live multi-MCP-server end-to-end trace with real networked servers (Notion, Z.ai, Web Reader, etc.) was not captured — this CI/container environment cannot spawn stdio-based mock MCP server child processes reliably (child_process.spawn hangs in this container).\n  - A deterministic parallel-timing proof test was attempted but removed because the mock-stdio MCP server harness requires real child process spawning.\n  - **Recommendation**: After merge, run `OPENCLAW_LOG_LEVEL=trace openclaw` with 2+ real/slow MCP servers and capture `[trace:embedded-run] prep stages:` logs. The `bundle-tools` stage should drop from ~6-8s to ~1.5-2s.\n\n## Files Changed\n\n- `src/agents/agent-bundle-mcp-runtime.ts` — Parallelize MCP catalog connections\n- `src/agents/agent-bundle-lsp-runtime.ts` — Parallelize LSP server initialization\n- `src/agents/embedded-agent-runner/run/attempt.ts` — Parallelize MCP+LSP coordination + cross-runtime dedup\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "perf/parallel-mcp-lsp-init",
-        "head_sha": "b61cd9f030eb49b22b8f2114de0a397fb4497cfc",
-        "author": "chenyangjun-xy",
+        "title": "feat: add model switch choices to /model",
+        "body": "## Summary\n\n- add dynamic configured-model choices to the native `/model` command\n- enable the existing command argument menu path for `/model` so Slack can render model picks with its existing buttons/static_select/external_select machinery\n- keep bare `/model` status behavior when no configured model choices are available\n\n## Details\n\n`/think` already gets rich Slack command UI because its registry entry declares choices plus an argument menu. `/model` had a positional argument but no choices/menu metadata, so Slack had nothing to render before dispatching the command as plain text.\n\nThis change keeps the fix in the shared command registry: configured catalog entries become `provider/model` choices, and the existing `/model <provider/model>` setter handles the selected value. No Slack-specific command renderer changes are needed.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/auto-reply/commands-registry.test.ts`\n- `git diff --check HEAD~1..HEAD`\n- `node --import tsx - <<'EOF' ...` registry smoke shown below\n\n## Real behavior proof\n\nBehavior addressed: Slack native slash-command UX for `/model` can now surface the existing command argument menu instead of requiring users to type a model id manually.\n\nReal environment tested: local OpenClaw source checkout in an isolated worktree from `origin/main`, running the actual command registry module after this patch.\n\nExact steps or command run after this patch: ran this local terminal command against the patched checkout:\n\n```bash\nnode --import tsx - <<'EOF'\nimport { findCommandByNativeName, resolveCommandArgMenu } from './src/auto-reply/commands-registry.ts';\nconst command = findCommandByNativeName('model');\nif (!command) throw new Error('missing /model command');\nconst menu = resolveCommandArgMenu({\n  command,\n  cfg: {\n    models: {\n      providers: {\n        openai: { models: [{ id: 'gpt-5.5', name: 'GPT-5.5' }] },\n        anthropic: { models: [{ id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6' }] },\n      },\n    },\n  },\n});\nconsole.log(JSON.stringify({ arg: menu?.arg.name, choices: menu?.choices }, null, 2));\nEOF\n```\n\nEvidence after fix: terminal output from the patched OpenClaw registry smoke:\n\n```json\n{\n  \"arg\": \"model\",\n  \"choices\": [\n    {\n      \"value\": \"anthropic/claude-sonnet-4.6\",\n      \"label\": \"anthropic/Claude Sonnet 4.6\"\n    },\n    {\n      \"value\": \"openai/gpt-5.5\",\n      \"label\": \"openai/GPT-5.5\"\n    }\n  ]\n}\n```\n\nObserved result after fix: `/model` now resolves a native command argument menu for configured model choices, using `provider/model` values that the existing `/model <provider/model>` setter dispatch path already accepts. Focused registry tests also passed 31/31.\n\nWhat was not tested: live Slack Block Kit interaction against a real Slack workspace. The Slack plugin path reused here is already covered by existing arg-menu render/dispatch tests; this PR adds the missing registry metadata that feeds that path.\n\n## Notes\n\nAI-assisted with human-requested agent workflow. The local commit helper hydrated ignored `node_modules` in the isolated worktree before committing; no tracked dependency or lockfile changes are included.\n",
+        "branch": "clawSean/slack-model-menu",
+        "head_sha": "d08ef1836b90eea6b46facd08b32c14b8e279a18",
+        "author": "clawsean",
         "labels": [
-          "agents",
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "size: S",
+          "clawsweeper:automerge",
+          "clawsweeper:human-review",
+          "proof: supplied",
+          "proof: sufficient",
+          "P3",
+          "rating: 🦐 gold shrimp",
+          "status: 🚀 automerge armed",
+          "clownfish:automerge"
         ],
         "files": [
           {
-            "path": "src/agents/agent-bundle-lsp-runtime.ts",
-            "additions": 82,
-            "deletions": 57,
+            "path": "src/auto-reply/commands-registry.shared.ts",
+            "additions": 26,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/agent-bundle-mcp-runtime.ts",
-            "additions": 186,
-            "deletions": 139,
+            "path": "src/auto-reply/commands-registry.test.ts",
+            "additions": 35,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 69,
-            "deletions": 24,
+            "path": "src/auto-reply/thinking.shared.ts",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 3,
-        "additions": 337,
-        "deletions": 220,
+        "additions": 62,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
+        "cluster_id": "automerge-openclaw-openclaw-92230",
+        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92230.md",
         "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94779",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94779.md",
+        "has_automerge_job": true,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92230",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92230.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 8,
-          "gatingTotal": 3,
+          "total": 166,
+          "gatingTotal": 161,
           "counts": {
-            "IN_PROGRESS": 6,
-            "SKIPPED": 2
+            "CANCELLED": 1,
+            "SUCCESS": 133,
+            "SKIPPED": 31,
+            "NEUTRAL": 1
           },
-          "blockers": [
-            "dependency-guard-detect:IN_PROGRESS",
-            "Real behavior proof:IN_PROGRESS",
-            "security-sensitive-guard-detect:IN_PROGRESS"
-          ],
-          "pending": [
-            "dependency-guard-detect:IN_PROGRESS",
-            "Real behavior proof:IN_PROGRESS",
-            "security-sensitive-guard-detect:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is paused for human review"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1507,
+    "total_ms": 3141,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 279
+        "ms": 408
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 989
+        "ms": 2441
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 214
+        "ms": 261
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 1
       }
     ]
   }
