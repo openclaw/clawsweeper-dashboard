@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-20T15:12:38.580Z",
+  "generated_at": "2026-06-20T15:13:02.518Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-20T12:12:36.777Z",
+  "since": "2026-06-20T12:13:02.075Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95154
+    95342
+  ],
+  "comment_ids": [
+    4758673586
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95154:4755822161:2026-06-20T15:12:32Z:clawsweeper_auto_repair",
-      "comment_id": "4755822161",
-      "comment_version_key": "4755822161:2026-06-20T15:12:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95154#issuecomment-4755822161",
+      "idempotency_key": "comment-router:openclaw/openclaw:95342:4758673586:2026-06-20T15:10:40Z:re_review",
+      "comment_id": "4758673586",
+      "comment_version_key": "4758673586:2026-06-20T15:10:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95342#issuecomment-4758673586",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95154,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 95342,
+      "author": "mpz4life",
+      "author_id": 32388289,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-20T01:13:34Z",
-      "comment_updated_at": "2026-06-20T15:12:32Z",
+      "comment_created_at": "2026-06-20T15:10:40Z",
+      "comment_updated_at": "2026-06-20T15:10:40Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -62,128 +65,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): write unresumable notice to transcript for non-deliverable channels",
-        "body": "### Summary\n\n- **Problem**: Issue #95141 reports that WebChat (Control UI dashboard) sessions interrupted by a gateway restart show a blank chat on reconnect with no explanation. The session is marked `failed` but no notice appears in the transcript.\n- **Root Cause**: `resolveRestartRecoveryDeliveryContext` returns `undefined` for WebChat because `isDeliverableMessageChannel(\"webchat\") === false` (WebChat is `INTERNAL_MESSAGE_CHANNEL`). So `sendUnresumableSessionNotice` returns `false` and the recovery notice is silently discarded. The `chat.history` projection reads the transcript, but nothing is ever written there for WebChat sessions.\n- **Fix**: When `sendUnresumableSessionNotice` returns `false` AND `resolveRestartRecoveryDeliveryContext` confirms there is no outbound delivery channel (e.g. WebChat/internal), write the notice as an assistant `delivery-mirror` row via `appendExactAssistantMessageToSessionTranscript`. Deliverable-channel transient failures are excluded: external-channel users (e.g. Telegram) do not read `chat.history`, so a transcript write would be invisible to them. The write targets `<sessionId>.jsonl` directly via `resolveSessionTranscriptPathInDir` rather than `entry.sessionFile`, so it lands on the same file `chat.history` reads first even when `sessionFile` is a stale generated path. `shouldHideProjectedHistoryMessage` does not filter `delivery-mirror` assistant messages — the notice appears in `chat.history` on reconnect.\n- **What changed**:\n  - `src/agents/main-session-restart-recovery.ts` — add `writeUnresumableNoticeToTranscript` (with try/catch so a write throw never skips `markSessionFailed`); gate the call on `!hasDeliveryChannel` so deliverable-channel transient failures skip transcript write.\n  - `src/config/sessions/transcript.ts` — add optional `sessionFile?` param to `appendExactAssistantMessageToSessionTranscript` so callers can supply an explicit target path and bypass store-entry resolution.\n  - Tests added: WebChat path (no deliverable channel → notice in `<sessionId>.jsonl`, no `callGateway`) and stale `sessionFile` path (notice goes to canonical file, not the stale file).\n- **What did NOT change**: Config surface unchanged. Plugin surface unchanged. External deliverable-channel path unchanged (`hasDeliveryChannel=true` skips the transcript write entirely).\n\n### Reproduction\n\n1. Start a WebChat session in the Control UI and have a turn in progress.\n2. Trigger a gateway restart (e.g. config reload).\n3. Reconnect to the same session in the Control UI.\n4. **Before this PR**: session is `failed`, no message in transcript, blank chat with no indication anything happened.\n5. **After this PR**: transcript gains a `delivery-mirror` assistant row containing \"I was interrupted by a gateway restart and couldn't safely resume the previous turn. Please send that last request again and I'll pick it up cleanly.\" — `chat.history` shows this message on reconnect.\n\n### Real behavior proof\n\n**Behavior addressed (#95141, WebChat gateway restart notice gap)**: after recovery runs for a WebChat restart-aborted session, the unresumable notice is written to the session transcript so `chat.history` surfaces it on reconnect; the external-channel `callGateway` path is not triggered.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production recovery path, transcript write, and session store)**: `recoverRestartAbortedMainSessions` driving the real `sendUnresumableSessionNotice`, `writeUnresumableNoticeToTranscript`, and `appendExactAssistantMessageToSessionTranscript` implementations; `resolveRestartRecoveryDeliveryContext` is called on real `SessionEntry` structs with `lastChannel: \"webchat\"`.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/agents/main-session-restart-recovery.test.ts` — 35/35 pass.\n\n**Evidence after fix (Vitest output)**:\n\n```\nTest Files  1 passed (1)\n     Tests  35 passed (35)\n```\n\nTwo new test cases: (1) WebChat no-deliverable-channel path — asserts `callGateway` not called and `<sessionId>.jsonl` gains the notice row; (2) stale `sessionFile` path — asserts notice is written to canonical `<sessionId>.jsonl`, not the stale file.\n\n**Observed result after fix**: `appendExactAssistantMessageToSessionTranscript` with an explicit `sessionFile` bypasses `resolveAndPersistSessionFile` (which would follow stale `entry.sessionFile`); `chat.history` finds the notice on the first candidate `<sessionId>.jsonl` regardless of what `entry.sessionFile` holds.\n\n**What was not tested**: live Crabbox WebChat + managed gateway restart end-to-end; Control UI rendering of the notice in the browser. Maintainer can request `@openclaw-mantis visual task: verify that a WebChat session interrupted by a gateway restart shows the unresumable notice on reconnect.`\n\n### Risk / Mitigation\n\n- **Risk**: Existing deliverable-channel path is affected. **Mitigation**: transcript write is gated on `!hasDeliveryChannel`; any session with a resolvable outbound delivery context (Telegram, Discord, etc.) is unaffected.\n- **Risk**: Transcript write throws (corrupt store, fs/EIO, lock-acquisition timeout) could skip `markSessionFailed`. **Mitigation**: `writeUnresumableNoticeToTranscript` wraps the entire body (including `resolveSessionTranscriptPathInDir`) in try/catch; any throw is logged at `warn` and swallowed so `markSessionFailed` always runs.\n- **Risk**: Canonical `<sessionId>.jsonl` target may not match `chat.history` read path for non-stale `sessionFile` entries. **Mitigation**: `persistSessionTranscriptTurn` with `touchSessionEntry:true` re-persists `entry.sessionFile = canonical` on write, aligning future reads regardless of prior entry state.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] agents\n- [x] sessions / storage\n- [x] tests\n\n### Linked Issue/PR\n\nFixes #95141",
-        "branch": "work/85404-rebase",
-        "head_sha": "eb265b196095f111b1c5da1c33ceaf7ebaee04aa",
-        "author": "openperf",
-        "labels": [
-          "agents",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
-            "additions": 41,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
-            "additions": 11,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/main-session-restart-recovery.test.ts",
-            "additions": 91,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/main-session-restart-recovery.ts",
-            "additions": 78,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/transcript.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 225,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95154",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95154.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 36,
-          "gatingTotal": 31,
-          "counts": {
-            "CANCELLED": 2,
-            "QUEUED": 10,
-            "SKIPPED": 14,
-            "SUCCESS": 10
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2064,
+    "total_ms": 1643,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 414
+        "ms": 431
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1374
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -195,7 +94,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 251
+        "ms": 1199
       },
       {
         "name": "append_ledger",
