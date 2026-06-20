@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-20T15:31:37.492Z",
+  "generated_at": "2026-06-20T15:31:40.131Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-20T12:31:37.174Z",
+  "since": "2026-06-20T12:31:37.632Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95357
+    95353
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,18 +29,160 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95353:4758692868:2026-06-20T15:19:10Z:clawsweeper_auto_repair",
+      "comment_id": "4758692868",
+      "comment_version_key": "4758692868:2026-06-20T15:19:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95353#issuecomment-4758692868",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95353,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-20T15:15:12Z",
+      "comment_updated_at": "2026-06-20T15:19:10Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=911fede3ab024f3c5f86cf22230f487240635051)",
+      "review_summary": "The PR adds an AgentSession store-entry sync helper for getContextUsage and branch-summary reads, plumbs optional storePath/sessionKey options, and adds synthetic regression tests plus repro scripts.\n\nPR surface: Source +67, Tests +337, Other +278. Total +682 across 6 files.\n\nReproducibility: yes. source-level. Current main persists providerOverride/modelOverride in the session store while getContextUsage and branch-summary code read the in-memory AgentSession model snapshot.",
+      "review_followup": "- [P1] Contributor or maintainer action is needed because the blocker combines a production wiring defect with insufficient real behavior proof; automation cannot prove the contributor's live setup for them.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "911fede3ab024f3c5f86cf22230f487240635051",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agent-session): refresh this.model from store override in getContextUsage + branch summary (#92415 gaps #2 + #3)",
+        "body": "## What Problem This Solves\n\nIssue [#92415](https://github.com/openclaw/openclaw/issues/92415) reports that `AgentSession.this.model` is a stale snapshot after `/model` switches. There are 8 call sites that read `this.model.{contextWindow,reasoning,thinkingLevelMap,provider}` and produce wrong behavior between the `/model` command and the next AgentSession restart.\n\n[PR #93056](https://github.com/openclaw/openclaw/pull/93056) (open) covers `prompt()` — but two gaps remain:\n\n- **Gap #2** — `getContextUsage()` is called by TUI `/status`, status panels, and command status tools BETWEEN turns (after `/model`, before the next `prompt()`). It reads stale `this.model.contextWindow`.\n- **Gap #3** — `summarizeAndContinue`'s default branch-summarizer block calls `getRequiredRequestAuth(model)` using `this.model` at line 2934. Branch summary is an independent abortable async task; if `/model` runs while summary is in flight, the summary uses the stale model.\n\nThis PR closes both gaps with a single helper `syncModelFromStoreEntry()` that intentionally complements #93056 (no name conflict, no behavior overlap — same helper signature).\n\n## Changes\n\n- **`src/agents/sessions/agent-session.ts`** — new private `syncModelFromStoreEntry()` with 6 guards (storePath present, entry exists, override present, current matches, target in registry, auth configured). Call sites at `getContextUsage()` entry (gap #2) and at the default-summarizer block inside `summarizeAndContinue` (gap #3).\n- **`src/agents/sessions/sdk.ts`** — plumb new optional `storePath` + `sessionKey` through `CreateAgentSessionOptions`.\n- **`src/agents/sessions/agent-session-services.ts`** — same pass-through on `CreateAgentSessionFromServicesOptions` for the services path.\n- **`src/agents/sessions/agent-session.test.ts`** (new, 332 lines) — 8 unit tests covering both call sites and all 6 guards.\n- **`scripts/repro/issue-92415-stale-model-context-usage.mts`** (new) — gap #2 live proof.\n- **`scripts/repro/issue-92415-stale-model-branch-summary.mts`** (new) — gap #3 live proof.\n\n## Behavior rationale\n\nThe helper reads the JSON session store path (passed via `storePath`), looks up the entry by `sessionKey`, and if `providerOverride`/`modelOverride` are set to a model the registry knows with auth, swaps `this.model`. The 6 guards ensure the helper is a no-op when no override is pending, when the entry is missing, when the target is unknown, or when no auth is configured — mirroring `setModel()`'s safety. It does not call `appendModelChange` or `setDefaultModelProvider` (those side effects are owned by `setModel()` for explicit user switches).\n\n## Evidence\n\n### Live proof — gap #2 (`getContextUsage`)\n\n```\n$ pnpm exec tsx scripts/repro/issue-92415-stale-model-context-usage.mts\n=== Issue #92415 gap #2 — getContextUsage stale model ===\ninitial.contextWindow  = 4096\noverride.contextWindow = 200000\ngetContextUsage()      = 200000\nPASS: getContextUsage reflects override\n```\n\n### Live proof — gap #3 (default-summarizer sync)\n\n```\n$ pnpm exec tsx scripts/repro/issue-92415-stale-model-branch-summary.mts\n=== Issue #92415 gap #3 — syncModelFromStoreEntry call site ===\nexpected override    = override-provider/override-model\nobserved sync models = [{\"provider\":\"override-provider\",\"id\":\"override-model\"}]\nPASS: sync helper picks up override model\n```\n\n### Unit + regression test results (run on current commit head `911fede3ab`)\n\n- `node scripts/run-vitest.mjs src/agents/sessions/agent-session.test.ts` → **8 passed**\n- `node scripts/run-vitest.mjs src/agents/sessions/sdk.test.ts` → 19 passed (no regression)\n- `node scripts/run-vitest.mjs src/agents/sessions/session-manager.test.ts` → 45 passed (no regression)\n- `node scripts/run-vitest.mjs src/agents/agent-command.live-model-switch.test.ts` → 65 passed (no regression)\n- `node scripts/run-tsgo.mjs` → exit 0\n- `pnpm build` → success\n\n### What was not tested\n\n- The `prompt()` entry-point sync (covered by #93056).\n- Fallback auto-downgrade (gap #4, higher risk, requires product decision).\n- Wiring `storePath`/`sessionKey` through the embedded runner — the runner creates a fresh `AgentSession` per run with `params.model` already derived from the session entry at `Attempt.ts`, so the helper's call sites in this PR are only relevant for long-lived sessions created via `createAgentSession`/`createAgentSessionFromServices`.\n\n## Risk\n\nLow. The helper is a no-op when no override is in the store entry, when the registry lacks the target, or when no auth is configured. Existing callers in `getContextUsage()` and `summarizeAndContinue` see the same `this.model` they did before unless an override is pending.\n\n## AI-assisted disclosure\n\nThis PR was prepared with AI assistance. Real behavior proof above was run on the current commit head (`911fede3ab`) by hand against the local checkout, on top of the rebased upstream `openclaw/main` (`947c21ee5a`).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "fix/92415-stale-model-context-and-branch-summary",
+        "head_sha": "911fede3ab024f3c5f86cf22230f487240635051",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "scripts",
+          "agents",
+          "size: L",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/repro/issue-92415-stale-model-branch-summary.mts",
+            "additions": 153,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/repro/issue-92415-stale-model-context-usage.mts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/sessions/agent-session-services.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sessions/agent-session.test.ts",
+            "additions": 337,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/sessions/agent-session.ts",
+            "additions": 52,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sessions/sdk.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 682,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95353",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95353.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 34,
+          "gatingTotal": 29,
+          "counts": {
+            "SUCCESS": 10,
+            "QUEUED": 10,
+            "SKIPPED": 14
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require an open issue or PR"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 537,
+    "total_ms": 2821,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 307
+        "ms": 407
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2078
       },
       {
         "name": "classify_comment_commands",
@@ -56,7 +198,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 219
+        "ms": 310
       },
       {
         "name": "append_ledger",
