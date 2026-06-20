@@ -1,20 +1,20 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-06-19T23:34:04.475Z
+Generated: 2026-06-20T13:31:13.625Z
 
 ## Summary
 
 | Metric | Count |
 | --- | ---: |
-| open_prs | 2 |
+| open_prs | 1 |
 | ready_candidates | 0 |
 | security_hold | 0 |
-| needs_rebase | 1 |
+| needs_rebase | 0 |
 | mergeability_unknown | 0 |
-| needs_checks | 2 |
+| needs_checks | 1 |
 | needs_review | 0 |
-| needs_merge_preflight | 2 |
-| needs_result_backfill | 0 |
+| needs_merge_preflight | 1 |
+| needs_result_backfill | 1 |
 
 ## Dispatch
 
@@ -30,5 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#94833](https://github.com/openclaw/openclaw/pull/94833) | fix(codex): release timed-out app-server lanes | automerge-openclaw-openclaw-94685 | CONFLICTING | DIRTY | CANCELLED:3 SKIPPED:53 SUCCESS:141 NEUTRAL:1; blockers:1 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
-| [#94784](https://github.com/openclaw/openclaw/pull/94784) | fix(doctor): stop promising --fix for working isolated shell-prompt cron jobs (#94655) | automerge-openclaw-openclaw-94659 | MERGEABLE | UNSTABLE | CANCELLED:10 QUEUED:10 SKIPPED:26 SUCCESS:13; blockers:15 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#95278](https://github.com/openclaw/openclaw/pull/95278) | Avoid copying process.env in ingress queue state DB opens | automerge-openclaw-openclaw-94573 | MERGEABLE | UNSTABLE | CANCELLED:12 QUEUED:10 SKIPPED:56 SUCCESS:13; blockers:16 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight, needs_result_backfill | repair failing checks or document unrelated main flake with touched-surface proof |
