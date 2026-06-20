@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-20T16:43:47.443Z",
+  "generated_at": "2026-06-20T16:43:47.953Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-20T13:43:45.481Z",
+  "since": "2026-06-20T13:43:46.070Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    95352
+    95030
   ],
   "comment_ids": [
-    4759075223
+    4759075204
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:95352:4759075223:2026-06-20T16:41:41Z:re_review",
-      "comment_id": "4759075223",
-      "comment_version_key": "4759075223:2026-06-20T16:41:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95352#issuecomment-4759075223",
+      "idempotency_key": "comment-router:openclaw/openclaw:95030:4759075204:2026-06-20T16:41:40Z:re_review",
+      "comment_id": "4759075204",
+      "comment_version_key": "4759075204:2026-06-20T16:41:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95030#issuecomment-4759075204",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95352,
-      "author": "wangmiao0668000666",
-      "author_id": 290215524,
+      "issue_number": 95030,
+      "author": "jalehman",
+      "author_id": 550978,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-20T16:41:41Z",
-      "comment_updated_at": "2026-06-20T16:41:41Z",
+      "comment_created_at": "2026-06-20T16:41:40Z",
+      "comment_updated_at": "2026-06-20T16:41:40Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -64,114 +64,135 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "feat(tasks): add generic task-route lease module for cross-crash delivery origin recovery",
-        "body": "## What Problem This Solves\n\nPR [#95352](https://github.com/openclaw/openclaw/pull/95352) is the **storage foundation** for the cross-cutover route recovery design that closes [#92460](https://github.com/openclaw/openclaw/issues/92460). It defines a `task_route_leases` SQLite table, a generic lease API, and auto-acquire / auto-settle hooks on detached-task lifecycle.\n\nThis re-review addresses **both ClawSweeper findings** from the initial review:\n\n1. **P2 retention (confidence 0.9)** — settled/expired/orphaned lease rows accumulated indefinitely because task deletion did not clean up `task_route_leases`.\n2. **P3 settled_at (confidence 0.82)** — re-acquire on a settled lease did not clear the prior `settled_at`, so `getActiveTaskRouteLease` could return an active lease with stale terminal metadata.\n\nBoth are now fixed in two new commits on this branch, with regression coverage in both unit and integration tests.\n\n## Why this PR (still) does not close #92460 alone\n\nBy design. The actual cron-side wiring that USES the lease to recover the originating `delivery.channel` lives in the open companion PR [#95362](https://github.com/openclaw/openclaw/pull/95362) (an earlier stacked attempt, [#95012](https://github.com/openclaw/openclaw/pull/95012), was closed unmerged and superseded by #95362 on the same head). This PR provides:\n\n- the `task_route_leases` table that #95362 reads from\n- the CRUD API (`acquireTaskRouteLease`, `updateTaskRouteLease`, `getActiveTaskRouteLease`, `settleTaskRouteLease`, `extendTaskRouteLease`, `expireStaleTaskRouteLeases`)\n- the auto-acquire / auto-settle hooks on `createRunningTaskRun` / `setDetachedTaskDeliveryStatusByRunId`\n- **the retention owner** so the lease table cannot grow unbounded (new in this re-review)\n\nWithout this PR, #95362 has no place to persist the originating origin and no clean way to GC it.\n\n## Changes\n\nThis branch (5 commits total, **2 new in this re-review**):\n\n| Commit | Purpose |\n|---|---|\n| `4cb1e38182` `feat(tasks): add task-route lease module` | Initial lease module + auto-acquire/auto-settle hooks |\n| `29eb2e9985` `feat(tasks): add updateTaskRouteLease helper` | Resolver post-resolve update path |\n| `13f5c14930` `test(tasks): isolate lease test fixtures` | Per-test temp state DB |\n| `98babe4cd6` `fix(tasks): reset settledAt on task-route lease re-acquire` | **P3 fix** — `conflict.doUpdateSet` now sets `settled_at: null`; existing test #6 strengthened + new test pins the cleared-settledAt shape |\n| `af84e33d91` `fix(tasks): cascade task-route lease cleanup on task registry delete` | **P2 fix** — new `deleteTaskRouteLeasesByTaskIdInDb(db, taskId)` lease-module helper called from `deleteTaskRowsWithDeliveryState`; 4 new unit tests + 1 integration test using `createRunningTaskRun` (the real production entry point that triggers auto-acquire) |\n| `21f16587b8` `test(repro): extend lease lifecycle repro with re-acquire + cascade cleanup` | Repro now exercises both fixes on a real on-disk SQLite |\n\n## Behavior rationale\n\n### Fix 1 — settled_at reset\nThe lease module's `acquireTaskRouteLease` uses `INSERT … ON CONFLICT(run_id) DO UPDATE SET …` to make re-acquire idempotent. Without `settled_at` in the update set, a settled lease would reactivate with `status='active'` but a stale `settled_at` from the prior terminal transition. `normalizeLeaseRow` reads `settled_at` and exposes it as `lease.settledAt`, so callers (e.g. completion-announce handlers) would see terminal metadata on an active lease. Adding `settled_at: null` to the conflict update makes the re-acquire semantics match a fresh lifecycle.\n\n### Fix 2 — retention owner\n`createRunningTaskRun` writes a `task_route_leases` row on every eligible detached task. Before this fix, `deleteTaskRowsWithDeliveryState` deleted only `task_delivery_state` and `task_runs`, leaving the lease row as an orphan. The new helper `deleteTaskRouteLeasesByTaskIdInDb(db, taskId)` runs inside the same write transaction as the task + delivery-state deletes, so cleanup is atomic. The function uses the existing `idx_task_route_leases_task_id` index (created at schema-time for exactly this lookup pattern). Both `deleteTaskRegistryRecordFromSqlite` and `deleteTaskAndDeliveryStateFromSqlite` go through `deleteTaskRowsWithDeliveryState`, so both paths now cascade. The integration test (`task-registry.store.test.ts`) uses `createRunningTaskRun` to trigger real auto-acquire and `deleteTaskRecordById` to trigger real cascade — no reflective injection.\n\nThe lease module owns its own SQL (AGENTS.md owner-boundary). The registry store does not bypass that boundary — it calls into the helper with the open `db` handle so it can manage the surrounding transaction.\n\n## Evidence\n\n### Live proof — extended `issue-92460-task-route-lease-lifecycle.mts` repro\n\n```text\n=== Reproduction for issue #92460 — task-route lease lifecycle ===\nPASS  1. acquire → getActive round-trip\nPASS  2. lease carries the captured requesterOrigin\nPASS  3. settle transitions the lease out of active\nPASS  4. extend on settled lease is a no-op\nPASS  5. expireStaleTaskRouteLeases GC (1 lease(s) expired)\nPASS  6. mapDeliveryStatusToLeaseRetirement maps terminal statuses\nPASS  7. lease persists across SQLite close + reopen\nPASS  8. re-acquire after settle clears settledAt\nPASS  9. deleteTaskRouteLeasesByTaskIdInDb cascade\nALL PASS  task-route lease lifecycle behaves as expected\n```\n\nSteps 8 and 9 are new in this re-review and exercise the P2/P3 fixes on a real on-disk SQLite.\n\n### Unit + integration test results (rebased on `openclaw/main` HEAD `947c21ee5a`)\n\n- `node scripts/run-vitest.mjs src/tasks/task-route-lease.test.ts` — **18 passed** (was 13; +1 settled_at reset, +4 cascade retention)\n- `node scripts/run-vitest.mjs src/tasks/task-registry.store.test.ts` — **28 passed** (was 27; +1 cascade integration test using `createRunningTaskRun`)\n- `node scripts/run-vitest.mjs src/tasks/task-registry.test.ts` — regression clean\n- `node scripts/run-vitest.mjs src/tasks/task-registry.maintenance.issue-60299.test.ts` — regression clean\n- `pnpm tsgo:core` — exit 0\n- `node scripts/run-oxlint.mjs` on touched files — exit 0\n\n### What was not tested\n\n- No live cron / subagent / ACP call site is wired in this PR — by design, this PR is infrastructure only. The cron wiring is in the open companion PR [#95362](https://github.com/openclaw/openclaw/pull/95362).\n- The `expireStaleTaskRouteLeases` TTL GC is unchanged from the initial review and continues to be a defense-in-depth fallback for leases that never received a settle call (caller crashed, etc). The new cascade path handles the dominant cleanup case (normal task deletion).\n\n## Risk\n\nLow.\n\n- Fix 1 is a 1-line SQL change that only affects the conflict-update branch on re-acquire; existing tests + new test pin the cleared-`settledAt` shape.\n- Fix 2 adds an atomic delete alongside two existing deletes in the same transaction; if the new delete fails it logs a warn and returns 0 (best-effort, matches the rest of the lease module).\n- No schema migration is required — the existing `idx_task_route_leases_task_id` index already supports the new lookup.\n- No public API removal. `resetTaskRouteLeasesForTests` is unchanged.\n\n## AI-assisted disclosure\n\nThis PR was prepared with AI assistance. Lease module design, lifecycle helpers, the two review-finding fixes, and tests were written and run by the human on a clean checkout of the branch. Real behavior proof above was run on the rebased `openclaw/main` HEAD `947c21ee5a` by hand.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "feat/task-route-lease-module",
-        "head_sha": "721300715633dffc39346d9fa3ecfff998c994db",
-        "author": "wangmiao0668000666",
+        "title": "refactor: add SDK transcript identity target API",
+        "body": "## What\nAdds one combined public SDK transcript runtime API bundle for Path 3. This supersedes #89261 and #89262 by exposing the coherent contract in a single review unit: stable transcript identity plus scoped transcript target/read/write/publish/lock helpers.\n\n## Why\n#89261 and #89262 were split across a stale stack, but the public API is one contract. Plugins need identity helpers and scoped target writers together so reads, appends, update publishes, and write locks bind to the same session transcript target without treating `sessionFile` as durable identity. The compatibility behavior remains additive and limited to callers that already receive active transcript artifacts.\n\n## Changes\n- Add transcript runtime SDK subpath\n- Add transcript memory keys\n- Add scoped target/write helpers\n- Keep identity reads read-only\n- Re-export memory keys from lightweight hit subpath\n- Update SDK docs and metadata\n- Refresh plugin SDK API baseline\n\n## Changes Walkthrough\n\n| File | Change |\n|------|--------|\n| `src/plugin-sdk/session-transcript-runtime.ts` | Adds public identity, target, read, append, publish, and lock helpers |\n| `src/config/sessions/transcript-append.ts` | Adds scoped append transaction helper over existing write lock and FIFO |\n| `src/config/sessions/session-accessor.ts` | Preserves malformed-line tolerance for parsed transcript reads |\n| `src/plugin-sdk/session-transcript-hit.ts` | Re-exports transcript memory hit key helpers from a lightweight contract |\n| `src/plugin-sdk/session-transcript-memory-hit.ts` | Hosts shared memory key helpers without transcript writer imports |\n| `docs/plugins/sdk-runtime.md` | Documents the combined transcript runtime contract |\n| `docs/plugins/sdk-subpaths.md` | Lists the new SDK subpath |\n| `package.json` / `scripts/lib/plugin-sdk-entrypoints.json` | Publish the SDK subpath |\n| `docs/.generated/plugin-sdk-api-baseline.sha256` | Refreshes the public API baseline hash |\n\n## Verification\n- `pnpm docs:list` - passed after workspace deps installed\n- `node scripts/run-vitest.mjs src/plugin-sdk/session-transcript-runtime.test.ts src/plugin-sdk/session-transcript-hit.test.ts src/config/sessions/session-accessor.test.ts` - passed\n- `node scripts/sync-plugin-sdk-exports.mjs --check` - passed\n- `node scripts/check-plugin-sdk-subpath-exports.mjs` - passed\n- `node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check` - passed\n- `node scripts/check-session-accessor-boundary.mjs` - passed\n- `./node_modules/.bin/oxfmt --check --threads=1 ...` - passed\n- `node scripts/format-docs.mjs --check docs/plugins/sdk-runtime.md docs/plugins/sdk-subpaths.md` - passed\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json ...` - passed\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/sdk-transcript-api-core.tsbuildinfo` - passed\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/sdk-transcript-api-core-test.tsbuildinfo` - passed\n- `git diff --check` - passed\n- `.agents/skills/autoreview/scripts/autoreview --mode local --base upstream/main ...` - first run found a read-side mutation bug; fixed and retested\n- `.agents/skills/autoreview/scripts/autoreview --mode local --base upstream/main ...` - clean\n\nRefs #88838.\nSupersedes #89261.\nSupersedes #89262.\n\n\n\n## Real behavior proof\n\nBehavior addressed: Public SDK transcript runtime contract for Path 3: stable transcript identity plus scoped target/read/write/lock helpers, including deprecated `sessionFile` compatibility for callers that already receive an active transcript artifact.\n\nReal environment tested: Local PR checkout on macOS, PR head `e93458f39e6ce786ec89ec8cb27e7a954cd8d606c`, Node `v24.15.0`. The proof imported the built package subpaths after `corepack pnpm build`.\n\nExact steps or command run after this patch:\n\n```bash\nnode scripts/run-vitest.mjs src/plugin-sdk/session-transcript-runtime.test.ts src/plugin-sdk/session-transcript-hit.test.ts test/scripts/plugin-sdk-surface-report.test.ts\nnode scripts/check-plugin-sdk-subpath-exports.mjs\nnode --max-old-space-size=8192 scripts/plugin-sdk-surface-report.mjs --check\nnode scripts/sync-plugin-sdk-exports.mjs --check\n./node_modules/.bin/oxfmt --check --threads=1 src/plugin-sdk/session-transcript-memory-hit.ts src/plugin-sdk/session-transcript-hit.ts src/plugin-sdk/session-transcript-hit.test.ts src/plugin-sdk/session-transcript-runtime.ts src/plugin-sdk/session-transcript-runtime.test.ts\nnode scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/plugin-sdk/session-transcript-memory-hit.ts src/plugin-sdk/session-transcript-hit.ts src/plugin-sdk/session-transcript-hit.test.ts src/plugin-sdk/session-transcript-runtime.ts src/plugin-sdk/session-transcript-runtime.test.ts\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/sdk-transcript-api-core.tsbuildinfo\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/sdk-transcript-api-core-test.tsbuildinfo\ngit diff --check\ncorepack pnpm build\nnode --input-type=module <<'NODE'\nimport fs from 'node:fs';\nimport os from 'node:os';\nimport path from 'node:path';\nimport {\n  appendSessionTranscriptMessageByIdentity,\n  formatSessionTranscriptMemoryHitKey,\n  parseSessionTranscriptMemoryHitKey,\n  publishSessionTranscriptUpdateByIdentity,\n  readSessionTranscriptEvents,\n  resolveSessionTranscriptIdentity,\n  resolveSessionTranscriptMemoryHitKeyToSessionKeys,\n  resolveSessionTranscriptTarget,\n  withSessionTranscriptWriteLock,\n} from 'openclaw/plugin-sdk/session-transcript-runtime';\nimport {\n  formatSessionTranscriptMemoryHitKey as formatHitSubpathKey,\n  parseSessionTranscriptMemoryHitKey as parseHitSubpathKey,\n} from 'openclaw/plugin-sdk/session-transcript-hit';\nimport { getSessionEntry, upsertSessionEntry } from 'openclaw/plugin-sdk/session-store-runtime';\n// Creates a temp sessions.json + active transcript JSONL, resolves identity,\n// reads malformed-tolerant events, appends by identity, appends under lock,\n// publishes with stale caller-supplied identity metadata, verifies persisted\n// bytes and public shapes, then removes the temp root.\nNODE\n.agents/skills/autoreview/scripts/autoreview --mode local --base upstream/main --prompt 'Review only the local fix for PR #95030: memory hit key helpers were moved out of session-transcript-runtime so session-transcript-hit no longer imports the writer/read-lock runtime. Check public SDK export compatibility, module-load topology, and tests. Treat broader PR design questions outside this local patch as already tracked unless this patch regresses them.'\n```\n\nEvidence after fix: Focused Vitest passed 2 shards with 42 tests. SDK subpath/export/surface checks passed. Oxfmt, oxlint, both tsgo wrappers, `git diff --check`, and `corepack pnpm build` passed. The standalone package-import proof exited 0 and printed:\n\n```json\n{\n  \"importSurface\": \"openclaw/plugin-sdk/session-transcript-runtime\",\n  \"hitSubpathImportSurface\": \"openclaw/plugin-sdk/session-transcript-hit\",\n  \"memoryKey\": \"transcript:main:proof-session%3Acurrent-head\",\n  \"hitSubpathSameKey\": true,\n  \"parsedAgentId\": \"main\",\n  \"hitParsedAgentId\": \"main\",\n  \"resolvedKeys\": [\"agent:main:proof\"],\n  \"identityReturnedSessionFile\": false,\n  \"targetReturnedSessionFile\": false,\n  \"targetKind\": \"active-session-file\",\n  \"lockedTargetReturnedSessionFile\": false,\n  \"beforeCount\": 2,\n  \"malformedLineSkipped\": true,\n  \"appendReturnedMessage\": true,\n  \"afterCount\": 4,\n  \"persistedContainsAppend\": true,\n  \"persistedContainsLockAppend\": true,\n  \"publishWithStaleInputCompleted\": true,\n  \"finalStoreSessionFileUnchanged\": true\n}\n{\"cleanupRemoved\":true}\n```\n\nAutoreview result: `.agents/skills/autoreview/scripts/autoreview --mode local --base upstream/main ...` exited 0: `autoreview clean: no accepted/actionable findings reported`; overall patch correct, confidence 0.84.\n\nObserved result after fix: The built public package export resolved from `openclaw/plugin-sdk/session-transcript-runtime`, and the existing hit subpath resolved the same memory key helpers without importing the transcript runtime writer/read-lock path. Identity, target, and locked target helpers returned public shapes without `sessionFile`. Reads skipped malformed JSONL rows, append and write-lock helpers persisted to the active transcript target, publish helpers completed while overriding stale caller-supplied publish identity internally, and cleanup removed the temporary proof state.\n\nWhat was not tested: No third-party plugin package was installed, no future SQLite runtime flip was exercised, and no broad Crabbox/Testbox matrix was run for this narrow import-boundary fix. The proof used the current built package and focused SDK/runtime checks rather than restarting the local live gateway.\n\n",
+        "branch": "clawdbot-d02.1.9.1.20-24/31b-sdk-transcript-identity-target-api",
+        "head_sha": "e93458f39e663d31857b9b6fd2e84559e28531c7",
+        "author": "jalehman",
         "labels": [
           "docs",
           "scripts",
-          "size: XL",
-          "proof: sufficient",
+          "maintainer",
+          "size: L",
+          "plugin: file-transfer",
           "P2",
-          "rating: 🐚 platinum hermit",
+          "rating: 🦪 silver shellfish",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "docs/concepts/task-completion.md",
-            "additions": 49,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "docs/docs.json",
+            "path": "docs/plugins/sdk-runtime.md",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/sdk-subpaths.md",
             "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "package.json",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/plugin-sdk-doc-metadata.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/plugin-sdk-entrypoints.json",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/plugin-sdk-surface-report.mjs",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/session-accessor.ts",
+            "additions": 5,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/repro/issue-92460-task-route-lease-lifecycle.mts",
-            "additions": 221,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/state/openclaw-state-db.generated.d.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-schema.generated.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-schema.sql",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-executor.ts",
-            "additions": 26,
+            "path": "src/config/sessions/transcript-append.ts",
+            "additions": 62,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/tasks/task-registry.store.sqlite.ts",
-            "additions": 8,
+            "path": "src/plugin-sdk/session-transcript-hit.test.ts",
+            "additions": 35,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/tasks/task-registry.store.test.ts",
-            "additions": 33,
+            "path": "src/plugin-sdk/session-transcript-hit.ts",
+            "additions": 13,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/tasks/task-route-lease.test.ts",
-            "additions": 446,
+            "path": "src/plugin-sdk/session-transcript-memory-hit.ts",
+            "additions": 120,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/tasks/task-route-lease.ts",
-            "additions": 392,
+            "path": "src/plugin-sdk/session-transcript-runtime.test.ts",
+            "additions": 406,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/plugin-sdk/session-transcript-runtime.ts",
+            "additions": 208,
             "deletions": 0,
             "changeType": "ADDED"
           }
         ],
-        "changedFiles": 11,
-        "additions": 1253,
-        "deletions": 1,
+        "changedFiles": 14,
+        "additions": 867,
+        "deletions": 8,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95352",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95352.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95030",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95030.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 34,
-          "gatingTotal": 29,
+          "total": 30,
+          "gatingTotal": 25,
           "counts": {
-            "SUCCESS": 11,
+            "CANCELLED": 1,
             "QUEUED": 10,
-            "SKIPPED": 13
+            "SUCCESS": 11,
+            "SKIPPED": 8
           },
           "blockers": [
             "preflight:QUEUED",
@@ -201,22 +222,22 @@
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
       "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2156,
+    "total_ms": 2110,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 556
+        "ms": 496
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1389
+        "ms": 1369
       },
       {
         "name": "classify_comment_commands",
@@ -232,7 +253,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 195
+        "ms": 227
       },
       {
         "name": "append_ledger",
