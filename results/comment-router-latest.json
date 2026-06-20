@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-20T16:52:17.823Z",
+  "generated_at": "2026-06-20T16:52:25.943Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-20T13:52:16.493Z",
+  "since": "2026-06-20T13:52:23.433Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92445
+    95365
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,18 +31,231 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92445:4691302979:2026-06-20T16:52:13Z:clawsweeper_needs_human",
-      "comment_id": "4691302979",
-      "comment_version_key": "4691302979:2026-06-20T16:52:13Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92445#issuecomment-4691302979",
+      "idempotency_key": "comment-router:openclaw/openclaw:95365:4759088963:2026-06-20T16:44:33Z:re_review",
+      "comment_id": "4759088963",
+      "comment_version_key": "4759088963:2026-06-20T16:44:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95365#issuecomment-4759088963",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 92445,
+      "issue_number": 95365,
+      "author": "NianJiuZst",
+      "author_id": 180004567,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-20T16:44:33Z",
+      "comment_updated_at": "2026-06-20T16:44:33Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: preserve user text that looks like inbound metadata",
+        "body": "Closes #95279\n\n## Summary\n\n- **What did NOT change:** This does not remove legacy sentinel stripping for already-persisted rows, does not migrate transcript files, does not change active-turn model prompt construction, and does not add unrelated provider/channel routing behavior.\n- **Why it matters / User impact:** Users who paste or type literal inbound-metadata-looking text should not lose that text from Control UI history, text extraction, memory session export, CLI imported-session dedupe, or historical LLM replay when OpenClaw already knows the canonical bare user body for a decorated inbound turn.\n- **Behavior addressed:** user-authored text that looks like OpenClaw inbound metadata could be stripped or deduped incorrectly because downstream consumers inferred the bare body from forgeable sentinel text inside `content`.\n\n## Why This Contract Shape\n\nThe accepted source of truth in this PR is a host-owned metadata slot under the existing OpenClaw-owned message bag: `__openclaw.inboundDecoration.bareBody`.\n\nWhy this shape instead of top-level `bareBody` / `inboundDecorated` fields:\n\n- **Ownership stays explicit:** this data is OpenClaw-generated transport/runtime metadata, not user content and not a general message-schema field. Keeping it under `__openclaw` matches the repo's existing ownership pattern for OpenClaw-managed per-message metadata.\n- **Narrower compatibility surface:** top-level fields would widen the generic message contract across more callers and plugin consumers. Nesting under `__openclaw.inboundDecoration` keeps the new state additive and clearly internal while still serializing it where the affected consumers already read OpenClaw metadata.\n- **Room for the same family of trusted decoration data:** the `inboundDecoration` object can carry future trusted decoration facts without minting more one-off top-level keys.\n- **Best-fit boundary for this fix:** the bug is not “messages in general need a new public bareBody field”; it is “OpenClaw needs one trusted place to remember the host-authored bare body for inbound-decorated user turns.”\n\n## Real behavior proof\n\n- **Exact steps or command run after this patch:**\n  - `node scripts/run-vitest.mjs src/gateway/cli-session-history.test.ts src/sessions/user-turn-transcript.test.ts ui/src/ui/chat/message-extract.test.ts ui/src/ui/chat/message-normalizer.test.ts packages/memory-host-sdk/src/host/session-files.test.ts src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts src/auto-reply/reply/strip-inbound-meta.test.ts`\n  - `git diff --check`\n  - `node --import tsx <transcript-ui-proof>` using repository runtime code to persist a real transcript row with `appendUserTurnTranscriptMessage(...)`, then feed that persisted row through `normalizeMessage(...)` and `extractTextCached(...)`\n  - `node --import tsx <cli-dedupe-proof>` using repository runtime code to call `mergeImportedChatHistoryMessages(...)` with two distinct trusted bare bodies that share decorated model-facing `content`\n- **Observed result after fix:** targeted regression tests passed, `git diff --check` passed, the transcript/UI proof preserved literal `Sender (untrusted metadata):` user text when the trusted bare body was present, and the CLI imported-session dedupe proof kept two rows with different trusted bare bodies even though the legacy sentinel-stripped comparable text would have collided.\n- **What was not tested:** I did not run an external live channel or packaged app proof in this environment. The real-behavior proof here exercises the repository runtime code locally with synthetic persisted transcript data and CLI merge inputs.\n- **Real environment tested:** local source checkout on this branch using repository Vitest lanes and small `tsx` proof harnesses that import the production code paths directly.\n- **Evidence after fix:** transcript persistence, Control UI display/extraction, CLI imported-session dedupe, memory-host export/indexing, and historical replay consumers all prefer the trusted bare body when present and fall back to legacy sentinel stripping only for unmarked legacy rows.\n\nTranscript/UI proof output, redacted to synthetic data:\n\n```text\nCommand shape:\nnode --import tsx <transcript-ui-proof>\n\n{\n  \"trusted\": {\n    \"normalizedText\": \"Sender (untrusted metadata):\\n```json\\n{\\\"label\\\":\\\"literal user-authored text\\\"}\\n```\\n\\nPlease preserve this literal block.\",\n    \"extractedText\": \"Sender (untrusted metadata):\\n```json\\n{\\\"label\\\":\\\"literal user-authored text\\\"}\\n```\\n\\nPlease preserve this literal block.\",\n    \"preservedLiteralSenderSentinel\": true,\n    \"usedTrustedBareBodyInsteadOfDecoratedCopy\": true\n  },\n  \"legacyFallbackWithoutTrustedField\": {\n    \"normalizedText\": \"Please preserve this literal block.\",\n    \"extractedText\": \"Please preserve this literal block.\",\n    \"strippedLiteralSenderSentinel\": true\n  }\n}\n\nObserved result: the same persisted decorated row keeps the literal sentinel-shaped user text when the trusted bare body exists, and the legacy fallback still strips that literal sentinel text when the trusted field is absent.\n```\n\nCLI imported-session dedupe proof output, redacted to synthetic data:\n\n```text\nCommand shape:\nnode --import tsx <cli-dedupe-proof>\n\n{\n  \"mergedWithTrustedContract\": 2,\n  \"mergedWithoutTrustedContract\": 1,\n  \"legacyComparableTextCollision\": true,\n  \"preservedDistinctTrustedBareBodies\": true\n}\n\nObserved result: with the trusted contract, the CLI merge path keeps both rows; without the trusted field, the legacy sentinel-strip comparable text collapses the same two rows into one.\n```\n\n## Regression Test Plan\n\n- **Target test files:** `src/gateway/cli-session-history.test.ts`, `src/sessions/user-turn-transcript.test.ts`, `ui/src/ui/chat/message-extract.test.ts`, `ui/src/ui/chat/message-normalizer.test.ts`, `packages/memory-host-sdk/src/host/session-files.test.ts`, `src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts`, and `src/auto-reply/reply/strip-inbound-meta.test.ts`.\n- **Scenario locked in:** each consumer test covers a decorated inbound turn whose trusted bare body itself contains sentinel-shaped user text such as `Sender (untrusted metadata):` plus fenced JSON; the expected behavior is that the trusted bare body is preserved literally instead of being reparsed and stripped as metadata. The CLI imported-session test additionally proves two messages with identical decorated `content` but different trusted bare bodies do not dedupe into one row.\n- **Why this is the smallest reliable guardrail:** it locks the shared trusted-contract behavior at the persistence, UI, CLI dedupe, memory, and replay boundaries without changing unrelated prompt-construction behavior or removing legacy fallback cleanup for old rows.\n\n## Root Cause\n\n- **Root cause:** the parser/contract boundary was wrong. `buildInboundUserContextPrefix(...)` creates host decoration as plaintext blocks inside user-message `content`, but consumers such as Control UI history, CLI imported-session dedupe, memory-host session export, and historical LLM replay had no trusted way to distinguish host-added decoration from user-authored text in that same channel.\n- **Why this is the root-cause fix:** the source-of-truth decision no longer comes from forgeable `content` text. The affected consumers now prefer one shared trusted resolver and only fall back to legacy sentinel stripping for older rows that do not carry the trusted field.\n- **Fix classification:** root-cause fix for a public session/transcript contract bug.\n- **Maintainer-ready confidence:** high. The change is additive, preserves legacy fallback behavior, and has targeted regression coverage plus local real-behavior proof for the affected consumer paths.\n- **Architecture / source-of-truth check:** the canonical contract is the host-owned per-message metadata under `__openclaw.inboundDecoration.bareBody`. Display/history/CLI dedupe/memory/replay consumers use that trusted contract when present; legacy unmarked rows still go through sentinel stripping.\n\n## Scope boundary\n\nIn scope: trusted inbound bare-body metadata plumbing for persisted/runtime user turns, transcript persistence/runtime merge preservation, UI display normalization and text extraction, CLI imported-session dedupe, memory-host session export/indexing, historical LLM replay normalization, and targeted regression tests for those paths.\n\nOut of scope: removing legacy sentinel stripping for already-persisted rows, migrating existing transcript files, changing active-turn model prompt construction, or broadening the generic message schema with new top-level public fields.\n\n## Verification\n\nPassed locally:\n\n```text\nnode scripts/run-vitest.mjs src/gateway/cli-session-history.test.ts src/sessions/user-turn-transcript.test.ts ui/src/ui/chat/message-extract.test.ts ui/src/ui/chat/message-normalizer.test.ts packages/memory-host-sdk/src/host/session-files.test.ts src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts src/auto-reply/reply/strip-inbound-meta.test.ts\n```\n\n```text\ngit diff --check\n```\n\n## Merge risk\n\n- Risk labels considered: `compatibility`, `session-state`.\n- Risk explanation: this changes display/replay/indexing/dedupe behavior for messages that explicitly opt into the trusted inbound-decoration contract. The new serialized state is additive and only authoritative when present; existing transcripts without the field keep the old heuristic fallback.\n- Why acceptable: the fix narrows an unsafe heuristic without removing backward compatibility for legacy rows, and the proof covers the user-visible paths most likely to drop or dedupe real user-authored content.\n",
+        "branch": "codex/issue-95279-inbound-decoration-contract",
+        "head_sha": "c9bf3e53850bb7b8be1402237c45248f8cb553e4",
+        "author": "nianjiuzst",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "agents",
+          "size: L",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/session-files.test.ts",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/session-files.ts",
+            "additions": 14,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts",
+            "additions": 38,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.llm-boundary.ts",
+            "additions": 40,
+            "deletions": 24,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-tool-result-guard.test.ts",
+            "additions": 113,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-tool-result-guard.ts",
+            "additions": 23,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/strip-inbound-meta.test.ts",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/strip-inbound-meta.ts",
+            "additions": 165,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/cli-session-history.merge.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/session-cost-usage.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/sessions/user-turn-transcript.test.ts",
+            "additions": 133,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/sessions/user-turn-transcript.ts",
+            "additions": 14,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/message-extract.test.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/message-extract.ts",
+            "additions": 7,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/message-normalizer.test.ts",
+            "additions": 64,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/message-normalizer.ts",
+            "additions": 27,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 18,
+        "additions": 794,
+        "deletions": 52,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95365",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95365.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 57,
+          "gatingTotal": 52,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 9,
+            "SKIPPED": 41,
+            "QUEUED": 6
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "Security High (core-auth-secrets):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED"
+          ],
+          "pending": [
+            "Security High (core-auth-secrets):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95365:4758865555:2026-06-20T16:37:10Z:clawsweeper_needs_human",
+      "comment_id": "4758865555",
+      "comment_version_key": "4758865555:2026-06-20T16:37:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95365#issuecomment-4758865555",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95365,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-12T12:35:02Z",
-      "comment_updated_at": "2026-06-20T16:52:13Z",
+      "comment_created_at": "2026-06-20T15:55:24Z",
+      "comment_updated_at": "2026-06-20T16:37:10Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,100 +266,188 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] No narrow automated repair remains; maintainers need to decide whether the Feishu audit-redaction policy is acceptable before merge.; Cleared: No dependency, workflow, secret-handling, permission, or executable surface change was found; the remaining concern is a message-content compatibility policy, not a concrete security or supply-chain defect. (sha=418fbb502ce610804ded02f78883a3ba358d0198)",
-      "review_summary": "The PR adds Feishu outbound redaction for email, mainland mobile, 95xxx service-number, and 400/800 hotline identifiers across post, card/edit, and streaming Card Kit payloads with regression tests.\n\nPR surface: Source +64, Tests +239. Total +303 across 5 files.\n\nReproducibility: yes. at source level: current main and v2026.6.8 send the covered Feishu payloads without redaction, while the PR body shows a real Feishu delivery succeeding after the redaction logic. I did not independently reproduce Feishu 230028 in this read-only review.",
-      "review_followup": "- [P2] No narrow automated repair remains; maintainers need to decide whether the Feishu audit-redaction policy is acceptable before merge.",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=c9bf3e53850bb7b8be1402237c45248f8cb553e4)",
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "418fbb502ce610804ded02f78883a3ba358d0198",
+      "expected_head_sha": "c9bf3e53850bb7b8be1402237c45248f8cb553e4",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(feishu): redact audit-sensitive contact info",
-        "body": "## Summary\n- Redact Feishu audit-sensitive contact identifiers at outbound message boundaries before sending text, cards, edited cards, and streaming Card Kit updates.\n- Cover email addresses, mainland China mobile numbers, 95xxx service numbers, and 400/800 hotline formats.\n- Add regression coverage for post messages, interactive cards, edited messages, structured/markdown cards, and streaming card update/replace/note/summary payloads.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Feishu final replies containing contact identifiers can be rejected by Feishu audit code 230028, which leaves users seeing the misleading no-visible-content fallback instead of the generated answer.\n- Real environment tested: macOS local OpenClaw gateway with a real Feishu account and the Feishu plugin loaded from the installed runtime path under `/Users/bytedance/.openclaw/npm/projects/.../@openclaw/feishu/dist/index.js`.\n- Exact steps or command run after this patch: Applied the same outbound redaction logic from this PR to the installed Feishu plugin runtime, restarted the gateway with `openclaw gateway restart`, then sent a real Feishu delivery using `openclaw agent --agent main --message '东方航空 95530 这封邮件主要讲的是啥内容？' --deliver --reply-channel feishu ... --json`.\n- Evidence after fix: Terminal transcript from the real Feishu delivery path:\n\n```text\n$ openclaw agent --agent main --message '东方航空 95530 这封邮件主要讲的是啥内容？' --deliver --reply-channel feishu ... --json\n{\n  \"runId\": \"72bbf949-d61b-4ea4-882a-3db86806332f\",\n  \"status\": \"ok\",\n  \"deliverySucceeded\": true,\n  \"deliveryStatus\": {\n    \"status\": \"sent\"\n  }\n}\n```\n\n- Observed result after fix: The same service-number prompt delivered successfully through Feishu with `deliverySucceeded: true` and `deliveryStatus.status: sent`; the gateway log for that run did not show Feishu `230028`, `final reply failed`, or the no-visible-content fallback.\n- What was not tested: No known gaps.\n\n## Test Plan\n- node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-feishu.config.ts\n- node scripts/run-tsgo.mjs\n- node scripts/run-oxlint.mjs extensions/feishu/src\n",
-        "branch": "codex/feishu-audit-redact-contact-info",
-        "head_sha": "418fbb502ce610804ded02f78883a3ba358d0198",
-        "author": "winger007",
+        "title": "fix: preserve user text that looks like inbound metadata",
+        "body": "Closes #95279\n\n## Summary\n\n- **What did NOT change:** This does not remove legacy sentinel stripping for already-persisted rows, does not migrate transcript files, does not change active-turn model prompt construction, and does not add unrelated provider/channel routing behavior.\n- **Why it matters / User impact:** Users who paste or type literal inbound-metadata-looking text should not lose that text from Control UI history, text extraction, memory session export, CLI imported-session dedupe, or historical LLM replay when OpenClaw already knows the canonical bare user body for a decorated inbound turn.\n- **Behavior addressed:** user-authored text that looks like OpenClaw inbound metadata could be stripped or deduped incorrectly because downstream consumers inferred the bare body from forgeable sentinel text inside `content`.\n\n## Why This Contract Shape\n\nThe accepted source of truth in this PR is a host-owned metadata slot under the existing OpenClaw-owned message bag: `__openclaw.inboundDecoration.bareBody`.\n\nWhy this shape instead of top-level `bareBody` / `inboundDecorated` fields:\n\n- **Ownership stays explicit:** this data is OpenClaw-generated transport/runtime metadata, not user content and not a general message-schema field. Keeping it under `__openclaw` matches the repo's existing ownership pattern for OpenClaw-managed per-message metadata.\n- **Narrower compatibility surface:** top-level fields would widen the generic message contract across more callers and plugin consumers. Nesting under `__openclaw.inboundDecoration` keeps the new state additive and clearly internal while still serializing it where the affected consumers already read OpenClaw metadata.\n- **Room for the same family of trusted decoration data:** the `inboundDecoration` object can carry future trusted decoration facts without minting more one-off top-level keys.\n- **Best-fit boundary for this fix:** the bug is not “messages in general need a new public bareBody field”; it is “OpenClaw needs one trusted place to remember the host-authored bare body for inbound-decorated user turns.”\n\n## Real behavior proof\n\n- **Exact steps or command run after this patch:**\n  - `node scripts/run-vitest.mjs src/gateway/cli-session-history.test.ts src/sessions/user-turn-transcript.test.ts ui/src/ui/chat/message-extract.test.ts ui/src/ui/chat/message-normalizer.test.ts packages/memory-host-sdk/src/host/session-files.test.ts src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts src/auto-reply/reply/strip-inbound-meta.test.ts`\n  - `git diff --check`\n  - `node --import tsx <transcript-ui-proof>` using repository runtime code to persist a real transcript row with `appendUserTurnTranscriptMessage(...)`, then feed that persisted row through `normalizeMessage(...)` and `extractTextCached(...)`\n  - `node --import tsx <cli-dedupe-proof>` using repository runtime code to call `mergeImportedChatHistoryMessages(...)` with two distinct trusted bare bodies that share decorated model-facing `content`\n- **Observed result after fix:** targeted regression tests passed, `git diff --check` passed, the transcript/UI proof preserved literal `Sender (untrusted metadata):` user text when the trusted bare body was present, and the CLI imported-session dedupe proof kept two rows with different trusted bare bodies even though the legacy sentinel-stripped comparable text would have collided.\n- **What was not tested:** I did not run an external live channel or packaged app proof in this environment. The real-behavior proof here exercises the repository runtime code locally with synthetic persisted transcript data and CLI merge inputs.\n- **Real environment tested:** local source checkout on this branch using repository Vitest lanes and small `tsx` proof harnesses that import the production code paths directly.\n- **Evidence after fix:** transcript persistence, Control UI display/extraction, CLI imported-session dedupe, memory-host export/indexing, and historical replay consumers all prefer the trusted bare body when present and fall back to legacy sentinel stripping only for unmarked legacy rows.\n\nTranscript/UI proof output, redacted to synthetic data:\n\n```text\nCommand shape:\nnode --import tsx <transcript-ui-proof>\n\n{\n  \"trusted\": {\n    \"normalizedText\": \"Sender (untrusted metadata):\\n```json\\n{\\\"label\\\":\\\"literal user-authored text\\\"}\\n```\\n\\nPlease preserve this literal block.\",\n    \"extractedText\": \"Sender (untrusted metadata):\\n```json\\n{\\\"label\\\":\\\"literal user-authored text\\\"}\\n```\\n\\nPlease preserve this literal block.\",\n    \"preservedLiteralSenderSentinel\": true,\n    \"usedTrustedBareBodyInsteadOfDecoratedCopy\": true\n  },\n  \"legacyFallbackWithoutTrustedField\": {\n    \"normalizedText\": \"Please preserve this literal block.\",\n    \"extractedText\": \"Please preserve this literal block.\",\n    \"strippedLiteralSenderSentinel\": true\n  }\n}\n\nObserved result: the same persisted decorated row keeps the literal sentinel-shaped user text when the trusted bare body exists, and the legacy fallback still strips that literal sentinel text when the trusted field is absent.\n```\n\nCLI imported-session dedupe proof output, redacted to synthetic data:\n\n```text\nCommand shape:\nnode --import tsx <cli-dedupe-proof>\n\n{\n  \"mergedWithTrustedContract\": 2,\n  \"mergedWithoutTrustedContract\": 1,\n  \"legacyComparableTextCollision\": true,\n  \"preservedDistinctTrustedBareBodies\": true\n}\n\nObserved result: with the trusted contract, the CLI merge path keeps both rows; without the trusted field, the legacy sentinel-strip comparable text collapses the same two rows into one.\n```\n\n## Regression Test Plan\n\n- **Target test files:** `src/gateway/cli-session-history.test.ts`, `src/sessions/user-turn-transcript.test.ts`, `ui/src/ui/chat/message-extract.test.ts`, `ui/src/ui/chat/message-normalizer.test.ts`, `packages/memory-host-sdk/src/host/session-files.test.ts`, `src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts`, and `src/auto-reply/reply/strip-inbound-meta.test.ts`.\n- **Scenario locked in:** each consumer test covers a decorated inbound turn whose trusted bare body itself contains sentinel-shaped user text such as `Sender (untrusted metadata):` plus fenced JSON; the expected behavior is that the trusted bare body is preserved literally instead of being reparsed and stripped as metadata. The CLI imported-session test additionally proves two messages with identical decorated `content` but different trusted bare bodies do not dedupe into one row.\n- **Why this is the smallest reliable guardrail:** it locks the shared trusted-contract behavior at the persistence, UI, CLI dedupe, memory, and replay boundaries without changing unrelated prompt-construction behavior or removing legacy fallback cleanup for old rows.\n\n## Root Cause\n\n- **Root cause:** the parser/contract boundary was wrong. `buildInboundUserContextPrefix(...)` creates host decoration as plaintext blocks inside user-message `content`, but consumers such as Control UI history, CLI imported-session dedupe, memory-host session export, and historical LLM replay had no trusted way to distinguish host-added decoration from user-authored text in that same channel.\n- **Why this is the root-cause fix:** the source-of-truth decision no longer comes from forgeable `content` text. The affected consumers now prefer one shared trusted resolver and only fall back to legacy sentinel stripping for older rows that do not carry the trusted field.\n- **Fix classification:** root-cause fix for a public session/transcript contract bug.\n- **Maintainer-ready confidence:** high. The change is additive, preserves legacy fallback behavior, and has targeted regression coverage plus local real-behavior proof for the affected consumer paths.\n- **Architecture / source-of-truth check:** the canonical contract is the host-owned per-message metadata under `__openclaw.inboundDecoration.bareBody`. Display/history/CLI dedupe/memory/replay consumers use that trusted contract when present; legacy unmarked rows still go through sentinel stripping.\n\n## Scope boundary\n\nIn scope: trusted inbound bare-body metadata plumbing for persisted/runtime user turns, transcript persistence/runtime merge preservation, UI display normalization and text extraction, CLI imported-session dedupe, memory-host session export/indexing, historical LLM replay normalization, and targeted regression tests for those paths.\n\nOut of scope: removing legacy sentinel stripping for already-persisted rows, migrating existing transcript files, changing active-turn model prompt construction, or broadening the generic message schema with new top-level public fields.\n\n## Verification\n\nPassed locally:\n\n```text\nnode scripts/run-vitest.mjs src/gateway/cli-session-history.test.ts src/sessions/user-turn-transcript.test.ts ui/src/ui/chat/message-extract.test.ts ui/src/ui/chat/message-normalizer.test.ts packages/memory-host-sdk/src/host/session-files.test.ts src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts src/auto-reply/reply/strip-inbound-meta.test.ts\n```\n\n```text\ngit diff --check\n```\n\n## Merge risk\n\n- Risk labels considered: `compatibility`, `session-state`.\n- Risk explanation: this changes display/replay/indexing/dedupe behavior for messages that explicitly opt into the trusted inbound-decoration contract. The new serialized state is additive and only authoritative when present; existing transcripts without the field keep the old heuristic fallback.\n- Why acceptable: the fix narrows an unsafe heuristic without removing backward compatibility for legacy rows, and the proof covers the user-visible paths most likely to drop or dedupe real user-authored content.\n",
+        "branch": "codex/issue-95279-inbound-decoration-contract",
+        "head_sha": "c9bf3e53850bb7b8be1402237c45248f8cb553e4",
+        "author": "nianjiuzst",
         "labels": [
-          "channel: feishu",
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
+          "app: web-ui",
+          "gateway",
+          "agents",
+          "size: L",
           "P2",
-          "rating: 🐚 platinum hermit",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "extensions/feishu/src/audit-redaction.ts",
-            "additions": 54,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/feishu/src/send.test.ts",
-            "additions": 104,
+            "path": "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts",
+            "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/send.ts",
-            "additions": 4,
-            "deletions": 3,
+            "path": "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
+            "additions": 6,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/streaming-card.test.ts",
-            "additions": 135,
+            "path": "packages/memory-host-sdk/src/host/session-files.test.ts",
+            "additions": 31,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/streaming-card.ts",
-            "additions": 15,
+            "path": "packages/memory-host-sdk/src/host/session-files.ts",
+            "additions": 14,
             "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts",
+            "additions": 38,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.llm-boundary.ts",
+            "additions": 40,
+            "deletions": 24,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-tool-result-guard.test.ts",
+            "additions": 113,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-tool-result-guard.ts",
+            "additions": 23,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/strip-inbound-meta.test.ts",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/strip-inbound-meta.ts",
+            "additions": 165,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/cli-session-history.merge.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/session-cost-usage.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/sessions/user-turn-transcript.test.ts",
+            "additions": 133,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/sessions/user-turn-transcript.ts",
+            "additions": 14,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/message-extract.test.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/message-extract.ts",
+            "additions": 7,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/message-normalizer.test.ts",
+            "additions": 64,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/message-normalizer.ts",
+            "additions": 27,
+            "deletions": 5,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 312,
-        "deletions": 9,
+        "changedFiles": 18,
+        "additions": 794,
+        "deletions": 52,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92445",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92445.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95365",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95365.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 30,
-          "gatingTotal": 25,
+          "total": 57,
+          "gatingTotal": 52,
           "counts": {
-            "SUCCESS": 12,
-            "QUEUED": 4,
-            "SKIPPED": 14
+            "FAILURE": 1,
+            "SUCCESS": 9,
+            "SKIPPED": 41,
+            "QUEUED": 6
           },
           "blockers": [
-            "preflight:QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "security-fast:QUEUED"
+            "Real behavior proof:FAILURE",
+            "Security High (core-auth-secrets):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED"
           ],
           "pending": [
-            "preflight:QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "security-fast:QUEUED"
+            "Security High (core-auth-secrets):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED"
           ],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
@@ -157,19 +458,19 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1576,
+    "total_ms": 2829,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 228
+        "ms": 412
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1088
+        "ms": 2082
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -181,7 +482,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 236
+        "ms": 308
       },
       {
         "name": "append_ledger",
