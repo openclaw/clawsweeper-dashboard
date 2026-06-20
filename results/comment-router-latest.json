@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-20T13:03:07.889Z",
-  "repo": "openclaw/openclaw-windows-node",
+  "generated_at": "2026-06-20T13:03:10.987Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-20T10:03:07.563Z",
+  "since": "2026-06-20T10:03:09.314Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    795
+    95328
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,18 +29,133 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95328:4757944397:2026-06-20T13:03:04Z:clawsweeper_needs_human",
+      "comment_id": "4757944397",
+      "comment_version_key": "4757944397:2026-06-20T13:03:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95328#issuecomment-4757944397",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95328,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-20T12:53:01Z",
+      "comment_updated_at": "2026-06-20T13:03:04Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The remaining action is contributor-supplied real behavior proof and maintainer selection between same-root PRs, not a narrow automated code repair.; Cleared: The diff only changes session metadata merge logic and a focused Vitest file; no concrete security or supply-chain concern was found. (sha=01725c8dda59d03b0e4332727bb9346bea14e9f6)",
+      "review_summary": "The branch clears `nativeChannelId`, `nativeDirectUserId`, and `threadId` during session-origin merges when provider or surface changes, and adds regression coverage for cross-channel sparse metadata.\n\nPR surface: Source +13, Tests +96. Total +109 across 2 files.\n\nReproducibility: yes. Source inspection shows current main preserves omitted channel-keyed origin fields, while Telegram-style direct-message context can omit them after Slack supplied them; I did not run a live two-channel reproduction in this read-only review.",
+      "review_followup": "- [P1] The remaining action is contributor-supplied real behavior proof and maintainer selection between same-root PRs, not a narrow automated code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "01725c8dda59d03b0e4332727bb9346bea14e9f6",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(sessions): reset stale per-channel origin fields on channel switch",
+        "body": "## What Problem This Solves\n\nFixes #95325. With `session.dmScope: \"main\"`, a user's DMs to an agent across channels (Slack, Telegram, webchat) share one session. On a channel switch (e.g. Slack → Telegram), the session origin's per-channel identity fields are not reset.\n\n`mergeOrigin` in `src/config/sessions/metadata.ts` merges field-by-field, overwriting a field only when the new inbound supplies it. Telegram DMs carry no `nativeChannelId` (or `threadId`), so the previous channel's Slack channel id persists in a now-Telegram session. It keeps persisting on every subsequent Telegram turn until the user messages on the original channel again or the session resets.\n\n`route.target.to` (delivery) updates correctly, so message delivery is unaffected. But native-channel-keyed operations (reactions, native threading, native message references) and any status/inspection that reads `origin.nativeChannelId` reference the previous channel for the entire duration of the new-channel session — e.g. an agent on Telegram reports the prior Slack account/channel when asked about its current context.\n\n## Why This Change Was Made\n\nThe sparse merge exists so consecutive turns on the *same* channel keep previously known fields when an inbound legitimately omits them. That intent is correct within a channel, but a provider/surface change is a *fresh channel identity*: the channel-keyed fields (`nativeChannelId`, `nativeDirectUserId`, `threadId`) belong to the prior channel and must not survive into the new one.\n\nThe fix treats a `provider` (or `surface`) change as a channel switch and drops those three channel-keyed fields before the merge, so an inbound that omits them no longer inherits the previous channel's values. Provider/surface-agnostic and always-supplied fields (`label`, `from`, `to`, `accountId`, `chatType`) are untouched and still update as before. Same-provider turns keep the existing sparse-merge behavior. This matches the root cause and suggested fix in the issue and keeps the change bounded to the one helper that owns origin merging.\n\n## User Impact\n\nNative-channel-keyed operations and context/status reads now reflect the channel the session is actually on after a cross-channel switch in a `dmScope: \"main\"` session, instead of pointing at the previous channel. No config, migration, or delivery-path change; same-channel sessions behave exactly as before.\n\n## Evidence\n\nAdded `src/config/sessions/origin-channel-switch.test.ts`, exercising the real runtime path (`deriveSessionMetaPatch`, the function called per inbound turn in `src/auto-reply/reply/session.ts`) with realistic Slack-then-Telegram `MsgContext` inputs.\n\n**Before (bug reproduced on the pre-fix `mergeOrigin`)** — stashing only the fix and running the test shows the stale Slack channel id persisting on the Telegram session, exactly as reported:\n\n```text\nFAIL  src/config/sessions/origin-channel-switch.test.ts > clears stale channel-keyed fields when provider changes and the new turn omits them\nAssertionError: expected 'D111SLACK' to be undefined\n   expect(afterTelegram.origin?.nativeChannelId).toBeUndefined();\n\nFAIL  src/config/sessions/origin-channel-switch.test.ts > does not re-stamp the prior channel id on subsequent same-channel turns\nAssertionError: expected 'D111SLACK' to be undefined\n   expect(afterTelegramAgain.origin?.nativeChannelId).toBeUndefined();\n  Tests  2 failed | 2 passed (4)\n```\n\n**Root cause / premise** — the two passing tests above confirm the other half of the contract is preserved both with and without the fix: when the new channel *does* supply `nativeChannelId`/`threadId` they are adopted, and same-provider turns still retain sparse metadata. So the regression is exactly the cross-provider omit case.\n\n**After (with the fix)**:\n\n```text\n$ node scripts/run-vitest.mjs src/config/sessions/origin-channel-switch.test.ts\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\nTest cases: (1) Slack→Telegram with Telegram omitting channel id → stale Slack `nativeChannelId`/`nativeDirectUserId`/`threadId` cleared, `provider`/`surface`/`accountId` become Telegram; (2) no re-stamp of the prior channel id on subsequent Telegram turns; (3) new channel's identity adopted when the inbound supplies it; (4) same-provider sparse turns still preserve the established channel id and thread.\n\nFormatting verified with `oxfmt --check` on both touched files (clean). Full lint/typecheck/build run in CI.\n\n### Real behavior proof notes\n\n- Behavior addressed: cross-channel `dmScope: \"main\"` session keeps the prior channel's `nativeChannelId`/`threadId` after a Slack→Telegram switch.\n- Environment tested: local unit test against the actual `deriveSessionMetaPatch`/`mergeOrigin` derivation path (the per-turn runtime entry point), Node 24.\n- Root cause evidence: `src/config/sessions/metadata.ts` `mergeOrigin` only assigned each field when `next` supplied it; Telegram DM `MsgContext` carries no `NativeChannelId`/`MessageThreadId`, so the prior values survived.\n- What was not tested: a two-bot live round-trip (a configured Slack bot and a Telegram bot sharing one `dmScope:\"main\"` session) was not run; the bug lives entirely in pure metadata derivation, so the unit test exercises the exact failing code path deterministically.\n\n## Risk checklist\n\nDid user-visible behavior change? `Yes` (post-channel-switch origin now reflects the current channel; same-channel behavior unchanged)\n\nDid config, environment, or migration behavior change? `No`\n\n---\n\nAI-assisted.\n",
+        "branch": "fix/95325-reset-stale-origin-on-channel-switch",
+        "head_sha": "01725c8dda59d03b0e4332727bb9346bea14e9f6",
+        "author": "zengwen-dt",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/config/sessions/metadata.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/origin-channel-switch.test.ts",
+            "additions": 96,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 109,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95328",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95328.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 36,
+          "gatingTotal": 31,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 11,
+            "QUEUED": 10,
+            "SKIPPED": 14
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 566,
+    "total_ms": 1995,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 315
+        "ms": 412
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1247
       },
       {
         "name": "classify_comment_commands",
@@ -56,7 +171,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 241
+        "ms": 311
       },
       {
         "name": "append_ledger",
