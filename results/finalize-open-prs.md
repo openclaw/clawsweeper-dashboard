@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-06-20T13:31:13.625Z
+Generated: 2026-06-20T15:01:51.103Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#95278](https://github.com/openclaw/openclaw/pull/95278) | Avoid copying process.env in ingress queue state DB opens | automerge-openclaw-openclaw-94573 | MERGEABLE | UNSTABLE | CANCELLED:12 QUEUED:10 SKIPPED:56 SUCCESS:13; blockers:16 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight, needs_result_backfill | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#95278](https://github.com/openclaw/openclaw/pull/95278) | Avoid copying process.env in ingress queue state DB opens | automerge-openclaw-openclaw-94573 | MERGEABLE | UNSTABLE | CANCELLED:12 QUEUED:119 SKIPPED:75 SUCCESS:21 NEUTRAL:1; blockers:125 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight, needs_result_backfill | repair failing checks or document unrelated main flake with touched-surface proof |
