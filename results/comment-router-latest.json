@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T11:33:23.408Z",
-  "repo": "openclaw/clownfish",
+  "generated_at": "2026-06-21T11:33:27.588Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T08:33:23.103Z",
+  "since": "2026-06-21T08:33:25.893Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    169
+    95383
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,136 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95383:4759317610:2026-06-21T11:33:22Z:clawsweeper_needs_human",
+      "comment_id": "4759317610",
+      "comment_version_key": "4759317610:2026-06-21T11:33:22Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95383#issuecomment-4759317610",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95383,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-20T17:35:15Z",
+      "comment_updated_at": "2026-06-21T11:33:22Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No automated repair is needed; maintainers should decide whether to accept the release-note-worthy public SDK event behavior correction before merge.; Cleared: The diff only changes SDK normalization logic and tests; it does not touch dependencies, workflows, secrets, package metadata, or code-execution surfaces. (sha=07604246dd8d92d05afd085c3cdc3f6774a2268b)",
+      "review_summary": "The PR reorders SDK agent event normalization so failed or blocked terminal tool, item, and command_output events map to `tool.call.failed`, and adds item-stream regression tests.\n\nPR surface: Source +3, Tests +34. Total +37 across 2 files.\n\nReproducibility: yes. A current-main call to `normalizeGatewayEvent` with an `agent` item or command_output payload containing `phase: \"end\"` and `status: \"failed\"` or `\"blocked\"` follows the completed branch first; I verified this by source inspection rather than executing tests in the read-only checkout.",
+      "review_followup": "- No automated repair is needed; maintainers should decide whether to accept the release-note-worthy public SDK event behavior correction before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "07604246dd8d92d05afd085c3cdc3f6774a2268b",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(sdk): classify failed/blocked tool events as tool.call.failed",
+        "body": "## Summary\n\nThe SDK's `normalizeAgentEventType` (`packages/sdk/src/normalize.ts`) maps raw gateway agent events into the public `OpenClawEventType`. For the `tool` / `item` / `command_output` streams the terminal branches were ordered:\n\n```ts\nif (phase === \"end\" || status === \"completed\") return \"tool.call.completed\";\nif (status === \"failed\" || status === \"blocked\") return \"tool.call.failed\";\n```\n\nBut terminal tool/item events are emitted with **`phase: \"end\"` together with the real status** — the producer (`src/agents/embedded-agent-subscribe.handlers.tools.ts`) emits `{ phase: \"end\", status: isToolError ? \"failed\" : \"completed\" }` and `{ phase: \"end\", status: \"blocked\" }`, and `AgentItemEventStatus` (`src/infra/agent-events.ts:26`) is `running | completed | failed | blocked`. So for a **failed or blocked** tool the `phase === \"end\"` check won first and returned `tool.call.completed` — the `tool.call.failed` branch was effectively dead for the item stream. SDK consumers filtering on `tool.call.failed` (a documented public event type, `types.ts:257`) never saw tool failures; **failures looked like successes.**\n\nThis reorders the two branches so failed/blocked is classified before end/completed. Pure logic — no type, schema, protocol, or config change. `normalize.ts` is the only classifier of these event types (grep of `src/`/`packages/`/`ui/`), so this is the single consumer boundary.\n\n### Changes\n- `packages/sdk/src/normalize.ts` — check `failed`/`blocked` before the `end`/`completed` branch (+ comment).\n- `packages/sdk/src/normalize.test.ts` — new regression test for terminal tool item status classification.\n\n## Real behavior proof\n\nBehavior addressed: terminal tool/item events with `phase:\"end\"` + `status:\"failed\"|\"blocked\"` were normalized to `tool.call.completed`, hiding tool failures from SDK consumers. They now normalize to `tool.call.failed`; `completed` and unstatused-end events are unchanged.\n\nReal environment tested: Node 22.22.1, macOS, no model / network / device. A `./node_modules/.bin/tsx` harness imports the real exported `normalizeGatewayEvent` and feeds it the producer's exact terminal event shapes (`{ event:\"agent\", payload:{ stream:\"item\", data:{ phase:\"end\", status } } }`). BEFORE is `origin/main`'s `normalize.ts` (cp-swapped in for the run).\n\nExact steps or command run after this patch:\n```bash\n# harness calls the real normalizeGatewayEvent for status=failed|blocked|completed\n./node_modules/.bin/tsx norm-proof.mts\n```\n\nEvidence after fix:\n```\nBEFORE (origin/main):\n  item phase=end status=failed    -> tool.call.completed\n  item phase=end status=blocked   -> tool.call.completed\n  item phase=end status=completed -> tool.call.completed\nAFTER (this branch):\n  item phase=end status=failed    -> tool.call.failed\n  item phase=end status=blocked   -> tool.call.failed\n  item phase=end status=completed -> tool.call.completed\n```\n\nObserved result after fix: failed and blocked terminal tool items now normalize to `tool.call.failed`; before the change all three collapsed to `tool.call.completed`. Completed (and `phase:\"end\"` with no status) remain `tool.call.completed`.\n\nWhat was not tested: a full live gateway→SDK round-trip with a real failing tool (no model/gateway run was performed). The end-to-end normalization is covered by the new `packages/sdk/src/normalize.test.ts` (failed→failed, blocked→failed, completed→completed, end-without-status→completed), which fails before the change and passes after.\n\n## Additional checks\n- `pnpm test packages/sdk/src/normalize.test.ts packages/sdk/src/index.test.ts packages/sdk/src/transport.test.ts` — 46 pass, no regressions. Verified fail-before by cp-swapping `origin/main`'s `normalize.ts` → the new test fails (failed/blocked classified as completed).\n- Formatter (`oxfmt`), static analysis (`oxlint`), and `tsgo:core` pass for the changed files.\n- Sibling check: `normalize.ts` is the only producer of `tool.call.completed`/`tool.call.failed` (the gateway emits raw `{stream,data}`; the SDK normalizes), so the fix is not one-sided.\n\n\n## Compatibility / release note\n\nThis corrects a public SDK event type, so it is an intentional, release-note-worthy behavior change: SDK consumers that previously observed **failed or blocked** terminal tool/item events as `tool.call.completed` will now correctly receive `tool.call.failed`. Both are existing members of the public `OpenClawEventType` union (`packages/sdk/src/types.ts`), so consumers already handling `tool.call.failed` need no change; consumers that only branched on `tool.call.completed` were previously treating failures as completions and can now distinguish them. `tool.call.completed` (and a `phase:\"end\"` event with no status) are unchanged. No type/schema/protocol change accompanies this.\n",
+        "branch": "fix/sdk-normalize-failed-tool-event",
+        "head_sha": "07604246dd8d92d05afd085c3cdc3f6774a2268b",
+        "author": "ly-wang19",
+        "labels": [
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "packages/sdk/src/normalize.test.ts",
+            "additions": 34,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "packages/sdk/src/normalize.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 40,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95383",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95383.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 25,
+          "gatingTotal": 20,
+          "counts": {
+            "QUEUED": 9,
+            "SUCCESS": 11,
+            "SKIPPED": 5
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 519,
+    "total_ms": 2049,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 292
+        "ms": 375
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1307
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +170,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 214
+        "ms": 344
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
