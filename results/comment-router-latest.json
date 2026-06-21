@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T23:01:15.810Z",
-  "repo": "openclaw/crabbox",
+  "generated_at": "2026-06-21T23:01:51.324Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T20:01:15.364Z",
+  "since": "2026-06-21T20:01:49.500Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    538
+    95608
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,217 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95608:4763242405:2026-06-21T23:01:46Z:clawsweeper_needs_human",
+      "comment_id": "4763242405",
+      "comment_version_key": "4763242405:2026-06-21T23:01:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95608#issuecomment-4763242405",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95608,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-21T20:46:28Z",
+      "comment_updated_at": "2026-06-21T23:01:46Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] A code repair is concrete, but the permanent gateway/SDK/Swift/plugin private-data API and trusted telemetry policy need maintainer approval before automation or merge is safe.; Needs attention: The diff adds caller-supplied trusted telemetry context, and session-scoped storage can mis-associate identifiers across runs unless attribution is made run-owned.; Review finding: [P1] Bind clientContext to the admit... (sha=1c6d1d0f78a6961220b828f3bdd1768a652a1ef5)",
+      "review_summary": "The PR adds an optional opaque `clientContext` field to gateway agent requests and forwards it through SDK/Swift/protocol surfaces into trusted diagnostic private data for run attribution.\n\nPR surface: Source +250, Tests +358, Generated 0, Other +8. Total +616 across 16 files.\n\nReproducibility: yes. From source, the PR writes caller context into a reusable diagnostic session slot and later lifecycle events read that mutable slot, so two differently attributed same-session requests are enough to exercise the mis-association path.",
+      "review_followup": "- [P2] A code repair is concrete, but the permanent gateway/SDK/Swift/plugin private-data API and trusted telemetry policy need maintainer approval before automation or merge is safe.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "1c6d1d0f78a6961220b828f3bdd1768a652a1ef5",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(gateway): opt-in clientContext run attribution via the trusted diagnostic channel",
+        "body": "## What Problem This Solves\n\nObservability and cost-attribution plugins that consume OpenClaw's diagnostic stream can see *that* a run happened, but have no safe way to learn *which upstream caller or task* a run belongs to. When OpenClaw is driven by an external orchestrator that launches a gateway `agent` run on behalf of some upstream identity/session, the resulting model-call and lifecycle telemetry cannot be joined back to that identity — so spans land unattributed (\"unknown\") on downstream tracing/cost dashboards.\n\nThere is currently no plugin-agnostic seam for a gateway client to attach opaque run context and have it reach diagnostics exporters without the gateway interpreting it.\n\n## Why This Change Was Made\n\nAdd an optional, bounded, opaque `clientContext` bag that a gateway `agent` request can carry, and deliver it to exporters over the **existing trusted diagnostic grant** (`onTrustedInternalDiagnosticEvent`, exposed to plugins via `ctx.internalDiagnostics.onEvent`) — not on the public event payload. No new subscription API is introduced.\n\nDesign decisions and boundaries:\n\n- **Trusted-grant-only delivery.** `clientContext` is delivered exclusively as `privateData` to holders of the existing trusted internal-diagnostics grant. Public `message.queued` / `session.state` payloads are unchanged, so untrusted/public `onDiagnosticEvent` subscribers never receive it. Delivery is scoped by an allowlist of lifecycle event types; the carrying events themselves stay untrusted.\n- **Core stays opaque.** The gateway never inspects the bag's contents and learns no plugin-specific names; an exporter interprets it via a discriminator it owns (`schemaVersion`).\n- **Bounded and sanitized.** `diagnostic-client-context.ts` enforces size (8 KB), depth (4), and key-count (64) caps, sanitizes prototype keys, orders keys deterministically (prompt-cache safety), and drops the whole bag on any cap/validation failure (never partial).\n- **Seed once, inherit, bounded to the active run.** Seeded once onto per-session diagnostic state before dispatch (the same propagation that already gives a later `message.queued` its `sessionKey`) and cleared when the run completes (session → `idle`) or when a reused session is seeded without context — so it cannot leak onto a later, unrelated run.\n- **Inert when absent.** No `clientContext` → the seeder no-ops, events carry no privateData, and there is zero behavior change.\n\n## User Impact\n\nPlugin and integration developers gain a generic seam: attach opaque `clientContext` on an `agent` run (TypeScript SDK, raw gateway, or OpenClawKit) and read it in a trusted diagnostics exporter (`ctx.internalDiagnostics.onEvent`) to attribute spans/cost to the upstream identity. Operators running OpenClaw under an external orchestrator get correctly-attributed traces instead of \"unknown\". No impact on existing runs or on public diagnostic consumers.\n\n## Compatibility\n\nAll changed public surfaces are additive. Accounting for each:\n\n| Surface | Change | Compatibility |\n|---|---|---|\n| Gateway `agent` request (`packages/gateway-protocol`) | `+ clientContext?` (optional) on `AgentParamsSchema` | Additive optional; `additionalProperties: false` preserved; **no protocol version bump**. Absent → unchanged. |\n| Public diagnostic events (`message.queued` / `session.state`) | **none** | Payloads unchanged. `clientContext` rides the trusted grant only — public/untrusted consumers see no new field. |\n| `DiagnosticEventPrivateData` (trusted-grant payload) | `+ clientContext?` | Only holders of the existing trusted internal-diagnostics grant receive it; no new subscription API. |\n| TypeScript SDK (`packages/sdk`) | `+ clientContext?` on run creation | Additive optional; existing callers unaffected. |\n| Swift `GatewayModels.swift` | regenerated: new optional `clientcontext` property + **`= nil`-defaulted** init parameter | **Source-compatible.** The generator's `DEFAULTED_OPTIONAL_INIT_PARAMS` policy gives `AgentParams.clientContext` a `nil` default, so existing OpenClawKit callers that construct `AgentParams` without it still compile. |\n| Diagnostic session state | `+ clientContext` on `SessionState`, carried in `mergeSessionState`, cleared on session reuse and on idle | Internal; bounded to the active run, preventing cross-run leakage on reused session ids/keys. |\n\nNo `CHANGELOG.md` edit (left for maintainers per CONTRIBUTING).\n\n## Security / telemetry boundary\n\n`clientContext` is **caller-supplied** and can carry upstream identifiers, so it is deliberately confined to the trusted boundary:\n\n- It is delivered **only** to holders of the existing trusted internal-diagnostics grant (official exporters), **never** to public `onDiagnosticEvent` subscribers — verified by the proof below.\n- The gateway treats it as opaque and bounds it server-side (size/depth/key caps, deterministic ordering, whole-bag drop on overflow); it is not echoed back to clients.\n- It is not a content-capture path: it carries caller attribution metadata, not prompt/message content, and the public lifecycle payload contract is unchanged.\n\nThe trust/spoofability/redaction policy for caller-supplied trusted telemetry is ultimately a maintainer call; this PR keeps the data strictly on the existing trusted grant and out of public diagnostics by construction.\n\n## Evidence\n\n**Focused tests (local, this branch):**\n\n- `src/infra/diagnostic-client-context.test.ts` — normalizer: size/depth/key caps, prototype-key sanitization, deterministic ordering, whole-bag drop on failure\n- `src/logging/diagnostic-client-context-events.test.ts` — 6/6: seed → trusted-grant inheritance; public listeners excluded; stale-clear on reuse; clear-on-idle bounding; absent → no privateData\n- `src/infra/diagnostic-events.test.ts` — 30/30: dispatch/emitter regression incl. trusted-vs-public delivery\n- `packages/gateway-protocol/src/schema/agent.test.ts` — optional `clientContext` acceptance\n- `tsgo` typecheck of the touched `src/` + `packages/` files: clean.\n\nCI runs the full suite.\n\n### Real behavior proof\n\n**Behavior addressed:** A gateway client attaches opaque `clientContext` to an `agent` run; it is normalized, seeded once, and delivered for the whole run to the trusted internal-diagnostics grant only (never to public diagnostic subscribers), and cleared when the run completes. Absent or oversized context is a no-op.\n\n**Real environment tested:** The actual diagnostic runtime (`setDiagnosticSessionClientContext` → `logSessionStateChange` / `logMessageQueued` → trusted/public dispatch), exercised with a redacted caller bag, observing both a public `onDiagnosticEvent` subscriber and a trusted `onTrustedInternalDiagnosticEvent` grant.\n\n**Exact steps run after this patch:** Seeded a redacted `clientContext` for a run, emitted `processing` → `message.queued` → `idle (run_completed)` → a trailing `message.queued`, and captured what each channel observed:\n\n```text\nPUBLIC clientContext per event: [null, null, null, null]\nPUBLIC stream contains redacted value: false\nTRUSTED grant saw:\n  session.state   clientContext = { schemaVersion: \"agentweave.context.v1\", upstreamRunId: \"REDACTED-run-7f3a2c\" }   # processing\n  message.queued  clientContext = { schemaVersion: \"agentweave.context.v1\", upstreamRunId: \"REDACTED-run-7f3a2c\" }   # queued\n  session.state   clientContext = { schemaVersion: \"agentweave.context.v1\", upstreamRunId: \"REDACTED-run-7f3a2c\" }   # idle (completing run)\n  message.queued  (no clientContext)                                                                                 # trailing event after idle — cleared\n```\n\n**Observed result:** The redacted `clientContext` reached the trusted grant on every in-run lifecycle event and was **absent from every public payload** (all `null`; the value appears nowhere in the public stream). After the run completed (`idle`), the trailing event carried no context — confirming it is bounded to the active run.\n\nThis was additionally confirmed end-to-end on a live `openclaw-gateway.service` carrying this seam: startup logs the trusted-grant subscription, and a real orchestrator-driven turn produced an attributed model-call span in Tempo (`{ span.prov.llm.model = \"gpt-5.5\" }`) instead of bucketing as \"unknown\".\n\n**What was not tested:** The downstream exporter plugin itself is out of this repo's scope.\n\n## Follow-ups\n\n- **Full per-run scoping.** clientContext is session-scoped today — the diagnostic lifecycle layer is keyed by `sessionId`/`sessionKey` (not `runId`) at the emit sites. It is bounded to the active run via clear-on-idle, which is correct under the one-active-run-per-session lifecycle; threading `runId` end-to-end for true per-run attribution is a separate, focused change.\n\n---\n\n🤖 AI-assisted (Claude Code).\n",
+        "branch": "feat/diagnostic-clientcontext-privatedata",
+        "head_sha": "1c6d1d0f78a6961220b828f3bdd1768a652a1ef5",
+        "author": "arniesaha",
+        "labels": [
+          "docs",
+          "app: web-ui",
+          "gateway",
+          "scripts",
+          "size: L",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/agent.test.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/agent.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/sdk/src/client.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/sdk/src/index.test.ts",
+            "additions": 18,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/sdk/src/types.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/protocol-gen-swift.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostic-client-context.test.ts",
+            "additions": 101,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/diagnostic-client-context.ts",
+            "additions": 130,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/diagnostic-events.test.ts",
+            "additions": 43,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostic-events.ts",
+            "additions": 23,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic-client-context-events.test.ts",
+            "additions": 181,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/logging/diagnostic-session-state.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic.ts",
+            "additions": 66,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 16,
+        "additions": 625,
+        "deletions": 9,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95608",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95608.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 165,
+          "gatingTotal": 160,
+          "counts": {
+            "SUCCESS": 138,
+            "SKIPPED": 22,
+            "FAILURE": 4,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-fast:FAILURE",
+            "checks-node-core-tooling:FAILURE",
+            "checks-node-agentic-agents-core-runner:FAILURE",
+            "check-docs:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-core-fast:FAILURE",
+            "checks-node-core-tooling:FAILURE",
+            "checks-node-agentic-agents-core-runner:FAILURE",
+            "check-docs:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 782,
+    "total_ms": 2081,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 435
+        "ms": 240
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1570
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +251,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 336
+        "ms": 245
       },
       {
         "name": "append_ledger",
