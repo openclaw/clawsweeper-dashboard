@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T06:49:42.037Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-21T06:50:04.164Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T03:49:39.426Z",
+  "since": "2026-06-21T03:50:03.950Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95412
+    518
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,222 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95412:4760154081:2026-06-21T06:49:36Z:clawsweeper_needs_human",
-      "comment_id": "4760154081",
-      "comment_version_key": "4760154081:2026-06-21T06:49:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95412#issuecomment-4760154081",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 95412,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-20T22:21:03Z",
-      "comment_updated_at": "2026-06-21T06:49:36Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- No automated repair is indicated; the remaining action is maintainer acceptance or tuning of the compatibility-sensitive cap and normal merge-gate handling.; Cleared: The diff reduces an unbounded Discord REST response-memory risk and adds no dependency, workflow, secret, or supply-chain exposure. (sha=140a4f13cddf9f6c5aaf190083d69e6c24a4608d)",
-      "review_summary": "The PR replaces Discord RequestClient's unbounded REST success-body read with the shared response-limit helper and adds regression tests for overflow, idle timeout, and normal payload parsing.\n\nPR surface: Source +19, Tests +72. Total +91 across 2 files.\n\nReproducibility: yes. Current main has an unbounded `response.text()` in `RequestClient.executeRequest`, and the PR body provides before/after terminal proof against that path; I did not run tests in this read-only review.",
-      "review_followup": "- No automated repair is indicated; the remaining action is maintainer acceptance or tuning of the compatibility-sensitive cap and normal merge-gate handling.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "140a4f13cddf9f6c5aaf190083d69e6c24a4608d",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(discord): bound REST response body to prevent OOM flood",
-        "body": "## What Problem This Solves\n\nThe Discord REST main response path read its body with an **unbounded** `await response.text()` (`extensions/discord/src/internal/rest.ts:252`) before JSON-parsing it. A controlled or hijacked endpoint — a malicious gateway redirecting REST traffic, or a compromised proxy in front of the Discord API — can stream an arbitrarily large response body that is fully buffered into memory, an unbounded-flood → OOM / DoS vector against any bot using the Discord extension. This bounds the read with the canonical `readResponseWithLimit` helper (an 8 MiB cap, far above any legitimate Discord JSON payload) plus an idle timeout, cancelling the stream at the cap or on stall instead of buffering unbounded — the symmetric fix to PR #95108, which bounded the analogous Anthropic Messages error-response read with the same helper.\n\n## Evidence\n\nA standalone `tsx proof.mts` drives the **real** `RequestClient.executeRequest` main path (line 252), with `vitest` regression tests and `oxlint` / `tsgo` on the changed files (worktree off `upstream/main`, repo `node_modules` symlinked):\n\n- **Before (unbounded)**: `await response.text()` against a flood body (4 MiB/chunk) buffered the **entire 256 MiB** flood — `heapUsed` grew **+236.55 MiB**, stream `cancel` count **0** (drained everything). A real endpoint flooding indefinitely = OOM.\n- **After (bounded, this PR)**: the same flood through `RequestClient.get(...)` pulled only **4 chunks**, hit the 8 MiB cap, **cancelled the stream once** (heap grew only **+16.69 MiB**), and threw `Discord REST response body exceeds 8388608 bytes (received 12582912)`. A stalled stream is cancelled with `Discord REST response stalled: no data received for 80ms`.\n- **Negative control**: a normal ~100 KB JSON payload (`{id, name, topic}`) still parses fully — `id`/`name`/`topic.length` all match, no false positive (legitimate large-but-bounded responses are not broken).\n- **Tests / lint / types**: `vitest extensions/discord/src/internal/rest.test.ts` → **34 passed (3 new)** — bounded overflow, idle-timeout stall, normal-payload control; `oxlint` on both changed files → exit 0; `tsgo --noEmit` on `extensions/discord/tsconfig.json` + scoped test tsconfig → exit 0.\n\n---\n\n## Summary\n\nThe Discord REST main response path read the body with an **unbounded** `await response.text()` (`extensions/discord/src/internal/rest.ts:252`) before JSON-parsing it. A controlled or hijacked endpoint (e.g. a malicious gateway redirecting REST traffic, a compromised proxy) can stream an arbitrarily large response body, which is fully buffered into memory — an unbounded-flood → OOM vector.\n\nThis wraps the read in the canonical `readResponseWithLimit` helper (the same one PR #95108 used to bound the Anthropic Messages error-response read), with an **8 MiB cap** — far above any legitimate Discord JSON payload (bulk `messages?limit=100` / full guild objects stay in the low hundreds of KB) — plus an **idle timeout** tied to the request timeout. The stream is cancelled at the cap or on stall instead of buffering unbounded, and normal payloads still parse fully.\n\n## Changes\n\n- `extensions/discord/src/internal/rest.ts`\n  - Import `readResponseWithLimit` from `openclaw/plugin-sdk/response-limit-runtime` (the established extension-side entry that re-exports the `@openclaw/media-core` helper from #95108 — no new abstraction).\n  - Add `DISCORD_REST_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024` and a small `readResponseBodyText(response, idleTimeoutMs)` wrapper that caps the body, sets `chunkTimeoutMs` to the request timeout, and throws bounded `onOverflow` / `onIdleTimeout` errors.\n  - Replace the line-252 `await response.text()` on the main path with the bounded reader; the result is still fed to `coerceResponseBody`, so normal JSON / 204 / 429 / error payloads parse exactly as before.\n- `extensions/discord/src/internal/rest.test.ts`\n  - Regression tests: bounded overflow (flood body → cap error + stream cancelled, only a few chunks pulled), idle-timeout stall (stalled stream cancelled with the stall error), and a normal-payload control that still parses.\n\n## Real behavior proof\n\n- **What was run**: a standalone `tsx proof.mts` driving the real `RequestClient.executeRequest` main path (line 252), plus the new `vitest` regression tests and `oxlint` / `tsgo` on the changed files. Worktree off `upstream/main` with the repo `node_modules` symlinked.\n- **Before (unbounded)**: `await response.text()` against a flood body (4 MiB/chunk) buffered the **entire 256 MiB** flood into memory — `heapUsed` grew **+236.55 MiB**, `cancel` count **0** (drained everything). A real endpoint flooding indefinitely = OOM.\n- **After (bounded, this PR)**: the same flood through `RequestClient.get(...)` pulled only **4 chunks**, hit the 8 MiB cap, **cancelled the stream once** (heap grew only +16.69 MiB), and threw `Discord REST response body exceeds 8388608 bytes (received 12582912)`. Idle case: a stalled stream is cancelled with `Discord REST response stalled: no data received for 80ms`.\n- **Negative control**: a normal ~100 KB JSON payload (`{id, name, topic}`) still parses fully — `id`/`name`/`topic.length` all match, no false positive (proving legitimate large-but-bounded responses are not broken).\n- **Readback**: the proof reads the actual thrown `Error.message`, the stream's `cancel` callback invocation count + cancel `reason`, the resolved/parsed object, and `process.memoryUsage().heapUsed` deltas across the real read path (not a mock of the helper).\n- **Tests / lint / types**: `vitest extensions/discord/src/internal/rest.test.ts` → 34 passed (3 new); `oxlint` on both changed files → exit 0; `tsgo --noEmit` on `extensions/discord/tsconfig.json` and a scoped test tsconfig including the test file → exit 0.\n- **Result**: all proof assertions passed (`=== 全部 proof 断言通过 ✅ ===`).\n\n**Label**: security\n\n## Symmetry with #95108\n\n#95108 bounded the analogous Anthropic Messages **error-response** read with `readResponseWithLimit` / `readResponseTextSnippet`. This PR is the symmetric fix for the Discord REST **main-response** path, reusing the same `@openclaw/media-core` helper (via the `response-limit-runtime` plugin entry) rather than introducing a new abstraction. (Note: `extensions/discord/src/api.ts:194` has the same unbounded `res.text()` on its main path and could be a follow-up.)\n\n---\n\nAI-assisted: implemented and verified with AI assistance; all proof commands were run for real against the actual code path.\n",
-        "branch": "fix/bound-discord-rest",
-        "head_sha": "140a4f13cddf9f6c5aaf190083d69e6c24a4608d",
-        "author": "alix-007",
-        "labels": [
-          "channel: discord",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/discord/src/internal/rest.test.ts",
-            "additions": 72,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/internal/rest.ts",
-            "additions": 20,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 92,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95412",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95412.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "gatingTotal": 159,
-          "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 31,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-core-tooling:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-core-tooling:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:95412:4761129401:2026-06-21T06:27:41Z:re_review",
-      "comment_id": "4761129401",
-      "comment_version_key": "4761129401:2026-06-21T06:27:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95412#issuecomment-4761129401",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 95412,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-21T06:27:41Z",
-      "comment_updated_at": "2026-06-21T06:27:41Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review — added the `what problem this solves` and `evidence` headings the proof workflow expects (proof content unchanged, just restructured under the required sections). this should clear needs-pr-context",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "— Added the `What Problem This Solves` and `Evidence` headings the proof workflow expects (proof content unchanged, just restructured under the required sections). This should clear needs-pr-context.",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(discord): bound REST response body to prevent OOM flood",
-        "body": "## What Problem This Solves\n\nThe Discord REST main response path read its body with an **unbounded** `await response.text()` (`extensions/discord/src/internal/rest.ts:252`) before JSON-parsing it. A controlled or hijacked endpoint — a malicious gateway redirecting REST traffic, or a compromised proxy in front of the Discord API — can stream an arbitrarily large response body that is fully buffered into memory, an unbounded-flood → OOM / DoS vector against any bot using the Discord extension. This bounds the read with the canonical `readResponseWithLimit` helper (an 8 MiB cap, far above any legitimate Discord JSON payload) plus an idle timeout, cancelling the stream at the cap or on stall instead of buffering unbounded — the symmetric fix to PR #95108, which bounded the analogous Anthropic Messages error-response read with the same helper.\n\n## Evidence\n\nA standalone `tsx proof.mts` drives the **real** `RequestClient.executeRequest` main path (line 252), with `vitest` regression tests and `oxlint` / `tsgo` on the changed files (worktree off `upstream/main`, repo `node_modules` symlinked):\n\n- **Before (unbounded)**: `await response.text()` against a flood body (4 MiB/chunk) buffered the **entire 256 MiB** flood — `heapUsed` grew **+236.55 MiB**, stream `cancel` count **0** (drained everything). A real endpoint flooding indefinitely = OOM.\n- **After (bounded, this PR)**: the same flood through `RequestClient.get(...)` pulled only **4 chunks**, hit the 8 MiB cap, **cancelled the stream once** (heap grew only **+16.69 MiB**), and threw `Discord REST response body exceeds 8388608 bytes (received 12582912)`. A stalled stream is cancelled with `Discord REST response stalled: no data received for 80ms`.\n- **Negative control**: a normal ~100 KB JSON payload (`{id, name, topic}`) still parses fully — `id`/`name`/`topic.length` all match, no false positive (legitimate large-but-bounded responses are not broken).\n- **Tests / lint / types**: `vitest extensions/discord/src/internal/rest.test.ts` → **34 passed (3 new)** — bounded overflow, idle-timeout stall, normal-payload control; `oxlint` on both changed files → exit 0; `tsgo --noEmit` on `extensions/discord/tsconfig.json` + scoped test tsconfig → exit 0.\n\n---\n\n## Summary\n\nThe Discord REST main response path read the body with an **unbounded** `await response.text()` (`extensions/discord/src/internal/rest.ts:252`) before JSON-parsing it. A controlled or hijacked endpoint (e.g. a malicious gateway redirecting REST traffic, a compromised proxy) can stream an arbitrarily large response body, which is fully buffered into memory — an unbounded-flood → OOM vector.\n\nThis wraps the read in the canonical `readResponseWithLimit` helper (the same one PR #95108 used to bound the Anthropic Messages error-response read), with an **8 MiB cap** — far above any legitimate Discord JSON payload (bulk `messages?limit=100` / full guild objects stay in the low hundreds of KB) — plus an **idle timeout** tied to the request timeout. The stream is cancelled at the cap or on stall instead of buffering unbounded, and normal payloads still parse fully.\n\n## Changes\n\n- `extensions/discord/src/internal/rest.ts`\n  - Import `readResponseWithLimit` from `openclaw/plugin-sdk/response-limit-runtime` (the established extension-side entry that re-exports the `@openclaw/media-core` helper from #95108 — no new abstraction).\n  - Add `DISCORD_REST_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024` and a small `readResponseBodyText(response, idleTimeoutMs)` wrapper that caps the body, sets `chunkTimeoutMs` to the request timeout, and throws bounded `onOverflow` / `onIdleTimeout` errors.\n  - Replace the line-252 `await response.text()` on the main path with the bounded reader; the result is still fed to `coerceResponseBody`, so normal JSON / 204 / 429 / error payloads parse exactly as before.\n- `extensions/discord/src/internal/rest.test.ts`\n  - Regression tests: bounded overflow (flood body → cap error + stream cancelled, only a few chunks pulled), idle-timeout stall (stalled stream cancelled with the stall error), and a normal-payload control that still parses.\n\n## Real behavior proof\n\n- **What was run**: a standalone `tsx proof.mts` driving the real `RequestClient.executeRequest` main path (line 252), plus the new `vitest` regression tests and `oxlint` / `tsgo` on the changed files. Worktree off `upstream/main` with the repo `node_modules` symlinked.\n- **Before (unbounded)**: `await response.text()` against a flood body (4 MiB/chunk) buffered the **entire 256 MiB** flood into memory — `heapUsed` grew **+236.55 MiB**, `cancel` count **0** (drained everything). A real endpoint flooding indefinitely = OOM.\n- **After (bounded, this PR)**: the same flood through `RequestClient.get(...)` pulled only **4 chunks**, hit the 8 MiB cap, **cancelled the stream once** (heap grew only +16.69 MiB), and threw `Discord REST response body exceeds 8388608 bytes (received 12582912)`. Idle case: a stalled stream is cancelled with `Discord REST response stalled: no data received for 80ms`.\n- **Negative control**: a normal ~100 KB JSON payload (`{id, name, topic}`) still parses fully — `id`/`name`/`topic.length` all match, no false positive (proving legitimate large-but-bounded responses are not broken).\n- **Readback**: the proof reads the actual thrown `Error.message`, the stream's `cancel` callback invocation count + cancel `reason`, the resolved/parsed object, and `process.memoryUsage().heapUsed` deltas across the real read path (not a mock of the helper).\n- **Tests / lint / types**: `vitest extensions/discord/src/internal/rest.test.ts` → 34 passed (3 new); `oxlint` on both changed files → exit 0; `tsgo --noEmit` on `extensions/discord/tsconfig.json` and a scoped test tsconfig including the test file → exit 0.\n- **Result**: all proof assertions passed (`=== 全部 proof 断言通过 ✅ ===`).\n\n**Label**: security\n\n## Symmetry with #95108\n\n#95108 bounded the analogous Anthropic Messages **error-response** read with `readResponseWithLimit` / `readResponseTextSnippet`. This PR is the symmetric fix for the Discord REST **main-response** path, reusing the same `@openclaw/media-core` helper (via the `response-limit-runtime` plugin entry) rather than introducing a new abstraction. (Note: `extensions/discord/src/api.ts:194` has the same unbounded `res.text()` on its main path and could be a follow-up.)\n\n---\n\nAI-assisted: implemented and verified with AI assistance; all proof commands were run for real against the actual code path.\n",
-        "branch": "fix/bound-discord-rest",
-        "head_sha": "140a4f13cddf9f6c5aaf190083d69e6c24a4608d",
-        "author": "alix-007",
-        "labels": [
-          "channel: discord",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/discord/src/internal/rest.test.ts",
-            "additions": 72,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/internal/rest.ts",
-            "additions": 20,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 92,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95412",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95412.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "gatingTotal": 159,
-          "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 31,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-core-tooling:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-core-tooling:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2939,
+    "total_ms": 350,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 409
+        "ms": 198
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2185
+        "ms": 4
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -256,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 317
+        "ms": 137
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
