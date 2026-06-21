@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T03:41:52.348Z",
+  "generated_at": "2026-06-21T03:42:06.259Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T00:41:50.689Z",
+  "since": "2026-06-21T00:42:05.787Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -39,12 +39,12 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/95467#issuecomment-4760810757",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95467,
-      "author": "yetval",
-      "author_id": 102706514,
+      "issue_number": 95352,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-21T03:39:49Z",
-      "comment_updated_at": "2026-06-21T03:39:49Z",
+      "comment_created_at": "2026-06-21T03:39:56Z",
+      "comment_updated_at": "2026-06-21T03:39:56Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review please",
@@ -64,106 +64,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(sessions): keep bound channel identity across non-delivery turns",
-        "body": "## What Problem This Solves\n\nA `dmScope:\"main\"` session keeps one durable origin record (`origin.nativeChannelId`, `origin.nativeDirectUserId`, `origin.accountId`, `origin.threadId`) so reactions, native threading, and status reads stay pointed at the channel the session is bound to.\n\n`mergeOrigin` in `src/config/sessions/metadata.ts` now drops those channel-keyed fields whenever the new turn's `provider`/`surface`/`accountId` differs from the stored origin (added to reset stale fields on a real Slack -> Telegram switch). But the check fires for **non-delivery turns too**. A non-deliver gateway `chat.send` builds its context with `Provider = Surface = OriginatingChannel = INTERNAL_MESSAGE_CHANNEL` (\"webchat\") (`src/gateway/server-methods/chat.ts`), and `deriveSessionOrigin` derives `origin.provider = \"webchat\"`. For a session bound to a real channel (e.g. Slack), `\"webchat\" !== \"slack\"` is treated as a channel switch, so the live Slack `nativeChannelId`/`nativeDirectUserId`/`accountId`/`threadId` are deleted even though the session never left Slack.\n\nThe same wipe happens for any internal non-delivery provider (`heartbeat`, `cron`, `webhook`, `voice`, `sessions_send`) that reaches `mergeOrigin` through `recordSessionMetaFromInbound` / `updateLastRoute`, which call `deriveSessionMetaPatch` without `skipSystemEventOrigin`.\n\n## Why This Change Was Made\n\nAn internal/non-delivery turn has no channel identity of its own, so it is not a channel switch and must not overwrite or erase the session's bound channel. The fix gates the reset on the new turn being a real, deliverable channel:\n\n```ts\nconst nextProvider = next?.provider;\nconst nextIsDeliverableChannel =\n  nextProvider != null &&\n  nextProvider !== INTERNAL_MESSAGE_CHANNEL &&\n  !isInternalNonDeliveryChannel(nextProvider);\nconst channelChanged = existing != null && nextIsDeliverableChannel && (/* provider/surface/account differs */);\n```\n\nA genuine Slack -> Telegram switch still resets the stale fields (Telegram is deliverable); a webchat send or heartbeat tick preserves them. This restores the pre-regression behavior for internal turns while keeping the intended cross-channel reset.\n\n## User Impact\n\nBefore: after an operator/webchat message or a heartbeat/cron tick lands in a channel-bound `dmScope:\"main\"` session, the agent's next threaded reply, reaction, or status read has no channel/thread target (origin wiped), so it posts to the wrong place or fails to route until the next real inbound on that channel re-populates the fields. P1, reachable on current `main`.\n\nAfter: the bound channel identity survives non-delivery turns; cross-channel switches still reset correctly.\n\n## Evidence\n\nRegression source: PR #95328 (`fix(sessions): reset stale per-channel origin fields on channel switch`), commit `73c988a9c8`.\n\nBefore/after, driving the real `deriveSessionMetaPatch` (`src/config/sessions/origin-channel-switch.test.ts`):\n\n- On unpatched `main`: the two new non-delivery tests FAIL — a Slack origin's `nativeChannelId`/`threadId`/`accountId` become `undefined` after a webchat send and after a heartbeat tick (`2 failed | 10 passed`).\n- With the fix: `12 passed (12)` — the bound Slack identity is preserved across a webchat send and a heartbeat tick, a real Slack -> Telegram switch still resets, and all 9 original PR #95328 cases stay green.\n- The gate also excludes the system-event providers `heartbeat`/`cron-event`/`exec-event` (reusing `isSystemEventProvider`, which now de-dupes the same check in `deriveSessionOrigin`); without that clause the new cron-event/exec-event tests fail (the bound `nativeChannelId` is wiped to `undefined`). 14/14 pass with it.\n\noxlint (core, type-aware) and tsgo core/test typecheck clean on the changed files.\n\n### Real behavior proof (live runtime, head `60a482119b`)\n\nDriving the real persistence path `recordSessionMetaFromInbound` (load `sessions.json` -> `deriveSessionMetaPatch`/`mergeOrigin` -> persist) against a temp store, identical inputs on both trees: a Slack DM turn, then a non-deliver gateway webchat turn on the same `dmScope:\"main\"` session key. Output redacted (no real ids/endpoints/tokens).\n\nPristine `main` (before):\n```\n[1] Slack DM persisted origin   : {\"label\":\"slack:U_REDACTED\",\"provider\":\"slack\",\"surface\":\"slack\",\"chatType\":\"direct\",\"from\":\"slack:U_REDACTED\",\"to\":\"slack:D_REDACTED\",\"nativeChannelId\":\"D_REDACTED\",\"nativeDirectUserId\":\"U_REDACTED\",\"accountId\":\"team_REDACTED\",\"threadId\":\"1700000000.000100\"}\n[2] after non-deliver webchat   : {\"label\":\"webchat:operator_REDACTED\",\"provider\":\"webchat\",\"surface\":\"webchat\",\"chatType\":\"direct\",\"from\":\"webchat:operator_REDACTED\",\"to\":\"webchat:agent\"}\n    nativeChannelId retained? false\n    nativeDirectUserId retained? false\n    accountId retained? false\n    threadId retained? false\n```\n\nPatched tree (after):\n```\n[1] Slack DM persisted origin   : {\"label\":\"slack:U_REDACTED\",\"provider\":\"slack\",\"surface\":\"slack\",\"chatType\":\"direct\",\"from\":\"slack:U_REDACTED\",\"to\":\"slack:D_REDACTED\",\"nativeChannelId\":\"D_REDACTED\",\"nativeDirectUserId\":\"U_REDACTED\",\"accountId\":\"team_REDACTED\",\"threadId\":\"1700000000.000100\"}\n[2] after non-deliver webchat   : {\"label\":\"webchat:operator_REDACTED\",\"provider\":\"webchat\",\"surface\":\"webchat\",\"chatType\":\"direct\",\"from\":\"webchat:operator_REDACTED\",\"to\":\"webchat:agent\",\"nativeChannelId\":\"D_REDACTED\",\"nativeDirectUserId\":\"U_REDACTED\",\"accountId\":\"team_REDACTED\",\"threadId\":\"1700000000.000100\"}\n    nativeChannelId retained? true\n    nativeDirectUserId retained? true\n    accountId retained? true\n    threadId retained? true\n```\n\nOn `main` the non-deliver webchat turn erases the persisted Slack `nativeChannelId`/`nativeDirectUserId`/`accountId`/`threadId` (so the next threaded reply/reaction/status read has no target); with the fix they survive while the webchat turn still updates `provider`/`surface`. Both runs `1 passed`.\n",
-        "branch": "fix/session-origin-internal-channel-wipe",
-        "head_sha": "60a482119bfe8e67bba3d8097378463a5dafe764",
-        "author": "yetval",
-        "labels": [
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "status: 🛠️ actively grinding"
-        ],
-        "files": [
-          {
-            "path": "src/config/sessions/metadata.ts",
-            "additions": 18,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/origin-channel-switch.test.ts",
-            "additions": 70,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 88,
-        "deletions": 5,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95467",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95467.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 36,
-          "gatingTotal": 31,
-          "counts": {
-            "SUCCESS": 13,
-            "QUEUED": 10,
-            "SKIPPED": 13
-          },
-          "blockers": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1865,
+    "total_ms": 1620,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 469
+        "ms": 454
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1176
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 4
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -175,7 +93,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 206
+        "ms": 1149
       },
       {
         "name": "append_ledger",
