@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T07:23:25.781Z",
+  "generated_at": "2026-06-21T07:24:29.647Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T04:23:24.039Z",
+  "since": "2026-06-21T04:24:29.083Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4761239093
   ],
-  "status_comment_id": 4761239240,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4761239093:2026-06-21T07:22:19Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/95419#issuecomment-4761239093",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 95419,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-21T07:22:19Z",
       "comment_updated_at": "2026-06-21T07:22:19Z",
-      "status_comment_id": 4761239240,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review — fixed a genuine regression the cron-isolated-agent check caught: the #94058 status-decoupling branch was too broad and reclassified deliberate keyless delivery-target *denials* (errorkind: delivery-target) as ok. narrowed the condition so those stay error, while transient delivery failures still become ok + deliverystatus:not-delivered. local: delivery-awareness 3 pass, full cron/isolated-agent suite 395 tests pass",
       "intent": "re_review",
@@ -62,125 +62,26 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-21T07:23:26.445Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 95419
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-21T07:23:27.344Z",
-          "response_comment_id": "4761239240",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): keep isolated run status ok when delivery fails",
-        "body": "## Summary\n\nScheduled isolated `agentTurn` cron jobs could finish a successful isolated session yet have the outer scheduled run persisted with `status=error` when the post-run delivery phase failed. This patch keeps execution `status=ok` and records the delivery failure separately, so cron run logs report `status=ok` with `deliveryStatus=not-delivered` instead of a false execution failure.\n\n## Root cause\n\nIn `finalizeCronRun` (`src/cron/isolated-agent/run.ts`), when the agent payload was non-fatal (`!hasFatalErrorPayload`), the dispatch outcome was returned verbatim:\n\n```ts\nif (!hasFatalErrorPayload || deliveryResult.result.status !== \"ok\") {\n  return resultWithDeliveryMeta; // carries deliveryResult.result.status === \"error\"\n}\n```\n\nA `dispatchCronDelivery` result of `status: \"error\"` (unresolved target / outbound send failure) therefore collapsed into the isolated agent execution status. `applyJobResult` then set `lastRunStatus=error`, incremented `consecutiveErrors`, and could trigger backoff / failure alerts for a session that actually succeeded.\n\nThe storage layer already keeps `status` (`CronRunStatus`) and `deliveryStatus` (`CronDeliveryStatus`) as separate columns; the bug was purely that `run.ts` contaminated `status` before persistence.\n\n## Changes\n\n- `finalizeCronRun`: when the agent payload is non-fatal and the run was not aborted, a delivery dispatch `status: \"error\"` now routes through `resolveRunOutcome` so execution `status` stays `ok`. Delivery failure is recorded via `delivered`/`deliveryAttempted` and delivery diagnostics, which drive the decoupled run-log `deliveryStatus` (`not-delivered`). Aborted runs and fatal agent payloads keep their `error` status.\n- `resolveRunOutcome`: carries optional `deliveryDiagnostics` so the delivery error remains operator-visible in run diagnostics even when `status=ok`.\n- Adds a regression test asserting a successful final report followed by a delivery dispatcher failure keeps `status=ok` with delivery failure metadata.\n\nScope is limited to cron finalization; no provider/channel code is touched.\n\n## Decoupling rationale (status vs deliveryStatus)\n\n`status` answers \"did the isolated agent turn execute successfully\" and `deliveryStatus` answers \"did the result reach its destination\". These are orthogonal: a turn can succeed and the announce/direct send can still fail. Collapsing them made every transient delivery error look like an agent failure and drove backoff/alerting. Keeping them decoupled means a delivery failure is surfaced (`deliveryStatus=not-delivered`, delivery diagnostics) without falsely failing the execution — avoiding any cross-cutting product-decision change to the scheduler's error semantics.\n\n## Semantic change — for maintainer review\n\nThis PR changes one observable behavior — the run-log `status` for the \"execution succeeded, delivery failed\" path — so I want to lay out the semantics and blast radius explicitly rather than asking you to infer them. This is the only judgement call in the change; the code is otherwise a verbatim re-route.\n\n**1. Why `status` / `deliveryStatus` decoupling is the correct semantics.** An isolated `agentTurn` is a self-contained unit of work: it either executes successfully and produces a final assistant report, or it does not. Post-run *delivery* (announce / direct send) is a separate, downstream phase that depends on transient externals (channel resolution, outbound network, provider availability). Today a successful, completed isolated session is retroactively re-labelled `status=error` purely because the announce send failed afterwards — i.e. work that finished is recorded as failed work. The storage layer already models these as two independent columns (`CronRunStatus` + `CronDeliveryStatus`); this PR just stops `run.ts` from contaminating the first with the second. The user who filed #94058 reached the same conclusion independently — their stated expected behavior is exactly \"preserve the successful agent execution outcome and separately record the delivery failure phase.\"\n\n**2. Blast radius on backoff / failure-alert is deliberately narrow.** Only one path changes: agent payload non-fatal (`!hasFatalErrorPayload`) **and** `deliveryResult.result.status === \"error\"` **and** the run was not aborted (`!params.isAborted()`). That path goes from `status=error` to `status=ok` + `deliveryStatus=not-delivered`. Everything else is untouched:\n\n   - A genuine execution failure (`hasFatalErrorPayload`) still records `status=error` → `consecutiveErrors++` → backoff / failure alerts fire exactly as before.\n   - An aborted run still records `status=error`.\n   - A successful delivery still records `status=ok` + delivered.\n\n   So real execution failures continue to drive backoff and alerting; only the false positives (succeeded-but-undelivered) stop doing so. The delivery failure is **not** swallowed — it remains operator-visible via `delivered=false`, `deliveryAttempted`, the `deliveryStatus=not-delivered` column, and the merged delivery diagnostics.\n\n**3. Compatibility note (the `merge-risk: compatibility` label).** The risk to weigh is operators/tooling that currently key off `status=error` to detect *undelivered* runs. After this change those runs surface as `status=ok` + `deliveryStatus=not-delivered`, so any such consumer should read `deliveryStatus` (the column already exists for this purpose) rather than overloading `status`. There is no schema/migration change and no provider/channel code touched. I have kept the code change to the minimum re-route and surfaced the trade-off here so the call on the error-semantics is yours to make — happy to adjust framing or gate the behavior if you'd prefer a more conservative landing.\n\n## Real behavior proof\n\n- **Behavior addressed:** A successful isolated `agentTurn` whose post-run delivery fails was persisted to the cron run log with `status=error`, making a successful session look like a failed run (and feeding error backoff/alerting).\n- **Real environment tested:** Local OpenClaw source checkout on Linux at `upstream/main` head `7217477553f64701d2ba36e344ca1cd6be8ba54f`, dependencies hydrated, commands run from the repo root.\n- **Exact steps or command run after this patch:** Drove the REAL `CronService` finalization (`applyJobResult` + `resolveDeliveryState`) for a successful isolated turn with a failing post-run delivery, persisted the resulting `finished` run record through the REAL `appendCronRunLog` into a REAL on-disk SQLite database (`OPENCLAW_STATE_DIR`), then READ IT BACK across the SQLite disk boundary via the REAL `readCronRunLogEntriesSync`. The injected finalization outcome is exactly what patched `run.ts` returns, validated independently by the new vitest regression test.\n- **Evidence after fix:** SQLite disk readback (console-intercept disabled):\n\n  ```text\n  [PROOF after-fix] finished event: {\"jobId\":\"16ede2af-...\",\"status\":\"ok\",\"delivered\":false,\"deliveryStatus\":\"not-delivered\"}\n  [PROOF after-fix] SQLite readback: {\"status\":\"ok\",\"deliveryStatus\":\"not-delivered\",\"delivered\":false}\n  ```\n\n- **Negative control (pre-fix behavior reproduced):** Reverting only `run.ts` and re-running the regression test reproduces the bug (real `run.ts` output), and the same SQLite readback flow persists the collapsed status:\n\n  ```text\n  AssertionError: expected 'error' to be 'ok' // Object.is equality   (run.ts regression test, fix reverted)\n\n  [PROOF pre-fix] SQLite readback: {\"status\":\"error\",\"deliveryStatus\":\"not-delivered\",\"delivered\":false,\"deliveryError\":\"Message failed\"}\n  ```\n\n- **Validation commands (all green after fix):**\n  - `node scripts/run-vitest.mjs src/cron/isolated-agent/run.message-tool-policy.test.ts src/cron/isolated-agent/run.meta-error-status.test.ts src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts src/cron/service.persists-delivered-status.test.ts src/cron/service.runs-one-shot-main-job-disables-it.test.ts` -> 166 passed\n  - `node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental false` -> exit 0\n  - `oxfmt --check` on changed files -> all formatted\n  - `oxlint` on changed files -> exit 0\n\n**Label**: proof: live SQLite run-log readback across disk (status=ok / deliveryStatus=not-delivered) + negative control reproducing the pre-fix collapsed status=error.\n\nAI-assisted.\n\nFixes #94058\n\n",
-        "branch": "fix/cron-isolated-status-not-overwritten-by-delivery",
-        "head_sha": "b570ae53ffb38ebc725c06289e4d0cff7092309a",
-        "author": "alix-007",
-        "labels": [
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/cron/isolated-agent/run.message-tool-policy.test.ts",
-            "additions": 77,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.ts",
-            "additions": 25,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 102,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95419",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95419.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 30,
-          "gatingTotal": 25,
-          "counts": {
-            "QUEUED": 10,
-            "SUCCESS": 13,
-            "SKIPPED": 7
-          },
-          "blockers": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3781,
+    "total_ms": 2052,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 556
+        "ms": 551
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1171
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -192,11 +93,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2026
+        "ms": 1489
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
