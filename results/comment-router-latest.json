@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T12:00:27.159Z",
+  "generated_at": "2026-06-21T12:01:33.230Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T09:00:23.900Z",
+  "since": "2026-06-21T09:01:32.911Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95522
+    95548
   ],
-  "comment_ids": [
-    4761870627
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,178 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:95183:4761870587:2026-06-21T11:58:10Z:re_review",
-      "comment_id": "4761870587",
-      "comment_version_key": "4761870587:2026-06-21T11:58:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95183#issuecomment-4761870587",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 95183,
-      "author": "snowzlmbot",
-      "author_id": 293528334,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-21T11:58:10Z",
-      "comment_updated_at": "2026-06-21T11:58:10Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "review-pr",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "pr",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): materialize streaming progress placeholders",
-        "body": "## What Problem This Solves\n\nFixes #95004.\n\nTelegram preview streaming had two source-proven silent paths that made Telegram feel stuck even while upstream/Web draft state existed:\n\n- short first previews below `minInitialChars` could remain unsent for the whole active turn;\n- `progress` mode dropped answer-lane partial activity when no tool/progress row existed yet, so Telegram could stay silent while Web had upstream draft/progress state.\n\nThis PR keeps Telegram's existing one-preview/no-spam policy, but makes the silence bounded and predictable.\n\n\n## Related Work / Scope Boundary\n\nRelated: #82303 (`feat(telegram): add progress assistant preview lane`).\n\nThis PR and #82303 both address Telegram feeling silent while upstream answer activity exists in `progress`-style streaming, but they intentionally choose different product shapes:\n\n- #82303 adds an **opt-in** `streaming.progress.assistantPreview` path that keeps the existing progress/tool draft and streams assistant partials on a separate transient assistant preview lane.\n- This PR keeps the existing default Telegram `progress` semantics narrower: it only materializes a stable label-only progress placeholder when answer activity would otherwise be invisible, and it does **not** stream assistant answer text into the progress draft.\n- This PR also separately bounds short first-preview silence for non-progress answer previews via `minInitialDelayMs`.\n\nSo #95183 is not a duplicate of #82303. It can coexist as the lower-risk default-silence fix, while #82303 remains the fuller opt-in two-lane assistant-preview feature if maintainers want that product behavior.\n\n## Summary\n\n- Add `minInitialDelayMs` to Telegram draft streams:\n  - short first previews still respect the initial debounce;\n  - if the turn remains active past the bounded delay, the same preview materializes instead of staying invisible forever;\n  - finals and threshold-reaching previews clear the delayed timer normally.\n- Add a shared progress-draft `noteActivity()` hook:\n  - `progress` mode can show the stable status label when upstream answer activity exists but no tool/progress row is available yet;\n  - answer text is still not leaked into the progress draft in `progress` mode.\n- Wire Telegram dispatch to use a 5s delayed materialization window for non-progress answer previews.\n- Update Telegram/streaming docs to describe the bounded short-preview behavior and progress-label placeholder.\n\n## Product decision encoded\n\nIssue #95004 was tagged for maintainer/product choice because the existing first-preview debounce is intentional. This PR chooses the least noisy fix shape:\n\n- keep the debounce for push-notification UX;\n- keep one visible Telegram preview message;\n- avoid token/delta spam;\n- only materialize a stable placeholder/preview when upstream activity remains active long enough to otherwise look stuck.\n\n## Latest timer cleanup fix evidence\n\nLatest head: `1ab0ba3ae113761e8875f75eb5c644da1ce73adf`.\n\nThis update addresses the ClawSweeper P2 finding that `createTelegramDraftStream.clear()` did not cancel a delayed first-preview timer. The fix calls `clearInitialPreviewTimer()` in `clear()` before stopping/removing the draft, and adds a fake-timer regression covering: below-threshold pending preview → `clear()` → timer count drops to zero → advancing the old delay does not send or edit a Telegram draft.\n\nValidation run on the updated head:\n\n```bash\ngit diff --check origin/main...HEAD\nnode scripts/run-vitest.mjs \\\n  extensions/telegram/src/draft-stream.test.ts \\\n  extensions/telegram/src/bot-message-dispatch.test.ts \\\n  src/channels/progress-draft-compositor.test.ts\n```\n\nResult: 193 targeted tests passed (`draft-stream` 48, `bot-message-dispatch` 130, `progress-draft-compositor` 15).\n\n## Live Telegram Bot API timer cleanup proof\n\nA real Telegram Bot API proof was run with the configured test bot token against a private proof chat. Token and chat identifiers are redacted in the captured evidence.\n\nScenario:\n\n1. Create a Telegram draft stream with `minInitialChars: 80` and `minInitialDelayMs: 1200`.\n2. Send a below-threshold first preview (`Proof <label>`), then flush once so the delayed first-preview timer is scheduled.\n3. Call `clear()` before the delay elapses.\n4. Wait beyond the original delay window and record Bot API calls plus runtime timer events.\n\nBefore/after evidence:\n\n```text\n#95183 before fix (70c0948...)\n- after flush: active delayed timers = 1\n- after clear(): active delayed timers = 1\n- after 1200ms: timer fired after clear = true\n- Telegram send/edit/delete calls after clear: 0/0/0\n\n#95183 after fix (1ab0ba3...)\n- after flush: active delayed timers = 1\n- clear() called clearTimeout(timerId=1)\n- after clear(): active delayed timers = 0\n- after 1200ms: timer fired after clear = false\n- Telegram send/edit/delete calls after clear: 0/0/0\n\n#95522 before fix (3296107...)\n- after flush: active delayed timers = 1\n- after clear(): active delayed timers = 1\n- after 1200ms: timer fired after clear = true\n- Telegram send/edit/delete calls after clear: 0/0/0\n\n#95522 after fix (ae1b0bd...)\n- after flush: active delayed timers = 1\n- clear() called clearTimeout(timerId=1)\n- after clear(): active delayed timers = 0\n- after 1200ms: timer fired after clear = false\n- Telegram send/edit/delete calls after clear: 0/0/0\n```\n\nObserved result: before the fix, `clear()` removed the visible draft state but left the delayed first-preview timer alive until it fired after cleanup. After the fix, `clear()` cancels the pending timer immediately, so no delayed flush runs after draft cleanup. The live Bot API run also confirms that the cleanup scenario does not leave a stray Telegram message after the fix.\n\n## Evidence\n\nLocal verification on this branch:\n\n```bash\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.extension-telegram.config.ts telegram/src/draft-stream.test.ts telegram/src/bot-message-dispatch.test.ts\n# 177 passed\n\nnode scripts/run-vitest.mjs run src/channels/progress-draft-compositor.test.ts\n# 15 passed\n\npnpm docs:list\n# passed\n\npnpm tsgo:extensions\n# passed\n\npnpm tsgo:core\n# passed\n\ngit diff --check\n# passed\n```\n\nTargeted source-level proof added:\n\n- `draft-stream.test.ts` now proves a short first preview is initially held, then materialized after the configured delay.\n- `progress-draft-compositor.test.ts` now proves upstream activity can materialize a label-only progress draft after the delay or repeated activity.\n- `progress-draft-compositor.test.ts` also proves pending delayed answer activity is cancelled when final delivery starts or lands, preventing stale progress placeholders after final delivery.\n- `bot-message-dispatch.test.ts` now proves Telegram `progress` mode shows a stable status placeholder for answer activity without streaming answer text into that draft.\n\nFollow-up verification after addressing ClawSweeper's delayed-final guard finding at `d2687eaed7`:\n\n```bash\nnode scripts/run-vitest.mjs src/channels/progress-draft-compositor.test.ts\n# 15 passed\n\nnode scripts/run-vitest.mjs extensions/telegram/src/bot-message-dispatch.test.ts\n# 130 passed\n\ngit diff --check\n# passed\n```\n\nCI status after initial PR creation:\n\n- Some repository workflows started and reported unrelated GitHub API installation rate-limit failures while listing PR files or comparing refs (`x-ratelimit-remaining: 0`). These are infrastructure/rate-limit failures, not code/test failures from this PR.\n- The `Real behavior proof` workflow initially failed because external PRs require explicit authored `What Problem This Solves` and `Evidence` sections. This body now includes those sections.\n\n## Native Telegram Bot API proof\n\nA dedicated Telegram test bot was used for native Bot API proof. Sensitive values are intentionally not included: the bot token is omitted and the private test chat id is redacted.\n\n- Dedicated test bot: `@snowzlmOpenClawtestBot` (`8602965171`)\n- Chat: redacted private test chat\n- Token: not included\n- Generated at: `2026-06-20T06:22:49.182Z`\n\nScenarios verified:\n\n1. PR #95007 — progress draft rows are visible as readable Telegram text.\n   - Operation: `sendMessage` + `editMessageText` with Telegram HTML parse mode.\n   - Message id: `4`\n   - Before: `Shelling`\n   - After: `Shelling` plus compact `exec running ...` and `exec passed ...` rows.\n   - Checks: Bot API accepted the HTML payload; no `[object Object]` or raw object dump; rows are readable as plain text in the Telegram message.\n\n2. PR #95183 — short first preview is bounded, not indefinitely silent.\n   - Operation: delayed `sendMessage` after an intentional initial quiet window.\n   - Message id: `5`\n   - `minInitialChars`: `30`\n   - Proof delay: `1201ms`\n   - Text: `Short`\n   - Checks: initially quiet; then materialized despite being below threshold.\n\n3. PR #95183 — progress mode can show a stable label placeholder before final delivery.\n   - Operation: placeholder `sendMessage`, followed by normal final `sendMessage`.\n   - Placeholder message id: `6`\n   - Final message id: `7`\n   - Checks: placeholder visible as `Shelling`; final delivery is separate and normal; answer text is not leaked into the placeholder.\n\nLocal sanitized artifact retained in the maintenance workspace: `projects/openclaw-pr-maintenance/proofs/telegram-real/telegram-proof-1781936573613.public.md`.\n### Telegram draft lifecycle proof\n\nAdditional native Bot API lifecycle proof was captured to address draft-message count and cleanup behavior:\n\n- Dedicated test bot: `@snowzlmOpenClawtestBot` (`8602965171`)\n- Chat/token: redacted\n- Local sanitized artifact: `projects/openclaw-pr-maintenance/proofs/telegram-real/telegram-proof-draft-lifecycle-1781937832925.public.md`\n\nVerified scenarios:\n\n1. Progress draft lifecycle, covering #95007 and #95183:\n   - Operations: `sendMessage(draft)` → `editMessageText(same draft id)` → `editMessageText(same draft id)` → `sendMessage(final)` → `deleteMessage(draft)`.\n   - Checks: both draft edits reused the initial draft message id; the final answer was delivered as a separate normal message; `deleteMessage` for the draft returned success.\n\n2. Short-preview lifecycle, covering #95183:\n   - Operations: `sendMessage(short preview)` → `editMessageText(same id update)` → `editMessageText(same id final)`.\n   - Checks: the short preview, later update, and final text all used the same Telegram message id, so the bounded short preview does not create multiple default draft messages.\n\n\n\n",
-        "branch": "fix/telegram-preview-placeholder-95004",
-        "head_sha": "1e6af44af2f81d0c09b82d05d7372a6bda881968",
-        "author": "snowzlmbot",
-        "labels": [
-          "docs",
-          "channel: telegram",
-          "size: M",
-          "proof: sufficient",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "docs/channels/telegram.md",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/concepts/streaming.md",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.test.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.ts",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/draft-stream.test.ts",
-            "additions": 36,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/draft-stream.ts",
-            "additions": 47,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/progress-draft-compositor.test.ts",
-            "additions": 64,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/progress-draft-compositor.ts",
-            "additions": 24,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 8,
-        "additions": 202,
-        "deletions": 7,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95183",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95183.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 30,
-          "gatingTotal": 25,
-          "counts": {
-            "QUEUED": 10,
-            "SUCCESS": 13,
-            "SKIPPED": 7
-          },
-          "blockers": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3487,
+    "total_ms": 641,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2010
+        "ms": 309
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1235
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -214,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 228
+        "ms": 323
       },
       {
         "name": "append_ledger",
