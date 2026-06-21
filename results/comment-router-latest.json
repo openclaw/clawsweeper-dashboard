@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T13:46:29.357Z",
-  "repo": "openclaw/clownfish",
+  "generated_at": "2026-06-21T13:46:32.760Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T10:46:29.041Z",
+  "since": "2026-06-21T10:46:31.063Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    173
+    95561
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,172 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95561:4762146305:2026-06-21T13:46:26Z:clawsweeper_auto_repair",
+      "comment_id": "4762146305",
+      "comment_version_key": "4762146305:2026-06-21T13:46:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95561#issuecomment-4762146305",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95561,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-21T13:34:52Z",
+      "comment_updated_at": "2026-06-21T13:46:26Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=8d063bc7bc6e2816b43b4e15305c04bf09f8596b)",
+      "review_summary": "The PR changes budget/preflight compaction to pass a configured compaction timeout signal instead of the reply operation abort signal, and adds one-off repro/evidence files under scripts/repro.\n\nPR surface: Source +4, Docs +362, Other +88. Total +454 across 7 files.\n\nReproducibility: yes. at source level: current main passes replyOperation.abortSignal into required budget/preflight compaction, and compactWithSafetyTimeout lets that external abort race the configured timeout. I did not run the reporter's slow vLLM reproduction in this read-only review.",
+      "review_followup": "- [P1] Maintainer review is needed for the preflight cancellation contract, and the contributor still needs to add real runtime proof from their setup.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "8d063bc7bc6e2816b43b4e15305c04bf09f8596b",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: preflight compaction uses reply abort signal (~60s) instead of configurable compaction timeout (#95553)",
+        "body": "## Summary\r\n\r\nPreflight compaction uses the reply operation's abort signal (~60s lifecycle) instead of the configured compaction timeout (default 180s), causing compaction on large sessions to be prematurely killed.\r\n- Problem: `runPreflightCompactionIfNeeded` passes `params.replyOperation.abortSignal` to `compactEmbeddedAgentSession`. This signal comes from `ReplyOperation`'s `AbortController` which aborts when the reply lifecycle ends (~60s by gateway timeout/restart/cancel), making slow compaction on large sessions always fail with \"Preflight compaction required but failed\"\r\n- Solution: Replace `params.replyOperation.abortSignal` with `AbortSignal.timeout(resolveCompactionTimeoutMs(cfg))`, which respects the configured `compaction.timeoutSeconds` (default 180s) and decouples compaction timeout from the reply operation lifecycle\r\n- What changed: `src/auto-reply/reply/agent-runner-memory.ts` — 1 new import + 4 lines added, 1 line removed (preflight compaction abort signal source)\r\n- What did NOT change: Memory flush and agent execution paths still correctly use `replyOperation.abortSignal` (2 occurrences, unchanged); `compactWithSafetyTimeout` core logic; `buildSessionContext`; non-preflight compaction paths (`trigger=overflow`); `ReplyOperation.abortSignal` interface\r\n\r\n## Change Type (select all)\r\n\r\n- [x] Bug fix\r\n- [ ] Feature\r\n- [ ] Refactor required for the fix\r\n- [ ] Docs\r\n- [ ] Security hardening\r\n- [ ] Chore/infra\r\n\r\n## Scope (select all)\r\n\r\n- [ ] Gateway / orchestration\r\n- [ ] Skills / tool execution\r\n- [ ] Auth / tokens\r\n- [x] Memory / storage\r\n- [ ] Integrations\r\n- [ ] API / contracts\r\n- [ ] UI / DX\r\n- [ ] CI/CD / infra\r\n\r\n## Linked Issue/PR\r\n\r\n- Fixes #95553\r\n- [x] This PR fixes a bug or regression\r\n\r\n## Motivation\r\n\r\nPreflight compaction (`trigger=budget`) is invoked before an agent turn when the session is near or over the context window budget. For large sessions with many messages, compaction can take significantly longer than the reply operation's lifecycle time (~60s). The abort signal from `ReplyOperation` (wire origin: `AbortController` in `reply-run-registry.ts:388`) is intended for cancelling the entire reply when the user aborts, gateway restarts, or timeout fires — but when passed as the compaction abort signal, it causes `compactWithSafetyTimeout`'s `composeAbortSignals()` to abort compaction prematurely on any reply lifecycle event, even though `compactWithSafetyTimeout` itself has a proper 180s safety timeout.\r\n\r\nThe fix ensures preflight compaction is bounded by its own configurable timeout (`compaction.timeoutSeconds`, default 180s) like all other compaction paths, not by the reply operation's transient lifecycle.\r\n\r\n## Real behavior proof\r\n\r\n**Behavior addressed**: Preflight compaction uses replyOperation.abortSignal (~60s lifecycle) instead of the configured compaction timeout (default 180s), causing compaction failure on large sessions.\r\n\r\n**Real environment tested**: Linux, Node v24.13.1, branch `fix/preflight-compaction-timeout-95553`\r\n\r\n**Exact steps or command run after this patch**:\r\n```bash\r\n# 1. Before: proof script against unpatched source shows 3x replyOperation.abortSignal + no import\r\nnode --import tsx scripts/repro/issue-95553-preflight-compaction-timeout-proof.mts\r\n\r\n# 2. After: same script against patched source shows config timeout + correct 2x remaining signals\r\nnode --import tsx scripts/repro/issue-95553-preflight-compaction-timeout-proof.mts\r\n\r\n# 3. Unit tests (all 131 pass)\r\npnpm test src/auto-reply/reply/agent-runner-memory.test.ts\r\npnpm test src/auto-reply/reply/agent-runner-memory.preflight-stale-tokens.test.ts\r\npnpm test src/auto-reply/reply/followup-runner.test.ts\r\n```\r\n\r\n**Evidence after fix**:\r\n\r\n`resolveCompactionTimeoutMs` matrix — config → output:\r\n\r\n| Config | Expected | Actual | Match |\r\n|--------|----------|--------|-------|\r\n| no config (default) | 180000ms (180s) | 180000ms | ✓ |\r\n| `compaction.timeoutSeconds: 300` | 300000ms (300s) | 300000ms | ✓ |\r\n| `compaction.timeoutSeconds: 120` | 120000ms (120s) | 120000ms | ✓ |\r\n\r\nBefore — unpatched source (reverted to `bc4b1b018a`):\r\n```console\r\n$ node --import tsx scripts/repro/issue-95553-preflight-compaction-timeout-proof.mts\r\n=== Source code verification ===\r\n  Preflight compaction uses config timeout:  NO — BUG STILL PRESENT\r\n  Other paths keep replyOperation signal:    3 occurrences (expected: 2 for memory flush + agent execution)\r\n  Import of resolveCompactionTimeoutMs:      NO — MISSING\r\n\r\n=== VERDICT: FIX NOT FULLY APPLIED ===\r\n  - Preflight compaction still uses old signal\r\n  - Missing resolveCompactionTimeoutMs import\r\n  - Unexpected replyOperation.abortSignal count: 3\r\n```\r\n\r\nAfter — patched source (this branch):\r\n```console\r\n$ node --import tsx scripts/repro/issue-95553-preflight-compaction-timeout-proof.mts\r\n=== Source code verification ===\r\n  Preflight compaction uses config timeout:  YES ✓\r\n  Other paths keep replyOperation signal:    2 occurrences (expected: 2 for memory flush + agent execution)\r\n  Import of resolveCompactionTimeoutMs:      YES ✓\r\n\r\n=== VERDICT: FIX CONFIRMED ===\r\nPreflight compaction now uses the configured compaction timeout\r\n(180s, configurable via compaction.timeoutSeconds)\r\ninstead of the reply operation's abort signal (~60s).\r\nMemory flush and agent execution paths correctly keep the old signal.\r\nIssue #95553 is resolved.\r\n```\r\n\r\nUnit tests:\r\n```console\r\n$ pnpm test src/auto-reply/reply/agent-runner-memory.test.ts\r\n Test Files  1 passed (1)\r\n      Tests  46 passed (46)\r\n\r\n$ pnpm test src/auto-reply/reply/agent-runner-memory.preflight-stale-tokens.test.ts\r\n Test Files  1 passed (1)\r\n      Tests  2 passed (2)\r\n\r\n$ pnpm test src/auto-reply/reply/followup-runner.test.ts\r\n Test Files  1 passed (1)\r\n      Tests  83 passed (83)\r\n\r\nTotal: 3 test files, 131 tests, all passed\r\n```\r\n\r\n**Observed result after fix**:\r\n1. Proof script source verification confirms preflight compaction uses `AbortSignal.timeout(resolveCompactionTimeoutMs(cfg))` instead of `replyOperation.abortSignal`\r\n2. Memory flush and agent execution paths correctly keep the original `replyOperation.abortSignal` (2 remaining occurrences)\r\n3. `resolveCompactionTimeoutMs` correctly resolves all config variants (no config → 180s, 300s → 300000ms, 120s → 120000ms)\r\n4. All 131 existing unit tests pass with zero regressions\r\n5. `import { resolveCompactionTimeoutMs }` correctly added at the import site\r\n\r\n**What was not tested**: Full end-to-end OpenClaw runtime compaction with live gateway (requires real server). The `node --import tsx` proof script calls the exact same `resolveCompactionTimeoutMs` function used in production. No browser UI or mobile app flow tested; this is a backend compaction timeout change.\r\n\r\n## Root cause (if applicable)\r\n\r\nThe signal chain was: `ReplyOperation (AbortController ~60s lifecycle) → preflightCompaction → compactEmbeddedAgentSession → compactWithSafetyTimeout(180s timeout)`. The `composeAbortSignals()` helper in `compaction-safety-timeout.ts:21` combines the 180s timeout signal and the external abort signal — when the reply operation's signal fires first (~60s), it wins the race and aborts compaction prematurely. The fix cuts `replyOperation.abortSignal` out of this chain entirely by replacing it with `AbortSignal.timeout(180s)`, matching `compactWithSafetyTimeout`'s own timeout.\r\n\r\n## Regression Test Plan\r\n\r\n- `agent-runner-memory.test.ts` (46 tests): Covers preflight compaction call with `toMatchObject` assertion — `abortSignal` field is not explicitly asserted so the change is transparent\r\n- `agent-runner-memory.preflight-stale-tokens.test.ts` (2 tests): Validates stale token handling in preflight compaction gate\r\n- `followup-runner.test.ts` (83 tests): End-to-end reply flow unaffected since compaction param change doesn't affect caller semantics\r\n- Minimal risk: only 1 line of production logic changed (+5/-1), only affects `trigger=budget` preflight path\r\n\r\n## User-visible / Behavior Changes\r\n\r\nPreflight compaction on large sessions can now complete within the configured `compaction.timeoutSeconds` (default 180s) instead of being killed after ~60s by the reply operation lifecycle timeout. No user-facing API or config changes.\r\n\r\n## Security Impact\r\n\r\n- [x] New permissions/capabilities? No\r\n- [x] Secrets/tokens handling changed? No\r\n- [x] New/changed network calls? No\r\n- [x] Command/tool execution surface changed? No\r\n- [x] Data access scope changed? No\r\n\r\n## Human Verification\r\n\r\n- Verified scenarios: `resolveCompactionTimeoutMs` with 3 config variants (undefined, 300s, 120s); source code grep for all `abortSignal:` occurrences to confirm only the preflight path changed; `replyOperation.abortSignal` count verified at 2 for remaining paths\r\n- Edge cases checked: `compaction.timeoutSeconds` set to 0 or negative → `finiteSecondsToTimerSafeMilliseconds` returns undefined → falls back to 180s default; memory flush and agent execution retain correct signal; preflight compaction only, non-preflight compaction unaffected\r\n\r\n## Compatibility / Migration\r\n\r\n- [x] Backward compatible? Yes — only the abort signal source changes, the timeout value (180s default) matches the pre-existing `compactWithSafetyTimeout` default\r\n- [x] Config/env changes? No — `compaction.timeoutSeconds` already existed\r\n- [x] Migration needed? No\r\n\r\n## Best-fix Verdict\r\n\r\n- **Best fix**: Yes — targets the exact root cause at the preflight compaction call site. The fix is a one-line change (+5/-1 including the import) that replaces the wrong signal source with the correct configured timeout, maintaining symmetry with `compactWithSafetyTimeout`'s own 180s default\r\n- **Refactor needed**: No — single concern, clean boundary\r\n- **Alternative considered**: (a) modifying `composeAbortSignals` to prioritize the timeout signal — rejected because the right fix is to not pass a non-compaction signal at all; (b) adding a new flag to `compactWithSafetyTimeout` to ignore external abort signal — rejected as over-engineering for a one-caller issue\r\n\r\n## AI Assistance\r\n\r\n- **AI-assisted**: Yes\r\n- **Co-Authored-By**: Claude Sonnet 4.6 <noreply@anthropic.com>\r\n- **Human confirmed understanding of code changes**: Yes\r\n- **AI prompts / session excerpts**: Issue #95553 analysis, iterative signal-chain tracing through `reply-run-registry.ts`, `compaction-safety-timeout.ts`, `compact.ts`, and `agent-runner-memory.ts` to identify the correct fix boundary\r\n\r\n## Risks and Mitigations\r\n\r\n**Highest risk area**: If `replyOperation.abortSignal` was intentionally used to abort compaction when the reply is cancelled (e.g., user abort), the fix could allow compaction to continue briefly after the reply is cancelled.\r\n**Mitigation**: Compaction time is bounded by `compaction.timeoutSeconds` (default 180s). The memory flush and agent execution paths still use `replyOperation.abortSignal`, so those operations remain abortable. When compaction completes after reply cancellation, its results are benign (post-compaction compaction entries in storage are safe to ignore) and the follow-up agent turn won't run since the reply is already cancelled.\r\n**Compatibility impact**: None. Only affects the abort signal source for `trigger=budget` (preflight) compaction. The `compactWithSafetyTimeout` safety timeout (180s) is identical before and after the fix.\r\n\r\nFixes #95553\r\n",
+        "branch": "fix/preflight-compaction-timeout-95553",
+        "head_sha": "8d063bc7bc6e2816b43b4e15305c04bf09f8596b",
+        "author": "maweibin",
+        "labels": [
+          "scripts",
+          "size: M",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/repro/evidence-95553/01-before-after-diff.md",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/repro/evidence-95553/02-architectural-analysis.md",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/repro/evidence-95553/03-proof-script-output.md",
+            "additions": 65,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/repro/evidence-95553/04-test-results.md",
+            "additions": 60,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/repro/evidence-95553/05-summary.md",
+            "additions": 113,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/repro/issue-95553-preflight-compaction-timeout-proof.mts",
+            "additions": 88,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 7,
+        "additions": 455,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95561",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95561.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 34,
+          "gatingTotal": 29,
+          "counts": {
+            "CANCELLED": 2,
+            "QUEUED": 10,
+            "SKIPPED": 14,
+            "SUCCESS": 8
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 511,
+    "total_ms": 1964,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 304
+        "ms": 350
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1331
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +206,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 196
+        "ms": 254
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
