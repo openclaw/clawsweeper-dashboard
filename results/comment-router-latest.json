@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T23:28:05.991Z",
-  "repo": "openclaw/clawrouter",
+  "generated_at": "2026-06-21T23:28:15.741Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T20:28:05.675Z",
+  "since": "2026-06-21T20:28:13.711Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    37
+    95614
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,252 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95614:4763547963:2026-06-21T23:28:09Z:clawsweeper_auto_repair",
+      "comment_id": "4763547963",
+      "comment_version_key": "4763547963:2026-06-21T23:28:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95614#issuecomment-4763547963",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95614,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-21T22:57:24Z",
+      "comment_updated_at": "2026-06-21T23:28:09Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=baa95a4b660e11e161b7bc1380ce21ecbd325d07)",
+      "review_summary": "The PR changes memory-wiki local-source re-ingest to read an existing generated source page, preserve its human Notes block, and adds focused ingest regressions.\n\nPR surface: Source +35, Tests +82. Total +117 across 3 files.\n\nReproducibility: yes. Current main and v2026.6.9 write a regenerated source page with an empty Notes block, and the PR body includes before/after on-disk proof for the actual ingestMemoryWikiSource path; I did not run repository tests in this read-only review.",
+      "review_followup": "- [P2] A narrow mechanical PR-branch repair can address the remaining Notes-block boundary bug without product judgment.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "baa95a4b660e11e161b7bc1380ce21ecbd325d07",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-wiki): preserve human notes block on source re-ingest",
+        "body": "## Summary\n\nRe-ingesting an already-ingested memory-wiki source destroys the user's notes. `openclaw wiki ingest <path>` (and the gateway `wiki` ingest tool) write each source page with a `## Notes` block delimited by `<!-- openclaw:human:start -->` / `<!-- openclaw:human:end -->` markers that the user is meant to edit. When the same source is ingested again (same title, so same slug and same `sources/<slug>.md` path), the page is regenerated with an empty Notes block and overwritten, silently dropping anything the user wrote inside the human-managed block.\n\nThis contradicts the documented contract in `docs/plugins/memory-wiki.md:129`: \"Managed content stays inside generated blocks. Human note blocks are preserved.\"\n\n## Root cause\n\n`extensions/memory-wiki/src/ingest.ts` rebuilds the full page body with a hardcoded empty human block and writes it unconditionally, never reading the existing page:\n\n```ts\n// before\n      \"## Notes\",\n      \"<!-- openclaw:human:start -->\",\n      \"<!-- openclaw:human:end -->\",\n      \"\",\n    ].join(\"\\n\"),\n  });\n\n  await fs.writeFile(pagePath, markdown, \"utf8\");\n```\n\nThe sibling write paths already preserve the human block by reading the existing page first: synthesis (`apply.ts` `buildSynthesisBody` threads `originalBody` through `replaceManagedMarkdownBlock`) and the ChatGPT importer (`chatgpt-import.ts` `preserveExistingPageBlocks` re-injects the existing human block). Ingest was the lone writer that skipped this step.\n\n## Fix\n\nWhen the page already exists, read it and re-inject its existing human Notes block into the freshly rendered markdown before writing. A small helper lives next to the existing human-block markers in `markdown.ts`:\n\n```ts\n// after - markdown.ts\nfunction findNotesHumanBlock(page: string): { start: number; end: number } | null {\n  const start = page.lastIndexOf(HUMAN_START_MARKER);\n  if (start === -1) {\n    return null;\n  }\n  const endMarker = page.indexOf(HUMAN_END_MARKER, start + HUMAN_START_MARKER.length);\n  if (endMarker === -1) {\n    return null;\n  }\n  return { start, end: endMarker + HUMAN_END_MARKER.length };\n}\n\nexport function preserveHumanNotesBlock(rendered: string, existing: string): string {\n  const existingBlock = findNotesHumanBlock(existing);\n  const renderedBlock = findNotesHumanBlock(rendered);\n  if (!existingBlock || !renderedBlock) {\n    return rendered;\n  }\n  return (\n    rendered.slice(0, renderedBlock.start) +\n    existing.slice(existingBlock.start, existingBlock.end) +\n    rendered.slice(renderedBlock.end)\n  );\n}\n```\n\n```ts\n// after - ingest.ts\n  const existing = created ? \"\" : await fs.readFile(pagePath, \"utf8\").catch(() => \"\");\n  await fs.writeFile(\n    pagePath,\n    existing ? preserveHumanNotesBlock(markdown, existing) : markdown,\n    \"utf8\",\n  );\n```\n\nThe helper anchors to the trailing human-marker pair rather than the first pair in the page. The source text is fenced inside `## Content`, which always precedes `## Notes`, and the generated `## Related` block carries only `openclaw:wiki:related` markers, so the last `openclaw:human` pair is always the real Notes block. This is robust even when the ingested source file itself contains the human marker comments: that text stays in `## Content` and is not mistaken for the Notes block. New page creation is unchanged (`created` short-circuits the read), and the freshly generated source content is still written; only the human block is carried forward.\n\n## Why this is the right boundary\n\n`ingestMemoryWikiSource` is the single function behind both the `wiki ingest` CLI command (`cli.ts:588`) and the gateway ingest tool, so fixing it covers both entry points. The human-block markers and detection already live in `markdown.ts`, so the preserve helper is colocated with the contract it protects. The two sibling writers (synthesis, ChatGPT import) already preserve the block, so no other surface needs changing; this change brings ingest in line with them.\n\n## Verification\n\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/ingest-human-notes.test.ts` (both cases pass with the patch). The marker-in-source-content case fails on the prior first-match helper and passes after anchoring to the trailing Notes block.\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/ingest.test.ts` (existing create-path assertion unchanged) passes.\n- `node scripts/run-oxlint.mjs` and `oxfmt --check` clean on the three changed files.\n- tsgo core typecheck clean.\n\n## Real behavior proof\n\nBehavior addressed: re-ingesting the same memory-wiki source wiped user notes stored in the page's human-managed `## Notes` block; with the patch the notes survive while the regenerated source content is still updated, including when the source content itself contains the human marker comments.\nReal environment tested: drove the real `ingestMemoryWikiSource` runtime function (the exact function behind `wiki ingest` and the gateway ingest tool) against a real on-disk vault on pristine base `66b94ba577` and on the patched head `baa95a4b66`, with identical inputs. Scenario 1: ingest a file, add a note inside the human markers, update the source, re-ingest. Scenario 2: same, but the updated source content itself contains the human start/end marker comments. Everything stayed real (real vault on disk, real render/write path); nothing was stubbed.\nExact steps or command run after this patch: for each scenario, ingest the source, edit the page Notes block to add a note, overwrite the source file, re-ingest the same path, then read the page back from disk.\nEvidence after fix:\n```\n# BEFORE (pristine base 66b94ba577)\n[scenario 1: plain re-ingest]\nupdated source content present: true\nuser note present after re-ingest: false\n[scenario 2: re-ingest where source content itself contains the human markers]\nsource content INJECTED FROM SOURCE present: true\nNotes block keeps user note: false\nNotes block free of source content: true\n\n# AFTER (this patch baa95a4b66, identical inputs)\n[scenario 1: plain re-ingest]\nupdated source content present: true\nuser note present after re-ingest: true\n[scenario 2: re-ingest where source content itself contains the human markers]\nsource content INJECTED FROM SOURCE present: true\nNotes block keeps user note: true\nNotes block free of source content: true\n```\nObserved result after fix: the re-ingested page keeps the user's note inside the Notes block while still showing the updated source content; on pristine base the same note is gone. When the source content contains the human marker comments, that content is retained in the body and the user's note is still preserved in the Notes block.\nWhat was not tested: no live network or provider request is involved in ingest; full repo build not run.\n",
+        "branch": "fix/memory-wiki-ingest-preserve-notes",
+        "head_sha": "baa95a4b660e11e161b7bc1380ce21ecbd325d07",
+        "author": "yetval",
+        "labels": [
+          "size: S",
+          "extensions: memory-wiki",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-wiki/src/ingest-human-notes.test.ts",
+            "additions": 82,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/ingest.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/markdown.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 119,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95614",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95614.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 159,
+          "gatingTotal": 154,
+          "counts": {
+            "SUCCESS": 130,
+            "SKIPPED": 25,
+            "FAILURE": 2,
+            "IN_PROGRESS": 2
+          },
+          "blockers": [
+            "checks-node-core-fast:FAILURE",
+            "checks-node-core-tooling:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runner:FAILURE"
+          ],
+          "pending": [
+            "checks-node-core-tooling:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-agents-core-runner:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95614:4763606257:2026-06-21T23:21:38Z:re_review",
+      "comment_id": "4763606257",
+      "comment_version_key": "4763606257:2026-06-21T23:21:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95614#issuecomment-4763606257",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95614,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-21T23:21:38Z",
+      "comment_updated_at": "2026-06-21T23:21:38Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-wiki): preserve human notes block on source re-ingest",
+        "body": "## Summary\n\nRe-ingesting an already-ingested memory-wiki source destroys the user's notes. `openclaw wiki ingest <path>` (and the gateway `wiki` ingest tool) write each source page with a `## Notes` block delimited by `<!-- openclaw:human:start -->` / `<!-- openclaw:human:end -->` markers that the user is meant to edit. When the same source is ingested again (same title, so same slug and same `sources/<slug>.md` path), the page is regenerated with an empty Notes block and overwritten, silently dropping anything the user wrote inside the human-managed block.\n\nThis contradicts the documented contract in `docs/plugins/memory-wiki.md:129`: \"Managed content stays inside generated blocks. Human note blocks are preserved.\"\n\n## Root cause\n\n`extensions/memory-wiki/src/ingest.ts` rebuilds the full page body with a hardcoded empty human block and writes it unconditionally, never reading the existing page:\n\n```ts\n// before\n      \"## Notes\",\n      \"<!-- openclaw:human:start -->\",\n      \"<!-- openclaw:human:end -->\",\n      \"\",\n    ].join(\"\\n\"),\n  });\n\n  await fs.writeFile(pagePath, markdown, \"utf8\");\n```\n\nThe sibling write paths already preserve the human block by reading the existing page first: synthesis (`apply.ts` `buildSynthesisBody` threads `originalBody` through `replaceManagedMarkdownBlock`) and the ChatGPT importer (`chatgpt-import.ts` `preserveExistingPageBlocks` re-injects the existing human block). Ingest was the lone writer that skipped this step.\n\n## Fix\n\nWhen the page already exists, read it and re-inject its existing human Notes block into the freshly rendered markdown before writing. A small helper lives next to the existing human-block markers in `markdown.ts`:\n\n```ts\n// after - markdown.ts\nfunction findNotesHumanBlock(page: string): { start: number; end: number } | null {\n  const start = page.lastIndexOf(HUMAN_START_MARKER);\n  if (start === -1) {\n    return null;\n  }\n  const endMarker = page.indexOf(HUMAN_END_MARKER, start + HUMAN_START_MARKER.length);\n  if (endMarker === -1) {\n    return null;\n  }\n  return { start, end: endMarker + HUMAN_END_MARKER.length };\n}\n\nexport function preserveHumanNotesBlock(rendered: string, existing: string): string {\n  const existingBlock = findNotesHumanBlock(existing);\n  const renderedBlock = findNotesHumanBlock(rendered);\n  if (!existingBlock || !renderedBlock) {\n    return rendered;\n  }\n  return (\n    rendered.slice(0, renderedBlock.start) +\n    existing.slice(existingBlock.start, existingBlock.end) +\n    rendered.slice(renderedBlock.end)\n  );\n}\n```\n\n```ts\n// after - ingest.ts\n  const existing = created ? \"\" : await fs.readFile(pagePath, \"utf8\").catch(() => \"\");\n  await fs.writeFile(\n    pagePath,\n    existing ? preserveHumanNotesBlock(markdown, existing) : markdown,\n    \"utf8\",\n  );\n```\n\nThe helper anchors to the trailing human-marker pair rather than the first pair in the page. The source text is fenced inside `## Content`, which always precedes `## Notes`, and the generated `## Related` block carries only `openclaw:wiki:related` markers, so the last `openclaw:human` pair is always the real Notes block. This is robust even when the ingested source file itself contains the human marker comments: that text stays in `## Content` and is not mistaken for the Notes block. New page creation is unchanged (`created` short-circuits the read), and the freshly generated source content is still written; only the human block is carried forward.\n\n## Why this is the right boundary\n\n`ingestMemoryWikiSource` is the single function behind both the `wiki ingest` CLI command (`cli.ts:588`) and the gateway ingest tool, so fixing it covers both entry points. The human-block markers and detection already live in `markdown.ts`, so the preserve helper is colocated with the contract it protects. The two sibling writers (synthesis, ChatGPT import) already preserve the block, so no other surface needs changing; this change brings ingest in line with them.\n\n## Verification\n\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/ingest-human-notes.test.ts` (both cases pass with the patch). The marker-in-source-content case fails on the prior first-match helper and passes after anchoring to the trailing Notes block.\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/ingest.test.ts` (existing create-path assertion unchanged) passes.\n- `node scripts/run-oxlint.mjs` and `oxfmt --check` clean on the three changed files.\n- tsgo core typecheck clean.\n\n## Real behavior proof\n\nBehavior addressed: re-ingesting the same memory-wiki source wiped user notes stored in the page's human-managed `## Notes` block; with the patch the notes survive while the regenerated source content is still updated, including when the source content itself contains the human marker comments.\nReal environment tested: drove the real `ingestMemoryWikiSource` runtime function (the exact function behind `wiki ingest` and the gateway ingest tool) against a real on-disk vault on pristine base `66b94ba577` and on the patched head `baa95a4b66`, with identical inputs. Scenario 1: ingest a file, add a note inside the human markers, update the source, re-ingest. Scenario 2: same, but the updated source content itself contains the human start/end marker comments. Everything stayed real (real vault on disk, real render/write path); nothing was stubbed.\nExact steps or command run after this patch: for each scenario, ingest the source, edit the page Notes block to add a note, overwrite the source file, re-ingest the same path, then read the page back from disk.\nEvidence after fix:\n```\n# BEFORE (pristine base 66b94ba577)\n[scenario 1: plain re-ingest]\nupdated source content present: true\nuser note present after re-ingest: false\n[scenario 2: re-ingest where source content itself contains the human markers]\nsource content INJECTED FROM SOURCE present: true\nNotes block keeps user note: false\nNotes block free of source content: true\n\n# AFTER (this patch baa95a4b66, identical inputs)\n[scenario 1: plain re-ingest]\nupdated source content present: true\nuser note present after re-ingest: true\n[scenario 2: re-ingest where source content itself contains the human markers]\nsource content INJECTED FROM SOURCE present: true\nNotes block keeps user note: true\nNotes block free of source content: true\n```\nObserved result after fix: the re-ingested page keeps the user's note inside the Notes block while still showing the updated source content; on pristine base the same note is gone. When the source content contains the human marker comments, that content is retained in the body and the user's note is still preserved in the Notes block.\nWhat was not tested: no live network or provider request is involved in ingest; full repo build not run.\n",
+        "branch": "fix/memory-wiki-ingest-preserve-notes",
+        "head_sha": "baa95a4b660e11e161b7bc1380ce21ecbd325d07",
+        "author": "yetval",
+        "labels": [
+          "size: S",
+          "extensions: memory-wiki",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-wiki/src/ingest-human-notes.test.ts",
+            "additions": 82,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/ingest.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/markdown.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 119,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95614",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95614.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 159,
+          "gatingTotal": 154,
+          "counts": {
+            "SUCCESS": 130,
+            "SKIPPED": 25,
+            "FAILURE": 2,
+            "IN_PROGRESS": 2
+          },
+          "blockers": [
+            "checks-node-core-fast:FAILURE",
+            "checks-node-core-tooling:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runner:FAILURE"
+          ],
+          "pending": [
+            "checks-node-core-tooling:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-agents-core-runner:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 533,
+    "total_ms": 2245,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 304
+        "ms": 335
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1681
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -56,11 +282,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 217
+        "ms": 203
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
