@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T23:39:41.933Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-21T23:40:21.312Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T20:39:39.430Z",
+  "since": "2026-06-21T20:40:20.233Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95432
+    540
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 5,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95432:4760419902:2026-06-21T23:39:35Z:clawsweeper_needs_human",
-      "comment_id": "4760419902",
-      "comment_version_key": "4760419902:2026-06-21T23:39:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95432#issuecomment-4760419902",
-      "repo": "openclaw/openclaw",
+      "idempotency_key": "clawsweeper-repair:openclaw/crabbox:540:4763552784:2026-06-21T23:40:17Z:clawsweeper_needs_human",
+      "comment_id": "4763552784",
+      "comment_version_key": "4763552784:2026-06-21T23:40:17Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/540#issuecomment-4763552784",
+      "repo": "openclaw/crabbox",
       "target_branch": null,
-      "issue_number": 95432,
+      "issue_number": 540,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-21T00:27:19Z",
-      "comment_updated_at": "2026-06-21T23:39:35Z",
+      "comment_created_at": "2026-06-21T22:59:46Z",
+      "comment_updated_at": "2026-06-21T23:40:17Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,102 +53,384 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- No automated repair lane is needed; the remaining actions are exact-head CI handling, optional transport proof, and maintainer landing judgment.; Cleared: No concrete security or supply-chain concern was found; the diff is limited to TypeScript reply-delivery logic and tests with no dependency, workflow, secret, or package-script changes. (sha=af592d77b0dfaf516f86ccacd0e16a27ccb7f3bd)",
-      "review_summary": "The PR changes block reply final-payload suppression to track streamed text fragments per assistant message and adds multi-message regression coverage.\n\nPR surface: Source +9, Tests +61. Total +70 across 2 files.\n\nReproducibility: yes. at source level. Current main and v2026.6.9 aggregate all streamed fragments before comparing to each final, so two separately streamed assistant messages cannot suppress their own finals.",
-      "review_followup": "- No automated repair lane is needed; the remaining actions are exact-head CI handling, optional transport proof, and maintainer landing judgment.",
+      "repair_reason": "- No automated repair remains; maintainer review should own the intentional non-admin hostId compatibility break and normal required-check gating.; Cleared: The diff tightens a coordinator authorization boundary and does not add dependency, secret, package, or supply-chain surfaces. (sha=bb2bfa857e501aa2524083a8e293ad417654f934)",
+      "review_summary": "The PR gates explicit brokered host pinning behind admin auth, filters non-admin EC2 Mac Dedicated Host visibility to hosts attached to visible active leases, and updates Worker tests and host-pinning docs.\n\nReproducibility: yes. from source: current main exposes global EC2 Mac host inventory through portal host rows/details and accepts non-admin hostId lease creation, while the PR body includes live HTTP output for the new 403 gate. I did not run the Worker tests because this review is read-only.",
+      "review_followup": "- No automated repair remains; maintainer review should own the intentional non-admin hostId compatibility break and normal required-check gating.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "af592d77b0dfaf516f86ccacd0e16a27ccb7f3bd",
+      "expected_head_sha": "bb2bfa857e501aa2524083a8e293ad417654f934",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(reply): suppress per-message finals across multi-message block streaming",
-        "body": "## Summary\nWhen an agent turn produces two or more assistant messages (the common text then tool-call then text shape), block streaming re-delivers each fully-streamed assistant message a second time as its final reply. The user sees every message stream live, then receives the same messages again in full: duplicate chat messages on Telegram, Discord, Slack, and other channels.\n\n## Root cause\n`createBlockReplyPipeline` tracked every streamed text block in one flat array and suppressed a final payload only when the join of all fragments across all assistant messages equaled that payload.\n\n`src/auto-reply/reply/block-reply-pipeline.ts` (before):\n```ts\nconst streamedTextFragments: string[] = [];\n// ...\nstreamedTextFragments.push(reply.trimmedText);\n// ...\nreturn normalize(streamedTextFragments.join(\"\")) === normalize(reply.trimmedText);\n```\n\nThe end-of-turn payloads are one per assistant message. The join of every fragment across every message (\"Alpha one.Alpha two.Beta one.Beta two.\") never equals one message's final (\"Alpha one. Alpha two.\"), so `hasSentPayload` returns false and `preserveUnsentMediaAfterBlockSend` (`agent-runner-payloads.ts`) re-delivers it. The sibling direct-send path `hasDirectlySentText` already groups fragments by `assistantMessageIndex`; the pipeline did not.\n\nThis is reachable with the coalescer disabled, a real production path: `src/auto-reply/reply/acp-projector.ts` builds the pipeline with `coalescing: undefined` for ACP live delivery, so every streamed block is delivered separately.\n\n## Fix\nGroup streamed fragments by `assistantMessageIndex` and suppress a final when any single message's fragment join matches it.\n\n`src/auto-reply/reply/block-reply-pipeline.ts` (after):\n```ts\nconst streamedTextFragmentsByMessage = new Map<number | undefined, string[]>();\n// ...\nconst assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;\nconst fragments = streamedTextFragmentsByMessage.get(assistantMessageIndex) ?? [];\nfragments.push(reply.trimmedText);\nstreamedTextFragmentsByMessage.set(assistantMessageIndex, fragments);\n// ...\nfor (const fragments of streamedTextFragmentsByMessage.values()) {\n  if (fragments.length > 0 && normalize(fragments.join(\"\")) === target) {\n    return true;\n  }\n}\nreturn false;\n```\nMatching against any one message's join (rather than the final payload's own index) keeps suppression correct even though the per-message finals are stamped from a single `assistantMessageIndex` value.\n\n## Why this is the right boundary\nThe defect and the fix live entirely in the block-streaming suppression predicate. The change makes it symmetric with the already-correct `hasDirectlySentText` direct-send path in the same module family, so both streamed-delivery paths share one rule. No config or protocol surface changes. Single-message turns (one message split into multiple blocks) stay suppressed, and a payload spanning multiple messages is correctly not suppressed.\n\n## Verification\n- node scripts/run-vitest.mjs on the new src/auto-reply/reply/block-reply-pipeline.multi-message.test.ts plus the adjacent block-reply-pipeline and agent-runner-payloads suites: all pass (3 new, 89 adjacent).\n- node scripts/run-oxlint.mjs and oxfmt --check on the changed files: clean.\n- node scripts/run-tsgo.mjs for tsconfig.core.json and test/tsconfig/tsconfig.core.test.json: clean.\n- The new test fails on pristine main and passes with the patch.\n\n## Real behavior proof\nBehavior addressed: a two-assistant-message turn re-delivers each fully-streamed message as a duplicate final reply.\nReal environment tested: the real production createBlockReplyPipeline from src/auto-reply/reply/block-reply-pipeline.ts driven on pristine main (ba34052a0e) and on the patched tree with identical streamed input; the pipeline, its coalescer-disabled delivery, and the real hasSentPayload suppression predicate that the dispatcher uses all stayed real, nothing mocked.\nExact steps or command run after this patch: stream two assistant messages, each as two blocks (assistantMessageIndex 0 then 1), flush the pipeline, then append every end-of-turn final the suppression predicate does not recognize as already sent, and print the resulting delivered-to-chat sequence.\nEvidence after fix:\n```\n# BEFORE (pristine main ba34052a0e)\nmessages delivered to chat (6):\n  1. Alpha one.\n  2. Alpha two.\n  3. Beta one.\n  4. Beta two.\n  5. Alpha one. Alpha two.\n  6. Beta one. Beta two.\n# AFTER (this patch, identical inputs)\nmessages delivered to chat (4):\n  1. Alpha one.\n  2. Alpha two.\n  3. Beta one.\n  4. Beta two.\n```\nObserved result after fix: the two fully-streamed messages are no longer appended a second time, so the chat receives four messages instead of six on identical input.\nWhat was not tested: no live channel round trip (Telegram/Discord/Slack delivery transport); the coalescer-enabled path, where the same duplication needs a message longer than the coalescer max chars to flush mid-stream, was not separately driven; full build not run.\n",
-        "branch": "fix/block-streaming-multi-message-dup",
-        "head_sha": "af592d77b0dfaf516f86ccacd0e16a27ccb7f3bd",
-        "author": "yetval",
+        "title": "fix: protect dedicated host capacity",
+        "body": "## Summary\n\n- require admin authentication for explicit brokered provider-host pinning\n- show non-admin portal users only Dedicated Hosts attached to active leases already visible to them\n- retain full inventory and unattached host workflows for admins\n- update all host-pinning and portal authorization documentation\n\nFixes https://github.com/openclaw/crabbox/issues/538\n\n## Verification\n\n- `npm run format:check --prefix worker`\n- `npm run lint --prefix worker`\n- `npm run check --prefix worker`\n- `npm run check:node --prefix worker`\n- `npm test --prefix worker` (23 files, 647 tests)\n- `npm run build --prefix worker`\n- `npm run build:node --prefix worker`\n- `node scripts/build-docs-site.mjs`\n- autoreview: clean\n\nRegression coverage verifies non-admin host-pinned creation stops before provider side effects, admins can still pin, owners see attached hosts, share recipients see only shared attached hosts, and unattached inventory/details remain admin-only.\n\n## Live Worker proof\n\nRan the production Worker through local Wrangler and sent real HTTP requests to the lease endpoint. No cloud credentials were supplied, so the proof cannot create or spend provider resources.\n\n```text\nPOST /v1/leases (shared non-admin token, explicit hostId)\n403 Forbidden\n{\"error\":\"admin_required\",\"message\":\"provider host pinning requires admin-token auth\"}\n\nPOST /v1/leases (admin token, same explicit hostId)\n424 Failed Dependency\n{\"error\":\"provider_not_configured\",\"provider\":\"aws\",\"missing\":[\"AWS_ACCESS_KEY_ID\",\"AWS_SECRET_ACCESS_KEY\"]}\n\n[wrangler:info] POST /v1/leases 403 Forbidden (16ms)\n[wrangler:info] POST /v1/leases 424 Failed Dependency (4ms)\n```\n\nThe non-admin request fails at the new authorization gate; the admin request passes that gate and reaches provider-readiness validation, with no provider call or paid capacity action.\n",
+        "branch": "fix/mac-host-capacity-auth",
+        "head_sha": "bb2bfa857e501aa2524083a8e293ad417654f934",
+        "author": "steipete",
         "labels": [
-          "size: S",
+          "merge-risk: 🚨 compatibility",
           "proof: sufficient",
-          "mantis: telegram-visible-proof",
-          "P1",
           "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
+          "status: 👀 ready for maintainer look",
+          "P1"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/block-reply-pipeline.multi-message.test.ts",
-            "additions": 61,
+            "path": "CHANGELOG.md",
+            "additions": 1,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/block-reply-pipeline.ts",
-            "additions": 13,
+            "path": "docs/cli.md",
+            "additions": 8,
             "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/commands/vnc.md",
+            "additions": 4,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/commands/warmup.md",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/auth-admin.md",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/aws.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/configuration.md",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/portal.md",
+            "additions": 7,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/providers.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/vnc-macos.md",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/infrastructure.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/operations.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/aws.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "worker/src/fleet.ts",
+            "additions": 54,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "worker/test/fleet.test.ts",
+            "additions": 103,
+            "deletions": 17,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 74,
-        "deletions": 4,
+        "changedFiles": 15,
+        "additions": 208,
+        "deletions": 57,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95432",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95432.md",
+        "automerge_cluster_id": "automerge-openclaw-crabbox-540",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-540.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 167,
-          "gatingTotal": 162,
+          "total": 11,
+          "gatingTotal": 11,
           "counts": {
-            "SUCCESS": 138,
-            "SKIPPED": 25,
-            "FAILURE": 3,
-            "NEUTRAL": 1
+            "IN_PROGRESS": 2,
+            "SUCCESS": 9
           },
           "blockers": [
-            "checks-node-core-fast:FAILURE",
-            "checks-node-core-tooling:FAILURE",
-            "checks-node-agentic-agents-core-runner:FAILURE"
+            "Go:IN_PROGRESS",
+            "Release Check:IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-core-fast:FAILURE",
-            "checks-node-core-tooling:FAILURE",
-            "checks-node-agentic-agents-core-runner:FAILURE"
+          "pending": [
+            "Go:IN_PROGRESS",
+            "Release Check:IN_PROGRESS"
           ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/crabbox:540:4763637506:2026-06-21T23:34:58Z:re_review",
+      "comment_id": "4763637506",
+      "comment_version_key": "4763637506:2026-06-21T23:34:58Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/540#issuecomment-4763637506",
+      "repo": "openclaw/crabbox",
+      "target_branch": null,
+      "issue_number": 540,
+      "author": "steipete",
+      "author_id": 58493,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-21T23:34:58Z",
+      "comment_updated_at": "2026-06-21T23:34:58Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "admin",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: protect dedicated host capacity",
+        "body": "## Summary\n\n- require admin authentication for explicit brokered provider-host pinning\n- show non-admin portal users only Dedicated Hosts attached to active leases already visible to them\n- retain full inventory and unattached host workflows for admins\n- update all host-pinning and portal authorization documentation\n\nFixes https://github.com/openclaw/crabbox/issues/538\n\n## Verification\n\n- `npm run format:check --prefix worker`\n- `npm run lint --prefix worker`\n- `npm run check --prefix worker`\n- `npm run check:node --prefix worker`\n- `npm test --prefix worker` (23 files, 647 tests)\n- `npm run build --prefix worker`\n- `npm run build:node --prefix worker`\n- `node scripts/build-docs-site.mjs`\n- autoreview: clean\n\nRegression coverage verifies non-admin host-pinned creation stops before provider side effects, admins can still pin, owners see attached hosts, share recipients see only shared attached hosts, and unattached inventory/details remain admin-only.\n\n## Live Worker proof\n\nRan the production Worker through local Wrangler and sent real HTTP requests to the lease endpoint. No cloud credentials were supplied, so the proof cannot create or spend provider resources.\n\n```text\nPOST /v1/leases (shared non-admin token, explicit hostId)\n403 Forbidden\n{\"error\":\"admin_required\",\"message\":\"provider host pinning requires admin-token auth\"}\n\nPOST /v1/leases (admin token, same explicit hostId)\n424 Failed Dependency\n{\"error\":\"provider_not_configured\",\"provider\":\"aws\",\"missing\":[\"AWS_ACCESS_KEY_ID\",\"AWS_SECRET_ACCESS_KEY\"]}\n\n[wrangler:info] POST /v1/leases 403 Forbidden (16ms)\n[wrangler:info] POST /v1/leases 424 Failed Dependency (4ms)\n```\n\nThe non-admin request fails at the new authorization gate; the admin request passes that gate and reaches provider-readiness validation, with no provider call or paid capacity action.\n",
+        "branch": "fix/mac-host-capacity-auth",
+        "head_sha": "bb2bfa857e501aa2524083a8e293ad417654f934",
+        "author": "steipete",
+        "labels": [
+          "merge-risk: 🚨 compatibility",
+          "proof: sufficient",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look",
+          "P1"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli.md",
+            "additions": 8,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/commands/vnc.md",
+            "additions": 4,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/commands/warmup.md",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/auth-admin.md",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/aws.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/configuration.md",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/portal.md",
+            "additions": 7,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/providers.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/vnc-macos.md",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/infrastructure.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/operations.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/aws.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "worker/src/fleet.ts",
+            "additions": 54,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "worker/test/fleet.test.ts",
+            "additions": 103,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 15,
+        "additions": 208,
+        "deletions": 57,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-crabbox-540",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-540.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 11,
+          "gatingTotal": 11,
+          "counts": {
+            "IN_PROGRESS": 2,
+            "SUCCESS": 9
+          },
+          "blockers": [
+            "Go:IN_PROGRESS",
+            "Release Check:IN_PROGRESS"
+          ],
+          "pending": [
+            "Go:IN_PROGRESS",
+            "Release Check:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/crabbox:540:4763587544:2026-06-21T23:13:40Z:re_review",
+      "comment_id": "4763587544",
+      "comment_version_key": "4763587544:2026-06-21T23:13:40Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/540#issuecomment-4763587544",
+      "repo": "openclaw/crabbox",
+      "target_branch": null,
+      "issue_number": 540,
+      "author": "steipete",
+      "author_id": 58493,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-21T23:13:40Z",
+      "comment_updated_at": "2026-06-21T23:13:40Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2852,
+    "total_ms": 2083,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 442
+        "ms": 248
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2050
+        "ms": 813
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -160,11 +442,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 341
+        "ms": 993
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
