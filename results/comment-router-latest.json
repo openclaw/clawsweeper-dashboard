@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T06:29:47.008Z",
+  "generated_at": "2026-06-21T06:29:50.301Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T03:29:46.381Z",
+  "since": "2026-06-21T03:29:47.640Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95420
+    95417
   ],
   "comment_ids": [
-    4761129245
+    4761129335
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:95420:4761129245:2026-06-21T06:27:37Z:re_review",
-      "comment_id": "4761129245",
-      "comment_version_key": "4761129245:2026-06-21T06:27:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95420#issuecomment-4761129245",
+      "idempotency_key": "comment-router:openclaw/openclaw:95417:4761129335:2026-06-21T06:27:39Z:re_review",
+      "comment_id": "4761129335",
+      "comment_version_key": "4761129335:2026-06-21T06:27:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95417#issuecomment-4761129335",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95420,
+      "issue_number": 95417,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-21T06:27:37Z",
-      "comment_updated_at": "2026-06-21T06:27:37Z",
+      "comment_created_at": "2026-06-21T06:27:39Z",
+      "comment_updated_at": "2026-06-21T06:27:39Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review — added the `what problem this solves` and `evidence` headings the proof workflow expects (proof content unchanged, just restructured under the required sections). this should clear needs-pr-context",
@@ -64,20 +64,87 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): bound Google prompt cache response reads",
+        "body": "## What Problem This Solves\n\nThe Google embedded-agent prompt-cache helpers parsed `cachedContents` metadata with an unbounded `await response.json()` in **both** `createGooglePromptCache` and `updateGooglePromptCacheTtl` — two reads from the external Google Generative Language endpoint, which is an untrusted source from openclaw's perspective. A buggy or hostile endpoint returning `200 OK` with a large or never-ending body (especially with no `Content-Length`) was fully buffered into memory before parsing, so the existing `cancelUnreadResponseBody` guard fired too late. That is an out-of-memory / DoS vector that affects any embedded-agent run using Google prompt caching. This is the Google-endpoint counterpart to the recently merged bound-stream work in #95108 (Anthropic error streams) and #95103 (gateway pricing catalog), closing the same symmetric unbounded-read class on the Google path.\n\n## Evidence\n\n- **Test**: `google-prompt-cache.test.ts` exercises the real create and TTL-refresh paths against a streamed `Response` whose first chunk exceeds the 1 MiB cap and whose body never ends. Command: `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/google-prompt-cache.test.ts --run` → `Test Files 1 passed (1) / Tests 10 passed (10)` in ~2.2s.\n- **Before (negative control, fix reverted to `await response.json()`)**: the unbounded read fully buffers the never-ending body and the Vitest worker crashes with `ERR_WORKER_OUT_OF_MEMORY` (\"Worker terminated due to reaching memory limit: JS heap out of memory\") after hanging 90s+ with no output — reproducing the vulnerability.\n- **After (fix applied)**: tests pass; the create path rejects with `Google prompt cache response too large: <n> bytes` and the refresh path swallows the error (`.catch(() => null)`) and falls back to the still-valid cached content. In both cases the body's `cancel()` is asserted called once (not buffered).\n- **Direct read-path control (tsx)**: `node --import tsx` driving `readResponseWithLimit` exactly as `readGooglePromptCacheJson` does → `threw: Google prompt cache response too large: 1048577 bytes (limit: 1048576 bytes)`, `body_cancelled: true`, `pulls_before_cancel: 1` — cap engaged, stream cancelled, no unbounded buffering.\n- **Static checks**: `npx oxlint` exit 0; `node --check --experimental-strip-types` clean; `git diff --check` clean.\n\n---\n\n## Summary\n- The Google embedded-agent prompt-cache helpers parsed `cachedContents` metadata with an unbounded `await response.json()` in **both** `createGooglePromptCache` (`google-prompt-cache.ts:341`) and `updateGooglePromptCacheTtl` (`google-prompt-cache.ts:303`). This is a symmetric pair on the Google Generative Language endpoint.\n- A buggy or hostile endpoint returning `200 OK` with a large or never-ending body (especially with no `Content-Length`) was fully buffered into memory before parsing. The existing `cancelUnreadResponseBody` guard fired too late, since `response.json()` had already drained the whole body.\n- Both reads now go through the shared streaming byte-cap reader `readResponseWithLimit` under a 1 MiB cap, cancelling the stream on overflow instead of buffering it, then `JSON.parse` the bounded buffer.\n\n## Changes\n- `src/agents/embedded-agent-runner/google-prompt-cache.ts`: add `GOOGLE_PROMPT_CACHE_RESPONSE_MAX_BYTES` (1 MiB) + a small `readGooglePromptCacheJson<T>` helper that wraps `readResponseWithLimit({ onOverflow })` + `JSON.parse`; route both call sites through it.\n- `src/agents/embedded-agent-runner/google-prompt-cache.test.ts`: regressions that stream an oversized, no-`Content-Length` body through the real create and TTL-refresh paths and assert the body is cancelled (not buffered).\n\nThis is the Google-endpoint counterpart to the recently merged bound-stream work in #95108 (Anthropic error streams) and #95103 (gateway pricing catalog), reusing the same `readResponseWithLimit` helper rather than introducing a new abstraction.\n\n## Real behavior proof\n\n**What was tested**: the real `prepareGooglePromptCacheStreamFn` wrapper driving the real `createGooglePromptCache` and `updateGooglePromptCacheTtl` against a streamed `Response` whose first chunk exceeds the cap and whose body never ends.\n\n**Command**: `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/google-prompt-cache.test.ts --run`\n\n**Before (negative control, fix reverted to `await response.json()`)**: the unbounded read fully buffers the never-ending body and the Vitest worker crashes:\n```\nCaused by: Error: Worker terminated due to reaching memory limit: JS heap out of memory\nSerialized Error: { code: 'ERR_WORKER_OUT_OF_MEMORY' }\n```\n(The run hung 90s+ with no output before the OOM, reproducing the unbounded-buffering vulnerability.)\n\n**After (fix applied)**: `Test Files 1 passed (1) / Tests 10 passed (10)` in ~2.2s. The new tests assert the create path rejects with `Google prompt cache response too large: <n> bytes` and the refresh path swallows the error (`.catch(() => null)`) and falls back to the still-valid cached content — and in both cases the body's `cancel()` is called once.\n\n**Also (tsx, real read path)**: `node --import tsx` driving `readResponseWithLimit` exactly as `readGooglePromptCacheJson` does:\n```\nthrew: Google prompt cache response too large: 1048577 bytes (limit: 1048576 bytes)\nbody_cancelled: true\npulls_before_cancel: 1\nPROOF OK: cap engaged, stream cancelled, no unbounded buffering\n```\n\n**Other checks**: `npx oxlint <both files>` exit 0; `node --check --experimental-strip-types <both files>` clean; `git diff --check` clean.\n\n**Label**: proof-sufficient\n\n---\n🤖 AI-assisted (human-reviewed). Symmetric Google-endpoint follow-up to #95108 / #95103 bound-stream reads.\n",
+        "branch": "fix/bound-google-prompt-cache",
+        "head_sha": "7652ed4b273b4770e43ad5a3b330ca355033b865",
+        "author": "alix-007",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/google-prompt-cache.test.ts",
+            "additions": 111,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/google-prompt-cache.ts",
+            "additions": 19,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 130,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95417",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95417.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 172,
+          "gatingTotal": 167,
+          "counts": {
+            "SUCCESS": 138,
+            "SKIPPED": 31,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-fast:FAILURE",
+            "checks-node-core-tooling:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-core-fast:FAILURE",
+            "checks-node-core-tooling:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2524,
+    "total_ms": 2962,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 613
+        "ms": 593
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 2053
       },
       {
         "name": "classify_comment_commands",
@@ -93,7 +160,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1897
+        "ms": 302
       },
       {
         "name": "append_ledger",
