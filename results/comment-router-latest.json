@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T06:37:14.375Z",
+  "generated_at": "2026-06-21T06:37:27.481Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T03:37:11.495Z",
+  "since": "2026-06-21T03:37:24.868Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95412
+    95307
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,120 +31,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95412:4760154081:2026-06-21T06:37:07Z:clawsweeper_needs_human",
-      "comment_id": "4760154081",
-      "comment_version_key": "4760154081:2026-06-21T06:37:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95412#issuecomment-4760154081",
+      "idempotency_key": "comment-router:openclaw/openclaw:95307:4761136451:2026-06-21T06:31:24Z:re_review",
+      "comment_id": "4761136451",
+      "comment_version_key": "4761136451:2026-06-21T06:31:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95307#issuecomment-4761136451",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95412,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 95307,
+      "author": "NianJiuZst",
+      "author_id": 180004567,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-20T22:21:03Z",
-      "comment_updated_at": "2026-06-21T06:37:07Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=140a4f13cddf9f6c5aaf190083d69e6c24a4608d)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "140a4f13cddf9f6c5aaf190083d69e6c24a4608d",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(discord): bound REST response body to prevent OOM flood",
-        "body": "## What Problem This Solves\n\nThe Discord REST main response path read its body with an **unbounded** `await response.text()` (`extensions/discord/src/internal/rest.ts:252`) before JSON-parsing it. A controlled or hijacked endpoint — a malicious gateway redirecting REST traffic, or a compromised proxy in front of the Discord API — can stream an arbitrarily large response body that is fully buffered into memory, an unbounded-flood → OOM / DoS vector against any bot using the Discord extension. This bounds the read with the canonical `readResponseWithLimit` helper (an 8 MiB cap, far above any legitimate Discord JSON payload) plus an idle timeout, cancelling the stream at the cap or on stall instead of buffering unbounded — the symmetric fix to PR #95108, which bounded the analogous Anthropic Messages error-response read with the same helper.\n\n## Evidence\n\nA standalone `tsx proof.mts` drives the **real** `RequestClient.executeRequest` main path (line 252), with `vitest` regression tests and `oxlint` / `tsgo` on the changed files (worktree off `upstream/main`, repo `node_modules` symlinked):\n\n- **Before (unbounded)**: `await response.text()` against a flood body (4 MiB/chunk) buffered the **entire 256 MiB** flood — `heapUsed` grew **+236.55 MiB**, stream `cancel` count **0** (drained everything). A real endpoint flooding indefinitely = OOM.\n- **After (bounded, this PR)**: the same flood through `RequestClient.get(...)` pulled only **4 chunks**, hit the 8 MiB cap, **cancelled the stream once** (heap grew only **+16.69 MiB**), and threw `Discord REST response body exceeds 8388608 bytes (received 12582912)`. A stalled stream is cancelled with `Discord REST response stalled: no data received for 80ms`.\n- **Negative control**: a normal ~100 KB JSON payload (`{id, name, topic}`) still parses fully — `id`/`name`/`topic.length` all match, no false positive (legitimate large-but-bounded responses are not broken).\n- **Tests / lint / types**: `vitest extensions/discord/src/internal/rest.test.ts` → **34 passed (3 new)** — bounded overflow, idle-timeout stall, normal-payload control; `oxlint` on both changed files → exit 0; `tsgo --noEmit` on `extensions/discord/tsconfig.json` + scoped test tsconfig → exit 0.\n\n---\n\n## Summary\n\nThe Discord REST main response path read the body with an **unbounded** `await response.text()` (`extensions/discord/src/internal/rest.ts:252`) before JSON-parsing it. A controlled or hijacked endpoint (e.g. a malicious gateway redirecting REST traffic, a compromised proxy) can stream an arbitrarily large response body, which is fully buffered into memory — an unbounded-flood → OOM vector.\n\nThis wraps the read in the canonical `readResponseWithLimit` helper (the same one PR #95108 used to bound the Anthropic Messages error-response read), with an **8 MiB cap** — far above any legitimate Discord JSON payload (bulk `messages?limit=100` / full guild objects stay in the low hundreds of KB) — plus an **idle timeout** tied to the request timeout. The stream is cancelled at the cap or on stall instead of buffering unbounded, and normal payloads still parse fully.\n\n## Changes\n\n- `extensions/discord/src/internal/rest.ts`\n  - Import `readResponseWithLimit` from `openclaw/plugin-sdk/response-limit-runtime` (the established extension-side entry that re-exports the `@openclaw/media-core` helper from #95108 — no new abstraction).\n  - Add `DISCORD_REST_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024` and a small `readResponseBodyText(response, idleTimeoutMs)` wrapper that caps the body, sets `chunkTimeoutMs` to the request timeout, and throws bounded `onOverflow` / `onIdleTimeout` errors.\n  - Replace the line-252 `await response.text()` on the main path with the bounded reader; the result is still fed to `coerceResponseBody`, so normal JSON / 204 / 429 / error payloads parse exactly as before.\n- `extensions/discord/src/internal/rest.test.ts`\n  - Regression tests: bounded overflow (flood body → cap error + stream cancelled, only a few chunks pulled), idle-timeout stall (stalled stream cancelled with the stall error), and a normal-payload control that still parses.\n\n## Real behavior proof\n\n- **What was run**: a standalone `tsx proof.mts` driving the real `RequestClient.executeRequest` main path (line 252), plus the new `vitest` regression tests and `oxlint` / `tsgo` on the changed files. Worktree off `upstream/main` with the repo `node_modules` symlinked.\n- **Before (unbounded)**: `await response.text()` against a flood body (4 MiB/chunk) buffered the **entire 256 MiB** flood into memory — `heapUsed` grew **+236.55 MiB**, `cancel` count **0** (drained everything). A real endpoint flooding indefinitely = OOM.\n- **After (bounded, this PR)**: the same flood through `RequestClient.get(...)` pulled only **4 chunks**, hit the 8 MiB cap, **cancelled the stream once** (heap grew only +16.69 MiB), and threw `Discord REST response body exceeds 8388608 bytes (received 12582912)`. Idle case: a stalled stream is cancelled with `Discord REST response stalled: no data received for 80ms`.\n- **Negative control**: a normal ~100 KB JSON payload (`{id, name, topic}`) still parses fully — `id`/`name`/`topic.length` all match, no false positive (proving legitimate large-but-bounded responses are not broken).\n- **Readback**: the proof reads the actual thrown `Error.message`, the stream's `cancel` callback invocation count + cancel `reason`, the resolved/parsed object, and `process.memoryUsage().heapUsed` deltas across the real read path (not a mock of the helper).\n- **Tests / lint / types**: `vitest extensions/discord/src/internal/rest.test.ts` → 34 passed (3 new); `oxlint` on both changed files → exit 0; `tsgo --noEmit` on `extensions/discord/tsconfig.json` and a scoped test tsconfig including the test file → exit 0.\n- **Result**: all proof assertions passed (`=== 全部 proof 断言通过 ✅ ===`).\n\n**Label**: security\n\n## Symmetry with #95108\n\n#95108 bounded the analogous Anthropic Messages **error-response** read with `readResponseWithLimit` / `readResponseTextSnippet`. This PR is the symmetric fix for the Discord REST **main-response** path, reusing the same `@openclaw/media-core` helper (via the `response-limit-runtime` plugin entry) rather than introducing a new abstraction. (Note: `extensions/discord/src/api.ts:194` has the same unbounded `res.text()` on its main path and could be a follow-up.)\n\n---\n\nAI-assisted: implemented and verified with AI assistance; all proof commands were run for real against the actual code path.\n",
-        "branch": "fix/bound-discord-rest",
-        "head_sha": "140a4f13cddf9f6c5aaf190083d69e6c24a4608d",
-        "author": "alix-007",
-        "labels": [
-          "channel: discord",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/discord/src/internal/rest.test.ts",
-            "additions": 72,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/internal/rest.ts",
-            "additions": 20,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 92,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95412",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95412.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "gatingTotal": 159,
-          "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 31,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-core-tooling:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-core-tooling:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:95412:4761129401:2026-06-21T06:27:41Z:re_review",
-      "comment_id": "4761129401",
-      "comment_version_key": "4761129401:2026-06-21T06:27:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95412#issuecomment-4761129401",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 95412,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-21T06:27:41Z",
-      "comment_updated_at": "2026-06-21T06:27:41Z",
+      "comment_created_at": "2026-06-21T06:31:24Z",
+      "comment_updated_at": "2026-06-21T06:31:24Z",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-review — added the `what problem this solves` and `evidence` headings the proof workflow expects (proof content unchanged, just restructured under the required sections). this should clear needs-pr-context",
+      "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -155,7 +56,7 @@
       "repair_reason": null,
       "review_summary": null,
       "review_followup": null,
-      "freeform_prompt": "— Added the `What Problem This Solves` and `Evidence` headings the proof workflow expects (proof content unchanged, just restructured under the required sections). This should clear needs-pr-context.",
+      "freeform_prompt": null,
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
@@ -164,63 +65,146 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(discord): bound REST response body to prevent OOM flood",
-        "body": "## What Problem This Solves\n\nThe Discord REST main response path read its body with an **unbounded** `await response.text()` (`extensions/discord/src/internal/rest.ts:252`) before JSON-parsing it. A controlled or hijacked endpoint — a malicious gateway redirecting REST traffic, or a compromised proxy in front of the Discord API — can stream an arbitrarily large response body that is fully buffered into memory, an unbounded-flood → OOM / DoS vector against any bot using the Discord extension. This bounds the read with the canonical `readResponseWithLimit` helper (an 8 MiB cap, far above any legitimate Discord JSON payload) plus an idle timeout, cancelling the stream at the cap or on stall instead of buffering unbounded — the symmetric fix to PR #95108, which bounded the analogous Anthropic Messages error-response read with the same helper.\n\n## Evidence\n\nA standalone `tsx proof.mts` drives the **real** `RequestClient.executeRequest` main path (line 252), with `vitest` regression tests and `oxlint` / `tsgo` on the changed files (worktree off `upstream/main`, repo `node_modules` symlinked):\n\n- **Before (unbounded)**: `await response.text()` against a flood body (4 MiB/chunk) buffered the **entire 256 MiB** flood — `heapUsed` grew **+236.55 MiB**, stream `cancel` count **0** (drained everything). A real endpoint flooding indefinitely = OOM.\n- **After (bounded, this PR)**: the same flood through `RequestClient.get(...)` pulled only **4 chunks**, hit the 8 MiB cap, **cancelled the stream once** (heap grew only **+16.69 MiB**), and threw `Discord REST response body exceeds 8388608 bytes (received 12582912)`. A stalled stream is cancelled with `Discord REST response stalled: no data received for 80ms`.\n- **Negative control**: a normal ~100 KB JSON payload (`{id, name, topic}`) still parses fully — `id`/`name`/`topic.length` all match, no false positive (legitimate large-but-bounded responses are not broken).\n- **Tests / lint / types**: `vitest extensions/discord/src/internal/rest.test.ts` → **34 passed (3 new)** — bounded overflow, idle-timeout stall, normal-payload control; `oxlint` on both changed files → exit 0; `tsgo --noEmit` on `extensions/discord/tsconfig.json` + scoped test tsconfig → exit 0.\n\n---\n\n## Summary\n\nThe Discord REST main response path read the body with an **unbounded** `await response.text()` (`extensions/discord/src/internal/rest.ts:252`) before JSON-parsing it. A controlled or hijacked endpoint (e.g. a malicious gateway redirecting REST traffic, a compromised proxy) can stream an arbitrarily large response body, which is fully buffered into memory — an unbounded-flood → OOM vector.\n\nThis wraps the read in the canonical `readResponseWithLimit` helper (the same one PR #95108 used to bound the Anthropic Messages error-response read), with an **8 MiB cap** — far above any legitimate Discord JSON payload (bulk `messages?limit=100` / full guild objects stay in the low hundreds of KB) — plus an **idle timeout** tied to the request timeout. The stream is cancelled at the cap or on stall instead of buffering unbounded, and normal payloads still parse fully.\n\n## Changes\n\n- `extensions/discord/src/internal/rest.ts`\n  - Import `readResponseWithLimit` from `openclaw/plugin-sdk/response-limit-runtime` (the established extension-side entry that re-exports the `@openclaw/media-core` helper from #95108 — no new abstraction).\n  - Add `DISCORD_REST_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024` and a small `readResponseBodyText(response, idleTimeoutMs)` wrapper that caps the body, sets `chunkTimeoutMs` to the request timeout, and throws bounded `onOverflow` / `onIdleTimeout` errors.\n  - Replace the line-252 `await response.text()` on the main path with the bounded reader; the result is still fed to `coerceResponseBody`, so normal JSON / 204 / 429 / error payloads parse exactly as before.\n- `extensions/discord/src/internal/rest.test.ts`\n  - Regression tests: bounded overflow (flood body → cap error + stream cancelled, only a few chunks pulled), idle-timeout stall (stalled stream cancelled with the stall error), and a normal-payload control that still parses.\n\n## Real behavior proof\n\n- **What was run**: a standalone `tsx proof.mts` driving the real `RequestClient.executeRequest` main path (line 252), plus the new `vitest` regression tests and `oxlint` / `tsgo` on the changed files. Worktree off `upstream/main` with the repo `node_modules` symlinked.\n- **Before (unbounded)**: `await response.text()` against a flood body (4 MiB/chunk) buffered the **entire 256 MiB** flood into memory — `heapUsed` grew **+236.55 MiB**, `cancel` count **0** (drained everything). A real endpoint flooding indefinitely = OOM.\n- **After (bounded, this PR)**: the same flood through `RequestClient.get(...)` pulled only **4 chunks**, hit the 8 MiB cap, **cancelled the stream once** (heap grew only +16.69 MiB), and threw `Discord REST response body exceeds 8388608 bytes (received 12582912)`. Idle case: a stalled stream is cancelled with `Discord REST response stalled: no data received for 80ms`.\n- **Negative control**: a normal ~100 KB JSON payload (`{id, name, topic}`) still parses fully — `id`/`name`/`topic.length` all match, no false positive (proving legitimate large-but-bounded responses are not broken).\n- **Readback**: the proof reads the actual thrown `Error.message`, the stream's `cancel` callback invocation count + cancel `reason`, the resolved/parsed object, and `process.memoryUsage().heapUsed` deltas across the real read path (not a mock of the helper).\n- **Tests / lint / types**: `vitest extensions/discord/src/internal/rest.test.ts` → 34 passed (3 new); `oxlint` on both changed files → exit 0; `tsgo --noEmit` on `extensions/discord/tsconfig.json` and a scoped test tsconfig including the test file → exit 0.\n- **Result**: all proof assertions passed (`=== 全部 proof 断言通过 ✅ ===`).\n\n**Label**: security\n\n## Symmetry with #95108\n\n#95108 bounded the analogous Anthropic Messages **error-response** read with `readResponseWithLimit` / `readResponseTextSnippet`. This PR is the symmetric fix for the Discord REST **main-response** path, reusing the same `@openclaw/media-core` helper (via the `response-limit-runtime` plugin entry) rather than introducing a new abstraction. (Note: `extensions/discord/src/api.ts:194` has the same unbounded `res.text()` on its main path and could be a follow-up.)\n\n---\n\nAI-assisted: implemented and verified with AI assistance; all proof commands were run for real against the actual code path.\n",
-        "branch": "fix/bound-discord-rest",
-        "head_sha": "140a4f13cddf9f6c5aaf190083d69e6c24a4608d",
-        "author": "alix-007",
+        "title": "fix(gateway): surface cross-agent subagent sessions via allAgents flag (#95295)",
+        "body": "Fixes #95295.\r\n\r\n## What Problem This Solves\r\n\r\nFixes an issue where users viewing the Control UI Sessions page or Recent Sessions sidebar for one agent could not see child sessions that were spawned from that workflow but stored under another configured agent. In the reported `dev` -> `orchestrator` case, the cross-agent subagent sessions existed in the session stores and could be listed from the CLI, but the web UI hid them unless they belonged to the currently selected agent.\r\n\r\n## Why This Change Was Made\r\n\r\nThis PR makes the UI use the existing `configuredAgentsOnly: true` plus omitted `agentId` request shape when the `All agents` toggle is enabled, instead of adding a new `sessions.list` protocol field. Explicit per-agent refreshes still pass `agentId`, so scoped loads stay narrow while the all-agents view can surface cross-agent child sessions in both the Sessions table and Recent Sessions sidebar.\r\n\r\n## User Impact\r\n\r\nWith `All agents` off, behavior is unchanged: the selected agent shows only its own sessions. With `All agents` on, operators can now see cross-agent child sessions in the Sessions table and Recent Sessions sidebar, including subagent runs spawned from another configured agent that were previously invisible.\r\n\r\n## Evidence\r\n\r\n- Live behavior proof used a real `pnpm openclaw --dev gateway` setup with two configured agents (`dev`, `orchestrator`), not seeded store files.\r\n- Three real `sessions_spawn` calls from `agent:dev:main` created `agent:orchestrator:subagent:*` session records in the orchestrator store. The child runs later failed at model step in this dev environment because the OpenAI key returned `401`, but the session records were already persisted; this PR changes whether those persisted rows are visible in the UI.\r\n- Replace the three placeholders below with uploaded PR images after you attach them in GitHub:\r\n\r\n  - `[IMAGE 1: Before fix - Recent Sessions sidebar only shows the current agent row]`\r\n  \r\n<img width=\"745\" height=\"595\" alt=\"截屏2026-06-21 01 51 09\" src=\"https://github.com/user-attachments/assets/02993ca1-36ea-4b49-9e9c-46a6c05750cc\" />\r\n\r\n  - `[IMAGE 2: After fix - Recent Sessions sidebar shows current agent plus cross-agent orchestrator subagent rows with All agents enabled]`\r\n  \r\n<img width=\"739\" height=\"770\" alt=\"截屏2026-06-21 01 49 25\" src=\"https://github.com/user-attachments/assets/7b3b0cb0-7f50-4d32-9f0c-c9f591690784\" />\r\n\r\n  - `[IMAGE 3: Sessions page after fix - mixed dev and orchestrator rows visible in the same All agents view]`\r\n<img width=\"1470\" height=\"824\" alt=\"截屏2026-06-21 01 50 10\" src=\"https://github.com/user-attachments/assets/b7757db2-6499-43ea-b442-d3c95af8abcc\" />\r\n\r\n- Suggested captions once images are uploaded:\r\n  - Before fix: cross-agent child sessions already exist in store, but the sidebar still shows only the current agent.\r\n  - After fix: enabling `All agents` surfaces the cross-agent `agent:orchestrator:subagent:*` rows in Recent Sessions.\r\n  - Sessions page after fix: the table now shows mixed `dev` and `orchestrator` rows in the same view.\r\n\r\n- Focused validation:\r\n  - `pnpm test src/gateway/server.sessions.store-rpc.test.ts ui/src/ui/controllers/sessions.test.ts ui/src/ui/views/sessions.test.ts ui/src/ui/app-render.sidebar.test.ts ui/src/ui/views/chat.test.ts packages/gateway-protocol src/tui/embedded-backend.test.ts src/gateway/session-utils.subagent.test.ts src/gateway/session-utils`\r\n  - `pnpm tsgo:core`\r\n  - `pnpm tsgo:extensions`\r\n  - `pnpm oxfmt --check` on touched files\r\n  - `pnpm protocol:gen:swift`\r\n  - `git diff --check`\r\n",
+        "branch": "fix/95295-webui-sessions-cross-agent-spawned",
+        "head_sha": "6366352830fb362be18b80767a9c683242d10574",
+        "author": "nianjiuzst",
         "labels": [
-          "channel: discord",
-          "size: S",
-          "proof: sufficient",
+          "app: web-ui",
+          "gateway",
+          "scripts",
+          "size: M",
           "P2",
-          "rating: 🐚 platinum hermit",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof",
+          "proof: 📸 screenshot"
         ],
         "files": [
           {
-            "path": "extensions/discord/src/internal/rest.test.ts",
-            "additions": 72,
+            "path": "scripts/protocol-gen-swift.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/discord/src/internal/rest.ts",
-            "additions": 20,
+            "path": "src/gateway/server-methods/sessions.ts",
+            "additions": 10,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.sessions.store-rpc.test.ts",
+            "additions": 102,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tui/embedded-backend.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/en.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-render.sidebar.test.ts",
+            "additions": 128,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/src/ui/app-render.ts",
+            "additions": 36,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-view-state.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app.ts",
+            "additions": 8,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/sessions.test.ts",
+            "additions": 57,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/sessions.ts",
+            "additions": 29,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/views/sessions.test.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/views/sessions.ts",
+            "additions": 10,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 92,
-        "deletions": 1,
+        "changedFiles": 14,
+        "additions": 398,
+        "deletions": 32,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95412",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95412.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95307",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95307.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 164,
-          "gatingTotal": 159,
+          "total": 173,
+          "gatingTotal": 168,
           "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 31,
-            "FAILURE": 1,
-            "NEUTRAL": 1
+            "SUCCESS": 136,
+            "SKIPPED": 30,
+            "FAILURE": 5,
+            "NEUTRAL": 2
           },
           "blockers": [
-            "checks-node-core-tooling:FAILURE"
+            "build-artifacts:FAILURE",
+            "checks-node-core-tooling:FAILURE",
+            "checks-node-core-runtime-media-ui:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "checks-node-core-tooling:FAILURE"
+            "build-artifacts:FAILURE",
+            "checks-node-core-tooling:FAILURE",
+            "checks-node-core-runtime-media-ui:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
           ],
           "externalBlockers": []
         }
@@ -228,19 +212,201 @@
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
       "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95307:4757374253:2026-06-21T06:15:15Z:clawsweeper_needs_human",
+      "comment_id": "4757374253",
+      "comment_version_key": "4757374253:2026-06-21T06:15:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95307#issuecomment-4757374253",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95307,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-20T10:34:27Z",
+      "comment_updated_at": "2026-06-21T06:15:15Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=6366352830fb362be18b80767a9c683242d10574)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "6366352830fb362be18b80767a9c683242d10574",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): surface cross-agent subagent sessions via allAgents flag (#95295)",
+        "body": "Fixes #95295.\r\n\r\n## What Problem This Solves\r\n\r\nFixes an issue where users viewing the Control UI Sessions page or Recent Sessions sidebar for one agent could not see child sessions that were spawned from that workflow but stored under another configured agent. In the reported `dev` -> `orchestrator` case, the cross-agent subagent sessions existed in the session stores and could be listed from the CLI, but the web UI hid them unless they belonged to the currently selected agent.\r\n\r\n## Why This Change Was Made\r\n\r\nThis PR makes the UI use the existing `configuredAgentsOnly: true` plus omitted `agentId` request shape when the `All agents` toggle is enabled, instead of adding a new `sessions.list` protocol field. Explicit per-agent refreshes still pass `agentId`, so scoped loads stay narrow while the all-agents view can surface cross-agent child sessions in both the Sessions table and Recent Sessions sidebar.\r\n\r\n## User Impact\r\n\r\nWith `All agents` off, behavior is unchanged: the selected agent shows only its own sessions. With `All agents` on, operators can now see cross-agent child sessions in the Sessions table and Recent Sessions sidebar, including subagent runs spawned from another configured agent that were previously invisible.\r\n\r\n## Evidence\r\n\r\n- Live behavior proof used a real `pnpm openclaw --dev gateway` setup with two configured agents (`dev`, `orchestrator`), not seeded store files.\r\n- Three real `sessions_spawn` calls from `agent:dev:main` created `agent:orchestrator:subagent:*` session records in the orchestrator store. The child runs later failed at model step in this dev environment because the OpenAI key returned `401`, but the session records were already persisted; this PR changes whether those persisted rows are visible in the UI.\r\n- Replace the three placeholders below with uploaded PR images after you attach them in GitHub:\r\n\r\n  - `[IMAGE 1: Before fix - Recent Sessions sidebar only shows the current agent row]`\r\n  \r\n<img width=\"745\" height=\"595\" alt=\"截屏2026-06-21 01 51 09\" src=\"https://github.com/user-attachments/assets/02993ca1-36ea-4b49-9e9c-46a6c05750cc\" />\r\n\r\n  - `[IMAGE 2: After fix - Recent Sessions sidebar shows current agent plus cross-agent orchestrator subagent rows with All agents enabled]`\r\n  \r\n<img width=\"739\" height=\"770\" alt=\"截屏2026-06-21 01 49 25\" src=\"https://github.com/user-attachments/assets/7b3b0cb0-7f50-4d32-9f0c-c9f591690784\" />\r\n\r\n  - `[IMAGE 3: Sessions page after fix - mixed dev and orchestrator rows visible in the same All agents view]`\r\n<img width=\"1470\" height=\"824\" alt=\"截屏2026-06-21 01 50 10\" src=\"https://github.com/user-attachments/assets/b7757db2-6499-43ea-b442-d3c95af8abcc\" />\r\n\r\n- Suggested captions once images are uploaded:\r\n  - Before fix: cross-agent child sessions already exist in store, but the sidebar still shows only the current agent.\r\n  - After fix: enabling `All agents` surfaces the cross-agent `agent:orchestrator:subagent:*` rows in Recent Sessions.\r\n  - Sessions page after fix: the table now shows mixed `dev` and `orchestrator` rows in the same view.\r\n\r\n- Focused validation:\r\n  - `pnpm test src/gateway/server.sessions.store-rpc.test.ts ui/src/ui/controllers/sessions.test.ts ui/src/ui/views/sessions.test.ts ui/src/ui/app-render.sidebar.test.ts ui/src/ui/views/chat.test.ts packages/gateway-protocol src/tui/embedded-backend.test.ts src/gateway/session-utils.subagent.test.ts src/gateway/session-utils`\r\n  - `pnpm tsgo:core`\r\n  - `pnpm tsgo:extensions`\r\n  - `pnpm oxfmt --check` on touched files\r\n  - `pnpm protocol:gen:swift`\r\n  - `git diff --check`\r\n",
+        "branch": "fix/95295-webui-sessions-cross-agent-spawned",
+        "head_sha": "6366352830fb362be18b80767a9c683242d10574",
+        "author": "nianjiuzst",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "scripts",
+          "size: M",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof",
+          "proof: 📸 screenshot"
+        ],
+        "files": [
+          {
+            "path": "scripts/protocol-gen-swift.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/sessions.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.sessions.store-rpc.test.ts",
+            "additions": 102,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tui/embedded-backend.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/en.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-render.sidebar.test.ts",
+            "additions": 128,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/src/ui/app-render.ts",
+            "additions": 36,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-view-state.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app.ts",
+            "additions": 8,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/sessions.test.ts",
+            "additions": 57,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/sessions.ts",
+            "additions": 29,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/views/sessions.test.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/views/sessions.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 14,
+        "additions": 398,
+        "deletions": 32,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95307",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95307.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 173,
+          "gatingTotal": 168,
+          "counts": {
+            "SUCCESS": 136,
+            "SKIPPED": 30,
+            "FAILURE": 5,
+            "NEUTRAL": 2
+          },
+          "blockers": [
+            "build-artifacts:FAILURE",
+            "checks-node-core-tooling:FAILURE",
+            "checks-node-core-runtime-media-ui:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "build-artifacts:FAILURE",
+            "checks-node-core-tooling:FAILURE",
+            "checks-node-core-runtime-media-ui:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3202,
+    "total_ms": 2812,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 451
+        "ms": 292
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2413
+        "ms": 2302
       },
       {
         "name": "classify_comment_commands",
@@ -248,7 +414,7 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -256,11 +422,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 308
+        "ms": 187
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
