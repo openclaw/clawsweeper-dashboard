@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T10:43:34.160Z",
+  "generated_at": "2026-06-21T10:43:50.584Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T07:43:33.899Z",
+  "since": "2026-06-21T07:43:48.732Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95539
+    78511
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,224 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:78511:4389131904:2026-06-21T10:43:45Z:clawsweeper_needs_human",
+      "comment_id": "4389131904",
+      "comment_version_key": "4389131904:2026-06-21T10:43:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/78511#issuecomment-4389131904",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 78511,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-06T14:34:20Z",
+      "comment_updated_at": "2026-06-21T10:43:45Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] Maintainer-labeled member PR has no concrete repair finding; the remaining action is maintainer API/compatibility acceptance plus validation, not an automated fix.; Cleared: No security or supply-chain concern was found; the diff changes gateway/plugin runtime logic and tests without workflows, lockfiles, dependencies, scripts, secrets, or artifact downloads. (sha=fcd72afb871cf033fb8d0b9dd84ef18a86ba9f08)",
+      "review_summary": "The branch adds a `terminalDisconnect` channel-account signal and threads it through WhatsApp status, generic gateway health checks, task-exit recovery, status projection, and regression tests to avoid auto-restarting terminally disconnected WhatsApp accounts.\n\nPR surface: Source +31, Tests +240. Total +271 across 16 files.\n\nReproducibility: yes. Source inspection shows current main preserves WhatsApp `logged-out` or `conflict` health state, but both generic restart paths still restart non-manual `running=false` accounts; I did not run a live WhatsApp unlink.",
+      "review_followup": "- [P2] Maintainer-labeled member PR has no concrete repair finding; the remaining action is maintainer API/compatibility acceptance plus validation, not an automated fix.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "fcd72afb871cf033fb8d0b9dd84ef18a86ba9f08",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): skip health-monitor restart for terminal WhatsApp disconnects",
+        "body": "### Summary\n\n- **Problem**: On multi-tenant gateways running ≥1 WhatsApp account, any account that receives a terminal disconnect (`loggedOut` 401, `connectionReplaced` 440) enters a perpetual restart loop — the health monitor calls `startChannel()` on every check interval, each attempt leaks a full Baileys WebSocket + Noise handshake, and over time this exhausts gateway heap (12.9 GB reported over 20 h on 12 accounts), saturates the event loop (~80% CPU), and degrades RPC latency for all tenants on the same gateway (~24 s p99 vs. <200 ms baseline). Recovery requires manual intervention.\n\n- **Root Cause**: Two independent restart paths both lacked a terminal-disconnect guard, and the status surface also missed the signal. (1) `ChannelHealthSnapshot` had no `terminalDisconnect` field, so `evaluateChannelHealth` returned `\"not-running\"` for every stopped channel regardless of why it stopped, causing the health-monitor to unconditionally call `startChannel()`. (2) The `ChannelManager` task-exit recovery handler fires immediately when the channel task settles — before the health monitor is involved — and only checked `manuallyStopped`, so terminal exits still triggered the backoff-and-restart loop independently. (3) WhatsApp's custom snapshot builder forwarded `healthState` from the runtime snapshot but not `terminalDisconnect`, so `channels.status` recomputed `\"not-running\"` instead of `\"terminal-disconnect\"` for logged-out accounts.\n\n- **Fix**: Add `terminalDisconnect?: boolean` to `ChannelHealthSnapshot` and the public `ChannelAccountSnapshot`. The WhatsApp status controller sets the flag to `true` in `markStopped()` when `healthState` is `\"logged-out\"` or `\"conflict\"` (the only two states that clear auth and require QR re-pairing), and resets it to `undefined` in `noteConnected()` on successful re-auth. Both restart paths now observe the flag: `evaluateChannelHealth` returns a new `\"terminal-disconnect\"` reason that the health monitor logs and skips; the `ChannelManager` task-exit handler returns early with an info-level log. The flag is forwarded in both `buildChannelSummary` and `resolveAccountSnapshot.extra` so `channels.status` reflects the correct terminal state. The flag is channel-agnostic: any future extension can set it on its own `ChannelAccountSnapshot` to opt in to the same no-restart behavior without modifying core.\n\n- **What changed**:\n  - `src/channels/plugins/types.core.ts` — added `terminalDisconnect?: boolean` to `ChannelAccountSnapshot`\n  - `src/gateway/channel-health-policy.ts` — added field to `ChannelHealthSnapshot`; added `\"terminal-disconnect\"` reason; added guard before the `not-running` branch\n  - `src/gateway/channel-health-monitor.ts` — added skip block for `terminal-disconnect` reason with an info-level log line\n  - `src/gateway/server-channels.ts` — added `terminalDisconnect` guard in the task-exit recovery handler after the `manuallyStopped` check\n  - `extensions/whatsapp/src/auto-reply/types.ts` — added `terminalDisconnect?: boolean` to `WebChannelStatus`\n  - `extensions/whatsapp/src/auto-reply/monitor-state.ts` — set flag in `markStopped()` for `\"logged-out\"` / `\"conflict\"`; clear in `noteConnected()`\n  - `extensions/whatsapp/src/channel.ts` — forwarded `terminalDisconnect` from the runtime snapshot in both `buildChannelSummary` and `resolveAccountSnapshot.extra` so `channels.status` correctly surfaces the terminal state\n  - `src/gateway/channel-health-policy.test.ts` — 3 new cases covering terminal-disconnect evaluation, no-flag fallthrough, and running-channel flag ignore\n  - `src/gateway/channel-health-monitor.test.ts` — 2 new cases proving the monitor skips terminal-disconnect channels and still restarts non-terminal stopped channels\n  - `src/gateway/server-channels.test.ts` — 1 new case proving the manager task-exit path does not auto-restart a terminal-disconnect channel\n  - `src/gateway/server-methods/channels.status.test.ts` — 2 new cases: `channels.status` reports `\"terminal-disconnect\"` health state when the flag is set; fallback to account-derived summaries when summary building fails\n  - `extensions/whatsapp/src/auto-reply/monitor-state.test.ts` — 4 new cases covering `markStopped` sets `terminalDisconnect` for `logged-out`/`conflict`, does not set it for non-terminal states, and `noteConnected` clears it\n\n- **What did NOT change (scope boundary)**:\n  - No changes to reconnect policy, cooldown config, or hourly restart cap\n  - No changes to any other channel extension (Telegram, Discord, Slack, etc.)\n  - `isManuallyStopped()` logic is untouched; manually stopped channels continue to be skipped by the existing guard that runs before health evaluation\n  - `resolveChannelRestartReason` is not reachable for `terminal-disconnect` (monitor skips before calling it) and is not modified\n  - No new public-facing config keys or gateway events in this change\n\n---\n\n### Reproduction\n\n1. Run a gateway with ≥1 WhatsApp account:\n   ```yaml\n   channels:\n     whatsapp:\n       accounts:\n         default:\n           enabled: true\n   ```\n2. From the linked phone: Settings → Linked Devices → unlink the session.\n3. Observe `gateway.log`:\n   ```\n   [health-monitor] [whatsapp:default] health-monitor: restarting (reason: stopped)\n   ```\n   firing every check interval indefinitely.\n4. After this fix:\n   ```\n   [default] auto-restart skipped, terminal disconnect\n   [health-monitor] [whatsapp:default] health-monitor: skipping restart, terminal disconnect\n   ```\n   fires with no `startChannel()` call, and `channels.status` reports `healthState: \"terminal-disconnect\"`.\n\n---\n\n### Real behavior proof\n\n**Behavior addressed**: WhatsApp gateway perpetual restart loop on `loggedOut`/`connectionReplaced` terminal disconnect, causing unbounded WebSocket leak and heap growth.\n\n**Real environment tested**: Unit-level proof via Vitest (no live WhatsApp device available in CI env; Crabbox live validation needed before merge).\n\n**Exact steps or command run after this patch**: `pnpm test src/gateway/channel-health-monitor.test.ts src/gateway/channel-health-policy.test.ts src/gateway/server-channels.test.ts src/gateway/server-methods/channels.status.test.ts extensions/whatsapp/src/auto-reply/monitor-state.test.ts`\n\n**Evidence after fix**: 322 tests across 12 test files pass, including all 3 new gateway policy cases, 2 monitor cases, 1 manager case, 2 channels.status cases, and 4 monitor-state transition cases.\n\n**Observed result after fix**: `evaluateChannelHealth` returns `\"terminal-disconnect\"` reason; health monitor and server-channels task-exit handler both skip restart; `channels.status` surfaces `healthState: \"terminal-disconnect\"`.\n\n**What was not tested**: Live WhatsApp loggedOut/connectionReplaced repro on real device (requires Crabbox with WhatsApp credentials).\n\n---\n\n### Risk / Mitigation\n\n- **Risk**: A terminal-disconnect channel will no longer be auto-recovered by either restart path. If `terminalDisconnect` is accidentally set `true` on a channel that could have reconnected, that channel would stay stopped until manually restarted.\n- **Mitigation**: The flag is set only for `\"logged-out\"` and `\"conflict\"` healthStates, which both clear stored auth credentials — the channel genuinely cannot reconnect without operator QR action. `noteConnected()` unconditionally clears the flag, so a successful re-auth restores normal behavior on all paths. Three policy unit tests, two monitor integration tests, one manager recovery test, two `channels.status` regression tests, and four monitor-state transition tests cover the boundary cases.\n\n---\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n---\n\n### Scope (select all touched areas)\n\n- [x] Gateway\n- [x] WhatsApp plugin\n- [x] Channel status types (additive, backward-compatible)\n- [x] Tests\n\n---\n\n### Linked Issue/PR\n\nFixes #78419",
+        "branch": "fix/78419-whatsapp-terminal-disconnect",
+        "head_sha": "fcd72afb871cf033fb8d0b9dd84ef18a86ba9f08",
+        "author": "openperf",
+        "labels": [
+          "channel: whatsapp-web",
+          "gateway",
+          "maintainer",
+          "size: M",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/whatsapp/src/auto-reply/monitor-state.test.ts",
+            "additions": 73,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/auto-reply/monitor-state.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/auto-reply/types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/channel.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/account-snapshot-fields.test.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/account-snapshot-fields.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/plugins/types.core.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/channel-health-monitor.test.ts",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/channel-health-monitor.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/channel-health-policy.test.ts",
+            "additions": 55,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/channel-health-policy.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-channels.test.ts",
+            "additions": 23,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-channels.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/channels.status.test.ts",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/status-helpers.test.ts",
+            "additions": 18,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/status-helpers.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 16,
+        "additions": 271,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-78511",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-78511.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 34,
+          "gatingTotal": 29,
+          "counts": {
+            "SUCCESS": 10,
+            "QUEUED": 10,
+            "SKIPPED": 14
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 519,
+    "total_ms": 2172,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 249
+        "ms": 386
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1450
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +258,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 257
+        "ms": 309
       },
       {
         "name": "append_ledger",
