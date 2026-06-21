@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-21T13:16:41.089Z",
+  "generated_at": "2026-06-21T13:18:33.575Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T10:16:39.635Z",
+  "since": "2026-06-21T10:18:33.181Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    77891
+    95553
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,142 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:77891:4380588908:2026-06-21T13:16:36Z:clawsweeper_needs_human",
-      "comment_id": "4380588908",
-      "comment_version_key": "4380588908:2026-06-21T13:16:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/77891#issuecomment-4380588908",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 77891,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-05T15:12:53Z",
-      "comment_updated_at": "2026-06-21T13:16:36Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] Manual review is needed because the maintainer-labeled PR changes persisted conversation binding cleanup semantics and should be validated against the broader linked issue before merge.; Cleared: No concrete security or supply-chain concern found; the diff changes session cleanup logic and tests without new dependencies, workflows, permissions, secrets handling, or external code execution. (sha=77fd2be812cbd999cebc730cb620d8816a2893dd)",
-      "review_summary": "The branch adds cleanup-time unbinding for session keys confirmed removed by `sessions cleanup --fix-missing` and adds focused cleanup-service tests.\n\nPR surface: Source +12, Tests +244. Total +256 across 2 files.\n\nReproducibility: yes. source-level. Current main and v2026.6.9 can remove missing-transcript session entries without clearing matching persisted conversation bindings; I did not run a live gateway/channel reproduction in this read-only review.",
-      "review_followup": "- [P2] Manual review is needed because the maintainer-labeled PR changes persisted conversation binding cleanup semantics and should be validated against the broader linked issue before merge.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "77fd2be812cbd999cebc730cb620d8816a2893dd",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(sessions): unbind conversation bindings when missing transcripts are pruned",
-        "body": "### What Problem This Solves\n\nWhen \\`sessions cleanup --fix-missing\\` removes a session store entry because its transcript file is missing, the conversation binding pointing to that session key is left intact. Every subsequent message resolves the stale binding and is routed to the pruned session key. The gateway finds no durable session, silently spawns a fresh in-memory session per message, and discards every turn — traffic appears normal while nothing persists.\n\n### Why This Change Was Made\n\nThe explicit session-reset path (\\`emitSessionUnboundLifecycleEvent\\` in \\`session-reset-service.ts\\`) correctly calls \\`getSessionBindingService().unbind()\\` on session delete and reset; the cleanup path omitted this step entirely.\n\n\\`resolveRuntimeConversationBindingRoute\\` in \\`binding-routing.ts\\` also carried a dead \\`targetSessionExists\\` optional predicate added for defense-in-depth against phantom routing — it is never passed by any caller and the check is now handled upstream by \\`isCronRunSessionKey\\` (merged in main). Removing it reduces surface noise.\n\n### User Impact\n\nUsers who run \\`openclaw sessions cleanup --fix-missing\\` will no longer have stale bindings route subsequent messages to phantom sessions after a cleanup pass.\n\n### Evidence\n\n**Source confirmation — cleanup path omits unbind:** \\`src/config/sessions/cleanup-service.ts\\` calls \\`pruneMissingTranscriptEntries\\` to collect entries to remove, then delegates removal to \\`applySessionEntryLifecycleMutation\\`; before this PR there is no \\`unbind\\` call anywhere in this function. \\`session-reset-service.ts:emitSessionUnboundLifecycleEvent\\` confirms the unbind contract exists on the sibling reset/delete path.\n\n**Fix — unbind after confirmed removal:** After \\`applySessionEntryLifecycleMutation\\` returns \\`lifecycleResult.removedSessionKeys\\`, the fix filters \\`missingRemovals\\` by that set and calls \\`getSessionBindingService().unbind({ targetSessionKey, reason: \"cleanup-missing-transcript\" })\\` for each confirmed removal. Entries whose transcripts still exist are not pruned and therefore not present in \\`removedSessionKeys\\`, so their bindings are not touched.\n\n**Dead code removal — \\`targetSessionExists\\`:** \\`git grep targetSessionExists\\` on HEAD returns zero hits outside this PR's branch. No caller in \\`src/**\\` or \\`extensions/**\\` passes this parameter. Removing it keeps the function signature honest.\n\n**Tests:** \\`src/config/sessions/cleanup-service.test.ts\\` (new, 5 cases) covers single-key unbind, multi-key unbind, dry-run no-op, \\`fixMissing: false\\` no-op, and existing-transcript no-op. \\`binding-routing.test.ts\\` removes the now-deleted \\`targetSessionExists\\` test cases; 4 tests remain covering the live binding-routing contract.\n\n### Reproduction\n\n1. Start the gateway with a channel conversation bound to a persistent session (\\`agent:review:acp:session-1\\`).\n2. Stop the gateway; delete the session transcript file from the state directory while leaving the session store entry and the binding intact.\n3. Run \\`openclaw sessions cleanup --fix-missing\\`.\n4. Send a message on the bound channel.\n5. **Before this PR:** The cleanup removes the store entry but leaves the binding; step 4 routes to the phantom key, spawns an ephemeral session, and persists nothing.\n6. **After this PR:** Step 3 also unbinds the stale binding; step 4 falls through to a fresh persisted session.\n\n### Risk / Mitigation\n\n- **Risk:** \\`unbind\\` is an additional async call per pruned entry in the cleanup apply path.\n- **Mitigation:** The loop only runs when \\`fixMissing\\` is set and entries are confirmed removed; in practice this is an infrequent operator-initiated maintenance pass. \\`unbind\\` is the same service call made by the reset/delete paths — no new failure modes.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway\n- [x] Sessions / cleanup\n- [x] Channel binding routing\n- [x] Session binding service\n\n### Linked Issue/PR\n\nFixes #77871",
-        "branch": "fix/77871-stale-binding-cleanup",
-        "head_sha": "77fd2be812cbd999cebc730cb620d8816a2893dd",
-        "author": "openperf",
-        "labels": [
-          "maintainer",
-          "size: M",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/config/sessions/cleanup-service.test.ts",
-            "additions": 244,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/sessions/cleanup-service.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 256,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-77891",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77891.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 36,
-          "gatingTotal": 31,
-          "counts": {
-            "CANCELLED": 2,
-            "QUEUED": 10,
-            "SKIPPED": 14,
-            "SUCCESS": 10
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1653,
+    "total_ms": 735,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 228
+        "ms": 381
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1213
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -176,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 183
+        "ms": 342
       },
       {
         "name": "append_ledger",
