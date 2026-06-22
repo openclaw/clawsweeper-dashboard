@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T14:49:09.727Z",
+  "generated_at": "2026-06-22T14:50:19.911Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-22T11:49:06.165Z",
+  "since": "2026-06-22T11:50:18.173Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4769564718
   ],
-  "status_comment_id": 4769565147,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4769564718:2026-06-22T14:48:05Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/95656#issuecomment-4769564718",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 95656,
       "author": "ZengWen-DT",
       "author_id": 290981215,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-22T14:48:05Z",
       "comment_updated_at": "2026-06-22T14:48:05Z",
-      "status_comment_id": 4769565147,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,164 +62,26 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-22T14:49:10.476Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 95656
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-22T14:49:11.679Z",
-          "response_comment_id": "4769565147",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(mattermost): keep private channels in group sessions across delivery paths",
-        "body": "## What Problem This Solves\n\nA Mattermost **private channel** (`P`/`G`) is addressed as `channel:<id>` — the\nsame target prefix as a public channel — yet its authoritative chat type is\n`group`. Inbound classification keys it under `group:<id>`, but every\ndelivery-side path that derived chat type from the target *string* returned\n`channel` at the `channel:` rule **before** consulting the per-plugin\n`messaging.inferTargetChatType` hook. Mattermost also never implemented that\nhook. So outbound replies, scheduled/threaded subagent announcements, and\nheartbeat deliveries to a private channel landed under a phantom\n`channel:<id>` session namespace, split from the inbound `group:<id>` one —\nfail-closed delivery or a conversation split across two session keys.\n\nCloses #95646\n\n## Why This Change Was Made\n\nThe previous revision of this PR only fixed `resolveMattermostOutboundSessionRoute`.\nThat left the two generic string-inference paths the issue calls out\n(`inferChatTypeFromTarget` and announce-delivery `inferDeliveryTargetChatType`)\nstill collapsing private channels to `channel`. This revision closes the whole\ndecision surface:\n\n- **Implements `messaging.inferTargetChatType` for Mattermost**, backed by an\n  id-keyed chat-type cache warmed both by outbound target resolution\n  (`/api/v4/channels/<id>` type lookup) and by inbound monitor channel reads\n  (`resolveChannelInfo`). The cache lives in a leaf module (`chat-type-cache.ts`)\n  with no client/runtime deps, so the **sync** hook stays off the lazy\n  `channel.runtime` chunk (build-verified, no `INEFFECTIVE_DYNAMIC_IMPORT`).\n- **Consults the plugin hook before the generic `channel:` default** in both\n  `inferChatTypeFromTarget` (`src/infra/outbound/targets.ts`) and\n  `inferDeliveryTargetChatType` (`src/agents/subagent-announce-delivery.ts`).\n  Plugins that do not classify the target return `undefined` and keep the exact\n  existing `channel` default — so this is behavior-preserving for every other\n  channel.\n- **Keeps the resolved `group` kind in `peer`/`from`** in the outbound session\n  route so the derived session key matches the inbound `group:<id>` namespace\n  (this addresses the sibling PR #95655's reported gap, where `chatType` changed\n  but `peer`/`from` stayed `channel`).\n\nBecause the hook is synchronous (`{ to } => ChatType | undefined`), it answers\nauthoritatively only when the channel type is already known (resolved outbound\nor seen inbound). Otherwise it returns `undefined` and core keeps the safe\n`channel` default. The cache is refreshed on every `resolveChannelInfo` (5-min\nmonitor TTL), so a private↔public conversion self-corrects within the TTL.\n\nThis stays inside the Mattermost plugin boundary plus the two generic\ntarget→chat-type inference sites; it adds no config, migration, or new\nchannel-specific policy in core.\n\n## User Impact\n\nMattermost private-channel replies, scheduled/threaded subagent announcements,\nand heartbeat deliveries now stay in the same `group:<id>` session namespace as\nthe inbound conversation instead of creating a phantom public-channel session.\nPublic channels still resolve to `channel`; direct messages still resolve to\n`direct`. No other channel changes behavior (non-implementing plugins keep the\nprior `channel:`/`thread:` default).\n\n## Evidence\n\nDependency premise — Mattermost upstream channel types (`O` open, `P` private,\n`D` direct, `G` group), `server/public/model/channel.go` L25-31:\nhttps://github.com/mattermost/mattermost/blob/master/server/public/model/channel.go#L25-L31\n\nNew behavior tests (`group` reached through the hook before the generic\n`channel` default):\n\n```text\n$ node scripts/run-vitest.mjs extensions/mattermost/src/mattermost/chat-type-cache.test.ts src/infra/outbound/targets.test.ts\nextensions/.../chat-type-cache.test.ts > resolves a recorded private channel as group  ✓\nextensions/.../chat-type-cache.test.ts > keeps a recorded public channel as channel    ✓\nsrc/infra/outbound/targets.test.ts > consults the plugin hook before the generic channel default  ✓  (chatType === \"group\")\nsrc/infra/outbound/targets.test.ts > falls back to the channel default when the hook returns undefined  ✓  (chatType === \"channel\")\n```\n\nAffected suites, full pass (no regressions across the two reordered generic\ninference sites and the whole Mattermost plugin):\n\n```text\n$ node scripts/run-vitest.mjs extensions/mattermost src/infra/outbound/targets.test.ts src/agents/subagent-announce-delivery.test.ts\nsrc/agents/subagent-announce-delivery.test.ts   Tests 101 passed (101)\nsrc/infra/outbound/targets.test.ts              Tests  81 passed (81)\nextensions/mattermost (41 files)                Tests 507 passed (507)\n[test] passed 3 Vitest shards\n```\n\nType, build, cycles, format:\n\n```text\n$ pnpm tsgo:core && pnpm tsgo:extensions\n# exit 0\n\n$ pnpm build\n# exit 0, no [INEFFECTIVE_DYNAMIC_IMPORT]  (sync hook leaf module stays off the lazy channel.runtime chunk)\n\n$ pnpm check:import-cycles\nImport cycle check: 0 runtime value cycle(s).\n\n$ pnpm exec oxfmt --check --threads=1 <changed files>\nAll matched files use the correct format.\n```\n\nWhat was not tested: no live Mattermost workspace round-trip — this checkout\nhas no Mattermost credentials. The fix is **network-before** classification\nlogic (it reads the authoritative channel type and chooses a session namespace;\nthe Mattermost send target stays `channel:<id>`), which the unit + plugin-level\ntests above drive through the real resolver, the real `inferTargetChatType`\nhook, and both generic inference sites. Live workspace proof would only re-show\nthe same deterministic classification.\n\nAI-assisted (Claude). Proof above was run manually in a clean worktree.\n",
-        "branch": "fix/95646-mattermost-chat-type",
-        "head_sha": "b3d6cd1ace8daabf0174514f859bae54f3892717",
-        "author": "zengwen-dt",
-        "labels": [
-          "channel: mattermost",
-          "agents",
-          "size: M",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 🛠️ actively grinding"
-        ],
-        "files": [
-          {
-            "path": "extensions/mattermost/src/channel.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/chat-type-cache.test.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/chat-type-cache.ts",
-            "additions": 53,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/monitor-resources.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/send.test.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/target-resolution.test.ts",
-            "additions": 47,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/target-resolution.ts",
-            "additions": 84,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/session-route.test.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/session-route.ts",
-            "additions": 8,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-announce-delivery.ts",
-            "additions": 8,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/targets.test.ts",
-            "additions": 39,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/targets.ts",
-            "additions": 8,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 12,
-        "additions": 322,
-        "deletions": 30,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95656",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95656.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 89,
-          "gatingTotal": 84,
-          "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 22,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6074,
+    "total_ms": 3525,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1737
+        "ms": 1726
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1811
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -227,15 +89,15 @@
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2500
+        "ms": 1788
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
