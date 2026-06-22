@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T06:19:05.621Z",
+  "generated_at": "2026-06-22T06:20:28.341Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-22T03:19:01.500Z",
+  "since": "2026-06-22T03:20:20.880Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4765452606
   ],
-  "status_comment_id": 4765452958,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4765452606:2026-06-22T06:18:00Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/90194#issuecomment-4765452606",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 90194,
       "author": "openperf",
       "author_id": 80630709,
       "author_association": "MEMBER",
       "comment_created_at": "2026-06-22T06:18:00Z",
       "comment_updated_at": "2026-06-22T06:18:00Z",
-      "status_comment_id": 4765452958,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,163 +62,26 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-22T06:19:06.326Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 90194
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-22T06:19:07.394Z",
-          "response_comment_id": "4765452958",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): sweep isolated-target base cron sessions under sessionRetention",
-        "body": "### Summary\n\n- **Problem**: Issue #89666 — `cron.sessionRetention` (default 24h) never prunes isolated-target cron sessions. The reaper gates every key with `isCronRunSessionKey`, which only matches `:run:` keys, but isolated jobs persist a single base key `agent:<agentId>:cron:<jobId>` (overwritten each run via `forceNew`, no `:run:` entry). Base sessions therefore skip the cutoff and accumulate forever — including orphans left behind by deleted jobs — regardless of the configured retention (the reporter confirmed 47 base sessions, oldest 25 days, plus 2 orphans from deleted jobs).\n- **Root cause**: `sweepCronRunSessions` only ever reaches the `updatedAt < cutoff` check for `:run:` keys. Isolated-job base keys and deleted-job remnants are never eligible, so retention is inert for all-isolated deployments.\n- **Fix (ownership-based)**: The reaper now also considers base cron keys, but prunes one only when it is an orphan — a base key no live job owns. `timer.ts` builds `knownCronJobSessionKeys` from every currently-configured job (isolated **and** non-isolated) before each sweep; keys in that set are preserved regardless of age, and base keys absent from it (deleted-job orphans) are pruned once stale. Without the set the reaper preserves all base keys (fail-safe). This is required because a live job's base row carries the user's model/auth/label overrides forward into its next run (`resolveCronSession` → `sanitizeFreshCronSessionEntry`, `src/cron/isolated-agent/session.ts:91`); deleting it would silently drop those choices for jobs that run less often than the retention window — the regression raised in review and corroborated by the issue's own field-union analysis (`authProfileOverride`, `modelOverride`, `label` are persisted on these rows). This matches the reporter's Option A (\"only prune if the job was deleted\") and the issue's \"Secondary gap — orphaned sessions from deleted jobs\". `:run:` pruning is unchanged.\n- **Agent-id correctness**: ownership keys are reconstructed with the same agent-id resolution the runtime uses when it writes the base row — a configured agent wins, an unset or dangling/non-configured id falls back to the default agent (`resolveCronAgent`, `src/gateway/server-cron.ts:175`). Using the raw `job.agentId` instead would mis-key a job that references a removed/typo'd agent (a state job creation never validates), so its live base row — written under the default agent — would be misread as an orphan and pruned. The cron service receives a `resolveCronAgentId` dependency for this; the reconstruction lives in two small, directly tested helpers (`resolveCronJobAgentId`, `buildKnownCronJobSessionKeys`).\n- **What changed**:\n  - `src/cron/session-reaper.ts` — base cron keys become prunable only as orphans (absent from the ownership set and stale); preserved when owned or when no set is provided. Adds the pure helpers `resolveCronJobAgentId` and `buildKnownCronJobSessionKeys`.\n  - `src/cron/service/timer.ts` — builds the ownership set and store paths from all live jobs via the helpers, resolving each job's agent id through `resolveCronAgentId`.\n  - `src/cron/service/state.ts` — adds the optional `resolveCronAgentId` cron-service dependency (internal dependency injection).\n  - `src/gateway/server-cron.ts` — wires `resolveCronAgentId` to the existing `resolveCronAgent`.\n  - `src/cron/session-reaper.test.ts` — ownership-based reaper cases plus pure unit tests for the two helpers (dangling agent id → default; configured → itself; named/session targets; malformed target skipped).\n  - `docs/{gateway/configuration-reference,gateway/configuration,cli/cron,automation/cron-jobs,reference/session-management-compaction}.md` — clarify that `cron.sessionRetention` now also reaps orphaned base cron sessions left by deleted jobs while preserving active jobs' sessions (behavior-description only; the config key, schema, and default are unchanged).\n- **What did NOT change (scope boundary)**:\n  - Cutoff arithmetic, throttle, archiving, and transcript-cleanup paths are unchanged.\n  - `:run:` pruning (main-target accumulation cleanup) is unchanged.\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader). `CronServiceDeps` is internal cron-service dependency injection, not a public contract.\n  - No dependency changes.\n\n### Reproduction\n\n1. Configure one or more cron jobs with `sessionTarget: isolated` that run less often than `cron.sessionRetention` (e.g. weekly with the default 24h), and leave behind a base session belonging to a since-deleted job.\n2. Let the gateway run so the session reaper sweeps (every 5 minutes).\n3. Inspect `~/.openclaw/agents/main/sessions/sessions.json` for `agent:main:cron:<jobId>` base keys older than the cutoff.\n4. **Before this PR**: no base key is ever pruned; isolated and orphaned base sessions accumulate indefinitely regardless of `cron.sessionRetention`.\n5. **After this PR**: base sessions for deleted jobs older than the cutoff are pruned on the next sweep, while a live job's base session (isolated or not, including under a dangling agent id) is preserved with its carried model/auth/label overrides intact.\n\n### Real behavior proof\n\n**Behavior addressed (#89666)**: orphaned base cron sessions (`agent:<agentId>:cron:<jobId>` for jobs no longer present in `state.store.jobs`) are pruned when `updatedAt < cutoff`; a live job's base session is preserved regardless of staleness so its persisted model/auth/label overrides survive; `:run:` rows continue to be pruned when stale.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production session-store helpers, real `listSessionEntries` / `applySessionEntryLifecycleMutation` I/O on actual temp-dir files; plus the production cron timer via `onTimer`)**: `sweepCronRunSessions` is exercised with on-disk session stores and real JSONL transcript files under `os.tmpdir()`; the ownership-set reconstruction is tested directly through the pure helpers.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/cron/session-reaper.test.ts src/cron/service.session-reaper-in-finally.test.ts` and `pnpm tsgo:core`.\n\n**Evidence after fix (Vitest + typecheck)**:\n\n```\nTest Files  2 passed (2)\n      Tests  32 passed (32)\ntsgo:core   exit 0 (no type errors)\n```\n\n**Observed result after fix**: `buildKnownCronJobSessionKeys` test seeds jobs `iso` (isolated, no agentId), `ghosted` (agentId `ghost`, not configured), `scoped` (agentId `real`, configured), and a `session:cron:weekly` target; with a resolver that mirrors `resolveCronAgent`, it yields `{agent:main:cron:iso, agent:main:cron:ghosted, agent:real:cron:scoped, agent:main:cron:weekly}` — the dangling-agent job resolves under the default agent, never `agent:ghost:*`. The reaper test `preserves a live isolated job's stale base session` confirms a stale owned key (with `modelOverride`) survives while the orphan is pruned.\n\n**What was not tested**: a live gateway run with real isolated cron jobs past the retention window; `resolveCronAgentSessionKey` with a non-default `mainKey` config (canonicalization is omitted when building the set — safe for `cron:*` keys, which never trigger the `main` alias path).\n\n**Repro confirmation**: the orphan-prune behavior fails on `main` (`isCronRunSessionKey` returns false for base keys, `result.pruned === 0`) and passes with the patch; the live-isolated-job guard and the `buildKnownCronJobSessionKeys` dangling-agent assertion are pure regression tests that fail if a live job's base row is swept or mis-keyed.\n\n### Risk / Mitigation\n\n- **Risk**: A live isolated job's base session pruned, dropping its carried model/auth/label overrides. **Mitigation**: every currently-configured job (isolated and non-isolated) is added to `knownCronJobSessionKeys`, so a live job's base row is preserved regardless of age; only base keys with no owning job are eligible.\n- **Risk**: A job under a dangling/non-configured agent id is mis-keyed and its live row pruned. **Mitigation**: the ownership key is reconstructed with the same `resolveCronAgent` fallback the runtime uses to store the row, so the keys match; covered by a dedicated helper unit test.\n- **Risk**: The reaper prunes base keys it cannot prove are orphans. **Mitigation**: pruning a base key requires the ownership set to be present and to exclude that key; when no set is provided the reaper preserves all base keys (fail-safe), reproducing the prior behavior.\n\n### Change Type (select all)\n\n- [x] Bug fix (non-breaking)\n\n### Scope (select all touched areas)\n\n- [x] Core runtime\n- [x] Cron\n- [x] Documentation\n\n### Linked Issue/PR\n\nFixes #89666\n",
-        "branch": "fix/89666-cron-isolated-session-reaper",
-        "head_sha": "1fe491d2a6610b3f59888743aaae16c2f7668cb0",
-        "author": "openperf",
-        "labels": [
-          "docs",
-          "gateway",
-          "size: M",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 🛠️ actively grinding"
-        ],
-        "files": [
-          {
-            "path": "docs/automation/cron-jobs.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/cli/cron.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/configuration-reference.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/configuration.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/reference/session-management-compaction.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/state.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 20,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/session-reaper.test.ts",
-            "additions": 242,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/session-reaper.ts",
-            "additions": 66,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 10,
-        "additions": 339,
-        "deletions": 17,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90194",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90194.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 171,
-          "gatingTotal": 166,
-          "counts": {
-            "SUCCESS": 135,
-            "SKIPPED": 31,
-            "FAILURE": 4,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6400,
+    "total_ms": 8849,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2048
+        "ms": 7448
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2059
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -230,7 +93,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2267
+        "ms": 1387
       },
       {
         "name": "append_ledger",
