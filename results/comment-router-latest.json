@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T14:33:13.402Z",
+  "generated_at": "2026-06-22T14:36:20.346Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-22T11:33:12.975Z",
+  "since": "2026-06-22T11:36:14.511Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    95693
+    95442
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4769437831
+  ],
+  "status_comment_id": 4769438316,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,22 +31,138 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95442:4769437831:2026-06-22T14:34:58Z:re_review",
+      "comment_id": "4769437831",
+      "comment_version_key": "4769437831:2026-06-22T14:34:58Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95442#issuecomment-4769437831",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 95442,
+      "author": "lzyyzznl",
+      "author_id": 41978486,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-22T14:34:58Z",
+      "comment_updated_at": "2026-06-22T14:34:58Z",
+      "status_comment_id": 4769438316,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-22T14:36:21.391Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 95442
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-22T14:36:22.718Z",
+          "response_comment_id": "4769438316",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): recover whitespace-padded job keys from local model parsers",
+        "body": "## Summary\n\nSome local/local-model tool-call parsers append a trailing space to specific cron job object key names during JSON serialization (e.g. `\"schedule \"` instead of `\"schedule\"`, `\"payload \"` instead of `\"payload\"`). The existing `canonicalizeCronToolObject` function only handled concatenated-key variants (`namePayload`, `scheduleKind`, `sessionTargetName`) and did not trim whitespace-padded keys before strict gateway schema validation, causing `CronAddParamsSchema` to reject the call with `unexpected property 'schedule '`.\n\nThis PR adds `repairWhitespacePaddedCronToolKeys` to `cron-tool-canonicalize.ts` and updates `recoverCronObjectFromFlatParams` to trim trailing whitespace from known recoverable keys. The fix is additive and defensive — it only affects key names that match the known `CRON_RECOVERABLE_OBJECT_KEYS` set when trimmed, and does not alter non-matching keys or change the existing concatenated-key recovery path.\n\nFixes #95407\n\n## Real behavior proof\n\n**Behavior addressed**: Cron `add` action fails with schema validation errors because local model parsers produce object keys with trailing whitespace (`schedule `, `sessionTarget `, `payload `) that bypass the canonicalization layer.\n\n**Real environment tested**: Linux 6.8.0 / OpenClaw source build / Node v26.2.0 / TypeBox schema validation\n\n**Pipeline demonstration** — Before and after the fix, using the actual `canonicalizeCronToolObject` function chained to the real gateway `CronAddParamsSchema` (with `additionalProperties: false`):\n\n### BEFORE fix (main) — bug reproduced\n```\nStep 1 — Model generates cron tool call with padded keys:\n  Input keys:  [ 'schedule ', 'payload ', 'sessionTarget ', 'enabled' ]\n  Padded keys: [ 'schedule ', 'payload ', 'sessionTarget ' ]\n\nStep 2 — canonicalizeCronToolObject (main, no repairWhitespacePaddedCronToolKeys):\n  Output keys: [ 'schedule ', 'payload ', 'sessionTarget ', 'enabled' ]\n  → padded keys pass through unchanged\n\nStep 3 — Gateway CronAddParamsSchema validation:\n  ❌ REJECTED!\n     → must have required properties schedule, sessionTarget, payload\n     → must not have additional properties\n\n  >> User sees: 'invalid cron.add params: must not have additional properties'\n```\n\n### AFTER fix (pr-95442)\n```\nStep 1 — Same model input with padded keys\n\nStep 2 — canonicalizeCronToolObject (with repairWhitespacePaddedCronToolKeys):\n  Output keys: [ 'enabled', 'schedule', 'payload', 'sessionTarget' ]\n  → ✅ All padded keys trimmed\n\nStep 3 — Gateway CronAddParamsSchema validation:\n  ✅ ACCEPTED\n  >> cron job created successfully, no validation error\n```\n\nThe fix was verified by:\n- Running both `main` and `pr-95442` branches in the same environment\n- Importing the real `canonicalizeCronToolObject` from source\n- Validating output against the actual `CronAddParamsSchema` via TypeBox `Value.Check()`\n- Full test suite: **126/126 tests pass** (124 existing + 2 new padded-key tests)\n\n**What was not tested**: Live gateway with an actual local model (e.g. qwen35b/llamacpp). The fix is source-level and follows the same defensive pattern as `repairConcatenatedCronToolKeys`, but boots the real schema validator.\n\n## Tests and validation\n\n### Unit tests\n\n```\n$ pnpm test src/agents/tools/cron-tool.test.ts\n\n RUN  v4.1.8\n\n Test Files  1 passed (1)\n      Tests  126 passed (126)\n   Start at  09:10:10\n   Duration  2.38s\n```\n\nTwo new test cases cover:\n1. **Nested job with whitespace-padded keys** — verifies gateway receives clean key names\n2. **Flat params with whitespace-padded keys** — verifies synthetic job recovery\n\nBoth assert no output keys retain trailing whitespace.\n\n## Risk checklist\n\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [ ] I have updated relevant documentation\n- [ ] Breaking changes (if any) are documented in Summary\n\n## Current review state\n\n- [x] Self-review completed\n- [ ] At least one maintainer review\n- [ ] All CI checks passed",
+        "branch": "fix/issue-95407-cron-key-mangling",
+        "head_sha": "6b189a5d1f8a1aa5bbc1c0043cb84f38909b7546",
+        "author": "lzyyzznl",
+        "labels": [
+          "agents",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "src/agents/tools/cron-tool-canonicalize.ts",
+            "additions": 20,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/cron-tool.test.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 73,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95442",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95442.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 172,
+          "gatingTotal": 167,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 139,
+            "SKIPPED": 31,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 752,
+    "total_ms": 9009,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 416
+        "ms": 2628
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 3193
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +174,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 325
+        "ms": 3161
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 2
       }
     ]
   }
