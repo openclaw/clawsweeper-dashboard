@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T02:26:42.910Z",
+  "generated_at": "2026-06-22T02:27:00.700Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T23:26:42.601Z",
+  "since": "2026-06-21T23:26:58.830Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95632
+    95626
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4764177175
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
@@ -31,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:95632:4764165735:2026-06-22T02:22:29Z:re_review",
-      "comment_id": "4764165735",
-      "comment_version_key": "4764165735:2026-06-22T02:22:29Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95632#issuecomment-4764165735",
+      "idempotency_key": "comment-router:openclaw/openclaw:95626:4764177175:2026-06-22T02:24:44Z:re_review",
+      "comment_id": "4764177175",
+      "comment_version_key": "4764177175:2026-06-22T02:24:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95626#issuecomment-4764177175",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95632,
-      "author": "ruomuxydt",
-      "author_id": 292684326,
+      "issue_number": 95626,
+      "author": "zw-xysk",
+      "author_id": 294457748,
       "author_association": "NONE",
-      "comment_created_at": "2026-06-22T02:22:29Z",
-      "comment_updated_at": "2026-06-22T02:22:29Z",
+      "comment_created_at": "2026-06-22T02:24:44Z",
+      "comment_updated_at": "2026-06-22T02:24:44Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -62,24 +64,127 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(telegram): fall back to sendMessage when sendRichMessage unsupported by client",
+        "body": "Fixes #93794\n\n## Summary\n\nWhen Telegram Bot API 10.1 `sendRichMessage` fails because the target client (e.g. Telegram Web) reports the message format as unsupported, fall back to regular `sendMessage` with HTML formatting. This ensures messages remain deliverable regardless of client compatibility.\n\n### Changes\n\n- **network-errors.ts**: New `isTelegramRichMessageUnsupportedError()` detection function\n- **bot/delivery.send.ts**: `sendTelegramText()` catches unsupported error, retries as HTML\n- **send.ts**: `sendChunkedText()` catches unsupported error, retries via regular chunk path; `editMessageTelegram` catches unsupported error on rich edit, falls back to standard HTML edit\n- **draft-stream.ts**: `sendRenderedMessage()` and `sendMessageTransportPreview()` catch unsupported error, retry as plain send/edit\n\n## ClawSweeper review findings addressed\n\n### [P1] Chunk replay guard — no duplication when partial rich chunks were already delivered\n\nPreviously, if `sendRichMessage` succeeded for chunk 1 but failed with unsupported on chunk 2, the outer catch would resend ALL content as HTML, duplicating chunk 1. \n\n**Fix**: `sendChunkedText` tracks each successfully sent rich chunk via a shared sentinel. On unsupported error, if any chunks were already delivered, the fallback is **skipped** (the error re-throws) instead of duplicating visible content. This handles the 99.9% case where the first rich chunk reveals the client doesn't support the format — in that case `sentCount === 0` and the full HTML fallback runs safely.\n\nTest: `does not fall back to HTML when some rich chunks were already delivered (no duplication)`\n\n```typescript\n// Chunk 1 succeeds, chunk 2 fails → no HTML fallback, error propagates\nexpect(sendRichMock).toHaveBeenCalledTimes(2);\nexpect(botApi.sendMessage).not.toHaveBeenCalled();\n```\n\n### [P2] Durable rich edit path covered\n\n`editMessageTelegram` called `richRawApi.editMessageText` directly without unsupported error handling — opt-in rich edits could still fail silently.\n\n**Fix**: `performTextEdit` now catches `isTelegramRichMessageUnsupportedError` inside the rich API branch and falls through to the standard HTML `editMessageText` path, matching the same pattern used in `delivery.send.ts` and `draft-stream.ts`.\n\nTests: `falls back to standard editMessageText when rich edit returns unsupported`, `falls back for MESSAGE_UNSUPPORTED rich edit errors`, `does not fall back for non-unsupported rich edit errors`\n\n### [P2] Narrowed unsupported matcher\n\nThe `RICH_MESSAGE_UNSUPPORTED_RE` regex contained bare `UNSUPPORTED` as an alternative, which could match unrelated Telegram API errors (e.g. `UNSUPPORTED_MEDIA_TYPE`) and convert them to HTML fallbacks, hiding real errors.\n\n**Fix**: Changed `UNSUPPORTED` to `UNSUPPORTED_MESSAGE`, keeping known error codes (`MESSAGE_UNSUPPORTED`, `UNSUPPORTED_MESSAGE_TYPE`) while rejecting non-message unsupported codes.\n\nTest: `rejects bare UNSUPPORTED without message context`\n\n```typescript\n// UNSUPPORTED_MEDIA_TYPE and UNSUPPORTED_PARAM no longer match\nexpect(isTelegramRichMessageUnsupportedError(\"UNSUPPORTED_MEDIA_TYPE\")).toBe(false);\nexpect(isTelegramRichMessageUnsupportedError(\"UNSUPPORTED_PARAM\")).toBe(false);\n```\n\n## Test evidence\n\nAll 317 tests pass across 4 test files (67 network-errors + 57 delivery + 50 draft-stream + 139 send):\n\n```\nTest Files  5 passed (5)\nTests  317 passed (317)\n```\n\nEach error classification, send path, edit path, and chunk scenario is covered by focused unit tests verifying:\n- `isTelegramRichMessageUnsupportedError` matches known Telegram Web error formats\n- Rejects parse errors, rate limits, server errors, and unrelated messages\n- `sendTelegramText` falls back from rich to HTML on unsupported\n- `sendChunkedText` falls back from rich to HTML on unsupported (first chunk)\n- `sendChunkedText` does NOT fall back when rich chunks were already delivered\n- `editMessageTelegram` falls back from rich edit to standard HTML edit on unsupported\n- `draft-stream` send and edit both fall back on unsupported\n- `deliverReplies` falls back from rich to standard send on unsupported\n\n## Real behavior proof\n\n- Behavior addressed: Telegram Web users receiving \"This message is currently not supported on Telegram Web\" after enabling `richMessages: true` — bot sends `sendRichMessage` format which Telegram Web cannot render\n- Real environment tested: local source checkout, Node.js v24.13.1, Linux x64\n- Evidence after fix: 317 unit tests pass verifying all error classifications, fallback paths, and edge cases. Three ClawSweeper findings addressed: chunk replay guard prevents visible duplication, durable rich edit path now falls back, and unsupported matcher is scoped to message-related errors only.\n- Terminal output:\n  ```\n  $ pnpm test extensions/telegram/src/network-errors.test.ts \\\n    extensions/telegram/src/bot/delivery.test.ts \\\n    extensions/telegram/src/draft-stream.test.ts \\\n    extensions/telegram/src/send.test.ts\n  \n  RUN  v4.1.8\n  \n  Test Files  5 passed (5)\n  Tests  317 passed (317)\n  Duration  27.24s\n  ```\n\n\n### HTTP-level integration test (added to address proof requirement)\n\nA new `rich-message-fallback-integration.test.ts` test file simulates the Telegram Bot API at the HTTP fetch level, proving the full error handling chain:\n\n1. **Telegram API response format** — test verifies our error detection correctly classifies the exact JSON format Telegram returns:\n   ```json\n   { \"ok\": false, \"error_code\": 400, \"description\": \"Bad Request: this message is currently not supported on Telegram Web\" }\n   ```\n2. **grammy error wrapping** — test simulates how grammy wraps this into `GrammyError(\"Call to 'sendRichMessage' failed! (400: Bad Request: ...)\")` and verifies `isTelegramRichMessageUnsupportedError()` catches it\n3. **Fallback trace** — test verifies the Bot API proxy log trace shows exactly one `sendRichMessage` attempt followed by exactly one `sendMessage` fallback, with no duplicate message delivery\n4. **Edge case rejection** — test verifies parse errors, rate limits, and \"message not modified\" errors are correctly rejected\n\nFull test output:\n```\n$ pnpm test extensions/telegram/src/rich-message-fallback-integration.test.ts\n\n RUN  v4.1.8\n\n ✓ detects the exact Telegram API error format for unsupported rich messages\n ✓ rejects other Telegram API error formats at the HTTP level\n ✓ simulates the Bot API proxy log showing fallback chain\n ✓ verifies the fallback produces exactly one non-duplicated message\n\n Test Files  1 passed (1)\n Tests  4 passed (4)\n```\n\n### Complete test suite: 317 tests passing across 5 files\n```\n Test Files  5 passed (5)\n Tests  317 passed (317)\n Duration  27.24s\n```\n",
+        "branch": "fix/telegram-rich-message-fallback",
+        "head_sha": "df5397fc44d0d2680e808bf306c3af2bf8cfb979",
+        "author": "zw-xysk",
+        "labels": [
+          "channel: telegram",
+          "size: L",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/telegram/src/bot/delivery.send.ts",
+            "additions": 30,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot/delivery.test.ts",
+            "additions": 91,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/draft-stream.test.ts",
+            "additions": 101,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/draft-stream.ts",
+            "additions": 32,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/network-errors.test.ts",
+            "additions": 76,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/network-errors.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/rich-message-fallback-integration.test.ts",
+            "additions": 292,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/telegram/src/send.test.ts",
+            "additions": 157,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/send.ts",
+            "additions": 55,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 9,
+        "additions": 841,
+        "deletions": 44,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95626",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95626.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 13,
+          "gatingTotal": 8,
+          "counts": {
+            "IN_PROGRESS": 1,
+            "SUCCESS": 9,
+            "SKIPPED": 3
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1281,
+    "total_ms": 2138,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 294
+        "ms": 598
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1257
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -91,7 +196,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 973
+        "ms": 268
       },
       {
         "name": "append_ledger",
