@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T08:24:03.259Z",
+  "generated_at": "2026-06-22T08:24:11.556Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-22T05:23:59.880Z",
+  "since": "2026-06-22T05:24:09.975Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    95676
+    95612
   ],
   "comment_ids": [
-    4766309593
+    4766318561
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4766318956,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:95676:4766309593:2026-06-22T08:21:36Z:re_review",
-      "comment_id": "4766309593",
-      "comment_version_key": "4766309593:2026-06-22T08:21:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95676#issuecomment-4766309593",
+      "idempotency_key": "comment-router:openclaw/openclaw:95612:4766318561:2026-06-22T08:22:54Z:re_review",
+      "comment_id": "4766318561",
+      "comment_version_key": "4766318561:2026-06-22T08:22:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/issues/95612#issuecomment-4766318561",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 95676,
-      "author": "anyech",
-      "author_id": 8743351,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-22T08:21:36Z",
-      "comment_updated_at": "2026-06-22T08:21:36Z",
-      "status_comment_id": null,
+      "target_branch": "main",
+      "issue_number": 95612,
+      "author": "cstreeter",
+      "author_id": 420810,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-22T08:22:54Z",
+      "comment_updated_at": "2026-06-22T08:22:54Z",
+      "status_comment_id": 4766318956,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,118 +62,60 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-22T08:24:12.731Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 95612
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-22T08:24:13.988Z",
+          "response_comment_id": "4766318956",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): retry same profile before timeout auth rotation",
-        "body": "## Summary\n\nThis PR keeps ordinary assistant-stage timeouts from immediately spending an auth-profile rotation. A first ordinary timeout now gets one bounded retry on the same model/profile; if the retry budget is exhausted, the existing auth-profile rotation path still runs.\n\nThe change deliberately does **not** weaken real failover for rate-limit/auth/quota/billing-style failures. Those reasons continue through the existing profile rotation / escalation path rather than being hidden by the timeout retry.\n\n## What Problem This Solves\n\nAn ordinary assistant-stage timeout is not necessarily evidence that the current auth profile is bad. Rotating the auth profile on the first ordinary timeout can spend a scarce profile/fallback lane too early and make transient timeout handling look like an auth-profile failure.\n\nThis patch keeps the first ordinary timeout local to the same model/profile retry budget while preserving the existing fast-failover behavior for real auth/rate-limit/quota/billing-style failures.\n\n## Why this is not covered by adjacent timeout fixes\n\nRelated timeout/failover work already exists, but it addresses adjacent seams rather than this one:\n\n- #80449 made idle watchdog timeouts participate in profile/model failover.\n- #87538 made timeout cooldowns model-scoped, so one model timeout does not block unrelated fallback models on the same profile.\n- #1576 classifies provider `Request was aborted` errors as timeout-like for fallback.\n- #95650 is about compaction retry behavior with backup auth profiles.\n- #87122 is about provider overload cooldown semantics.\n\nCurrent `origin/main` still only has the idle-timeout-specific same-model retry gate (`same_model_idle_timeout`). It does not have an ordinary request-timeout same-profile retry gate before `advanceAuthProfile()`.\n\n## Behavior addressed\n\nBefore this patch, an ordinary assistant-stage timeout could be classified as `rotate_profile` and call `advanceAuthProfile()` on the first timeout, marking the current profile as a timeout failure.\n\nAfter this patch:\n\n- ordinary assistant-stage timeout: retry the same model/profile once first;\n- repeated ordinary timeout after the retry budget is exhausted: use the existing auth-profile rotation path;\n- rate-limit/auth/quota/billing-style failures: keep existing fast failover behavior;\n- compaction/tool-execution timeouts: remain excluded from this assistant-stage retry gate.\n- configured fallback is intentionally not a bypass for the first ordinary timeout; the retry budget is one, so fallback/rotation remains available on the next timeout.\n\n## Implementation notes\n\n- Generalizes the previous idle-only retry state from `same_model_idle_timeout` to `same_model_timeout`.\n- Keeps the retry budget bounded at one same-profile retry.\n- Adds an ordinary-timeout guard so unrelated failure reasons are not masked by a timeout flag.\n- Extracts `shouldAllowSameModelTimeoutRetry` so the run-loop gate is directly tested for ordinary timeout, compaction/tool-execution exclusion, restart support, and retry budget.\n- Leaves the existing rate-limit short-window retry and overload/profile-rotation behavior intact.\n\n## Real Behavior Proof\n\n### Runtime proof: local OpenAI-compatible timeout service\n\nI re-ran this PR through the actual embedded runtime, not only the helper. The proof uses:\n\n- current PR head: `1c3ee148bc44df0572a445cdeef6417cb409f013`\n- `openclaw agent --local` from this PR checkout\n- a temporary isolated `HOME`, OpenClaw config, state directory, and workspace\n- a local OpenAI-compatible Responses service with its endpoint/port redacted\n- synthetic model names: `timeout-primary` and `timeout-fallback`\n- no live gateway, no production state, no external provider call, and no real credentials\n\nThe local service intentionally holds the first two `timeout-primary` Responses requests past the configured 1 second provider timeout, then returns a valid streamed Responses success for `timeout-fallback`.\n\nObserved runtime request order:\n\n```text\nPOST /v1/responses request #1 model=timeout-primary  -> provider timeout\nPOST /v1/responses request #2 model=timeout-primary  -> same model/profile retry before fallback\nPOST /v1/responses request #3 model=timeout-fallback -> streamed success\n```\n\nObserved final visible payload:\n\n```text\nPR95676_RUNTIME_OK\n```\n\nRedacted runtime log excerpts:\n\n```text\n[agent/embedded] [llm-timeout] openai/timeout-primary hit idle watchdog; retrying same profile before auth-profile rotation\n[agent/embedded] embedded run failover decision: stage=assistant decision=fallback_model reason=timeout from=openai/timeout-primary profile=- rawError=LLM idle timeout (1s): no response from model\n[model-fallback/decision] model fallback decision: decision=candidate_failed requested=openai/timeout-primary candidate=openai/timeout-primary reason=timeout next=openai/timeout-fallback detail=LLM idle timeout (1s): no response from model\n[model-fallback/decision] model fallback decision: decision=candidate_succeeded requested=openai/timeout-primary candidate=openai/timeout-fallback reason=unknown next=none\n[agent] run ended with stopReason=stop\n```\n\nMachine-readable proof summary, with paths, temp session IDs, endpoint/port, and local state locations omitted:\n\n```json\n{\n  \"proof\": \"PR #95676 embedded runtime timeout failover proof\",\n  \"runtime\": \"openclaw agent --local\",\n  \"service\": \"local OpenAI-compatible Responses timeout service\",\n  \"head\": \"1c3ee148bc44df0572a445cdeef6417cb409f013\",\n  \"assertion\": {\n    \"ok\": true,\n    \"responseModels\": [\"timeout-primary\", \"timeout-primary\", \"timeout-fallback\"],\n    \"expected\": [\"timeout-primary\", \"timeout-primary\", \"timeout-fallback\"],\n    \"visibleResponse\": \"PR95676_RUNTIME_OK\"\n  },\n  \"privacy\": \"temporary paths, endpoint/port, state locations, and credentials redacted; no live gateway or external provider used\"\n}\n```\n\nThis addresses the ClawSweeper proof request: the first ordinary assistant timeout stays on the same model/profile, and after the retry budget is exhausted the configured fallback path runs and succeeds.\n\n## Evidence\n\nCurrent head: `1c3ee148bc44df0572a445cdeef6417cb409f013`.\nBase observed before this body update: `c57fee8239ed41dbdf741760d06e1d0efae36b23`.\n\nLocal validation on the current checkout:\n\n```bash\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.agents-embedded-agent.config.ts src/agents/embedded-agent-runner/run.cross-provider-fallback-error-context.test.ts\nnode scripts/run-vitest.mjs run src/agents/embedded-agent-runner/run/assistant-failover.test.ts src/agents/embedded-agent-runner/run/failover-policy.test.ts test/scripts/plugin-sdk-surface-report.test.ts --maxWorkers=1 --no-fileParallelism\n./node_modules/.bin/oxfmt --check src/agents/embedded-agent-runner/run.ts src/agents/embedded-agent-runner/run/assistant-failover.ts src/agents/embedded-agent-runner/run/assistant-failover.test.ts src/agents/embedded-agent-runner/run/idle-timeout-breaker.ts src/agents/embedded-agent-runner/run.cross-provider-fallback-error-context.test.ts scripts/plugin-sdk-surface-report.mjs test/scripts/plugin-sdk-surface-report.test.ts\n./node_modules/.bin/oxlint src/agents/embedded-agent-runner/run.ts src/agents/embedded-agent-runner/run/assistant-failover.ts src/agents/embedded-agent-runner/run/assistant-failover.test.ts src/agents/embedded-agent-runner/run/idle-timeout-breaker.ts src/agents/embedded-agent-runner/run.cross-provider-fallback-error-context.test.ts scripts/plugin-sdk-surface-report.mjs test/scripts/plugin-sdk-surface-report.test.ts\ngit diff --check\n```\n\nObserved completed results on this pushed head:\n\n```text\nrun.cross-provider-fallback-error-context.test.ts: 4 passed\nfailover-policy.test.ts + plugin-sdk-surface-report.test.ts: 36 passed\nassistant-failover.test.ts: 28 passed\noxfmt focused files: passed\noxlint focused files: passed\ngit diff --check: passed\nruntime proof with local OpenAI-compatible timeout service: passed\n```\n\nGitHub CI is the authoritative broad-shard validation for this pushed head.\n\n## What was not tested\n\n- No live gateway/production runtime validation.\n- No external provider call.\n- No real credential or production auth-profile material was used.\n",
-        "branch": "fix/auth-profile-timeout-same-profile-retry",
-        "head_sha": "1c3ee148bc44df0572a445cdeef6417cb409f013",
-        "author": "anyech",
-        "labels": [
-          "scripts",
-          "agents",
-          "size: M",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "scripts/plugin-sdk-surface-report.mjs",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.cross-provider-fallback-error-context.test.ts",
-            "additions": 22,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 8,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/assistant-failover.test.ts",
-            "additions": 109,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/assistant-failover.ts",
-            "additions": 43,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/idle-timeout-breaker.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/plugin-sdk-surface-report.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 7,
-        "additions": 187,
-        "deletions": 41,
-        "is_clawsweeper_pr": false,
+        "kind": "issue",
+        "state": "open",
+        "locked": false,
+        "title": "cli-backend agent runs against anthropic (claude-cli runtime) return 401 authentication_failed while identical claude invocation works in shell",
+        "body": "# `cli-backend` agent runs against `anthropic` (claude-cli runtime) return `401 authentication_failed` while identical `claude` invocation works in shell\n\n## Environment\n\n- OpenClaw `2026.6.9 (c645ec4)` on macOS 25.3.0 (Apple silicon)\n- Node `v22.22.2`\n- Claude Code CLI `2.1.138` at `/opt/homebrew/bin/claude`\n- Single macOS user (`claw`) running an openclaw-gateway LaunchAgent\n- Auth state stripped to subscription-only profiles (no API keys anywhere):\n  ```\n  - anthropic effective=profiles | profiles=1 (oauth=1, token=0, api_key=0) | anthropic:claude-cli=OAuth\n  - claude-cli  effective=profiles | profiles=1 (oauth=1) | anthropic:claude-cli=OAuth | synthetic=plugin-owned | source=Claude CLI native auth\n  - openai      effective=profiles | profiles=1 (oauth=1) | openai:chatgpt-default=OAuth (ChatGPT subscription)\n  ```\n- Direct `claude -p \"reply ok\"` returns `ok` and successfully refreshes `~/.claude/.credentials.json` on demand.\n- `openclaw infer model run --model anthropic/claude-sonnet-4-6 --prompt 'ok'` returns `ok`. So the embedded provider path works fine against the same OAuth token.\n\n## Symptom\n\nAny agent run that is driven by the `cli-backend` path (cron jobs, Telegram-triggered agents using the claude-cli runtime) fails immediately with:\n\n```\nFailoverError: Failed to authenticate. API Error: 401 Invalid authentication credentials\n```\n\nGateway log excerpts:\n\n```\n[agent/cli-backend] cli exec: provider=claude-cli model=claude-sonnet-4-6 promptChars=580 trigger=cron useResume=false session=none resumeSession=none reuse=none historyPrompt=none\n[agent/cli-backend] claude live session start: provider=claude-cli model=claude-sonnet-4-6 activeSessions=1\n[agent/cli-backend] claude live session close: provider=claude-cli model=claude-sonnet-4-6 reason=restart\n[agent/cli-backend] claude live session turn failed: provider=claude-cli model=claude-sonnet-4-6 durationMs=4558 error=FailoverError\n[model-fallback/decision] model fallback decision: decision=candidate_failed requested=anthropic/claude-sonnet-4-6 candidate=anthropic/claude-sonnet-4-6 reason=auth next=none detail=Failed to authenticate. API Error: 401 Invalid authentication credentials\n```\n\n## What I traced\n\nI inserted a shell wrapper at `/Users/claw/.local/bin/claude` (earlier in PATH than `/opt/homebrew/bin/claude`) that logs argv + env + stdin and then `exec`s the real claude binary, capturing stdout/stderr.\n\n**argv that openclaw passes to claude (from the wrapper log):**\n\n```\n-p\n--include-partial-messages\n--verbose\n--setting-sources user\n--allowedTools mcp__openclaw__*\n--disallowedTools ScheduleWakeup,CronCreate\n--strict-mcp-config\n--mcp-config /var/folders/.../openclaw-cli-mcp-XXX/mcp.json\n--plugin-dir /tmp/openclaw/openclaw-claude-skills-XXX/openclaw-skills\n--model claude-sonnet-4-6\n--append-system-prompt-file /private/tmp/openclaw/openclaw-cli-system-prompt-XXX/system-prompt.md\n--input-format stream-json\n--output-format stream-json\n--permission-prompt-tool stdio\n--replay-user-messages\n--permission-mode default\n```\n\n**env passed to the claude subprocess** (auth-relevant subset):\n\n```\nHOME=/Users/claw\nOPENCLAW_MCP_TOKEN=<token>\nPATH=/opt/homebrew/Cellar/node@22/22.22.2_1/bin:/usr/bin:/bin:/opt/homebrew/opt/node@22/bin:/Users/claw/.local/bin:/Users/claw/.npm-global/bin:...\n```\n\nNote: **no `ANTHROPIC_API_KEY`, no `CLAUDE_CODE_OAUTH_TOKEN`, no `ANTHROPIC_BASE_URL`**.\n\n**claude's stream output:**\n\n```json\n{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"/Users/claw/.openclaw/agents-staging/ai-news\",\"session_id\":\"9e0a5024-...\",\"model\":\"claude-sonnet-4-6\",\"permissionMode\":\"default\",\"apiKeySource\":\"none\",\"claude_code_version\":\"2.1.138\",...}\n{\"type\":\"system\",\"subtype\":\"status\",\"status\":\"requesting\",\"session_id\":\"9e0a5024-...\"}\n{\"type\":\"system\",\"subtype\":\"api_retry\",\"attempt\":1,\"max_retries\":10,\"retry_delay_ms\":558.94,\"error_status\":401,\"error\":\"authentication_failed\",\"session_id\":\"9e0a5024-...\"}\n{\"type\":\"system\",\"subtype\":\"api_retry\",\"attempt\":2,\"max_retries\":10,\"retry_delay_ms\":1089.89,\"error_status\":401,\"error\":\"authentication_failed\",\"session_id\":\"9e0a5024-...\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"api_error_status\":401,\"duration_ms\":2199,\"result\":\"Failed to authenticate. API Error: 401 Invalid authentication credentials\",\"stop_reason\":\"stop_sequence\",...}\n```\n\nNotice `apiKeySource:\"none\"` — claude is correctly using the OAuth token from `~/.claude/.credentials.json`, not an API key. Yet the API call returns 401.\n\n## What's different about this invocation\n\nRunning the **exact same** argv, in the **exact same** cwd, with the **exact same** stdin, from my own interactive shell as the same `claw` user, returns `\"ok\"` with `cost=$0.025`. Verified by:\n\n```sh\ncd /Users/claw/.openclaw/agents-staging/ai-news\nprintf '{\"type\":\"user\",\"session_id\":\"\",\"parent_tool_use_id\":null,\"message\":{\"role\":\"user\",\"content\":\"reply ok\"}}\\n' | \\\n  /opt/homebrew/bin/claude -p --include-partial-messages --verbose --setting-sources user \\\n    --allowedTools 'mcp__openclaw__*' --disallowedTools ScheduleWakeup,CronCreate \\\n    --strict-mcp-config --mcp-config /tmp/repro/mcp.json --plugin-dir /tmp/repro/skills \\\n    --model claude-sonnet-4-6 --append-system-prompt-file /tmp/repro/system-prompt.md \\\n    --input-format stream-json --output-format stream-json \\\n    --permission-prompt-tool stdio --replay-user-messages --permission-mode default\n# returns \"ok\"\n```\n\nThe only meaningful differences I can identify:\n\n1. The cron's `--mcp-config` points at a live openclaw HTTP MCP server (`http://127.0.0.1:61563/mcp`) with bearer-token auth via `OPENCLAW_MCP_TOKEN`. My repro uses `{\"mcpServers\": {}}`. claude's `init` payload confirms it connected to the openclaw MCP successfully (`mcp_servers: [{\"name\":\"openclaw\",\"status\":\"connected\"}]`), so MCP isn't itself broken — but I wonder whether the cli-backend is mutating something on the OAuth credential file or sqlite between spawn and first request.\n\n2. The cron's stdin includes `\"session_id\":\"\"` (empty string) in the inbound user message. My passing repro uses the same and still gets `\"ok\"`.\n\n3. The cron is the child of `openclaw-gateway`; my repro is the child of an interactive zsh.\n\n## Steps to reproduce\n\n1. Install openclaw 2026.6.9, sign in via `claude /login` (or transplant `~/.claude/.credentials.json`), then `openclaw models auth login --provider anthropic --method cli --set-default`.\n2. Create an agent with `model.primary` = `anthropic/claude-sonnet-4-6` (or any anthropic model). Add a one-shot cron, `--model anthropic/claude-sonnet-4-6`.\n3. Trigger: `openclaw cron run <id>`.\n4. Result: `FailoverError: Failed to authenticate. API Error: 401 Invalid authentication credentials`.\n5. Manually re-run the exact argv claude was invoked with (visible in the gateway log or via a wrapper). It will return successfully.\n\n## Workaround in production\n\nSetting cron payload model to `openai/gpt-5.4-mini` (routed through `openai:chatgpt-default` OAuth, ChatGPT subscription) works end-to-end. So I've worked around by routing all cron-driven agents through the ChatGPT subscription path rather than the Claude subscription path.\n\nBut that's not really right — the user explicitly wants their Claude subscription used. Direct `claude -p` works. `openclaw infer` works. The cli-backend path is the only one that breaks.\n\n## Hunches worth checking in the codebase\n\n- `dist/external-cli-auth-selection-BDjB2d7f.js`: per-agent / per-profile selection logic around `CLAUDE_CLI_PROVIDER_ID = \"claude-cli\"` and the synthetic `anthropic:claude-cli` profile.\n- `dist/claude-live-session-BFQhL7uS.js`: the live-session spawn path.\n- `dist/credentials-read-D6J0ubHD.js`: where openclaw reads tokens. If this writes anything to credentials.json before spawning claude (e.g. to sync sqlite ↔ file), a race could invalidate the just-refreshed access token.\n\nIf a maintainer wants additional traces (full wrapper log, full system-prompt.md, full mcp.json, full claude stream output) I'm happy to attach them — I have all of them captured locally.\n\nThanks for openclaw!\n",
+        "author": "cstreeter",
+        "labels": [],
         "cluster_id": null,
         "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95676",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95676.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 149,
-          "gatingTotal": 144,
-          "counts": {
-            "SUCCESS": 118,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
+        "open_prs": [],
+        "issue_implementation_cluster_id": "issue-openclaw-openclaw-95612",
+        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-95612.md",
+        "mode": "autonomous"
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3716,
+    "total_ms": 4787,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 647
+        "ms": 624
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2720
+        "ms": 471
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 474
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -185,7 +127,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 337
+        "ms": 3194
       },
       {
         "name": "append_ledger",
