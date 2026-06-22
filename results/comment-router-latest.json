@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T08:53:27.365Z",
+  "generated_at": "2026-06-22T08:54:36.924Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-22T05:53:24.801Z",
+  "since": "2026-06-22T05:54:36.183Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4766519908
   ],
-  "status_comment_id": 4766520315,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4766519908:2026-06-22T08:52:20Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/95223#issuecomment-4766519908",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 95223,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-22T08:50:06Z",
       "comment_updated_at": "2026-06-22T08:52:20Z",
-      "status_comment_id": 4766520315,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review — follow-up after the branch email rewrite and ci re-check. the current head has no failed or pending checks in the latest status rollup; the remaining waiting-on-author label appears stale relative to the addressed feedback and posted ci notes",
       "intent": "re_review",
@@ -62,102 +62,26 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-22T08:53:28.069Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 95223
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-22T08:53:29.023Z",
-          "response_comment_id": "4766520315",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(openai): bound ChatGPT Responses error body reads to prevent OOM",
-        "body": "## Summary\n\nThe ChatGPT Responses (Codex) provider reads HTTP error bodies with an unbounded `await response.text()` in two places: the network retry/error path in `streamOpenAICodexResponses` and the canonical `parseErrorResponse` helper. A malicious or misbehaving endpoint that returns an oversized (or never-ending) error response forces the whole body into memory before the error is surfaced — an OOM / DoS vector.\n\nThis is the symmetric counterpart to #95108, which hardened the Anthropic Messages error stream with the shared byte-cap reader. The OpenAI/Codex error path was the matching gap: same `response.text()` shape, same unbounded buffering. This PR applies the **same** `readResponseTextSnippet` helper and the same cap/idle-timeout pattern, so both providers now bound diagnostic error bodies identically.\n\n## Changes\n\n- `src/llm/providers/openai-chatgpt-responses.ts`\n  - Import the shared bounded reader `readResponseTextSnippet` from `@openclaw/media-core/read-response-with-limit` (the same helper used by the Anthropic sweep in #95108).\n  - Add a small `readCodexErrorBodySnippet(response)` wrapper mirroring `readAnthropicMessagesErrorBodySnippet`: 8 KiB byte cap, 400-char snippet cap, 10s idle timeout, with a stall message and graceful `\"\"` fallback on read errors.\n  - Replace both unbounded `await response.text()` calls — the network error path (used for retry decisions and the friendly-message parse) and the `parseErrorResponse` body read — with the bounded wrapper. The stream is cancelled once the cap is hit, so only a small prefix is ever buffered.\n- `src/llm/providers/openai-chatgpt-responses.test.ts`\n  - Regression test: an oversized streamed error response is collapsed to the cap (`400 chars + \"…\"`), the underlying stream is `cancel()`-ed, and bytes pulled stay a small constant instead of draining the body.\n  - Guard test: a normal-sized JSON error body still yields the existing friendly usage-limit message, so the cap does not regress error reporting for real-world payloads.\n\nNormal OpenAI error bodies are far under the 8 KiB cap, so user-facing error messages and the usage-limit friendly text are unchanged.\n\n## Real behavior proof\n\n**Label**: bounded error-body reads for the ChatGPT Responses provider, preventing unbounded memory buffering of oversized/never-ending HTTP error responses (symmetric hardening to #95108).\n\n**Behavior addressed**: oversized/streamed HTTP error responses from the Codex endpoint were buffered in full via `response.text()`; they are now read under an 8 KiB byte cap with stream cancellation and a 10s idle timeout.\n\n**Real environment tested**: Node 22.22.0 on Linux. Two real-runtime executions: (1) the genuine production helper `readResponseTextSnippet` (the function the patched provider now calls) driven against a 10 MiB streamed error body via `node --import tsx`; (2) the full provider path through `streamOpenAICodexResponses` under vitest with a mocked `fetch` returning an oversized `ReadableStream` error body.\n\n**Exact steps or command run after this patch**:\n- `node --import tsx --import ./loader.mjs ./proof.mjs` (drives the real `readResponseTextSnippet` with the provider's exact constants: maxBytes 8192, maxChars 400, idle 10000ms)\n- `node scripts/run-vitest.mjs src/llm/providers/openai-chatgpt-responses.test.ts --run`\n- `npx oxlint src/llm/providers/openai-chatgpt-responses.ts src/llm/providers/openai-chatgpt-responses.test.ts`\n\n**Evidence after fix**:\n- tsx proof — AFTER (patched, `readResponseTextSnippet`): `bytes pulled from stream = 524288`, `stream cancel() invoked = true`, `returned snippet length = 401 chars` (400 + \"…\"). BEFORE (pre-patch, unbounded `response.text()` on the same 10 MiB stream): `bytes pulled from stream = 10485760`, `stream cancel() invoked = false`, `buffered text length = 10485760`. Summary: bounded reader pulled 524288 bytes vs unbounded 10485760 bytes (~20× less buffered). `RESULT: PASS`.\n- vitest: `Test Files 1 passed (1)`, `Tests 16 passed (16)`.\n- oxlint: exit 0, no diagnostics on the changed files.\n\n**Observed result after fix**: the oversized error body is collapsed to a 400-char snippet, the stream is cancelled after the cap, and only a small bounded prefix is held in memory; the friendly usage-limit message is preserved for normal-sized JSON error bodies.\n\n**Negative control**: reverting both call sites back to `await response.text()` (source fix removed) makes the regression test fail — with a finite oversized body the test reports `errorMessage` equal to the entire multi-hundred-KiB `E…` body instead of the bounded `400 chars + \"…\"`; with the test's unbounded streaming body, the reverted code hangs draining the never-ending stream (the exact OOM/DoS behavior this PR fixes). Restoring the fix makes all 16 tests pass again.\n\n**What was not tested**: a live network call against the real ChatGPT/Codex backend (the proof uses real `ReadableStream`/`Response` objects and the genuine production reader, not a live remote endpoint). Full-repo `tsgo` type-check was not completed locally (the 20k-file monorepo check exceeded the local time budget); the changed files compile cleanly through the vitest TS pipeline and CI will run the full type-check.\n\nAI-assisted (human-run real behavior proof included).\n",
-        "branch": "fix/bound-openai-responses-error-body",
-        "head_sha": "9737b2a1cebd3f21b12fa2a7d9cf96b33eff4c0c",
-        "author": "alix-007",
-        "labels": [
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/llm/providers/openai-chatgpt-responses.test.ts",
-            "additions": 103,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-chatgpt-responses.ts",
-            "additions": 30,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 133,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95223",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95223.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 143,
-          "gatingTotal": 138,
-          "counts": {
-            "SUCCESS": 117,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4689,
+    "total_ms": 2745,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 526
+        "ms": 728
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2024
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -169,11 +93,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2114
+        "ms": 2004
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
