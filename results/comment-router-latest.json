@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T06:05:11.829Z",
+  "generated_at": "2026-06-22T06:06:13.476Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-22T03:05:09.636Z",
+  "since": "2026-06-22T03:06:12.989Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4765367612
   ],
-  "status_comment_id": 4765367917,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4765367612:2026-06-22T06:04:10Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/93636#issuecomment-4765367612",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 93636,
       "author": "ml12580",
       "author_id": 38740695,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-22T06:04:10Z",
       "comment_updated_at": "2026-06-22T06:04:10Z",
-      "status_comment_id": 4765367917,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,212 +62,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-22T06:05:12.600Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 93636
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-22T06:05:13.698Z",
-          "response_comment_id": "4765367917",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(infra): tolerate deleted cwd across startup, PATH, home-dir, and TUI [AI-assisted]",
-        "body": "> [AI-assisted] This PR was generated using Claude Code.\n\n## Summary\n\n**Problem:** When the current working directory is deleted (by another process, `git clean`, or directory removal), the OpenClaw CLI/TUI crashes with `Error: ENOENT: no such file or directory, uv_cwd` because multiple startup **and runtime** code paths call `process.cwd()` without handling the `ENOENT` error.\n\n**Why it matters:** Hard crash with no recovery — the user sees only the raw `uv_cwd` error. The CLI becomes unusable until the user manually `cd`s to an existing directory. Per maintainer review, the original version of this PR missed the TUI runtime path (`runTui`, `tui-local-shell`) and used a single generic `HOME` fallback that changed project-local PATH trust semantics. The current rework further avoids any **implicit directory fallback on operator-trust paths**: a deleted cwd on the local shell **refuses with a clear error** instead of silently re-targeting the operator's command at `$HOME`, and TUI runtime paths **re-validate the cwd at use time** instead of reusing a stale launch-time cwd.\n\n**What changed (rework per review):** Dropped the generic `safeCwd()→HOME` helper in favor of **nullable cwd handling** with **caller-specific** behavior, adopting the design endorsed in PR #93034. The guiding principle: on a deleted cwd, **skip** project-local lookups, **refuse** operator-command paths with a clear error, or **re-validate at use time** — never silently re-target an operator command/state write at an implicit directory:\n- New `src/infra/safe-cwd.ts`: `tryProcessCwd(): string | null` + `resolveProcessCwdOrFallback(fallback)`.\n- **dotenv** (`cli/dotenv`, `cli/gateway-dispatch-dotenv`, `cli/run-main`, `infra/dotenv`): skip workspace `.env` when cwd is deleted (it cannot exist); global `.env` loading continues.\n- **PATH** (`infra/path-env`): `if (allowProjectLocalBin && cwd)` — skip project-local bin lookup when cwd is null, so `$HOME/node_modules/.bin` is never treated as the deleted project path.\n- **required-home** (`infra/home-dir`): fall back to `path.dirname(process.execPath)` — not `os.tmpdir()` (shared-temp state-write surface) and not `os.homedir()` (already empty/throwing in this branch, so `path.resolve(os.homedir())` would reach back into `process.cwd()` and crash). This is a last-resort state-dir fallback (only when every home source is unavailable); a crash here is worse than writing to the always-existing Node binary directory, which is not a shared-temp surface.\n- **TUI** (`tui/tui.ts`): `runTui` resolves a nullable `launchCwd` **once for startup-only agent workspace inference** (skipped when cwd is gone). The two runtime paths that only need *some* valid cwd — the autocomplete provider cwd and the auth-login spawn — re-validate the cwd **at use time** via `resolveLaunchCwd()` (`tryProcessCwd() ?? wrapperDir`), so a cwd deleted *after* TUI startup is not silently reused as a stale, now-deleted path. `resolveLocalAuthSpawnCwd` already re-evaluates on each call.\n- **tui-local-shell** (`tui/tui-local-shell.ts`): the `!cmd` local shell spawn **re-validates the cwd at use time and refuses with a clear error** (\"working directory was deleted; cd to an existing directory first\") when it is gone, instead of silently running the operator's command in `os.homedir()`. A local shell command's effects depend on where it runs; re-targeting it at an implicit directory the operator did not choose is a trust/safety hazard. This is the explicit-failure behavior issue #73676 asks for (\"clear error or fallback\") for the operator-trust local-shell path.\n- **is-main** (`infra/is-main.ts`): aligned to `resolveProcessCwdOrFallback(path.dirname(currentFile))`, removing a duplicated try/catch.\n\n**What did NOT change:** Config/env loading semantics for the normal (cwd present) case; global `.env` / state-dir behavior; the `project-local-bin` default (still off unless `OPENCLAW_ALLOW_PROJECT_LOCAL_BIN` is set).\n\n## Linked context\n\nCloses #73676\nRelated: #74994 (previous failed attempt — `os.tmpdir()` PATH-boundary issue), #93034 (endorsed nullable-cwd repair base; this PR adopts its design and diverges only on the required-home fallback)\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: CLI/TUI crash with `ENOENT: ... uv_cwd` when the working directory is deleted, across startup dotenv, PATH bootstrap, home-dir resolution, and TUI startup/runtime paths.\n- Real environment tested: Windows 10 Enterprise, Node v22.22.3, OpenClaw checkout on `fix/vuln-73676` (tsx 4.22.3 loader); probe run from a real terminal.\n- Exact steps or command run after this patch: a standalone `node` probe drives PRODUCTION code with the working directory deleted — both `resolveRequiredHomeDir()` (from `src/infra/home-dir.ts`) and the `!cmd` local-shell runner (`createLocalShellRunner` from `src/tui/tui-local-shell.ts`). Windows locks the running process's cwd so it cannot be `rmdir`'d in-process; the probe reproduces the exact failure libuv raises in that state — `process.cwd()` throwing `ENOENT: no such file or directory, uv_cwd` (the same error a real `rmdir` of the cwd triggers on Linux/macOS) — then invokes the real production functions and prints the observed result. The home-dir probe is run against the unpatched `main` source and against this patch; the local-shell probe is run against this patch:\n  `node --import tsx .tmp/deleted-cwd-probe.mjs home-dir <module>` and `... local-shell <module>` (probe source attached below).\n- Evidence after fix (terminal capture, real node probe driving production code):\n```\n===== BEFORE (unpatched, main: src/infra/home-dir.ts) =====\nprobe target : .tmp/home-dir-main.ts\nlaunch cwd   : D:\\code_self\\openclaw-pr-new\\openclaw (process.cwd raised ENOENT: uv_cwd)\nnode exec dir : D:\\software\\nodejs\n\nCRASH : ENOENT: no such file or directory, uv_cwd (code=ENOENT)\n\n===== AFTER (patched: src/infra/home-dir.ts) =====\nprobe target : src/infra/home-dir.ts\nlaunch cwd   : D:\\code_self\\openclaw-pr-new\\openclaw (process.cwd raised ENOENT: uv_cwd)\nnode exec dir : D:\\software\\nodejs\n\nRESULT: resolveRequiredHomeDir() => \"D:\\\\software\\\\nodejs\"\nOK    : no crash; resolved to the Node binary directory\n\n===== AFTER (patched: src/tui/tui-local-shell.ts, !cmd under deleted cwd) =====\nprobe target : src/tui/tui-local-shell.ts\nlaunch cwd   : D:\\code_self\\openclaw-pr-new\\openclaw (process.cwd raised ENOENT: uv_cwd)\nnode exec dir : D:\\software\\nodejs\n\nspawn called : false (false = command refused, not re-targeted)\nchatLog       : [\"local shell: enabled for this session\",\"local shell: working directory was deleted; cd to an existing directory first\"]\nOK    : refused with a clear error, no implicit HOME/executable-dir fallback\n```\n- Observed result after fix: (1) unpatched `resolveRequiredHomeDir()` throws `ENOENT: ... uv_cwd` (its cwd fallback was `path.resolve(process.cwd())`); patched it returns the Node binary directory via `resolveProcessCwdOrFallback(path.dirname(process.execPath))` — no crash. (2) The `!cmd` local shell under a deleted cwd **refuses**: `spawn` is never called and the chat log shows a clear error (\"working directory was deleted; cd to an existing directory first\") — the operator's command is NOT silently re-targeted at `os.homedir()` or any other implicit directory. The dotenv/PATH callers skip their workspace lookups; the TUI autocomplete/auth-spawn paths re-validate the cwd at use time via `resolveLaunchCwd()`.\n- What was not tested:\n  - Full `pnpm build` on Windows (pre-existing `write-cli-startup-metadata` failure unrelated to this change)\n  - `pnpm check:host-env-policy:swift` (requires Swift, not available on Windows)\n  - A literal `cd deleted-dir && openclaw tui` on Linux/macOS — Windows locks the cwd of a running process so it cannot be removed in-process; the deleted-cwd condition is reproduced by a `node` probe that makes `process.cwd()` raise the same `ENOENT: uv_cwd` libuv raises on a real `rmdir`, then drives the real production function. The other changed callers (dotenv, PATH, TUI, local-shell) are covered by the regression suite below.\n\n## Reproducer\n\nProbe source (`.tmp/deleted-cwd-probe.mjs`) — a `node` probe that stubs `process.cwd` to throw the libuv `ENOENT: ... uv_cwd` error and then drives PRODUCTION code. Two modes:\n- `home-dir <module>`: calls real `resolveRequiredHomeDir()` with every home source emptied (forces the cwd-fallback branch).\n- `local-shell <module>`: drives real `createLocalShellRunner`, approves the `!cmd` gate, runs `!pwd` under the deleted cwd, and reports whether `spawn` was called and what the chat log shows.\n\n```js\nimport path from \"node:path\";\nimport { pathToFileURL } from \"node:url\";\nimport { EventEmitter } from \"node:events\";\n\nconst mode = process.argv[2];\nconst moduleSpecifier = process.argv[3];\n// Faithful reproduction of the libuv error raised when the cwd is gone.\nfunction deletedCwd() {\n  const err = new Error(\"ENOENT: no such file or directory, uv_cwd\");\n  err.code = \"ENOENT\"; err.errno = -2; err.syscall = \"uv_cwd\";\n  throw err;\n}\n// Resolve the module path from the REAL cwd BEFORE stubbing, then stub.\nconst realCwd = process.cwd();\nprocess.cwd = deletedCwd;\nconst mod = await import(pathToFileURL(path.resolve(moduleSpecifier)).href);\n\nconsole.log(\"probe target :\", moduleSpecifier);\nconsole.log(\"launch cwd   :\", realCwd, \"(process.cwd raised ENOENT: uv_cwd)\");\nconsole.log(\"node exec dir:\", path.dirname(process.execPath));\nconsole.log(\"\");\n\nif (mode === \"home-dir\") {\n  try {\n    console.log(\"RESULT:\", JSON.stringify(mod.resolveRequiredHomeDir({}, () => \"\")));\n    console.log(\"OK    : no crash; resolved to the Node binary directory\");\n  } catch (err) {\n    console.log(\"CRASH :\", err.message, `(code=${err.code})`);\n  }\n} else if (mode === \"local-shell\") {\n  const messages = []; let spawnCalled = false; let sel = null;\n  const { runLocalShellLine } = mod.createLocalShellRunner({\n    chatLog: { addSystem: (l) => messages.push(l) },\n    tui: { requestRender: () => {} }, openOverlay: (s) => { sel = s; }, closeOverlay: () => {},\n    createSelector: () => ({ onSelect: undefined, onCancel: undefined, render: () => [], invalidate: () => {} }),\n    spawnCommand: () => { spawnCalled = true; return { stdout: new EventEmitter(), stderr: new EventEmitter(), on: () => {} }; },\n  });\n  const p = runLocalShellLine(\"!pwd\");\n  setImmediate(() => sel?.onSelect?.({ value: \"yes\", label: \"Yes\" }));\n  await p;\n  console.log(\"spawn called :\", spawnCalled, \"(false = refused, not re-targeted)\");\n  console.log(\"chatLog       :\", JSON.stringify(messages.filter((m) => m.startsWith(\"local shell:\"))));\n  console.log(spawnCalled ? \"FAIL  : ran in an implicit directory\" : \"OK    : refused with a clear error\");\n}\n```\n\nThe BEFORE run imports `git show main:src/infra/home-dir.ts` (written to `.tmp/home-dir-main.ts`); the AFTER runs import the patched modules from this branch.\n\n## Tests and validation\n\n- Commands run:\n  - `oxlint` on changed files ✅\n  - `node scripts/run-tsgo.mjs` — no errors in any changed file (the one repo-wide tsgo error, `src/agents/embedded-agent-runner/tool-result-context-guard.ts` unused import, is pre-existing on main from a deadcode cleanup, not in this PR's diff)\n  - `node scripts/test-projects.mjs src/infra/safe-cwd.test.ts` ✅ (4/4)\n  - `node scripts/test-projects.mjs src/infra/home-dir.test.ts` ✅ (incl. required-home → execPath dir deleted-cwd case)\n  - `node scripts/test-projects.mjs src/infra/dotenv.test.ts` ✅ (35/35)\n  - `node scripts/test-projects.mjs src/cli/run-main.test.ts` ✅ (40/40)\n  - `node scripts/test-projects.mjs src/tui/tui.test.ts src/tui/tui-local-shell.test.ts` ✅ (68/68, incl. local-shell \"refuses to run and surfaces a clear error when process.cwd() is deleted\")\n  - `node scripts/test-projects.mjs src/infra/path-env.test.ts` — 13 pass incl. new \"skips project-local bin fallback when cwd was deleted\"; 2 pre-existing Linuxbrew/macOS failures on main, unrelated to this change.\n  - Real `node --import tsx` probe (see Reproducer) driving production `resolveRequiredHomeDir()` and `createLocalShellRunner` under the deleted-cwd condition — captures in the Evidence block above.\n\n- Regression coverage added: deleted-cwd regression tests for every changed caller — `safe-cwd.test.ts` (null + fallback), `home-dir.test.ts` (required-home → execPath dir), `dotenv.test.ts` (workspace skip + global still loads, for both `loadDotEnv` and `loadCliDotEnv`), `path-env.test.ts` (project-local bin skipped), `tui.test.ts` (agent inference skips when cwd gone), `tui-local-shell.test.ts` (refuses + clear error when cwd deleted; `spawn` not called, no HOME/executable-dir re-targeting).\n\n- What failed before this fix: unguarded `process.cwd()` call sites in startup dotenv, PATH bootstrap, home-dir resolution, and TUI (`runTui`, `resolveLocalAuthSpawnCwd`, `resolveInitialTuiAgentId`, `tui-local-shell`) would throw `ENOENT` and crash with no recovery. The prior rework's local-shell `os.homedir()` fallback silently re-targeted the operator's command at HOME — now replaced with an explicit refusal.\n\n## Risk checklist\n\nDid user-visible behavior change? `Yes` — CLI/TUI no longer crash when CWD is deleted. Startup paths skip workspace `.env`/project-local PATH; the `!cmd` local shell refuses with a clear error instead of silently running in `$HOME`; the required-home state-dir fallback resolves to the Node binary directory; TUI runtime paths re-validate the cwd at use time.\n\nDid config, environment, or migration behavior change? `No` — config loading falls through to the same global `.env` / state-dir paths when workspace `.env` is skipped.\n\nDid security, auth, secrets, network, or tool execution behavior change? `No` — PATH resolution does not gain a `HOME/node_modules/.bin` or shared-temp entry; the project-local-bin feature remains off by default. The local shell no longer re-targets operator commands at an implicit directory (it refuses); the required-home fallback (`path.dirname(process.execPath)`) is a non-shared existing directory used only as a last-resort state-dir base when every home source is unavailable.\n\nWhat is the highest-risk area? `src/infra/path-env.ts` — `candidateBinDirs()` now uses a nullable cwd. This only affects the `allowProjectLocalBin` path (opt-in via `OPENCLAW_ALLOW_PROJECT_LOCAL_BIN`), and the change makes it *safer* (skip vs. the prior HOME-substitution).\n\nHow is that risk mitigated? `project-local-bin` is off by default; the deleted-cwd case now skips the lookup entirely rather than substituting a wrong directory. Covered by a dedicated regression test.\n\n## Current review state\n\nReworked per maintainer review (TUI coverage + caller-specific nullable-cwd handling) and per ClawSweeper's patch-level feedback (avoid implicit HOME/executable-dir fallbacks on operator-trust paths; revalidate runtime cwd at use time):\n- The `!cmd` local shell now **refuses with a clear error** when cwd is deleted, instead of silently re-targeting the operator's command at `os.homedir()`. (Issue #73676 asks for \"clear error or fallback\"; explicit failure is chosen for the operator-trust local-shell path.)\n- TUI runtime paths (autocomplete provider, auth-login spawn) now **re-validate the cwd at use time** via `resolveLaunchCwd()` instead of reusing a stale launch-time cwd.\n- The required-home fallback stays at `path.dirname(process.execPath)` — it is a last-resort state-dir base (only when every home source is unavailable), and a crash there is worse than writing to a non-shared existing directory. Flagged for maintainer judgment.\n- Real-behavior proof is a real `node` terminal capture driving production `resolveRequiredHomeDir()` (unpatched crash vs patched fallback) AND the production `createLocalShellRunner` (refusal + clear error, no implicit re-targeting). Awaiting re-review.\n",
-        "branch": "fix/vuln-73676",
-        "head_sha": "0439558055f25f1bfc9ff90a8c3d3e65560b00ba",
-        "author": "ml12580",
-        "labels": [
-          "cli",
-          "scripts",
-          "size: M",
-          "triage: mock-only-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 security-boundary",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "scripts/lib/ci-node-test-plan.mjs",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/dotenv.ts",
-            "additions": 7,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-dispatch-dotenv.ts",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/run-main.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/dotenv.test.ts",
-            "additions": 36,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/dotenv.ts",
-            "additions": 7,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/home-dir.test.ts",
-            "additions": 31,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/home-dir.ts",
-            "additions": 22,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/is-main.ts",
-            "additions": 3,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/path-env.test.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/path-env.ts",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/safe-cwd.test.ts",
-            "additions": 41,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/safe-cwd.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/tui/tui-local-shell.test.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/tui-local-shell.ts",
-            "additions": 24,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/tui.test.ts",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/tui.ts",
-            "additions": 25,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 17,
-        "additions": 336,
-        "deletions": 33,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93636",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93636.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 44,
-          "gatingTotal": 39,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 19,
-            "IN_PROGRESS": 3,
-            "SKIPPED": 20,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Scan changed paths (precise):FAILURE",
-            "preflight:IN_PROGRESS",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS"
-          ],
-          "pending": [
-            "preflight:IN_PROGRESS",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Scan changed paths (precise):FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4554,
+    "total_ms": 1920,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 459
+        "ms": 470
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1719
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 5
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -275,11 +93,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2349
+        "ms": 1434
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
