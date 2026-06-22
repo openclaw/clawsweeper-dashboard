@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T16:46:38.989Z",
+  "generated_at": "2026-06-22T16:47:15.434Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-22T13:46:35.808Z",
+  "since": "2026-06-22T13:47:14.732Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     95418
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4770692937
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -37,16 +39,16 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/95418#issuecomment-4760178543",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95418,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 91509,
+      "author": "mmaps",
+      "author_id": 3399869,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-20T22:31:37Z",
-      "comment_updated_at": "2026-06-22T16:46:31Z",
+      "comment_created_at": "2026-06-22T16:44:52Z",
+      "comment_updated_at": "2026-06-22T16:44:52Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -62,88 +64,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): bound OpenRouter model-scan catalog success body",
-        "body": "## Summary\n\n`fetchOpenRouterModels` (the OpenRouter `/v1/models` catalog read behind `scanOpenRouterModels`) hardened only its **error** path — `dbd5689` cancels the unread body when `res.bodyUsed` is false — but the **success** branch still buffered the entire response with an unbounded `await res.json()`. The catalog is a **provider-controlled, runtime-fetched** body, so a faulty or hostile provider can stream an effectively unbounded JSON document and exhaust process memory before the parse completes. The `finally`-block cancel is a no-op on success because `.json()` has already drained the whole body into memory.\n\nThis patch reads the success body through the canonical byte-cap reader (`readResponseWithLimit`) before `JSON.parse`, cancelling the stream on overflow and bounding idle stalls with the call's existing `timeoutMs`. It is the symmetric success-path counterpart to the bounded-stream hardening landed for the gateway pricing catalog in #95103 and for Anthropic error streams in #95108 — same vulnerability class, same helper, no new abstraction.\n\n## Changes\n\n- `src/agents/model-scan.ts`\n  - Import `readResponseWithLimit` from `@openclaw/media-core/read-response-with-limit` (the same helper used by `model-pricing-cache` in #95103, `provider-http-errors`, `clawhub`, and media fetch).\n  - Add `OPENROUTER_MODELS_BODY_MAX_BYTES = 4 * 1024 * 1024` with a comment explaining the untrusted-runtime-body rationale.\n  - Add `readOpenRouterModelsJson(response, timeoutMs)` that reads the body under the byte cap (throwing a clear overflow error), bounds idle stalls (reusing the call's existing `timeoutMs` as `chunkTimeoutMs`), then `JSON.parse`s the bounded buffer.\n  - Rewire the success branch from `await res.json()` to `await readOpenRouterModelsJson(res, timeoutMs)`. The existing error-path `finally`-cancel is unchanged.\n- `src/agents/model-scan.test.ts`\n  - Regression: an oversized streamed success body asserts the overflow error fires, the stream is cancelled once, and the reader stops early instead of draining an unbounded stream.\n  - Regression: a malformed success body surfaces the clear malformed-JSON error.\n\n**Cap rationale (why 4 MiB):** the OpenRouter live `/models` catalog is already >100 KB and grows; 4 MiB gives generous headroom for the largest known catalog while still bounding memory, and matches the cap used for the same endpoint in the live-catalog read (#95246). An overflow degrades gracefully — `scanOpenRouterModels` surfaces the error to its caller exactly as the prior `HTTP <status>` failure path already did.\n\n## Real behavior proof\n\n**Label**: success-path catalog body bounding\n\n- Behavior addressed: the OpenRouter `/models` catalog success body was read via unbounded `res.json()`; on success the stream was never cancelled, so a provider streaming an unbounded JSON document could exhaust process memory.\n- Real environment tested: Node 22 (v22.22.0), `node --expose-gc --import tsx` driving the **real** exported `scanOpenRouterModels` read path (→ real `fetchOpenRouterModels` → `readOpenRouterModelsJson` → `readResponseWithLimit`) against a `Response` wrapping a `ReadableStream` that emits a valid JSON array prefix then a run of 64 KiB padding chunks up to 12 MiB available; the stream is instrumented to count bytes actually pulled and whether `cancel()` fires. Plus `vitest` on the file and `oxlint` / `tsc`.\n- Exact steps or commands run:\n  1. tsx real-runtime harness driving `scanOpenRouterModels({ fetchImpl, probe: false })` with the oversized instrumented stream.\n  2. Negative control: temporarily revert the success-path read back to `await res.json()` and re-run the identical harness.\n  3. `node scripts/run-vitest.mjs src/agents/model-scan.test.ts --run`\n  4. `npx oxlint src/agents/model-scan.ts src/agents/model-scan.test.ts` and `npx tsc -p tsconfig.json --noEmit`.\n- Evidence after fix (tsx readback):\n  ```\n  threw            : true\n  error.message    : OpenRouter /models response too large: 4194313 bytes (limit 4194304 bytes)\n  stream.cancelled : true\n  bytesPulled      : 4259849 bytes  (~4.06 MiB)\n  byteCap          : 4194304 bytes  (~4.00 MiB)\n  totalAvailable   : 12582912 bytes (~12.00 MiB an unbounded reader would drain)\n  heap delta       : 3.42 MiB\n  ```\n  Negative control (source reverted to `await res.json()`):\n  ```\n  threw            : false\n  error.message    : (no error thrown)\n  stream.cancelled : false\n  bytesPulled      : 12582921 bytes (drained the ENTIRE oversized stream — no bound)\n  heap delta       : 14.82 MiB      (memory grows with the malicious payload)\n  ```\n  vitest: `Test Files 1 passed (1) / Tests 9 passed (9)` (7 pre-existing + 2 new). oxlint exit 0; `tsc -p tsconfig.json --noEmit` reports 0 errors project-wide (changed file clean).\n- Observed result after fix: the success body is read under a 4 MiB ceiling, the upstream stream is cancelled on overflow, and the call surfaces a clear overflow error that its caller handles exactly like the existing failure path. Idle-stall is bounded by the existing `timeoutMs`.\n- What was not tested: a real malicious upstream provider over the network (drove the real read path with an injected fetch instead); the live-probe inference path (unchanged); other providers' catalog projection logic (unchanged — only the byte-read boundary moved).\n\n---\n\nAI-assisted: implemented and verified with AI assistance; the bounded-stream approach mirrors the symmetric success-body hardening in #95103 and the error-stream hardening in #95108, reusing the canonical `readResponseWithLimit` helper rather than introducing a new abstraction.\n",
-        "branch": "fix/bound-openrouter-model-scan",
-        "head_sha": "285839b1e002b835eeb2e3ed6afb405d0f002bf8",
-        "author": "alix-007",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/model-scan.test.ts",
-            "additions": 51,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-scan.ts",
-            "additions": 27,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 78,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95418",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95418.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 143,
-          "gatingTotal": 138,
-          "counts": {
-            "SUCCESS": 118,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3595,
+    "total_ms": 2143,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 496
+        "ms": 689
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2671
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -151,11 +93,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 402
+        "ms": 1442
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
