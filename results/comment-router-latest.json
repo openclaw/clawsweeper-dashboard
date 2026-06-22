@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T14:50:31.577Z",
+  "generated_at": "2026-06-22T14:51:42.964Z",
   "repo": "openclaw/clawhub",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-22T11:50:29.703Z",
+  "since": "2026-06-22T11:51:42.375Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,7 +14,7 @@
   "comment_ids": [
     4769575560
   ],
-  "status_comment_id": 4769576066,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -38,14 +38,14 @@
       "comment_version_key": "4769575560:2026-06-22T14:49:17Z",
       "comment_url": "https://github.com/openclaw/clawhub/pull/2775#issuecomment-4769575560",
       "repo": "openclaw/clawhub",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 2775,
       "author": "momothemage",
       "author_id": 35096042,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-22T14:49:17Z",
       "comment_updated_at": "2026-06-22T14:49:17Z",
-      "status_comment_id": 4769576066,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,149 +62,26 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-22T14:50:32.560Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 2775
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-22T14:50:33.975Z",
-          "response_comment_id": "4769576066",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "Fix official-first category plugin pagination",
-        "body": "## Summary\n\n- fix official-first plugin category pagination so the official phase no longer runs a second `paginate()` to probe community results\n- preserve community fill-through when official results return zero or fewer than the requested page size, using a bounded non-paginated digest `take()` for the first community fill\n- preserve the existing no-empty-community-page behavior after a full official page with a bounded non-paginated digest probe\n- add regression coverage for both the no-second-paginate probe and the under-limit official page community fill-through behavior\n- fix an existing `types-build` blocker in the prod HTTP smoke retry helper by removing a stale assignment to an undeclared `lastError`\n- stabilize the long `malicious-skill-ban` local-auth shard after CI exposed expected banned-session teardown timeouts under runner load\n\nFixes #2773.\n\n## Evidence\n\nProduction still reproduces the issue on June 22, 2026:\n\n- `GET https://clawhub.ai/api/v1/plugins?limit=25&category=channels&officialFirst=true&sort=downloads&excludeScanStatus=pending,suspicious` returned HTTP 500 with request ID `836fa412a0b34a7d`.\n- `GET https://clawhub.ai/api/v1/plugins?limit=25&category=security&officialFirst=true&sort=downloads&excludeScanStatus=pending,suspicious` returned HTTP 500 with request ID `0ed268889284f0e6`.\n- Neighboring shapes without the combined `category + officialFirst` path returned HTTP 200.\n\nThe source issue is the official-first category wrapper calling `listPackagePageImpl()` for the official page and then calling it again in the same Convex query to probe community availability. That second call performs another `paginate()`, which is the same class of Convex runtime hazard addressed by the adjacent filtered-pagination fix.\n\nAfter-fix behavior proof on commit `ca1d68f6`:\n\n- Started a disposable anonymous local Convex deployment on `http://127.0.0.1:4310` / `http://127.0.0.1:4311` with this branch's functions and an empty local DB.\n- `CONVEX_AGENT_MODE=anonymous bunx convex dev --once --env-file <tmp> --typecheck=disable --codegen=disable --tail-logs=disable --local-cloud-port 4310 --local-site-port 4311` completed with `Convex functions ready!`.\n- Direct Convex query for the reported shape succeeded:\n\n```bash\nCONVEX_AGENT_MODE=anonymous bunx convex run --env-file .env.local --typecheck=disable --codegen=disable packages:listPublicPage '{\"category\":\"channels\",\"officialFirst\":true,\"sort\":\"downloads\",\"excludedScanStatuses\":[\"pending\",\"suspicious\"],\"paginationOpts\":{\"cursor\":null,\"numItems\":25}}'\n```\n\nResult:\n\n```json\n{\n  \"continueCursor\": \"\",\n  \"isDone\": true,\n  \"page\": []\n}\n```\n\n- Local HTTP API for the reported shape also succeeded:\n\n```bash\ncurl -i 'http://127.0.0.1:4311/api/v1/plugins?limit=25&category=channels&officialFirst=true&sort=downloads&excludeScanStatus=pending,suspicious'\n```\n\nResult summary: `HTTP/1.1 200 OK`, body `{\"items\":[],\"nextCursor\":null}`.\n\nThe disposable DB was empty, so the runtime/API proof verifies that the reported request shape reaches the branch Convex functions without the pagination runtime failure. The underfilled-data behavior is covered by the focused regression test added in this PR.\n\n## Tests\n\n- `bun run test convex/packages.public.test.ts --testNamePattern 'official category|official-first category|under-limit official-first|category-filtered listings'`\n- `bun run test convex/packages.public.test.ts`\n- `bun run format:check -- convex/packages.ts convex/packages.public.test.ts`\n- `bun run format:check -- e2e/local-auth/malicious-skill-ban-flow.pw.test.ts`\n- `bunx oxlint --type-aware --tsconfig ./tsconfig.oxlint.json convex/packages.ts convex/packages.public.test.ts`\n- `bunx tsc --noEmit --skipLibCheck --pretty false`\n- `bun run ci:types-build`\n- `PLAYWRIGHT_LOCAL_AUTH_CONVEX_URL=http://127.0.0.1:4312 PLAYWRIGHT_LOCAL_AUTH_CONVEX_SITE_URL=http://127.0.0.1:4313 bun run test:pw:local-auth -- --project=chromium e2e/local-auth/malicious-skill-ban-flow.pw.test.ts` (passed locally in 37.2s on `0beb9afb`)\n- `git diff --check`\n\n## CI\n\n- GitHub Actions were passing on commit `c4f6f94a`, including `static`, `unit`, `types-build`, `packages`, `e2e-http`, `playwright-smoke`, and all `playwright-local-auth` shards.\n- Commit `ca1d68f6` fixed ClawSweeper's P1 underfilled-page finding and added runtime/API proof.\n- Commit `052dc33c` extended the long `malicious-skill-ban` shard timeout after CI repeatedly hit the old 180s ceiling.\n- Commit `0beb9afb` adds the exact banned-session teardown timeout observed in CI (`CONVEX Q(skills:checkSlugAvailability)`) to that test's existing expected-timeout filter; the same shard now passes locally.\n- The only known non-code status is `Vercel – clawhub`, which reports `Authorization required to deploy`; a member of the OpenClaw Foundation Vercel team needs to authorize the preview deploy.\n\n## Not run / existing blockers\n\n- The first local Convex attempt against the copied main checkout local data failed schema validation because existing local `skillSearchDigest.latestVersionSummary` rows contained the stale extra field `apiKeyRequired`. I then reran against a disposable empty anonymous local deployment, which loaded successfully and served the reported request shape.\n",
-        "branch": "codex/issue-2773-category-official-first",
-        "head_sha": "0beb9afb7feb4407ce7a38a6455b2a8d20bc04d4",
-        "author": "momothemage",
-        "labels": [
-          "rating: 🧂 unranked krab",
-          "status: 🛠️ actively grinding"
-        ],
-        "files": [
-          {
-            "path": "convex/packages.public.test.ts",
-            "additions": 83,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "convex/packages.ts",
-            "additions": 135,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "e2e/local-auth/malicious-skill-ban-flow.pw.test.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "e2e/prod-http-smoke.e2e.test.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 220,
-        "deletions": 10,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-clawhub-2775",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawhub-2775.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 28,
-          "gatingTotal": 26,
-          "counts": {
-            "QUEUED": 16,
-            "SUCCESS": 11,
-            "ACTION_REQUIRED": 1
-          },
-          "blockers": [
-            "static:QUEUED",
-            "unit:QUEUED",
-            "packages:QUEUED",
-            "types-build:QUEUED",
-            "e2e-http:QUEUED",
-            "playwright-smoke:QUEUED",
-            "playwright-local-auth / delete-account:QUEUED",
-            "playwright-local-auth / delete-org:QUEUED",
-            "playwright-local-auth / header-profile-link:QUEUED",
-            "playwright-local-auth / malicious-skill-ban:QUEUED",
-            "playwright-local-auth / manage-context-proof:QUEUED",
-            "playwright-local-auth / plugin-inspector-findings:QUEUED",
-            "playwright-local-auth / publish-generated-card:QUEUED",
-            "playwright-local-auth / publish-new-version:QUEUED",
-            "playwright-local-auth / skill-star-sync:QUEUED",
-            "playwright-local-auth / version-delete:QUEUED",
-            "Vercel – clawhub:ACTION_REQUIRED"
-          ],
-          "pending": [
-            "static:QUEUED",
-            "unit:QUEUED",
-            "packages:QUEUED",
-            "types-build:QUEUED",
-            "e2e-http:QUEUED",
-            "playwright-smoke:QUEUED",
-            "playwright-local-auth / delete-account:QUEUED",
-            "playwright-local-auth / delete-org:QUEUED",
-            "playwright-local-auth / header-profile-link:QUEUED",
-            "playwright-local-auth / malicious-skill-ban:QUEUED",
-            "playwright-local-auth / manage-context-proof:QUEUED",
-            "playwright-local-auth / plugin-inspector-findings:QUEUED",
-            "playwright-local-auth / publish-generated-card:QUEUED",
-            "playwright-local-auth / publish-new-version:QUEUED",
-            "playwright-local-auth / skill-star-sync:QUEUED",
-            "playwright-local-auth / version-delete:QUEUED"
-          ],
-          "terminalBlockers": [
-            "Vercel – clawhub:ACTION_REQUIRED"
-          ],
-          "externalBlockers": [
-            "Vercel – clawhub:ACTION_REQUIRED"
-          ]
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 5163,
+    "total_ms": 2344,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 522
+        "ms": 576
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1341
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -216,7 +93,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3279
+        "ms": 1756
       },
       {
         "name": "append_ledger",
