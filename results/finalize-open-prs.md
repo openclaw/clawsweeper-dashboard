@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-06-22T02:39:25.413Z
+Generated: 2026-06-22T04:03:33.097Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#95278](https://github.com/openclaw/openclaw/pull/95278) | Avoid copying process.env in ingress queue state DB opens | automerge-openclaw-openclaw-94573 | MERGEABLE | UNSTABLE | CANCELLED:12 SKIPPED:75 SUCCESS:140 FAILURE:1 NEUTRAL:1; blockers:7 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight, needs_result_backfill | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#95278](https://github.com/openclaw/openclaw/pull/95278) | Avoid copying process.env in ingress queue state DB opens | automerge-openclaw-openclaw-94573 | MERGEABLE | UNSTABLE | SUCCESS:130 SKIPPED:27 FAILURE:10 NEUTRAL:1; blockers:10 | needs_merge_state:UNSTABLE, needs_checks:CI / build-artifacts:FAILURE; CI / checks-node-core-fast:FAILURE; CI / checks-node-core-tooling:FAILURE, needs_merge_preflight, needs_result_backfill | repair failing checks or document unrelated main flake with touched-surface proof |
