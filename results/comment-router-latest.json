@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T01:39:07.520Z",
+  "generated_at": "2026-06-22T01:39:14.577Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T22:39:06.285Z",
+  "since": "2026-06-21T22:39:14.115Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    94493
+    95623
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,122 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94493:4755303754:2026-06-22T01:39:03Z:clawsweeper_auto_repair",
-      "comment_id": "4755303754",
-      "comment_version_key": "4755303754:2026-06-22T01:39:03Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94493#issuecomment-4755303754",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 94493,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-19T22:48:07Z",
-      "comment_updated_at": "2026-06-22T01:39:03Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=c7ebb42c30ebaa79f9bbabd88eca457bc8b2be6a)",
-      "review_summary": "The PR changes the native Anthropic provider and one provider test so completed prior assistant turns omit thinking blocks while the active tool-use turn keeps signed thinking for continuation.\n\nPR surface: Source +5, Tests -7. Total -2 across 2 files.\n\nReproducibility: yes. source-level: current main and v2026.6.9 still have replay-enabled Anthropic paths that can preserve completed-turn signed thinking, and the linked issue includes production 400-loop evidence. I did not run live Anthropic traffic in this read-only pass.",
-      "review_followup": "- [P1] Manual review remains because the PR needs contributor or maintainer live-provider proof and a decision or patch for the managed transport sibling; automation cannot supply the contributor's real setup proof.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "c7ebb42c30ebaa79f9bbabd88eca457bc8b2be6a",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(anthropic): strip thinking blocks from completed prior assistant turns",
-        "body": "## Summary\n\nFixes #94228: on the native Anthropic provider path, long-lived multi-turn tool-use sessions eventually brick permanently with HTTP 400 `\"Invalid signature in thinking block\"`. The same stored history is replayed on every retry, so the thread can never recover.\n\n## Root cause\n\nThe Anthropic request-builder re-emits **every** stored thinking block from **all** prior assistant turns on every request, with its persisted signature. On long threads, the replayed multi-turn structure no longer matches the per-turn context each signature was minted against. Anthropic guidance states thinking blocks from already-closed turns may be omitted on replay.\n\n## Changes\n\nIn `src/llm/providers/anthropic.ts`:\n\n1. **Always compute the active tool-turn assistant index** (previously only computed when `replayThinkingEnabled` was `false`)\n2. **Strip thinking blocks from non-active turns only** — the active tool-use cycle always keeps its thinking for tool-result signature continuity\n\n```diff\n- const activeToolTurnAssistantIndex = replayThinkingEnabled\n-     ? -1\n-     : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);\n+ const activeToolTurnAssistantIndex =\n+     findActiveAnthropicToolTurnAssistantIndex(transformedMessages);\n```\n\n```diff\n- if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex) {\n+ if (i !== activeToolTurnAssistantIndex) {\n```\n\n### v2 fix: corrected regression from v1\n\nThe initial version used `!replayThinkingEnabled || i !== activeToolTurnAssistantIndex` which incorrectly stripped ALL thinking when `replayThinkingEnabled` was `false`. The corrected condition preserves active-tool-turn thinking for both modes.\n\n## Real behavior proof\n\n- **Behavior addressed**: Long multi-turn Anthropic tool-use sessions brick with HTTP 400 `\"Invalid signature in thinking block\"` because all historical thinking blocks with stale signatures are replayed on every request. Per reporter: ~11 occurrences/24h across multiple long threads after upgrading to 2026.6.6.\n- **Real environment tested**: Linux Node 24, full repository checkout, live execution of the `findActiveAnthropicToolTurnAssistantIndex` function against simulated multi-turn session messages\n- **Exact steps or command run after this patch**:\n  ```shell\n  $ node /tmp/proof-94493.mjs\n  ```\n  The script constructs 4 scenarios (completed turn, active tool cycle, multi-turn session, replayDisabled regression) and exercises the fix logic against the actual `findActiveAnthropicToolTurnAssistantIndex` function from `src/llm/providers/anthropic-thinking-replay.ts`.\n- **Evidence after fix**:\n  ```\n  ======================================================================\n  PR #94493 Live Proof — Anthropic thinking stale signature fix\n  ======================================================================\n\n  Case 1: Completed turn (no tool calls)\n    assistant[1]: STRIPPED (completed turn, stale sig would cause 400)\n\n  Case 2: Active tool-use cycle\n    assistant[1]: KEPT (active tool turn, signature needed)\n\n  Case 3: Multi-turn session (#94228 scenario)\n    assistant[1]: STRIPPED (completed — prevents 400 Invalid signature), sig: sig_old_1\n    assistant[4]: STRIPPED (completed — prevents 400 Invalid signature), sig: sig_old_4\n    assistant[6]: PRESERVED (active tool cycle), sig: sig_current\n\n  Case 4: replayThinkingEnabled=false — Codex regression check\n    assistant[1]: PRESERVED ✓ (active tool turn must keep thinking)\n\n  ======================================================================\n  SUMMARY:\n    ✓ Completed turns: thinking stripped (prevent stale sig 400)\n    ✓ Active tool turn: thinking preserved (signature continuity)\n    ✓ Multi-turn: only current cycle preserved, old sigs stripped\n    ✓ replayDisabled: no regression, active turn preserved\n  ======================================================================\n  ```\n- **Observed result after fix**: In multi-turn sessions, only the active tool-use cycle preserves its thinking blocks (with valid signatures needed for tool-result continuity). All completed prior turns have their thinking stripped — preventing stale signature accumulation that triggers Anthropic 400 `\"Invalid signature in thinking block\"`. The `replayThinkingEnabled=false` path correctly preserves active-tool-turn thinking (no regression).\n- **What was not tested**: Live Anthropic API multi-turn session with 10+ tool-use cycles (requires API access)\n\n## Related\n\n- #84002: same failure pattern on OpenAI-responses path (reasoning-replay poison loop)\n- #92373: merged PR that established the active-tool-turn preservation helper reused here\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/anthropic-thinking-stale-signatures",
-        "head_sha": "c7ebb42c30ebaa79f9bbabd88eca457bc8b2be6a",
-        "author": "lzy3538",
-        "labels": [
-          "size: XS",
-          "triage: mock-only-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/llm/providers/anthropic.test.ts",
-            "additions": 3,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/anthropic.ts",
-            "additions": 9,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 12,
-        "deletions": 14,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94493",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94493.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 11,
-          "gatingTotal": 6,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 7,
-            "SKIPPED": 3
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1459,
+    "total_ms": 848,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 221
+        "ms": 450
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1001
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -156,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 212
+        "ms": 386
       },
       {
         "name": "append_ledger",
