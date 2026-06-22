@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T01:53:20.938Z",
-  "repo": "openclaw/clawrouter",
+  "generated_at": "2026-06-22T01:56:20.958Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T22:53:20.635Z",
+  "since": "2026-06-21T22:56:18.777Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    38
+    95587
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4764061211
+  ],
+  "status_comment_id": 4764061412,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,22 +31,138 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95587:4764061211:2026-06-22T01:55:11Z:re_review",
+      "comment_id": "4764061211",
+      "comment_version_key": "4764061211:2026-06-22T01:55:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95587#issuecomment-4764061211",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 95587,
+      "author": "fanyangCS",
+      "author_id": 5820832,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-22T01:55:11Z",
+      "comment_updated_at": "2026-06-22T01:55:11Z",
+      "status_comment_id": 4764061412,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-22T01:56:21.922Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 95587
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-22T01:56:23.026Z",
+          "response_comment_id": "4764061412",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(openai-responses): recover streamed invalid_encrypted_content via drain-level retry (#95441)",
+        "body": "> **Agent-generated PR.** Authored by Fan's OpenClaw assistant (argus_bot), independently cross-reviewed by a second agent (fan_bot), and verified on a live deployment before submission. Opened on the user's behalf. Maintainers: see the `no-new-fix-pr` note at the bottom — this is filed at the user's explicit request and is intentionally scoped as a recovery fix, not a full root-cause fix.\n\nRefs #95441\n\n## Summary\n\nThe encrypted-content replay retry only wrapped `client.responses.create()` (the pre-stream call). In practice, `invalid_encrypted_content` / `thinking_signature_invalid` can also arrive **mid-stream** as a `response.failed` (or `type: \"error\"`) SSE event thrown inside `processResponsesStream`. That path bubbled to the outer transport `catch` with **no retry** and surfaced to the user as a hard `LLM request failed` with no deliverable assistant reply.\n\nThis widens the encrypted-content recovery to cover **create + drain**, and broadens detection/sanitization so the real-world failure shapes from #95441 are actually caught.\n\n## What changed\n\n1. **Drain-level retry** (`runResponsesDrainWithEncryptedRetry`): on a streamed encrypted-content failure with **no committed assistant content**, strip the encrypted payload and re-issue **once** into the same already-started output/stream. Single `start`/`done`, no duplicate partial. If any assistant content was already emitted, it rethrows (never double-emits).\n2. **Nested error-code extraction** (`normalizeResponsesErrorEvent`): the streamed `type: \"error\"` branch previously only read flat `event.code`. A provider sending the code nested (`{ type: \"error\", error: { code: \"invalid_encrypted_content\" } }`) lost the structured code, so the retry detector never fired. It now reads both flat and nested `code`/`message` (mirroring `response.failed`).\n3. **Bare-prose 400 matching** (`isInvalidEncryptedContentError`): the provider's pre-stream `400` can arrive as human-readable prose with **no** structured code (e.g. *\"The encrypted content for item … could not be verified.\"*). The matcher now recognizes that shape too.\n4. **Broader sanitization** (`stripEncryptedContentFields`): the sanitized retry now strips `thinkingSignature` / `textSignature` in addition to nested `encrypted_content` (this is #95441's suggested fix #3 — drop all replay-only provider-private reasoning material, not just `encrypted_content`).\n\nScope is **Responses-family only**; Anthropic/Google signed-thinking replay is untouched.\n\n## Tests\n\nAdds gate tests driving the real exported drain path with mocked SSE sequences (not just matcher unit tests):\n\n- retry-once on empty-content failure + single `start`\n- no-retry-after-content (anti double-emit)\n- no-op when nothing to strip\n- retry cap (at most once)\n- `responseId` boundary handling\n- single assistant lifecycle\n- nested `type: \"error\"` → drain → retry → sanitized request → success\n- flat + nested error-code normalization\n- bare provider `400` prose matching (and non-matching of unrelated prose)\n- strips `thinkingSignature` / `textSignature`, not just `encrypted_content`\n\nVerified locally on top of current `main`:\n\n- `vitest run src/agents/openai-transport-stream.test.ts` → **566 passed**, 0 regressions\n- targeted drain gates → **22 passed**\n- `oxlint src/agents/openai-transport-stream.ts src/agents/openai-transport-stream.test.ts` → 0 warnings, 0 errors\n\nThis change has also been running on a live deployment (`github-copilot/gpt-5.5`, Discord/Telegram/Feishu) and has been stable, recovering turns that previously hard-failed.\n\n## Scope / honesty note\n\nThis is a **recovery / mitigation** fix, **not** a full root-cause fix for #95441:\n\n- It recovers a failing turn (strip + retry) so the symptom no longer surfaces as `LLM request failed`.\n- It does **not** stop poisoned replay material from being **persisted** to session `.jsonl` in the first place, and does **not** repair already-polluted histories. So affected turns still take one failed attempt before the sanitized retry succeeds.\n- The deeper fixes from the issue — persistence-time stripping (#1) and a session-repair migration for existing `.jsonl` (#4) — are intentionally **out of scope** here and would be a larger, separate change touching the persistence layer and all embedded channel/direct paths.\n\n## Note for maintainers\n\nIssue #95441 carries the `clawsweeper:no-new-fix-pr` / `clawsweeper:needs-maintainer-review` labels. This PR is opened at the explicit request of the repository owner (the user running this agent), as a small, test-covered, deployment-validated **mitigation** for the streamed-failure gap. Happy to close/hold if maintainers would rather land the root-cause approach instead, or rework per review.\n\n\n---\n\n## Update (review response + live-path proof)\n\n**Addressed @NianJiuZst's review** (thanks for the thorough read). The pre-stream `createResponsesStreamWithEncryptedContentRetry` is now **deleted** — `runResponsesDrainWithEncryptedRetry` subsumes both the pre-stream `create()` failure and the mid-stream `response.failed` / `type:\"error\"` failure through a single catch, so there is no longer any silently-unused exported helper. Its now-redundant unit test (and the only `import OpenAI` that test needed) were removed; the create-failure path stays covered by the drain gates (they reject the first `create()` and assert the single sanitized retry). Net diff is smaller; still 2 files.\n\nRe-verified after the cleanup: targeted drain gates **22 passed**, `oxlint` 0 warnings / 0 errors. (The 3 red CI checks are unrelated to this diff — `Real behavior proof` is the policy gate addressed below; `checks-node-core-fast` / `checks-node-core-tooling` fail on `resolve-openclaw-ref` / `bench-gateway-restart` / `test-projects`, i.e. git-ls-remote and spawn/ENOENT CI-env flakes on files this PR never touches. The `agents-core` / `agents-support` shards that own this file pass.)\n\n**Real behavior proof.** A standalone harness drives the **real exported `runResponsesDrainWithEncryptedRetry`** (not a reimplementation) with a mocked Responses client: the first drain emits `response.failed: invalid_encrypted_content` mid-stream; the helper detects it, strips the replay-private fields, and re-drains once. Redacted, deterministic terminal output:\n\n```\n=== #95441 streamed encrypted-content retry: LIVE PATH PROOF ===\ncreate() calls                : 2  (expect 2: fail once, retry once)\nretry warn emitted            : true\n  -> [responses] retrying drain without encrypted reasoning content provider=REDACTED-provider api=openai-responses model=REDACTED-model responseId=resp_failed_1\n1st request had encrypted_content    : true\n1st request had thinkingSignature    : true\nretry stripped encrypted_content     : true\nretry stripped thinkingSignature     : true\nretry serialized has NO encrypted_content : true\nretry serialized has NO thinkingSignature : true\nretry serialized has NO textSignature     : true\n'start' events emitted        : 1  (expect 1: no duplicate start)\nfinal output.responseId       : resp_ok_2  (success-path id from the recovered response)\nrecovered (no thrown error)   : true\n=== PASS ===\n```\n\nThis corroborates the deployment experience noted above: the streamed encrypted-content failure retries exactly once, strips `encrypted_content` / `thinkingSignature` / `textSignature`, emits a single `start` (no duplicate start/partial/done), and recovers the assistant reply instead of surfacing `LLM request failed`.\n\n<details>\n<summary>Reproducible harness (run with <code>tsx</code> against this PR head)</summary>\n\n```ts\n// tmp/proof-95441.mts — node_modules/.bin/tsx --tsconfig tsconfig.json tmp/proof-95441.mts\nimport { testing } from \"../src/agents/openai-transport-stream.ts\";\n\nfunction streamOf(events: unknown[]): AsyncIterable<unknown> {\n  return { async *[Symbol.asyncIterator]() { for (const e of events) yield e; } };\n}\n\nconst poisonedRequest = {\n  model: \"REDACTED-model\", stream: true,\n  input: [\n    { type: \"reasoning\", id: \"rs_prior\", encrypted_content: \"REDACTED\", thinkingSignature: \"REDACTED\", summary: [] },\n    { type: \"message\", id: \"msg_prior\", role: \"assistant\", textSignature: \"REDACTED\",\n      content: [{ type: \"output_text\", text: \"prior answer\" }] },\n  ],\n};\n\nlet createCalls = 0; const sentRequests: unknown[] = [];\nconst client = { responses: { create(req: unknown) {\n  createCalls++; sentRequests.push(req);\n  if (createCalls === 1) return Promise.resolve(streamOf([\n    { type: \"response.failed\", response: { id: \"resp_failed_1\",\n      error: { code: \"invalid_encrypted_content\", message: \"encrypted content could not be verified\" } } },\n  ]));\n  return Promise.resolve(streamOf([\n    { type: \"response.created\", response: { id: \"resp_ok_2\" } },\n    { type: \"response.output_text.delta\", delta: \"Recovered reply.\" },\n    { type: \"response.completed\", response: { id: \"resp_ok_2\", status: \"completed\", output: [], usage: {} } },\n  ]));\n} } };\n\nconst startEvents: unknown[] = [];\nconst output: Record<string, unknown> = { content: [], responseId: undefined, stopReason: undefined };\nconst stream = { push(ev: { type: string }) { if (ev.type === \"start\") startEvents.push(ev); } };\nconst warnLines: string[] = []; const origWarn = console.warn;\nconsole.warn = (...a: unknown[]) => warnLines.push(a.join(\" \"));\nconst model = { id: \"REDACTED-model\", api: \"openai-responses\", provider: \"REDACTED-provider\",\n  baseUrl: \"https://REDACTED\", reasoning: true, input: [\"text\"],\n  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 8192 };\n\nstream.push({ type: \"start\", partial: output });\nawait testing.runResponsesDrainWithEncryptedRetry({\n  client: client as never, request: poisonedRequest as never, requestOptions: undefined,\n  model: model as never, output: output as never, stream: stream as never, processOptions: undefined as never });\nconsole.warn = origWarn;\n\nconst retry = JSON.stringify(sentRequests[1]);\nconsole.log(\"create() calls:\", createCalls);\nconsole.log(\"retry warn:\", warnLines.some((l) => l.includes(\"retrying drain\")));\nconsole.log(\"retry has NO encrypted_content:\", !retry.includes(\"encrypted_content\"));\nconsole.log(\"retry has NO thinkingSignature:\", !retry.includes(\"thinkingSignature\"));\nconsole.log(\"retry has NO textSignature:\", !retry.includes(\"textSignature\"));\nconsole.log(\"start events:\", startEvents.length);\n```\n\n</details>\n",
+        "branch": "pr/responses-drain-encrypted-retry",
+        "head_sha": "becdaeeacaf440cd29f914606448394539be98a7",
+        "author": "fanyangcs",
+        "labels": [
+          "agents",
+          "size: L",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 379,
+            "deletions": 57,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 185,
+            "deletions": 34,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 564,
+        "deletions": 91,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95587",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95587.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 11,
+          "gatingTotal": 6,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 7,
+            "SKIPPED": 3
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 578,
+    "total_ms": 4917,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 293
+        "ms": 672
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1496
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +174,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 275
+        "ms": 2724
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
