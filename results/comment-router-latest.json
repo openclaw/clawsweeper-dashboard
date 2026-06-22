@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T07:52:45.491Z",
+  "generated_at": "2026-06-22T07:53:51.736Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-22T04:52:42.622Z",
+  "since": "2026-06-22T04:53:51.115Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4766066035
   ],
-  "status_comment_id": 4766066414,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4766066035:2026-06-22T07:51:35Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/95675#issuecomment-4766066035",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 95675,
       "author": "wangmiao0668000666",
       "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-22T07:51:35Z",
       "comment_updated_at": "2026-06-22T07:51:35Z",
-      "status_comment_id": 4766066414,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,252 +62,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-22T07:52:46.559Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 95675
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-22T07:52:47.783Z",
-          "response_comment_id": "4766066414",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(compaction): add compaction.preflight.enabled config gate (#95553)",
-        "body": "## What Problem This Solves\n\nIssue #95553 reports that preflight (budget-triggered) compaction cannot be disabled via config. The issue's \"Expected behavior\" section explicitly lists two user-asked solutions:\n\n> 1. Honor `agents.defaults.compaction.timeoutSeconds` for the preflight/budget path too, **or**\n> 2. Add a config toggle `agents.defaults.compaction.preflight: false` to skip preflight compaction entirely\n\nThis PR addresses **solution 2**: a strict, additive `compaction.preflight.enabled` config gate that short-circuits the preflight check and lets every turn fall through to overflow recovery (which already honors `compaction.timeoutSeconds`).\n\nThe check is `=== false` against the literal value, so an unset key preserves the existing default-on behavior — the fix is strictly additive and does not change shipped behavior for any current user.\n\n## Why This Change Was Made\n\nThere are four open PRs already working on #95553, all focused on the same surface: the `abortSignal` source for the preflight path:\n\n- #95561 — `AbortSignal.any([replyOp, AbortSignal.timeout(resolveCompactionTimeoutMs(cfg))])`\n- #95563 — drop `abortSignal: replyOp.signal` and add a separate `mcp.runtimeScope` change\n- #95580 — new `createPreflightCompactionCancelSignal` helper that filters out `TimeoutError`\n- #95590 — drop `abortSignal` line entirely\n\nNone of those four PRs addresses the **user-facing config dimension** the issue explicitly requests. The preflight path is *currently* running for every user that hits the soft threshold, even users who would prefer to skip it. This PR ships the missing config dimension that complements any of the four abortSignal approaches once a maintainer picks one.\n\nThe change is narrow: a single 6-line early return placed after the `isHeartbeat || isCli` gate and before the Codex runtime gate, so it only affects OpenClaw's own preflight path. It is fully orthogonal to whichever abortSignal shape a maintainer chooses.\n\n## Changes\n\n- `src/config/types.agent-defaults.ts` — new `AgentCompactionPreflightConfig` type with optional `enabled: boolean`\n- `src/config/zod-schema.agent-defaults.ts` — `preflight: z.object({ enabled: z.boolean().optional() }).strict().optional()`\n- `src/config/schema.help.ts` — two help entries: parent `agents.defaults.compaction.preflight` + leaf `.enabled`\n- `src/config/schema.labels.ts` — two labels matching the help entries\n- `src/auto-reply/reply/agent-runner-memory.ts` — 6-line early-return gate in `runPreflightCompactionIfNeeded`, placed after `isHeartbeat/isCli` and before the Codex runtime gate (only OpenClaw's own preflight path is gated)\n- `src/auto-reply/reply/agent-runner-memory.test.ts` — new test \"skips preflight compaction when cfg.agents.defaults.compaction.preflight.enabled === false\" (uses the same fixture pattern as adjacent tests)\n- `docs/gateway/config-agents.md` — add `preflight.enabled` to the JSON5 example and bullet list under `agents.defaults.compaction`, matching the schema/help coverage\n- `scripts/repro/issue-95553-preflight-disabled-gate.mts` — standalone real-environment proof that writes a real `openclaw.json` and loads it via the production `loadConfig()` (not a cast)\n\n## User Impact\n\nA user who adds the following to their `openclaw.json` now skips the budget-triggered preflight check and lets every turn fall through to overflow recovery:\n\n```json\n{\n  \"agents\": {\n    \"defaults\": {\n      \"compaction\": {\n        \"preflight\": { \"enabled\": false }\n      }\n    }\n  }\n}\n```\n\nFor users who do not set the key, behavior is unchanged.\n\n## Evidence\n\n- **Behavior addressed:** preflight (budget-triggered) compaction can now be disabled via config, complementing the four open PRs that are all working on the `abortSignal` source for the same path\n- **Real environment tested:** Linux x86_64, Node v24.14.1, repo at `5210d8b121` rebased onto `personal/main` (base `c57fee8239ed`)\n- **Exact steps run after this patch:**\n\n  ```console\n  $ node scripts/run-vitest.mjs src/auto-reply/reply/agent-runner-memory.test.ts\n\n   RUN  v4.1.7 /home/0668000666/0668000666/AI/OpenClaw/new_open_claw\n\n   Test Files  1 passed (1)\n        Tests  41 passed (41)\n     Start at  15:45:38\n     Duration  17.86s (transform 4.48s, setup 395ms, import 8.27s, tests 8.90s, environment 0ms)\n\n  [test] passed 1 Vitest shard in 28.18s\n  ```\n\n  ```console\n  $ node --import tsx scripts/repro/issue-95553-preflight-disabled-gate.mts\n\n  === Reproduction for issue #95553 — preflight gate ===\n  tmpDir: /tmp/openclaw-95553-repro-XTtBDw\n  openclaw.json: /tmp/openclaw-95553-repro-XTtBDw/config/openclaw.json\n  sessionFile: /tmp/openclaw-95553-repro-XTtBDw/sessions/session.jsonl\n  loaded config: agents.defaults.compaction.preflight.enabled = false\n  PASS  preflight.enabled === false short-circuits preflight check\n        sessionEntry returned unchanged: session-95553-repro\n  === All repro assertions passed ===\n  ```\n\n  The repro script proves the **real `openclaw.json` → production `loadConfig()` → production `runPreflightCompactionIfNeeded`** path. It writes `openclaw.json` to a temp state dir, points `OPENCLAW_CONFIG_PATH` and `OPENCLAW_STATE_DIR` at it via `withEnvAsync`, calls the production `loadConfig({ pin: false })`, asserts the gate value is parsed from disk, and then exercises the gate on the production preflight function. The function returns the original session entry unchanged; `compactEmbeddedAgentSession` is never reached.\n\n- **Observed result after fix:** the production `runPreflightCompactionIfNeeded` returns the existing `sessionEntry` unchanged when `compaction.preflight.enabled === false`; `compactEmbeddedAgentSession` is never called; `incrementCompactionCount` is never called\n- **What was not tested:** I did not exercise the live gateway path (the four open PRs also exercise the unit-test surface, not the live gateway); the unit test and repro script cover the full production gate code path through `runPreflightCompactionIfNeeded`\n\n## ClawSweeper review fixes (commit `5210d8b121`)\n\nThe 🦪 silver shellfish review flagged three P1 findings on commit `a140b0bb1b` / `ffd17f3a85`; all three are addressed in commit `5210d8b121`:\n\n1. **[P1] schema.help.ts:1518 timeout wording** — replaced hardcoded \"15-minute budget\" claim with neutral wording that references `compaction.timeoutSeconds` only (no specific default minutes). The same wording fix applies to the inline code comment in `agent-runner-memory.ts`. The PR does not need to assume which timeout default the merge target carries.\n2. **[P1] public docs coverage** — added `preflight.enabled` to the JSON5 example and the bullet list under `agents.defaults.compaction` in `docs/gateway/config-agents.md`. Public docs now describe the new knob consistently with the schema help.\n3. **[P1] real OpenClaw setup proof** — rewrote the repro script to write a real `openclaw.json` to a temp state dir and load it through the production `loadConfig()`. The gate value is now parsed from disk through the same code path the gateway startup uses, not cast from an inline literal.\n\nThe single remaining CI failure (`checks-node-core-fast`, surface budget `public exports 10328 > 10327` and `public callable exports 5185 > 5184`) is **pre-existing on `openclaw/main`** HEAD alone — see [comment](https://github.com/openclaw/openclaw/pull/95675#issuecomment-4765586623). This PR adds zero new public SDK exports; `git diff c57fee8239ed..HEAD -- src/plugin-sdk/` is empty.\n\n## Related\n\n- Refs #95553\n- Complements (does not duplicate) #95561, #95563, #95580, #95590\n- Branch: `fix/95553-preflight-config-gate` (carries only the preflight config gate; the prior `feat/task-route-lease-module` branch was abandoned per PR #95648 close reason)\n- Commits on branch: `a140b0bb1b feat`, `ffd17f3a85 lint fix`, `5210d8b121 review fixes`",
-        "branch": "fix/95553-preflight-config-gate",
-        "head_sha": "5210d8b1210df6cb8b76f0f7e5531d9651a4a569",
-        "author": "wangmiao0668000666",
-        "labels": [
-          "docs",
-          "gateway",
-          "scripts",
-          "size: M",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/gateway/config-agents.md",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/repro/issue-95553-preflight-disabled-gate.mts",
-            "additions": 152,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
-            "additions": 63,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.help.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.labels.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.agent-defaults.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-defaults.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 8,
-        "additions": 248,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95675",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95675.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 148,
-          "gatingTotal": 143,
-          "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 29,
-            "IN_PROGRESS": 3,
-            "QUEUED": 49,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-gateway:QUEUED",
-            "checks-node-agentic-commands-doctor-shared:QUEUED",
-            "checks-node-agentic-commands-models:QUEUED",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:QUEUED",
-            "checks-node-agentic-control-plane-auth-node:QUEUED",
-            "checks-node-agentic-control-plane-http-models:QUEUED",
-            "checks-node-agentic-control-plane-http-plugin-ws:QUEUED",
-            "checks-node-agentic-control-plane-runtime:QUEUED",
-            "checks-node-agentic-control-plane-runtime-config:QUEUED",
-            "checks-node-agentic-control-plane-runtime-cron:QUEUED",
-            "checks-node-agentic-control-plane-runtime-events:QUEUED",
-            "checks-node-agentic-control-plane-runtime-network:QUEUED",
-            "checks-node-agentic-control-plane-runtime-server:QUEUED",
-            "checks-node-agentic-control-plane-runtime-shared-token:QUEUED",
-            "checks-node-agentic-control-plane-runtime-state:QUEUED",
-            "checks-node-agentic-control-plane-runtime-ui-tools:QUEUED",
-            "checks-node-agentic-control-plane-startup-config:QUEUED",
-            "checks-node-agentic-control-plane-startup-core:QUEUED",
-            "checks-node-agentic-control-plane-startup-health-runtime:QUEUED",
-            "checks-node-agentic-control-plane-startup-restart-close:QUEUED",
-            "checks-node-agentic-gateway-core:QUEUED",
-            "checks-node-agentic-gateway-methods:QUEUED",
-            "checks-node-agentic-plugin-sdk:QUEUED",
-            "checks-node-auto-reply-core-top-level:QUEUED",
-            "checks-node-auto-reply-reply-agent-runner:QUEUED",
-            "checks-node-auto-reply-reply-commands:QUEUED",
-            "checks-node-auto-reply-reply-dispatch:QUEUED",
-            "checks-node-auto-reply-reply-session:QUEUED",
-            "checks-node-auto-reply-reply-state-routing:QUEUED",
-            "checks-node-bundle-infra-small-1:QUEUED",
-            "checks-node-bundle-infra-small-2:QUEUED",
-            "checks-node-bundle-infra-small-3:QUEUED",
-            "checks-node-bundle-infra-small-4:QUEUED",
-            "checks-node-bundle-infra-small-5:QUEUED",
-            "checks-node-bundle-infra-small-6:QUEUED",
-            "checks-node-core-fast:QUEUED",
-            "checks-node-core-runtime-cron-core:QUEUED",
-            "checks-node-core-runtime-cron-isolated-agent:QUEUED",
-            "checks-node-core-runtime-cron-service:QUEUED",
-            "checks-node-core-runtime-hooks:QUEUED",
-            "checks-node-core-runtime-infra-process:QUEUED",
-            "checks-node-core-runtime-media-ui:QUEUED",
-            "checks-node-core-runtime-secrets:QUEUED",
-            "checks-node-core-runtime-shared:QUEUED",
-            "checks-node-core-src-security:QUEUED",
-            "checks-node-core-support:QUEUED",
-            "checks-node-core-tooling:QUEUED",
-            "checks-node-core-tooling-docker:QUEUED",
-            "checks-node-core-ui:QUEUED"
-          ],
-          "pending": [
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-gateway:QUEUED",
-            "checks-node-agentic-commands-doctor-shared:QUEUED",
-            "checks-node-agentic-commands-models:QUEUED",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:QUEUED",
-            "checks-node-agentic-control-plane-auth-node:QUEUED",
-            "checks-node-agentic-control-plane-http-models:QUEUED",
-            "checks-node-agentic-control-plane-http-plugin-ws:QUEUED",
-            "checks-node-agentic-control-plane-runtime:QUEUED",
-            "checks-node-agentic-control-plane-runtime-config:QUEUED",
-            "checks-node-agentic-control-plane-runtime-cron:QUEUED",
-            "checks-node-agentic-control-plane-runtime-events:QUEUED",
-            "checks-node-agentic-control-plane-runtime-network:QUEUED",
-            "checks-node-agentic-control-plane-runtime-server:QUEUED",
-            "checks-node-agentic-control-plane-runtime-shared-token:QUEUED",
-            "checks-node-agentic-control-plane-runtime-state:QUEUED",
-            "checks-node-agentic-control-plane-runtime-ui-tools:QUEUED",
-            "checks-node-agentic-control-plane-startup-config:QUEUED",
-            "checks-node-agentic-control-plane-startup-core:QUEUED",
-            "checks-node-agentic-control-plane-startup-health-runtime:QUEUED",
-            "checks-node-agentic-control-plane-startup-restart-close:QUEUED",
-            "checks-node-agentic-gateway-core:QUEUED",
-            "checks-node-agentic-gateway-methods:QUEUED",
-            "checks-node-agentic-plugin-sdk:QUEUED",
-            "checks-node-auto-reply-core-top-level:QUEUED",
-            "checks-node-auto-reply-reply-agent-runner:QUEUED",
-            "checks-node-auto-reply-reply-commands:QUEUED",
-            "checks-node-auto-reply-reply-dispatch:QUEUED",
-            "checks-node-auto-reply-reply-session:QUEUED",
-            "checks-node-auto-reply-reply-state-routing:QUEUED",
-            "checks-node-bundle-infra-small-1:QUEUED",
-            "checks-node-bundle-infra-small-2:QUEUED",
-            "checks-node-bundle-infra-small-3:QUEUED",
-            "checks-node-bundle-infra-small-4:QUEUED",
-            "checks-node-bundle-infra-small-5:QUEUED",
-            "checks-node-bundle-infra-small-6:QUEUED",
-            "checks-node-core-fast:QUEUED",
-            "checks-node-core-runtime-cron-core:QUEUED",
-            "checks-node-core-runtime-cron-isolated-agent:QUEUED",
-            "checks-node-core-runtime-cron-service:QUEUED",
-            "checks-node-core-runtime-hooks:QUEUED",
-            "checks-node-core-runtime-infra-process:QUEUED",
-            "checks-node-core-runtime-media-ui:QUEUED",
-            "checks-node-core-runtime-secrets:QUEUED",
-            "checks-node-core-runtime-shared:QUEUED",
-            "checks-node-core-src-security:QUEUED",
-            "checks-node-core-support:QUEUED",
-            "checks-node-core-tooling:QUEUED",
-            "checks-node-core-tooling-docker:QUEUED",
-            "checks-node-core-ui:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5962,
+    "total_ms": 1975,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 669
+        "ms": 607
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2187
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -315,11 +93,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3082
+        "ms": 1354
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
