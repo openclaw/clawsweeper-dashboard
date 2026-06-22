@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-22T02:01:18.138Z",
+  "generated_at": "2026-06-22T02:02:15.071Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-21T23:01:14.626Z",
+  "since": "2026-06-21T23:02:12.582Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    92957
+    90239
   ],
   "comment_ids": [
-    4764077407
+    4764077696
   ],
-  "status_comment_id": 4764077581,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92957:4764077407:2026-06-22T01:59:58Z:re_review",
-      "comment_id": "4764077407",
-      "comment_version_key": "4764077407:2026-06-22T01:59:58Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92957#issuecomment-4764077407",
+      "idempotency_key": "comment-router:openclaw/openclaw:90239:4764077696:2026-06-22T02:00:04Z:re_review",
+      "comment_id": "4764077696",
+      "comment_version_key": "4764077696:2026-06-22T02:00:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90239#issuecomment-4764077696",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 92957,
-      "author": "yetval",
-      "author_id": 102706514,
+      "target_branch": null,
+      "issue_number": 90239,
+      "author": "simplyclever914",
+      "author_id": 280986376,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-22T01:59:58Z",
-      "comment_updated_at": "2026-06-22T01:59:58Z",
-      "status_comment_id": 4764077581,
+      "comment_created_at": "2026-06-22T02:00:04Z",
+      "comment_updated_at": "2026-06-22T02:00:04Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,483 +62,377 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-22T02:01:18.804Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 92957
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-22T02:01:19.786Z",
-          "response_comment_id": "4764077581",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat(gateway): add agents.setDefault RPC method",
-        "body": "## Summary\n\nThere is no dedicated Gateway RPC to change the default agent. `agents.list` already returns a read-only `defaultId` and full CRUD exists (`agents.create`/`agents.update`/`agents.delete`), but `agents.update` does not accept a `default` field, so the only way to flip the default is the generic `config.patch` (ADMIN): read the whole config, find the agent's index, build a merge-patch, and reconcile `baseHash`. A \"set as default\" button should not have to reimplement config surgery (openclaw#52928).\n\nThis adds `agents.setDefault` (`{ agentId } -> { ok: true, defaultId }`, scope `operator.admin`). It marks the target as default, clears the flag from every other entry, persists through the same retrying config-write path the other `agents.*` mutations use, and rejects unknown agent ids.\n\n## Why a dedicated method\n\nThe default agent is a per-entry `default?: boolean` flag on `agents.list[]` (`src/config/types.agents.ts:82`), resolved by `resolveDefaultAgentId` (`src/agents/agent-scope-config.ts:91`), which takes the single entry with `default: true` and falls back to the first entry. Nothing exposed a write path for that flag:\n\n- `agents.update`'s param schema is `additionalProperties: false` with no `default` field, so passing `default: true` is rejected.\n- `applyAgentConfig` (`src/commands/agents.config.ts`) merges `name`/`workspace`/`model`/`identity` and never touches `default`.\n\nSo clients were pushed onto `config.patch`, which is exactly the index-lookup + merge-patch + `baseHash` dance the issue calls out.\n\n## Implementation\n\nThe handler mirrors the existing `agents.update`/`agents.delete` shape, so the new surface reuses the same validation, precondition, and retrying-write plumbing rather than inventing a parallel one:\n\n- `setDefaultAgent` (`src/commands/agents.config.ts`): pure transform next to `applyAgentConfig`/`pruneAgentConfig`. Sets `default: true` on the target and `false` on the rest, leaving unchanged entries referentially identical so the persisted config diff stays minimal.\n- `setDefaultAgentConfigEntry` (`agents-config-mutations.ts`): wraps `setDefaultAgent` in `mutateConfigFileWithRetry`, throws `AgentConfigPreconditionError(\"not-found\", id)` for unknown ids, and returns the resolved `defaultId`.\n- `agents.setDefault` handler (`server-methods/agents.ts`): `validateAgentsSetDefaultParams` -> `isConfiguredAgent` guard -> mutation -> `{ ok: true, defaultId }`.\n- Dispatch wiring: descriptor `{ name: \"agents.setDefault\", scope: \"operator.admin\" }` (`core-descriptors.ts`) plus registration in the lazy core handler family list in `server-methods.ts` (next to `agents.update`/`agents.delete`). Both are required: the descriptor advertises and scopes the method, and the lazy list is what makes `handleGatewayRequest` resolve a handler for it. Without the lazy-list entry a live request returns `unknown method: agents.setDefault` even though the descriptor exists.\n\n## Surfaces covered\n\nOne chokepoint per layer, so the method is fully wired and not half-exposed:\n\n- Protocol: `AgentsSetDefaultParams`/`AgentsSetDefaultResult` schemas + types + validator + re-exports (`packages/gateway-protocol/src/...`), and regenerated artifacts (`dist/protocol.schema.json` via `protocol:gen`; tracked Swift `GatewayModels.swift` via `protocol:gen:swift`, +32 additive).\n- Dispatch: core descriptor + lazy core method list in `server-methods.ts`.\n- SDK: `oc.agents.setDefault({ agentId })` (`packages/sdk/src/client.ts`), with the `AgentsSetDefaultParams` type defined next to the sibling agent-mutation params (`packages/sdk/src/types.ts`) and re-exported from the public barrel (`packages/sdk/src/index.ts`) so the helper's imported type resolves and the SDK package typechecks.\n- Admin HTTP RPC: added to the trusted-operator method allowlist (`extensions/admin-http-rpc/src/methods.ts`) so it crosses the HTTP surface like the other `agents.*` mutations.\n- Docs: `docs/gateway/protocol.md` agent-helpers list and `docs/plugins/admin-http-rpc.md` allowlist.\n\nNo new config keys, no migration, no change to `resolveDefaultAgentId`, and `agents.update` keeps its existing field set.\n\n## Verification\n\n- Rebased onto current `origin/main`; the branch carries only the `agents.setDefault` feature (22 files, +448/-3) with no unrelated changed-test routing edits. Re-ran the gates below on the rebased tree.\n- `node scripts/run-vitest.mjs src/gateway/server-methods.agents-set-default-dispatch.test.ts` -> pass. Dispatch-level test: drives the real `handleGatewayRequest` (no `extraHandlers`, so it must resolve through the real lazy registry) and asserts a real request reaches the handler, persists the flip, and rejects unknown agents. Red proof: removing the `agents.setDefault` entry from the lazy list makes all three fail with `unknown method: agents.setDefault`.\n- `node scripts/run-vitest.mjs src/commands/agents.config.test.ts src/gateway/server-methods/agents-mutate.test.ts` -> pass (pure `setDefaultAgent` transform + handler behavior).\n- `node scripts/run-vitest.mjs extensions/admin-http-rpc/src/handler.test.ts extensions/admin-http-rpc/src/methods.test.ts` -> pass, incl. a focused allowlist test (`methods.test.ts`: `agents.setDefault` allowed, unlisted methods rejected) and an HTTP dispatch test that routes `agents.setDefault` through the admin surface.\n- `node scripts/run-vitest.mjs packages/sdk/src/index.e2e.test.ts` -> pass. The SDK e2e drives `oc.agents.setDefault({ agentId })` over the in-memory gateway transport and asserts the call reaches the gateway as method `agents.setDefault` with the given params, alongside the existing create/update/delete coverage.\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json` -> clean (prod + test types). The core tsgo config includes `packages/**`, so this also typechecks the protocol schema additions and the SDK package surface where `AgentsSetDefaultParams` is now defined and exported.\n- `oxfmt --check` + `oxlint` on all touched files -> clean.\n- Full `pnpm build` not run on this box (memory-constrained); protocol artifacts were regenerated and the Swift diff is purely additive.\n\n## Real behavior proof\n\nBehavior addressed: a real Gateway request for `agents.setDefault` crosses the wire, routes through `handleGatewayRequest` and the lazy core registry to the handler, flips the default agent, persists to config, and returns the new `defaultId`; unknown ids are rejected without mutating config.\n\nReal environment tested: a throwaway harness (not committed) stood up a real `ws` WebSocketServer whose every frame is dispatched through the production `handleGatewayRequest`, then connected a real `ws` client and drove the method over the socket against a real on-disk `openclaw.json` (`OPENCLAW_CONFIG_PATH`), using the real `loadConfig` and `mutateConfigFileWithRetry`. No mocks, no `extraHandlers` override.\n\nExact steps or command run after this patch: seeded a config with agents `main` (default) and `research`; opened `ws://127.0.0.1:<port>`; sent `{ type: \"req\", method: \"agents.setDefault\", params: { agentId: \"research\" } }` and read the response frame; re-read the file; then sent the same method with an unknown id `ghost`.\n\nEvidence after fix:\n\n```\ntransport: real ws:// WebSocket -> 127.0.0.1:36301 -> handleGatewayRequest\n\n=== BEFORE (on disk) ===\ndefaults: [{\"id\":\"main\",\"default\":true},{\"id\":\"research\",\"default\":false}]\n\n>>> ws send: { method: 'agents.setDefault', params: { agentId: 'research' } }\n<<< ws recv: {\"type\":\"res\",\"id\":\"req-agents.setDefault\",\"ok\":true,\"result\":{\"ok\":true,\"defaultId\":\"research\"}}\n\n=== AFTER (persisted) ===\ndefaults: [{\"id\":\"main\",\"default\":false},{\"id\":\"research\",\"default\":true}]\n\n>>> ws send: agents.setDefault { agentId: 'ghost' }  (unknown agent)\n<<< ws recv: {\"type\":\"res\",\"id\":\"req-agents.setDefault\",\"ok\":false,\"error\":{\"code\":\"INVALID_REQUEST\",\"message\":\"agent \\\"ghost\\\" not found\"}}\n\n=== config after unknown-id attempt (unchanged) ===\ndefaults: [{\"id\":\"main\",\"default\":false},{\"id\":\"research\",\"default\":true}]\n```\n\nObserved result after fix: over a real WebSocket, `setDefault research` returns `{ ok: true, defaultId: \"research\" }` and the on-disk config flips `research` to the sole `default: true` entry; an unknown id returns an `INVALID_REQUEST` \"not found\" error and leaves the config untouched. Before the dispatch-list fix, the same frame came back as `unknown method: agents.setDefault`.\n\nWhat was not tested: the SDK's own authenticated `connect` handshake over a production gateway with TLS/auth; the harness exercises the real dispatch and config layers behind the WebSocket, and the SDK wrapper `oc.agents.setDefault` is a one-line passthrough to `agents.setDefault`.\n\n## References\n\n- Closes #52928.\n- Sibling mutations `agents.create`/`agents.update`/`agents.delete` in `src/gateway/server-methods/agents.ts` (same scope, plumbing, and lazy-list registration).\n\n\n",
-        "branch": "feat/agents-set-default-rpc",
-        "head_sha": "5dd3c67861b1bc04f9ed7ec7ec8b16f3155ac9bc",
-        "author": "yetval",
+        "title": "[AI-assisted] Add session history family lookup",
+        "body": "## Problem\n\nWhen a threaded conversation has already been split across reset transcripts, `chat.history` and the `sessions_history` tool only read the currently active transcript. The session store can already retain the family through `usageFamilySessionIds`, but history readers do not use that chain and do not discover archived `*.jsonl.reset.<timestamp>` topic transcripts.\n\nThat means an agent/tool can be looking at the correct logical Telegram/Slack/Discord thread and still miss earlier turns after session rollover.\n\n## Fix\n\nAdd an opt-in family history path:\n\n- `chat.history` accepts `includeFamily: true`.\n- `sessions_history` accepts `includeFamily`.\n- Gateway and embedded `chat.history` now share the bounded/header-checked reset archive resolver instead of using separate prefix scans.\n- The shared resolver can include owned topic-suffixed reset archives such as `<sessionId>-topic-456.jsonl.reset.<timestamp>` only when the archive header matches the requested session id.\n- Same-prefix colliding topic archives and headerless topic archives are ignored.\n- Family read targets are capped before transcript reads, and normal `chat.history` behavior remains opt-in: UI startup does not load ancestor history.\n\n## Validation\n\nCurrent head: `1aa4e9cbb94f6841803bd55559aa0ea6de17dc67`.\n\n- `CI=true node scripts/run-vitest.mjs run src/gateway/server.chat.gateway-server-chat-b.test.ts src/agents/tools/embedded-gateway-stub.test.ts`\n  - gateway shard: 84 tests passed\n  - agents shard: 11 tests passed\n- `CI=true node scripts/run-vitest.mjs run src/agents/openclaw-tools.sessions.test.ts`\n  - 36 tests passed\n- `CI=true node --import tsx scripts/generate-prompt-snapshots.ts --check`\n  - `Prompt snapshots are current (7 files).`\n- `CI=true node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo`\n  - passed\n- `CI=true node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo`\n  - passed\n- `git diff --check`\n  - passed, no output\n\n## Real Behavior Proof\n\n- **Behavior or issue addressed:** A logical thread whose active session has `usageFamilySessionIds` should be able to fetch earlier reset transcript turns when a caller explicitly requests family history, including owned topic-suffixed reset archives, without reading colliding or headerless topic archives. The current active transcript must also be preserved when a retained reset family has more entries than the bounded 32 read targets.\n- **Real environment tested:** Local OpenClaw checkout on this PR branch at current head `a12e1bbcf0`, using temporary on-disk session directories, the real Gateway `chat.history` RPC integration harness, embedded-mode `chat.history`, and the same reset archive filename/header patterns that OpenClaw creates for topic transcripts.\n- **Exact steps or command run after this patch:**\n  1. Created temporary session directories and session-store entries with `usageFamilySessionIds` linking an ancestor session and the current session.\n  2. Wrote an owned plain ancestor reset archive and an owned topic-suffixed ancestor archive with matching `type: \"session\"` headers.\n  3. Wrote newer same-prefix colliding and headerless topic reset archives in the same sessions directory.\n  4. Invoked the real Gateway `chat.history` RPC path with and without `includeFamily: true`.\n  5. Created a second Gateway/RPC case with 40 ancestor session ids before the current id in `usageFamilySessionIds`.\n  6. Invoked embedded-mode `chat.history(includeFamily)` through the sessions tool stub, including the same >32-family-target cap case.\n- **Evidence after fix:** Terminal capture from current head:\n  ```text\n  $ CI=true node scripts/run-vitest.mjs run src/gateway/server.chat.gateway-server-chat-b.test.ts src/agents/tools/embedded-gateway-stub.test.ts\n  Test Files  2 passed (2)\n  Tests  84 passed (84)\n  Test Files  1 passed (1)\n  Tests  11 passed (11)\n  [test] passed 2 Vitest shards in 44.69s\n\n  $ CI=true node scripts/run-vitest.mjs run src/agents/openclaw-tools.sessions.test.ts\n  Test Files  1 passed (1)\n  Tests  36 passed (36)\n  [test] passed 1 Vitest shard in 30.16s\n\n  $ CI=true node --import tsx scripts/generate-prompt-snapshots.ts --check\n  Prompt snapshots are current (7 files).\n\n  $ CI=true node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo\n  # passed\n\n  $ CI=true node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo\n  # passed\n\n  $ git diff --check\n  # no output\n  ```\n- **Observed result after fix:** Default `chat.history` excludes ancestor reset archive content, while `chat.history(includeFamily)` includes the owned plain ancestor archive, includes the owned topic-suffixed ancestor archive, includes current-session content, and rejects the colliding/headerless topic reset archives. In the >32-target Gateway/RPC regression, `chat.history(includeFamily)` contains `current survives family target cap`, contains early ancestor content, and does not read the ancestor entries beyond the target cap. Embedded `chat.history(includeFamily)` now reads the current active transcript first, then current archives, then ancestor archives/active transcripts; its >32-target regression also keeps the current transcript and drops over-cap ancestors.\n- **What was not tested:** I did not run a live Telegram topic end-to-end, and this PR does not add prompt-level carryover summaries or automatic prompt injection. It only adds explicit family history retrieval for gateway/tool callers.\n\n## Current head addendum: `8c164eeaa3`\n\nClawSweeper's `a12e1bbcf0` review finding is addressed in this head:\n\n- Family target selection still reserves the current active transcript before the 32-target cap is reached.\n- Family output order is now ancestor transcripts first, then current-session reset archives, then the current active transcript, so final `limit` trimming keeps the active session tail.\n- Embedded `chat.history(includeFamily)` mirrors the Gateway order.\n- Added over-limit regressions proving `includeFamily` with a small final limit keeps current active history.\n\nStandalone redacted embedded `chat.history` smoke from current head `8c164eeaa3545a9f05dc507908f9dec0236d2c47`:\n\n```text\n$ node --import tsx --input-type=module <<'TS'\n# Creates a temporary session.store, one ancestor transcript, and one current transcript;\n# calls createEmbeddedCallGateway().chat.history with default, includeFamily, and includeFamily+limit.\nTS\n{\n  \"default\": [\n    \"redacted current context\"\n  ],\n  \"includeFamily\": [\n    \"redacted ancestor context\",\n    \"redacted current context\"\n  ],\n  \"includeFamilyLimit1\": [\n    \"redacted current context\"\n  ]\n}\n```\n\nValidation on `8c164eeaa3545a9f05dc507908f9dec0236d2c47`:\n\n```text\n$ CI=true node scripts/run-vitest.mjs run src/gateway/server.chat.gateway-server-chat-b.test.ts src/agents/tools/embedded-gateway-stub.test.ts\nTest Files  2 passed (2)\nTests  84 passed (84)\nTest Files  1 passed (1)\nTests  11 passed (11)\n\n$ CI=true node scripts/run-vitest.mjs run src/gateway/server.chat.gateway-server-chat-b.test.ts -t 'chat.history preserves current transcript when family targets hit the cap'\nTest Files  1 passed (1)\nTests  1 passed | 41 skipped (42)\n\n$ CI=true node scripts/run-vitest.mjs run src/agents/tools/embedded-gateway-stub.test.ts -t 'keeps embedded current chat history when family targets hit the cap'\nTest Files  2 passed (2)\nTests  2 passed | 20 skipped (22)\n\n$ CI=true node --import tsx scripts/generate-prompt-snapshots.ts --check\nPrompt snapshots are current (7 files).\n\n$ CI=true node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo\n# passed\n\n$ CI=true node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo\n# passed\n\n$ git diff --check\n# no output\n```\n\n## Current head addendum: `0d37b42702`\n\nMaintainer readiness note addressed on current head `0d37b42702688ac9c4bf0edf949f99b00f096cf6`:\n\n- Removed the `resetAncestors` sessions_history alias so the model-facing selector is only `includeFamily`.\n- Kept Gateway `chat.history` and `sessions_history` aligned on the single `includeFamily` flag.\n- The embedded history macOS path-normalization failure was already addressed by dropping the redundant path assertion in `6050d0bbfb`.\n- Exact-head CI has restarted for `0d37b42702`; at refresh time there were no failed checks and the remaining required/security checks were still running.\n\nValidation on `0d37b42702688ac9c4bf0edf949f99b00f096cf6`:\n\n```text\n$ CI=true node scripts/run-vitest.mjs run src/agents/openclaw-tools.sessions.test.ts\nTest Files  1 passed (1)\nTests  36 passed (36)\n\n$ CI=true node scripts/run-vitest.mjs run src/agents/tools/embedded-gateway-stub.test.ts -t 'reads embedded chat history from reset ancestor transcripts when includeFamily is set|keeps embedded current chat history when family targets hit the cap'\nTest Files  2 passed (2)\nTests  4 passed | 18 skipped (22)\n\n$ CI=true node scripts/run-vitest.mjs run src/gateway/server.chat.gateway-server-chat-b.test.ts -t 'chat.history includes owned topic reset archives when includeFamily is set|chat.history preserves current transcript when family targets hit the cap'\nTest Files  1 passed (1)\nTests  1 passed | 41 skipped (42)\n\n$ git diff --check\n# no output\n```\n\n## Current head addendum: `1aa4e9cbb9`\n\nClawSweeper's generated-snapshot blocker is addressed on current head `1aa4e9cbb94f6841803bd55559aa0ea6de17dc67`:\n\n- Refreshed the Codex dynamic-tool prompt snapshots after removing `resetAncestors`.\n- `resetAncestors` no longer appears in source, docs, protocol/tool snapshots, or prompt snapshot counters.\n- Kept `includeFamily` as the only model-facing family-history selector.\n\nValidation on `1aa4e9cbb94f6841803bd55559aa0ea6de17dc67`:\n\n```text\n$ CI=true pnpm prompt:snapshots:gen\nWrote 7 prompt snapshot files.\n\n$ CI=true node --import tsx scripts/generate-prompt-snapshots.ts --check\nPrompt snapshots are current (7 files).\n\n$ CI=true node scripts/run-vitest.mjs run src/agents/openclaw-tools.sessions.test.ts\nTest Files  1 passed (1)\nTests  36 passed (36)\n\n$ git diff --check\n# no output\n```\n",
+        "branch": "fix/session-history-family",
+        "head_sha": "18926149cfcc6ba9c3cc81f71f87e47860922054",
+        "author": "simplyclever914",
         "labels": [
           "docs",
           "channel: discord",
           "app: web-ui",
           "gateway",
+          "scripts",
           "commands",
-          "size: M",
+          "agents",
+          "size: XL",
+          "extensions: memory-wiki",
           "proof: supplied",
           "proof: sufficient",
-          "extensions: admin-http-rpc",
+          "extensions: amazon-bedrock",
           "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 automation",
+          "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
             "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-            "additions": 32,
-            "deletions": 0,
+            "additions": 5,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "docs/gateway/protocol.md",
+            "path": "docs/concepts/session-tool.md",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/embedding-provider.test.ts",
+            "additions": 1,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/threading.auto-thread.test.ts",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/okf.ts",
+            "additions": 6,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/index.test.ts",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "docs/plugins/admin-http-rpc.md",
+            "path": "packages/gateway-protocol/src/schema/logs-chat.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/sdk/src/package.e2e.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/protocol-gen-swift.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-command.ts",
+            "additions": 7,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner.spawn.test.ts",
+            "additions": 39,
+            "deletions": 36,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-message-tool-source-reply.test.ts",
+            "additions": 1,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/tool-result-truncation.ts",
             "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/admin-http-rpc/src/handler.test.ts",
+            "path": "src/agents/openclaw-tools.sessions.test.ts",
             "additions": 23,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/admin-http-rpc/src/methods.test.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/admin-http-rpc/src/methods.ts",
-            "additions": 1,
+            "path": "src/agents/session-tool-result-guard.ts",
+            "additions": 3,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/gateway-protocol/src/index.ts",
-            "additions": 11,
-            "deletions": 0,
+            "path": "src/agents/tools/embedded-gateway-stub.test.ts",
+            "additions": 206,
+            "deletions": 7,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/gateway-protocol/src/schema/agents-models-skills.ts",
-            "additions": 17,
-            "deletions": 0,
+            "path": "src/agents/tools/embedded-gateway-stub.ts",
+            "additions": 217,
+            "deletions": 23,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/gateway-protocol/src/schema/protocol-schemas.ts",
+            "path": "src/agents/tools/sessions-history-tool.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-utils.ts",
+            "additions": 10,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-legacy-config.migrations.test.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-workspace-status.test.ts",
             "additions": 4,
-            "deletions": 0,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/gateway-protocol/src/schema/types.ts",
+            "path": "src/commands/doctor/shared/legacy-config-core-migrate.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 193,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 234,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-transcript-files.fs.ts",
+            "additions": 65,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.single-row-cache.test.ts",
             "additions": 2,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/channel-plugin-ids.test.ts",
+            "additions": 21,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/contracts/speech-vitest-registry.ts",
+            "additions": 0,
+            "deletions": 320,
+            "changeType": "DELETED"
+          },
+          {
+            "path": "src/plugins/host-hook-runtime.ts",
+            "additions": 6,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/proxy-capture/store.sqlite.test.ts",
+            "additions": 36,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/sdk/src/client.ts",
+            "path": "src/proxy-capture/store.sqlite.ts",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/scripts/test-projects.test.ts",
             "additions": 5,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/sdk/src/index.e2e.test.ts",
-            "additions": 9,
-            "deletions": 1,
+            "path": "src/skills/loading/workspace.ts",
+            "additions": 7,
+            "deletions": 7,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/sdk/src/index.ts",
-            "additions": 1,
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.discord-group.json",
+            "additions": 3,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/sdk/src/types.ts",
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.heartbeat-turn.json",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.telegram-direct.json",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
             "additions": 4,
-            "deletions": 0,
+            "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/commands/agents.config.test.ts",
-            "additions": 59,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/commands/agents.config.ts",
-            "additions": 22,
-            "deletions": 0,
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
+            "additions": 4,
+            "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/methods/core-descriptors.ts",
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/openclaw-cross-os-release-checks.test.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/resolve-openclaw-ref.test.ts",
             "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods.agents-set-default-dispatch.test.ts",
-            "additions": 118,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-methods.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agents-config-mutations.ts",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agents-mutate.test.ts",
-            "additions": 59,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agents.ts",
-            "additions": 32,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 22,
-        "additions": 448,
-        "deletions": 3,
+        "changedFiles": 42,
+        "additions": 1151,
+        "deletions": 496,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92957",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92957.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90239",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90239.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 162,
-          "gatingTotal": 157,
+          "total": 164,
+          "gatingTotal": 159,
           "counts": {
-            "SUCCESS": 14,
-            "IN_PROGRESS": 124,
-            "SKIPPED": 23,
-            "QUEUED": 1
+            "SUCCESS": 126,
+            "SKIPPED": 20,
+            "FAILURE": 7,
+            "IN_PROGRESS": 10,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "pnpm-store-warmup:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
+            "build-artifacts:FAILURE",
             "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
             "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-ui:IN_PROGRESS",
-            "checks-node-core-support:IN_PROGRESS",
             "checks-node-core-tooling:IN_PROGRESS",
-            "checks-node-core-tooling-docker:IN_PROGRESS",
-            "checks-node-core-runtime-hooks:IN_PROGRESS",
-            "checks-node-core-runtime-infra-approval-exec:IN_PROGRESS",
-            "checks-node-core-runtime-infra-channel-plugin:IN_PROGRESS",
-            "checks-node-core-runtime-infra-cli-ui:IN_PROGRESS",
-            "checks-node-core-runtime-infra-device:IN_PROGRESS",
-            "checks-node-core-runtime-infra-diagnostics-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-core-utils:IN_PROGRESS",
-            "checks-node-core-runtime-infra-env-auth:IN_PROGRESS",
-            "checks-node-core-runtime-infra-events-runtime:IN_PROGRESS",
             "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
-            "checks-node-core-runtime-infra-files-commands:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-lock-argv:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-processes:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-watch:IN_PROGRESS",
-            "checks-node-core-runtime-infra-heartbeat-core:IN_PROGRESS",
-            "checks-node-core-runtime-infra-heartbeat-runner:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc-dedupe-disk:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc-os:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc-values:IN_PROGRESS",
-            "checks-node-core-runtime-infra-net-install:IN_PROGRESS",
-            "checks-node-core-runtime-infra-network-node:IN_PROGRESS",
-            "checks-node-core-runtime-infra-network-platform:IN_PROGRESS",
-            "checks-node-core-runtime-infra-outbound-actions:IN_PROGRESS",
-            "checks-node-core-runtime-infra-outbound-core:IN_PROGRESS",
-            "checks-node-core-runtime-infra-provider-push:IN_PROGRESS",
-            "checks-node-core-runtime-infra-repo-tooling:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-system-runtime:IN_PROGRESS",
-            "checks-node-core-runtime-secrets:IN_PROGRESS",
             "checks-node-core-runtime-infra-process:IN_PROGRESS",
             "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-core:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:QUEUED",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-config:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-cron:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-network:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-server:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-shared-token:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-state:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-ui-tools:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-config:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS",
             "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-restart-close:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-auth:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-device:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-gateway:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-platform:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-plugins-tools:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-sessions-cron:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-whatsapp:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-workspace:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-auth:IN_PROGRESS",
-            "checks-node-agentic-agents-core-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-subagents:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-core-models:FAILURE",
             "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-agents-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:FAILURE",
+            "checks-node-agentic-plugin-sdk:FAILURE",
             "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
           ],
           "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "pnpm-store-warmup:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
             "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
             "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-ui:IN_PROGRESS",
-            "checks-node-core-support:IN_PROGRESS",
             "checks-node-core-tooling:IN_PROGRESS",
-            "checks-node-core-tooling-docker:IN_PROGRESS",
-            "checks-node-core-runtime-hooks:IN_PROGRESS",
-            "checks-node-core-runtime-infra-approval-exec:IN_PROGRESS",
-            "checks-node-core-runtime-infra-channel-plugin:IN_PROGRESS",
-            "checks-node-core-runtime-infra-cli-ui:IN_PROGRESS",
-            "checks-node-core-runtime-infra-device:IN_PROGRESS",
-            "checks-node-core-runtime-infra-diagnostics-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-core-utils:IN_PROGRESS",
-            "checks-node-core-runtime-infra-env-auth:IN_PROGRESS",
-            "checks-node-core-runtime-infra-events-runtime:IN_PROGRESS",
             "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
-            "checks-node-core-runtime-infra-files-commands:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-lock-argv:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-processes:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-watch:IN_PROGRESS",
-            "checks-node-core-runtime-infra-heartbeat-core:IN_PROGRESS",
-            "checks-node-core-runtime-infra-heartbeat-runner:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc-dedupe-disk:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc-os:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc-values:IN_PROGRESS",
-            "checks-node-core-runtime-infra-net-install:IN_PROGRESS",
-            "checks-node-core-runtime-infra-network-node:IN_PROGRESS",
-            "checks-node-core-runtime-infra-network-platform:IN_PROGRESS",
-            "checks-node-core-runtime-infra-outbound-actions:IN_PROGRESS",
-            "checks-node-core-runtime-infra-outbound-core:IN_PROGRESS",
-            "checks-node-core-runtime-infra-provider-push:IN_PROGRESS",
-            "checks-node-core-runtime-infra-repo-tooling:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-system-runtime:IN_PROGRESS",
-            "checks-node-core-runtime-secrets:IN_PROGRESS",
             "checks-node-core-runtime-infra-process:IN_PROGRESS",
             "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-core:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:QUEUED",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-config:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-cron:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-network:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-server:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-shared-token:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-state:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-ui-tools:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-config:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS",
             "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-restart-close:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-auth:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-device:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-gateway:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-platform:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-plugins-tools:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-sessions-cron:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-whatsapp:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-workspace:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-auth:IN_PROGRESS",
-            "checks-node-agentic-agents-core-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-subagents:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
             "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-agents-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
+            "check-shrinkwrap:IN_PROGRESS"
           ],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "build-artifacts:FAILURE",
+            "checks-node-agentic-agents-core-models:FAILURE",
+            "checks-node-agentic-agents-embedded:FAILURE",
+            "checks-node-agentic-plugin-sdk:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5643,
+    "total_ms": 2707,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1855
+        "ms": 472
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1641
+        "ms": 2002
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -550,11 +444,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2118
+        "ms": 218
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 1
       }
     ]
   }
