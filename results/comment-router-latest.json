@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T08:35:46.972Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-23T08:36:03.898Z",
+  "repo": "openclaw/acpx",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T05:35:44.637Z",
+  "since": "2026-06-23T05:36:03.463Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    77158
+    400
   ],
-  "comment_ids": [
-    4777295223
-  ],
-  "status_comment_id": 4777295604,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 0,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,274 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:77158:4777295223:2026-06-23T08:34:29Z:re_review",
-      "comment_id": "4777295223",
-      "comment_version_key": "4777295223:2026-06-23T08:34:29Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/77158#issuecomment-4777295223",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 77158,
-      "author": "zeroaltitude",
-      "author_id": 102749,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T08:34:29Z",
-      "comment_updated_at": "2026-06-23T08:34:29Z",
-      "status_comment_id": 4777295604,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-23T08:35:47.646Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 77158
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-23T08:35:48.621Z",
-          "response_comment_id": "4777295604",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(qmd): persistent export-state cache + stat fast path in exportSessions",
-        "body": "## Summary\n\n- **Problem:** For agents with thousands of session transcripts, `QmdMemoryManager.exportSessions()` was the dominant gateway CPU consumer. Every boot and every QMD sync interval walked every session JSONL and called `buildSessionEntry()` per file, which performs full read + parse + redaction + hash/render work even when the transcript export was unchanged.\n- **Why it matters:** The previous in-memory skip state only avoided some markdown rewrites after a manager instance had already rebuilt each entry. It did not survive gateway restart, so cold starts and periodic syncs could still create large CPU and GC spikes on production-sized transcript sets.\n- **What changed:**\n  1. Added a per-agent SQLite cache table, `qmd_session_export_cache`, in `openclaw-agent.sqlite`, keyed by `(session_file, export_dir, render_version)`.\n  2. Added a stat + full-content-fingerprint fast path before `buildSessionEntry()`. When cached `size`, `mtimeMs`, `ino`, full content fingerprint, and cached markdown target all match, QMD skips the expensive full-session rebuild.\n  3. Preserved the slow path for changed transcripts, missing markdown targets, mismatched cached targets, retention pruning, export-dir changes, and render-version changes.\n  4. Kept raw per-agent DB/Kysely access inside the core state owner and exposed only QMD-specific cache helpers through a private local-only SDK subpath, `openclaw/plugin-sdk/memory-core-qmd-export-cache-internal`, scoped to the bundled `memory-core` plugin.\n  5. Batch-loaded the current export scope cache rows once per `exportSessions()` pass and reused an in-memory lookup map, so large transcript sets do not reopen/refresh the per-agent DB accessor once per session file.\n  6. Excluded the generated private QMD SDK helper artifacts from npm package output: `!dist/plugin-sdk/memory-core-qmd-export-cache-internal.js` and `!dist/plugin-sdk/memory-core-qmd-export-cache-internal.d.ts`.\n\n**Scope boundary:** `renderSessionMarkdown()`, session redaction, line wrapping, and the markdown format QMD consumes are unchanged. `buildSessionEntry()` remains the authoritative slow path. The cache is scoped by export directory and `SESSION_EXPORT_RENDER_VERSION`, so config moves and render-byte changes invalidate cleanly.\n\n**Effect on Eddie's main agent (4,052 sessions / 158 MB):**\n- Boot QMD sync: **312s -> single-digit seconds**\n- Interval QMD sync: **38s -> ~50-500 ms**\n- The every-5-min CPU spike + GC tail collapses\n\n## Linked Issue\n\n- Closes openclaw-ys0 (Beads tracking issue)\n\n## Test Coverage\n\nNew and updated tests cover the cache contract:\n\n- `extensions/memory-core/src/memory/qmd-manager.test.ts`\n  - persists session-export state across manager restarts\n  - rebuilds after same-size transcript rewrites, proving content changes are not hidden by matching stat fields\n  - ignores cache rows scoped to a previous `exportDir`\n  - rebuilds markdown when the cached target has been deleted\n  - rebuilds the expected markdown when a current-scope cache row points at another target\n  - preserves existing session-export behavior for checkpoint/session filtering\n- `src/state/openclaw-agent-db.test.ts`\n  - schema shape includes the new derived-state cache table\n  - per-agent DB schema metadata and `user_version` remain at version 1\n  - newer-schema refusal still protects downgrade safety\n- `test/release-check.test.ts`\n  - package output rejects private local-only plugin SDK artifacts\n  - package `files` exclusions include every private local-only SDK artifact, including the new QMD cache helper\n\n## Tradeoffs / Known Caveats\n\n- The fast path still uses stat identity to avoid hashing obviously changed files, but it verifies a full SHA-1 content fingerprint before skipping the rebuild. Same-size rewrites with preserved or seeded stat identity do not suppress updated markdown.\n- `SESSION_EXPORT_RENDER_VERSION` must be bumped when changing `renderSessionMarkdown()`, redaction, line wrapping, or any other logic that changes the bytes written to `qmd/sessions/*.md`.\n- The cache table is derived state; the per-agent DB `user_version` remains at 1 for rollback safety.\n- No hand-written `CHANGELOG.md` entry is included; current repo policy keeps release notes out of normal PRs and derives them during release generation.\n\n## Real Behavior Proof\n\n- **Behavior addressed:** QMD session export persists its unchanged-transcript fast-path state in the per-agent SQLite DB without exposing raw per-agent DB/Kysely access through the public plugin SDK. It must still rebuild markdown when a cached target is missing, when the cached target points elsewhere, and when stat identity matches but the transcript content fingerprint changed. The private QMD SDK artifact must also stay out of package output.\n- **Real environment tested:** Current PR head `eb71a680cc4339778c93130d923833f98a238b30` in the `perf/qmd-export-stat-fast-path` worktree, after merging current `openclaw/main` and cleaning unrelated formatter-only merge churn, using the real `QmdMemoryManager`, real `resolveMemoryBackendConfig`, the private local-only QMD cache subpath, real per-agent `openclaw-agent.sqlite` storage, and local `qmd 2.1.0` on PATH. The proof ran against an isolated `OPENCLAW_STATE_DIR` under `/tmp`; no Vitest harness or mocked QMD export cache was used.\n- **Exact steps run after this patch:** `node --import tsx --input-type=module` from the topic worktree with an inline driver. The driver created one session JSONL, ran `QmdMemoryManager.sync({ reason: \"manual\" })` across fresh manager instances, inspected and seeded `qmd_session_export_cache` through the private QMD helper subpath, rewrote the transcript with a deliberately stale fingerprint row whose size/mtime/inode matched the source, deleted the generated markdown target, and verified the next sync rebuilt it.\n- **Evidence after fix:** Captured terminal output from the live run:\n\n```text\ncurrent head: eb71a680cc4339778c93130d923833f98a238b30\nqmd version: qmd 2.1.0\n=== Phase 1: first sync writes markdown and SQLite cache ===\n[memory] qmd manager initialized for agent \"main\" mode=full collections=2 durationMs=899\n[memory] qmd sync completed for agent \"main\" reason=manual durationMs=377\nsync 1: sync done in 380 ms\ncache target is export file: true\nfingerprint length: 40\n=== Phase 2: unchanged sync uses fast path ===\n[memory] qmd manager initialized for agent \"main\" mode=full collections=2 durationMs=828\n[memory] qmd sync completed for agent \"main\" reason=manual durationMs=299\nsync 2: sync done in 301 ms\nexport mtime unchanged: true\nexport size unchanged: true\n=== Phase 3: matching stat row with stale content fingerprint rebuilds ===\nseeded cache size matches source: true\nseeded cache mtime matches source: true\nseeded cache ino matches source: true\n[memory] qmd manager initialized for agent \"main\" mode=full collections=2 durationMs=813\n[memory] qmd sync completed for agent \"main\" reason=manual durationMs=306\nsync 3: sync done in 308 ms\nexport mtime newer: true\ncache fingerprint changed: true\ncache fingerprint length after rebuild: 40\n=== Phase 4: delete markdown while SQLite cache survives ===\nexport exists after delete: false\nsqlite cache row still present: true\n[memory] qmd manager initialized for agent \"main\" mode=full collections=2 durationMs=818\n[memory] qmd sync completed for agent \"main\" reason=manual durationMs=307\nsync 4: sync done in 309 ms\nrebuilt export exists: true\ncache target restored to export file: true\n\nAll runtime assertions passed.\n```\n\n- **Observed result after fix:** The first sync wrote markdown and a SQLite cache row with the expected derived target and 40-character fingerprint. The second sync preserved markdown mtime/size, proving unchanged input took the persisted fast path. The third sync rebuilt after a same-size rewrite even though the seeded cache row matched the source stat fields, proving the full-content fingerprint prevents stale skips. After deleting markdown while leaving SQLite cache intact, the fourth sync regenerated the target and restored the cache target to the expected export file.\n- **What was not tested:** I did not rerun a benchmark against Eddie's full 4,052-session production corpus after the SDK-boundary rewrite, base-branch merge, package exclusion fix, cached-target validation fix, and batch-read follow-up. The proof above validates the current SQLite cache behavior and regression paths on real runtime code; the original production-sized timing numbers remain observational context.\n\n## Verification\n\nCurrent head `eb71a680cc4339778c93130d923833f98a238b30` includes:\n\n- `3468c322a6` (`fix(qmd): exclude private cache SDK artifact from package`)\n- signed base-refresh merges from current `openclaw/main` to clear the PR's dirty/conflicting merge state\n- cleanup restoring unrelated Slack/Telegram/installer/test formatter churn back to current `openclaw/main`, leaving exactly the QMD/cache/SDK/package diff\n\nCommands run after the package exclusion fix and/or after the base merge:\n\n```text\nnode scripts/run-vitest.mjs test/release-check.test.ts\n# 56 passed\n\nnode scripts/check-plugin-sdk-subpath-exports.mjs\n# OK: all referenced openclaw/plugin-sdk/<subpath> imports are exported\n\nnode scripts/check-extension-plugin-sdk-boundary.mjs --mode=src-outside-plugin-sdk\n# no violations; baseline matches\n\nnode scripts/check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal\n# no violations; baseline matches\n\npnpm plugin-sdk:api:check\n# OK docs/.generated/plugin-sdk-api-baseline.sha256\n\npnpm plugin-sdk:surface:check\n# all SDK entrypoints: 339; public package SDK entrypoints: 321; local-only entrypoints: 18; package-exported forbidden subpaths: 0\n\npnpm exec oxfmt --check package.json docs/.generated/plugin-sdk-api-baseline.sha256 extensions/memory-core/src/memory/qmd-manager.ts extensions/memory-core/src/memory/qmd-manager.test.ts src/plugin-sdk/memory-core-qmd-export-cache-internal.ts src/plugins/sdk-alias.ts scripts/lib/plugin-sdk-private-local-only-subpaths.json\n# clean\n\npnpm tsgo:core\n# exited 0\n\npnpm tsgo:core:test\n# exited 0\n\ngit diff --check\n# clean\n\nnode --import tsx --input-type=module\n# real-runtime QMD/SQLite proof above; All runtime assertions passed.\n```\n\n",
-        "branch": "perf/qmd-export-stat-fast-path",
-        "head_sha": "a33a2db093bbbd9e9ebf8313affcfcab87e1ee8d",
-        "author": "zeroaltitude",
-        "labels": [
-          "docs",
-          "extensions: memory-core",
-          "scripts",
-          "size: L",
-          "triage: refactor-only",
-          "triage: blank-template",
-          "triage: dirty-candidate",
-          "proof: supplied",
-          "proof: sufficient",
-          "extensions: xai",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/sdk-subpaths.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
-            "additions": 280,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
-            "additions": 105,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/tsconfig.package-boundary.paths.json",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/xai/tsconfig.json",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "package.json",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-entrypoints.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/prepare-extension-package-boundary-artifacts.mjs",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/memory-core-qmd-export-cache-internal.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugins/sdk-alias.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.generated.d.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.ts",
-            "additions": 151,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.generated.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.sql",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 17,
-        "additions": 638,
-        "deletions": 24,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-77158",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77158.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SKIPPED": 28,
-            "SUCCESS": 49,
-            "IN_PROGRESS": 19,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "checks-windows-node-test:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "checks-windows-node-test:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4469,
+    "total_ms": 785,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 460
+        "ms": 425
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1862
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -310,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2119
+        "ms": 351
       },
       {
         "name": "append_ledger",
-        "ms": 4
+        "ms": 0
       }
     ]
   }
