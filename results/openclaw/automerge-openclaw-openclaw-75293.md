@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75293"
 mode: "autonomous"
-run_id: "28026172207"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28026172207"
-head_sha: "54eedf801125018cf047e9a5594951ed6cc35334"
+run_id: "28033407457"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28033407457"
+head_sha: "59f4d6981e6553c831d64b0f80e0c40dc5e35750"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-06-23T12:37:35.386Z"
+published_at: "2026-06-23T14:43:12.118Z"
 canonical: "#75293"
 canonical_issue: null
 canonical_pr: "#75293"
 actions_total: 1
 fix_executed: 0
-fix_failed: 1
-fix_blocked: 1
+fix_failed: 0
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28026172207](https://github.com/openclaw/clawsweeper/actions/runs/28026172207)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28033407457](https://github.com/openclaw/clawsweeper/actions/runs/28033407457)
 
 Workflow conclusion: success
 
@@ -43,10 +43,10 @@ Make PR #75293 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 | --- | ---: |
 | Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 1 |
-| Fix blocked | 1 |
+| Fix failed | 0 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,15 +54,13 @@ Make PR #75293 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | command timed out after 300000ms: git fetch origin +refs/pull/75293/head:refs/remotes/clawsweeper/source-pr-75293 |
-| execute_fix | blocked |  |  | command timed out after 300000ms: git fetch origin +refs/pull/75293/head:refs/remotes/clawsweeper/source-pr-75293 |
-| automerge_repair_outcome_comment | updated | #75293 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/75293 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #75293 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
