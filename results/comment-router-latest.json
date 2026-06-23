@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T10:20:34.439Z",
+  "generated_at": "2026-06-23T10:20:35.672Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T07:20:32.458Z",
+  "since": "2026-06-23T07:20:32.523Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96031
+    96042
   ],
   "comment_ids": [
-    4778163482
+    4778162942
   ],
-  "status_comment_id": 4778163940,
+  "status_comment_id": 4778163380,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96031:4778163482:2026-06-23T10:19:16Z:re_review",
-      "comment_id": "4778163482",
-      "comment_version_key": "4778163482:2026-06-23T10:19:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96031#issuecomment-4778163482",
+      "idempotency_key": "comment-router:openclaw/openclaw:96042:4778162942:2026-06-23T10:19:12Z:re_review",
+      "comment_id": "4778162942",
+      "comment_version_key": "4778162942:2026-06-23T10:19:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96042#issuecomment-4778162942",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 96031,
+      "issue_number": 96042,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T10:19:16Z",
-      "comment_updated_at": "2026-06-23T10:19:16Z",
-      "status_comment_id": 4778163940,
+      "comment_created_at": "2026-06-23T10:19:12Z",
+      "comment_updated_at": "2026-06-23T10:19:12Z",
+      "status_comment_id": 4778163380,
       "trigger": "mention",
       "command": "review",
       "intent": "re_review",
@@ -68,75 +68,69 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-06-23T10:20:35.305Z",
+          "dispatched_at": "2026-06-23T10:20:36.859Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 96031
+          "item_number": 96042
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-06-23T10:20:36.495Z",
-          "response_comment_id": "4778163940",
+          "commented_at": "2026-06-23T10:20:38.269Z",
+          "response_comment_id": "4778163380",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(nextcloud-talk): bound external send/reaction response reads to prevent OOM",
-        "body": "## What Problem This Solves\n\nThe Nextcloud Talk channel sends to **self-hosted** servers, so its HTTP responses are not under our control and are not trusted to be small. Three external response bodies in `send.ts` were buffered with no byte cap:\n\n- success JSON via `await response.json()` (every successful send/receipt parse)\n- send error text via `await response.text()` (non-2xx send responses)\n- reaction error text via `await response.text()` (non-2xx reaction responses)\n\nA hostile or misbehaving Nextcloud endpoint can return a response **without a `content-length` header** and stream an unbounded body. With the old code that body was fully buffered into memory, creating memory pressure / a potential hang on the plugin (and the provider/outbound) path — a small reaction error or a bogus 200 body could expand to gigabytes. This is the symmetric counterpart to the `#95103` / `#95108` response-limit campaign, which is hardening exactly these unbounded `response.json()` / `response.text()` reads across channels and providers.\n\n## Changes\n\n- `extensions/nextcloud-talk/src/send.ts`\n  - Success receipt JSON now reads through `readResponseWithLimit` (cap **16 MiB**, the same cap used for provider JSON in `#95218`), then `JSON.parse` on the decoded prefix. On overflow the stream is **cancelled** and a bounded error is thrown.\n  - Both send and reaction error bodies now read through the already-public `readResponseTextLimited` (from `openclaw/plugin-sdk/provider-http`, cap **8 KiB**, cancels the upstream stream once the byte budget is full), then a small local `collapseErrorSnippet` collapses whitespace and caps the prefix at 200 chars. This is wrapped in `readNextcloudTalkErrorSnippet`, which returns `\"\"` on any read failure (matching the previous `.catch(() => \"\")` semantics). No new plugin-SDK surface is added.\n  - **Preserved fault tolerance:** the existing \"message was sent but the receipt JSON could not be parsed -> keep the `unknown` receipt\" behavior is intact. An over-limit success body now also flows through that same `try/catch`, so a hostile success body never throws to the caller — it just yields the `unknown` receipt.\n- `extensions/nextcloud-talk/src/send.cfg-threading.test.ts`\n  - Added a `bounded response reads` suite driving the real exported functions against streamed `ReadableStream` bodies with **no `content-length`**: over-limit success JSON keeps the `unknown` receipt, over-limit send/reaction error bodies stay bounded (error message far below the streamed 17 MiB body), and a normal small body still parses fully.\n\n## Real behavior proof (committed, reproducible via Vitest)\n\n- **Behavior addressed:** unbounded buffering of external Nextcloud Talk send success JSON, send error text, and reaction error text.\n- **How it is proven:** the committed `send.cfg-threading.test.ts` `bounded response reads` suite drives the **real** exported `sendMessageNextcloudTalk` / `sendReactionNextcloudTalk` through the real `fetchWithSsrFGuard` path against `ReadableStream` bodies that emit **17 × 1 MiB chunks (17 MiB) with no `content-length`** — i.e. only the streaming byte cap can stop them. Cases:\n  - oversized 16 MiB+ success JSON (200) -> no throw, falls back to `messageId=\"unknown\"`, `timestamp` undefined (the cap fires, the receipt fallback is preserved);\n  - oversized 17 MiB send error body (400) -> rejects with `Nextcloud Talk: bad request …` (bounded snippet, not the full body);\n  - oversized 17 MiB reaction error body (500) -> rejects with an `Error` whose `message.length < 4000` (proving the 8 KiB read + 200-char collapse caps it far below the streamed body);\n  - normal small JSON body -> parses fully (`messageId`/`timestamp` populated).\n- **Run:** `node scripts/run-vitest.mjs extensions/nextcloud-talk/src/send.cfg-threading.test.ts --run` (all cases pass).\n- **What was not tested:** a live production Nextcloud Talk server (no real bot deployment available); the proof streams oversized bodies through real `ReadableStream` responses reproducing the unbounded-body condition. Idle-timeout (`chunkTimeoutMs`) tuning is left at the helper default and not exercised here.\n\n## Evidence\n\n```\n$ node scripts/run-vitest.mjs extensions/nextcloud-talk/src/send.cfg-threading.test.ts --run\n Test Files  1 passed (1)\n      Tests  passed (bounded response reads suite included)\n\n$ node scripts/plugin-sdk-surface-report.mjs --check    # exit 0 (no new plugin-SDK surface)\n\n$ npx oxlint extensions/nextcloud-talk/src/send.ts src/plugin-sdk/response-limit-runtime.ts\n# clean (exit 0)\n```\n\n**Label**: security\n\n---\n\n*AI-assisted.* This is the symmetric continuation of the `#95103` / `#95108` response-limit campaign, applying the same `@openclaw/media-core` `readResponseWithLimit` hardening to the Nextcloud Talk success JSON, and bounding the send/reaction error bodies through the already-public `readResponseTextLimited` plus a local snippet collapse (no new plugin-SDK surface).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "fix/bound-nextcloud-talk-send",
-        "head_sha": "d9fca1cdfe0641a882e349cb1c3c9630d1e04e9e",
+        "title": "fix(lmstudio): bound model load success response body to prevent OOM",
+        "body": "## What Problem This Solves\n\n`ensureLmstudioModelLoaded` in `extensions/lmstudio/src/models.fetch.ts` POSTs to LM Studio's `/api/v1/models/load` and reads the **success** response with an unbounded `await response.json()`. LM Studio is a self-hosted/local server endpoint that the agent reaches over HTTP; a misbehaving, misconfigured, or compromised server (or anything sitting on the configured `baseUrl`, including an SSRF-redirected target) can return a success body with no `Content-Length` and stream an arbitrarily large JSON payload.\n\nBecause `response.json()` buffers the entire body before parsing, that unbounded body is fully read into memory on the provider/discovery path before any size check runs. That is a memory-pressure / hang vector on a code path that runs during model discovery and before first inference — exactly the kind of unbounded external-response read the response-limit campaign has been closing across the codebase.\n\nThe sibling **error** body on the same endpoint was already bounded (`readResponseTextLimited`, 8 KiB) in a prior change. This PR closes the remaining unbounded read: the **success** JSON body.\n\n## Changes\n\n- `extensions/lmstudio/src/models.fetch.ts`: replace the unbounded `await response.json()` on the `/api/v1/models/load` success path with the shared, already-bounded `readProviderJsonResponse<LmstudioLoadResponse>(...)` helper (re-exported from `openclaw/plugin-sdk/provider-http`, same helper the `/api/v1/models` discovery path already uses). It reads the body through `readResponseWithLimit` under the 16 MiB provider-JSON cap, cancels the stream on overflow, and wraps malformed JSON with the caller's label. No new abstraction is introduced and the redundant local `try/catch` is removed.\n- `extensions/lmstudio/src/models.test.ts`: migrate the model fetch/load mocks from bare `{ ok, json }` placeholders to real `Response` objects (the bounded readers require a real body stream), and add a regression test that streams an oversized (>16 MiB) success body and asserts the load path throws a bounded error and cancels the stream instead of buffering it all. Updates the malformed-load assertion to the helper's owned message.\n\n## Real behavior proof\n\n- **Behavior addressed**: unbounded buffering of the LM Studio `/api/v1/models/load` success JSON body; after the fix the read is capped at 16 MiB and the stream is cancelled on overflow.\n- **Real environment tested**: a local `node:http` server (real sockets, chunked transfer-encoding, no `Content-Length`) driving the real exported `ensureLmstudioModelLoaded` / `readProviderJsonResponse` via the global `fetch` (real `Response` body streams). Run with `node --import tsx proof.mts`.\n- **Exact steps**: (1) normal small `{ \"status\": \"loaded\" }` response, end-to-end `ensureLmstudioModelLoaded`; (2) oversized 20 MiB chunked success body, end-to-end; (3) a body that hangs forever after a prefix, driving `readProviderJsonResponse` with an explicit small cap; (4) negative control reading the same 20 MiB body with the pre-fix unbounded `await response.text()`.\n- **Evidence after fix**: (1) returns `\"proof-model\"` (still parses normally); (2) throws `LM Studio model load: JSON response exceeds 16777216 bytes` and the server observed only ~17.5 MiB sent before the socket closed (vs 20 MiB total) — the stream was cancelled mid-flight; (3) throws `... exceeds 2048 bytes` and the server socket was closed (cancelled) instead of hanging; (4) the unbounded read consumed the full 20 MiB, confirming the cap is load-bearing.\n- **Observed result**: oversized/hanging bodies are stopped at the cap with a bounded error and the upstream stream is cancelled; well-formed small bodies still parse.\n- **What was not tested**: a real third-party LM Studio binary returning a pathological body (used a faithful local HTTP server instead); behavior under genuine OS memory exhaustion (the goal is to prevent reaching it).\n\n## Evidence\n\n```\n[proof] 本地 server 启动 http://127.0.0.1:36821\nPASS  normal-small 端到端解析不破 — ensureLmstudioModelLoaded 返回 proof-model\nPASS  oversized 抛 bounded error — error=\"LM Studio model load: JSON response exceeds 16777216 bytes\"\nPASS  oversized server 发送量 < 全量 20MiB(stream 被提前 cancel) — server 实发 17.50MiB (cap 16MiB,远小于 20MiB 全量)\nPASS  hang body 到 cap 即抛 bounded error(不无限挂起) — error=\"LM Studio model load: JSON response exceeds 2048 bytes\"\nPASS  hang body cap 命中后 server 端 socket 被 cancel/close — server 实发 720922 bytes 后 socket close=true\nPASS  negative control:无界 await .text() 全量读入 20MiB(证明 cap load-bearing) — 无界读到 20.00MiB 文本 / server 实发 20.00MiB(对照:bounded 仅读到 cap)\n[proof] ALL PASS\n```\n\nUnit tests: `node scripts/run-vitest.mjs extensions/lmstudio/src/models.test.ts --run` → 24 passed (24), including the new `bounds oversized model load success bodies`. `oxlint` and `tsgo` (extensions source + test) clean on the changed files.\n\n**Label**: security\n\n---\n\nThis is the symmetric companion to the response-limit campaign (e.g. #95103 / #95108 / #95218): the LM Studio discovery `/api/v1/models` path and the `/api/v1/models/load` error body were already bounded; this PR finishes the set by bounding the `/api/v1/models/load` success body with the same shared helper and cap.\n\nAI-assisted: implemented and proof-tested with AI assistance; reviewed by a human before submission.\n",
+        "branch": "fix/bound-lmstudio-model-fetch",
+        "head_sha": "90c3b9653e10efa4efd7ac835ef205f80d344836",
         "author": "alix-007",
         "labels": [
-          "channel: nextcloud-talk",
-          "size: S"
+          "size: S",
+          "extensions: lmstudio"
         ],
         "files": [
           {
-            "path": "extensions/nextcloud-talk/src/send.cfg-threading.test.ts",
-            "additions": 126,
-            "deletions": 0,
+            "path": "extensions/lmstudio/src/models.fetch.ts",
+            "additions": 8,
+            "deletions": 6,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/nextcloud-talk/src/send.ts",
-            "additions": 41,
-            "deletions": 4,
+            "path": "extensions/lmstudio/src/models.test.ts",
+            "additions": 104,
+            "deletions": 77,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 167,
-        "deletions": 4,
+        "additions": 112,
+        "deletions": 83,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96031",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96031.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96042",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96042.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 83,
-          "gatingTotal": 78,
+          "total": 90,
+          "gatingTotal": 85,
           "counts": {
             "SUCCESS": 58,
-            "SKIPPED": 23,
-            "FAILURE": 1,
-            "NEUTRAL": 1
+            "SKIPPED": 32
           },
-          "blockers": [
-            "checks-node-compact-small-whole-2:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-whole-2:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -146,15 +140,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4707,
+    "total_ms": 6552,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 541
+        "ms": 709
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1425
+        "ms": 2427
       },
       {
         "name": "classify_comment_commands",
@@ -170,7 +164,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2715
+        "ms": 3392
       },
       {
         "name": "append_ledger",
