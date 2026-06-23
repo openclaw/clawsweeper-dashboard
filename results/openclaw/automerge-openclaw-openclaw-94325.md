@@ -2,18 +2,18 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-94325"
 mode: "autonomous"
-run_id: "28031898677"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28031898677"
-head_sha: "54eedf801125018cf047e9a5594951ed6cc35334"
-workflow_conclusion: "success"
+run_id: "28033796433"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28033796433"
+head_sha: "59f4d6981e6553c831d64b0f80e0c40dc5e35750"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-06-23T14:34:44.640Z"
+published_at: "2026-06-23T15:19:40.517Z"
 canonical: "#94325"
 canonical_issue: null
 canonical_pr: "#94325"
 actions_total: 1
 fix_executed: 0
-fix_failed: 0
+fix_failed: 1
 fix_blocked: 1
 apply_executed: 0
 apply_blocked: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28031898677](https://github.com/openclaw/clawsweeper/actions/runs/28031898677)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28033796433](https://github.com/openclaw/clawsweeper/actions/runs/28033796433)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
@@ -43,7 +43,7 @@ Make PR #94325 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 | --- | ---: |
 | Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 0 |
+| Fix failed | 1 |
 | Fix blocked | 1 |
 | Applied executions | 0 |
 | Apply blocked | 0 |
@@ -54,7 +54,10 @@ Make PR #94325 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/94325 |  | source PR #94325 is paused by clawsweeper:human-review; refusing to mutate the PR branch |
+| repair_contributor_branch | failed |  |  | To https://github.com/sunlit-deng/openclaw.git
+ ! [remote rejected]       HEAD -> fix/issue-94202 (Unable to determine if workflow can be created or updated due to timeout; `workflows` scope may be required.)
+error: failed to push some refs to 'https://github.com/sunlit-deng/openclaw.git' |
+| execute_fix | blocked |  |  | Codex fix worker timed out after 48085ms |
 | automerge_repair_outcome_comment | updated | #94325 |  |  |
 
 ## Apply Actions
