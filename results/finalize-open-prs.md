@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-06-23T16:04:19.277Z
+Generated: 2026-06-23T17:08:50.644Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#96145](https://github.com/openclaw/openclaw/pull/96145) | fix: UI glitch: config is not visible | automerge-openclaw-openclaw-94325 | MERGEABLE | UNSTABLE | CANCELLED:6 SKIPPED:38 SUCCESS:51 IN_PROGRESS:2; blockers:5 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#96145](https://github.com/openclaw/openclaw/pull/96145) | fix: UI glitch: config is not visible | automerge-openclaw-openclaw-94325 | MERGEABLE | CLEAN | CANCELLED:6 SKIPPED:39 SUCCESS:54; blockers:3 | needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
