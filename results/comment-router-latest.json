@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T13:35:27.966Z",
+  "generated_at": "2026-06-23T13:35:33.891Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T10:35:27.182Z",
+  "since": "2026-06-23T10:35:29.670Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    93942
+    93394
   ],
   "comment_ids": [
-    4779755211
+    4779755824
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:93942:4779755211:2026-06-23T13:33:00Z:re_review",
-      "comment_id": "4779755211",
-      "comment_version_key": "4779755211:2026-06-23T13:33:00Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93942#issuecomment-4779755211",
+      "idempotency_key": "comment-router:openclaw/openclaw:93394:4779755824:2026-06-23T13:33:04Z:re_review",
+      "comment_id": "4779755824",
+      "comment_version_key": "4779755824:2026-06-23T13:33:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93394#issuecomment-4779755824",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 93942,
+      "issue_number": 93394,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T13:33:00Z",
-      "comment_updated_at": "2026-06-23T13:33:00Z",
+      "comment_created_at": "2026-06-23T13:33:04Z",
+      "comment_updated_at": "2026-06-23T13:33:04Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review — updated the pr body with a machine-readable `## real behavior proof` section using the exact field names required by the current proof policy. i verified the updated body locally against `evaluaterealbehaviorproof` and the latest github `real behavior proof` check is now passing",
@@ -64,24 +64,98 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory): abort orphaned qmd search subprocess when memory_search times out",
+        "body": "## What Problem This Solves\n\nThe `memory_search` tool enforces a 15s deadline, but with the **QMD** memory backend that deadline only stops the *caller* — the spawned `qmd query`/`qmd search` subprocess keeps running for the full QMD command timeout (`memory.qmd.limits.timeoutMs`, whose embed-heavy default was raised to 600s in PR #87572). So after the agent has already given up and moved on, an orphaned `qmd` process keeps churning for up to ~10 minutes, leaking CPU/memory on every timed-out search. PR #91742 fixed exactly this orphaned-work leak for the **builtin** backend by wiring an `AbortSignal` through `MemorySearchManager.search()`, but the QMD manager — the other backend behind the same interface — silently ignored the signal, so the leak was still live for QMD users. This PR closes that gap so every supported QMD search path kills its subprocess when the caller's deadline fires.\n\n## Evidence\n\nProven against the **real exported `runCliCommand`** (the single spawn point for all qmd search subprocesses) via `node --import tsx` against a real OS subprocess on PR head `6ee870e0ca`:\n\n```\n[B] child OS pid: 598162 alive before abort: true\n[B] runCliCommand rejected after 17 ms with: \"memory_search timed out after 15s\"\n[B] child pid 598162 alive AFTER abort: false\nRESULT: PASS - abort killed the real subprocess and rejected promptly (no orphan).\n```\n\nThe real OS process is confirmed alive before abort and dead after abort (via `process.kill(pid, 0)`), and `runCliCommand` rejects in **17ms** (not 600s) with the caller's deadline message preserved.\n\n- **Tests:** `qmd-process.test.ts` 16/16 pass (SIGKILL + reject-on-abort, and reject-before-spawn when already aborted); `qmd-manager.test.ts -t abort` → 3/3 abort tests pass (132 total) covering single-collection **and** grouped multi-collection paths, asserted via the child `kill(\"SIGKILL\")` spy. Typecheck (`run-tsgo.mjs -p tsconfig.extensions.json`) clean; memory-host-sdk typecheck passes.\n- **Negative control:** reverting *only* the grouped-path signal propagation makes the grouped abort test fail — the qmd child survives the caller abort and dies only at the qmd command timeout (`...timed out after 4000ms` instead of being killed promptly), confirming the wiring is load-bearing on the grouped path.\n\n---\n\n## Summary\n\nPR #91742 (\"abort orphaned embedding work when memory_search times out\") added an `AbortSignal` to `MemorySearchManager.search()` so that when the 15s `memory_search` tool deadline fires, in-flight embedding work is cancelled instead of running orphaned. That fix wired the signal through the **builtin** manager, but the **QMD** manager — the other backend behind the exact same `MemorySearchManager.search` interface — silently ignored it.\n\nWith the QMD backend, `memory_search` returns \"timed out after 15s\" to the agent after 15s, but the spawned `qmd query`/`qmd search` subprocess keeps running for the full QMD command timeout (`memory.qmd.limits.timeoutMs`, whose embed-heavy default was raised to 600s in PR #87572). So the orphaned-work leak that #91742 fixed for the builtin backend was still present for QMD users: the agent has already moved on, but a `qmd` process keeps churning for up to ~10 minutes.\n\n## What changed\n\n- `packages/memory-host-sdk/src/host/qmd-process.ts`: `runCliCommand` now accepts an optional `signal: AbortSignal`. When the signal aborts (or is already aborted on entry), the spawned child is `SIGKILL`ed immediately and the call rejects with the abort reason (preserving the caller's deadline message). Resolution/rejection is funneled through a single `settle()` guard so abort, timeout, `error`, and `close` cannot double-settle.\n- `extensions/memory-core/src/memory/qmd-manager.ts`: `QmdMemoryManager.search()` accepts `opts.signal` (matching the builtin manager and the `MemorySearchManager` interface added in #91742). It fast-fails if the signal is already aborted, and threads the signal through `runQmdSearch` → `runQmd` → `runCliCommand` across **all** direct-`qmd` subprocess search paths:\n  - the single-collection direct path and its `query` fallback, **and**\n  - the **grouped multi-collection path** `runQueryAcrossCollectionGroups` (plus its unsupported-option `query` fallback), which multi-collection or mixed memory/session configs route through.\n\n  The grouped helper previously called `runQmdSearch(args, command)` without the caller signal, so the central subprocess leak remained on that supported path (flagged in review). It now receives and forwards the same signal.\n\nWhen the caller's deadline fires, the qmd subprocess is killed on every supported search path instead of left orphaned. The optional mcporter bridge is short-circuited by the universal pre-flight abort guard before it spawns anything.\n\n## Real behavior proof (real runtime, outside tests)\n\n`runCliCommand` is the single spawn point for **all** qmd search subprocesses (single-collection and grouped), so proving abort kills the real child there covers every path that forwards the signal. Ran the **real exported `runCliCommand`** via `node --import tsx` against a real OS subprocess (PR head `6ee870e0ca`):\n\n```\n$ TSX_TSCONFIG_PATH=tsconfig.json node --import tsx ./abort-proof.mts\n[A] normal completion stdout: \"hello-from-child\"\n[B] child OS pid: 598162 alive before abort: true\n[B] runCliCommand rejected after 17 ms with: \"memory_search timed out after 15s\"\n[B] child pid 598162 alive AFTER abort: false\n\nRESULT: PASS - abort killed the real subprocess and rejected promptly (no orphan).\n```\n\nThe proof script spawns a child that records its own PID and `sleep 30`s, with `timeoutMs: 600_000` (mimicking the qmd embed timeout). It confirms via `process.kill(pid, 0)` that the real OS process is **alive before abort** and **dead after abort**, that `runCliCommand` rejects in **17ms** (not 600s) with the caller's deadline message, and that a no-signal short command still completes normally (Case A).\n\n**Grouped-path wiring (negative control):** the new grouped multi-collection abort regression drives `QmdMemoryManager.search({ signal })` through `runQueryAcrossCollectionGroups` (mixed memory/session sources) and asserts the spawned qmd child is `SIGKILL`ed when the caller aborts. Reverting *only* the grouped-path signal propagation makes that test fail, with the qmd child surviving the caller abort and dying only at the qmd command timeout:\n\n```\nAssertionError: expected [Function] to throw error including 'memory_search timed out after 15s'\n  but got 'qmd search test --json -n 4 -c workspace-main timed out after 4000ms'\n```\n\ni.e. without this fix the grouped qmd child is left running until the qmd command timeout (4000ms in the test) instead of being killed promptly — the exact leak this PR closes, now confirmed on the grouped path too.\n\n## Tests and validation\n\n- `packages/memory-host-sdk/src/host/qmd-process.test.ts`: `runCliCommand` kills the child with `SIGKILL` and rejects with the abort reason when the signal aborts mid-run; and rejects immediately without spawning when already aborted. 16/16 pass.\n- `extensions/memory-core/src/memory/qmd-manager.test.ts` (added grouped abort test → 3 abort tests total): single-collection **and** grouped multi-collection `qmd` searches both kill the in-flight subprocess (asserted via the child `kill(\"SIGKILL\")` spy) when the caller aborts, and reject before spawning when already aborted. `-t abort` → 3 passed / 132 total.\n- **Negative control**: reverting the grouped-path signal propagation makes the grouped abort test fail (child survives to the qmd command timeout), as shown above.\n- `node scripts/run-tsgo.mjs -p tsconfig.extensions.json` clean; memory-host-sdk typecheck passes.\n\n## Risk checklist\n\n- Behavior is unchanged when no `signal` is passed (all parameters/opts fields are optional; existing callers are unaffected).\n- `settle()` guard prevents double resolve/reject across abort/timeout/error/close; the abort listener is removed on settle to avoid leaks.\n- The abort reason prefers the caller-supplied error so the existing \"memory_search timed out after 15s\" message is preserved end to end.\n- No public API removed; only optional `signal` fields added. No config or schema changes.\n\n<!-- codex-rescue-machine-readable-real-behavior-proof -->\n## Real behavior proof\n\nBehavior addressed: memory_search enforces a 15s deadline, but QMD search subprocesses could continue running until the much longer qmd command timeout after the caller had already aborted. This patch threads AbortSignal through the QMD paths so the spawned subprocess is killed promptly instead of becoming orphaned work.\n\nReal environment tested: Local Linux runtime with Node v22 and node --import tsx, driving the real exported runCliCommand from packages/memory-host-sdk/src/host/qmd-process.ts against a real OS subprocess. runCliCommand is the central spawn point for qmd subprocesses; qmd-manager tests also cover signal forwarding through single-collection and grouped multi-collection search paths.\n\nExact steps or command run after this patch: In PR head fix/qmd-search-abort-orphaned, ran TSX_TSCONFIG_PATH=tsconfig.json node --import tsx ./abort-proof.mts, then ran packages/memory-host-sdk/src/host/qmd-process.test.ts and extensions/memory-core/src/memory/qmd-manager.test.ts -t abort. Also ran node scripts/run-tsgo.mjs -p tsconfig.extensions.json.\n\nEvidence after fix: Live terminal output from the real OS subprocess proof:\n```text\n$ TSX_TSCONFIG_PATH=tsconfig.json node --import tsx ./abort-proof.mts\n[A] normal completion stdout: \"hello-from-child\"\n[B] child OS pid: 598162 alive before abort: true\n[B] runCliCommand rejected after 17 ms with: \"memory_search timed out after 15s\"\n[B] child pid 598162 alive AFTER abort: false\nRESULT: PASS - abort killed the real subprocess and rejected promptly (no orphan).\n```\nGrouped-path negative control reverting only grouped-path signal propagation made the grouped abort regression fail with qmd timing out after 4000ms instead of rejecting with memory_search timed out after 15s, showing the child survived until qmd timeout without the fix.\n\nObserved result after fix: The real child process is alive before abort and dead after abort, verified via process.kill(pid, 0). runCliCommand rejects in 17ms with the caller deadline message rather than waiting for the qmd timeout. The qmd-process abort tests passed 16/16 and qmd-manager abort tests passed 3/3 across single and grouped paths.\n\nWhat was not tested: This proof does not run a live external qmd binary with real embeddings for the full 600s default timeout. It validates the process lifecycle and signal propagation through the shared spawn point and covered manager paths.\n",
+        "branch": "fix/qmd-search-abort-orphaned",
+        "head_sha": "fe52dede4ffe7b4750aa6251d3c188b5c6a85620",
+        "author": "alix-007",
+        "labels": [
+          "extensions: memory-core",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
+            "additions": 254,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
+            "additions": 58,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/qmd-process.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/qmd-process.ts",
+            "additions": 73,
+            "deletions": 30,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 433,
+        "deletions": 37,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93394",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93394.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 170,
+          "gatingTotal": 165,
+          "counts": {
+            "SUCCESS": 139,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2157,
+    "total_ms": 4570,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 774
+        "ms": 705
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 3502
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -93,7 +167,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1373
+        "ms": 350
       },
       {
         "name": "append_ledger",
