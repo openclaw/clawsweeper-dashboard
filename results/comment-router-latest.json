@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T15:14:40.723Z",
+  "generated_at": "2026-06-23T15:14:42.528Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T12:14:38.851Z",
+  "since": "2026-06-23T12:14:40.118Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95420
+    95973
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4780638488
+  ],
+  "status_comment_id": 4780638999,
   "max_autoclose_targets": 8,
-  "scanned_comments": 9,
-  "commands_seen": 4,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:95420:4775091445:2026-06-23T02:35:57Z:re_review",
-      "comment_id": "4775091445",
-      "comment_version_key": "4775091445:2026-06-23T02:35:57Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95420#issuecomment-4775091445",
+      "idempotency_key": "comment-router:openclaw/openclaw:95973:4780638488:2026-06-23T15:13:34Z:re_review",
+      "comment_id": "4780638488",
+      "comment_version_key": "4780638488:2026-06-23T15:13:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95973#issuecomment-4780638488",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 95420,
-      "author": "sallyom",
-      "author_id": 11166065,
+      "target_branch": "main",
+      "issue_number": 95973,
+      "author": "MonkeyLeeT",
+      "author_id": 6754057,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T02:35:57Z",
-      "comment_updated_at": "2026-06-23T02:35:57Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-23T15:13:34Z",
+      "comment_updated_at": "2026-06-23T15:13:34Z",
+      "status_comment_id": 4780638999,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -60,310 +62,103 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): bound OpenRouter model catalog response reads",
-        "body": "## What Problem This Solves\n\n`src/agents/embedded-agent-runner/openrouter-model-capabilities.ts` reads the full OpenRouter `/models` catalog from an external, untrusted endpoint with an unbounded `await response.json()`. A compromised, misconfigured, or hijacked provider endpoint can stream an arbitrarily large body and force the runtime to buffer the entire payload in memory before parsing — an unbounded-read OOM/DoS vector against anyone whose agent runner resolves model capabilities. This closes the missing sibling of the same hardening already landed for the OpenRouter/LiteLLM pricing catalog in #95103 and the Anthropic error streams in #95108; the capability-detection path hits the same `https://openrouter.ai/api/v1/models` URL but was still reading without a cap.\n\n## Evidence\n\n- **New Vitest case `bounds an oversized streamed OpenRouter catalog instead of buffering it whole`** drives the real `doFetch` path: on a stream whose first chunk exceeds the 16 MiB cap, the bounded read cancels the body (`cancel` called once, `pull` count ≤ 2 instead of draining the effectively-infinite stream) and leaves no poisoned cache entry (`getOpenRouterModelCapabilities` returns `undefined`).\n- **New Vitest case `round-trips a chunked under-cap catalog through the SQLite cache`** streams the catalog across many small chunks, lets the bounded reader reassemble it, and proves a *fresh module import* reads the parsed capabilities back from the cross-disk SQLite cache identical to the source — `fetch` called exactly once (no refetch). This is the hardest boundary: real reassembly + cross-import on-disk SQLite read-back.\n- **Negative control (pre-fix):** with `await response.json()`, the oversized stream is drained completely (`pulls=33`, all 32 chunks read, `cancels=0`). **After (fixed):** the bounded read throws `OpenRouter models response too large: 16777217 bytes`, cancels the stream (`cancels=1`), and stops after the first oversized chunk (`pulls=1` of up to 32 available).\n- **Suite + checks:** `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/openrouter-model-capabilities.test.ts --run` → **9 passed (9)** (7 existing + 2 new); `tsx proof.mts` → **ALL CHECKS PASSED**; `oxlint` on both changed files → **exit 0**; `tsc --noEmit -p tsconfig.json` → **exit 0**.\n\n## Summary\n\n`src/agents/embedded-agent-runner/openrouter-model-capabilities.ts` fetched the full OpenRouter `/models` catalog and parsed it with an unbounded `await response.json()`. A compromised, misconfigured, or hijacked endpoint could stream an arbitrarily large body and force the runtime to buffer the entire payload in memory before parsing — an unbounded-read DoS vector on an external, untrusted source.\n\nThis is the missing sibling of the same hardening already landed for the OpenRouter/LiteLLM pricing catalog in #95103 (`fix(gateway): bound pricing catalog streams`) and the Anthropic error streams in #95108 (`fix(agents): bound Anthropic error streams`). The capability-detection endpoint hits the same `https://openrouter.ai/api/v1/models` URL but was still reading without a cap.\n\n## Changes\n\n- Read the catalog body through the shared bounded reader `readResponseWithLimit` from `@openclaw/media-core/read-response-with-limit` (the exact helper #95103 uses), capping at `16 MiB` and cancelling the stream on overflow, then `JSON.parse` the bounded buffer.\n- Added a local `OPENROUTER_MODELS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024` constant, aligned with the 16 MiB `PROVIDER_*_RESPONSE_MAX_BYTES` convention used elsewhere in `src/agents`.\n- Malformed-JSON and non-OK behavior is unchanged: parse failures are still caught by the existing `catch` and logged via `log.warn`, and the existing `cancelUnreadResponseBody` finally-cancel still runs.\n- No new abstraction — reuses the existing media-core helper, symmetric with #95103/#95108.\n\n## Real behavior proof\n\n**What I ran:** the existing Vitest suite for this module (driving the real exported `loadOpenRouterModelCapabilities` → `doFetch` → `readResponseWithLimit` → `writeSqliteCache`/`readSqliteCache` against a real on-disk SQLite state dir), a standalone `tsx` proof driving the real `readResponseWithLimit` helper, `oxlint`, and a `tsc --noEmit` project typecheck.\n\n**Before (pre-fix, negative control):** with `await response.json()`, an oversized streamed body is drained completely:\n```\nnegative-control: pre-fix await response.json() DRAINS the whole oversized body\n  :: pulls=33 (read all 32 chunks) cancels=0 (no cap, no early cancel)\n```\n\n**After (fixed):** the bounded read stops at the first oversized chunk and cancels the stream:\n```\nfixed: oversized stream throws bounded overflow :: \"OpenRouter models response too large: 16777217 bytes\"\nfixed: stream cancelled after overflow (not drained) :: cancels=1\nfixed: stopped after the first oversized chunk (1 pull, not 32) :: pulls=1 of up to 32 available\nfixed: chunked under-cap body reassembles + parses correctly :: id=acme/chunked-model pulls=11 (multi-chunk reassembly)\n```\n\n**SQLite read-back (hardest boundary):** the new Vitest case `round-trips a chunked under-cap catalog through the SQLite cache` streams the catalog across many small chunks, lets the bounded reader reassemble it, and proves a *fresh module import* reads the parsed capabilities back from the cross-disk SQLite cache identical to the source — with `fetch` called exactly once (no refetch). New Vitest case `bounds an oversized streamed OpenRouter catalog instead of buffering it whole` proves the live `doFetch` path cancels the body (`cancel` called once, pull count ≤ 2) and leaves no poisoned cache entry.\n\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/openrouter-model-capabilities.test.ts --run` → **9 passed (9)** (7 existing + 2 new)\n- `tsx proof.mts` → **ALL CHECKS PASSED** (fixed stops early + throws bounded overflow; negative control drains everything)\n- `oxlint` on both changed files → **exit 0, no findings**\n- `tsc --noEmit -p tsconfig.json` → **exit 0** (no type errors)\n\n**Label**: trusted\n\nThis change was AI-assisted.\n",
-        "branch": "fix/bound-openrouter-model-capabilities",
-        "head_sha": "acb62c5c9193dbea16445604d8b35340d09739aa",
-        "author": "alix-007",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/openrouter-model-capabilities.test.ts",
-            "additions": 98,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/openrouter-model-capabilities.ts",
-            "additions": 16,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 114,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95420",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95420.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 91,
-          "gatingTotal": 86,
-          "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 23,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-23T15:14:43.469Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 95973
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-23T15:14:44.664Z",
+          "response_comment_id": "4780638999",
+          "response_comment_mode": "updated"
         }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:95420:4771222862:2026-06-22T17:51:46Z:re_review",
-      "comment_id": "4771222862",
-      "comment_version_key": "4771222862:2026-06-22T17:51:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95420#issuecomment-4771222862",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 95420,
-      "author": "sallyom",
-      "author_id": 11166065,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-22T17:51:46Z",
-      "comment_updated_at": "2026-06-22T17:51:46Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95420:4760193377:2026-06-22T16:37:39Z:clawsweeper_needs_human",
-      "comment_id": "4760193377",
-      "comment_version_key": "4760193377:2026-06-22T16:37:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95420#issuecomment-4760193377",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 95420,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-20T22:38:22Z",
-      "comment_updated_at": "2026-06-22T16:37:39Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] No automated code repair is indicated; the remaining action is maintainer acceptance of the fail-closed OpenRouter catalog cap.; Cleared: The diff reduces a provider-controlled response DoS surface by reusing an internal bounded-read helper and adds no dependencies, workflow changes, package-resolution changes, or secret handling. (sha=ee6d72f783731422cda743e00abff89f9eadb843)",
-      "review_summary": "The PR replaces the OpenRouter runtime model-capability catalog `response.json()` read with `readResponseWithLimit` and adds streamed overflow plus SQLite cache regression coverage.\n\nPR surface: Source +8, Tests +97. Total +105 across 2 files.\n\nReproducibility: yes. from source and PR proof rather than a local rerun. Current main reaches an unbounded `response.json()` on the OpenRouter runtime catalog success body, and the PR body plus Real behavior proof show an oversized stream is cancelled after the fix.",
-      "review_followup": "- [P1] No automated code repair is indicated; the remaining action is maintainer acceptance of the fail-closed OpenRouter catalog cap.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "ee6d72f783731422cda743e00abff89f9eadb843",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): bound OpenRouter model catalog response reads",
-        "body": "## What Problem This Solves\n\n`src/agents/embedded-agent-runner/openrouter-model-capabilities.ts` reads the full OpenRouter `/models` catalog from an external, untrusted endpoint with an unbounded `await response.json()`. A compromised, misconfigured, or hijacked provider endpoint can stream an arbitrarily large body and force the runtime to buffer the entire payload in memory before parsing — an unbounded-read OOM/DoS vector against anyone whose agent runner resolves model capabilities. This closes the missing sibling of the same hardening already landed for the OpenRouter/LiteLLM pricing catalog in #95103 and the Anthropic error streams in #95108; the capability-detection path hits the same `https://openrouter.ai/api/v1/models` URL but was still reading without a cap.\n\n## Evidence\n\n- **New Vitest case `bounds an oversized streamed OpenRouter catalog instead of buffering it whole`** drives the real `doFetch` path: on a stream whose first chunk exceeds the 16 MiB cap, the bounded read cancels the body (`cancel` called once, `pull` count ≤ 2 instead of draining the effectively-infinite stream) and leaves no poisoned cache entry (`getOpenRouterModelCapabilities` returns `undefined`).\n- **New Vitest case `round-trips a chunked under-cap catalog through the SQLite cache`** streams the catalog across many small chunks, lets the bounded reader reassemble it, and proves a *fresh module import* reads the parsed capabilities back from the cross-disk SQLite cache identical to the source — `fetch` called exactly once (no refetch). This is the hardest boundary: real reassembly + cross-import on-disk SQLite read-back.\n- **Negative control (pre-fix):** with `await response.json()`, the oversized stream is drained completely (`pulls=33`, all 32 chunks read, `cancels=0`). **After (fixed):** the bounded read throws `OpenRouter models response too large: 16777217 bytes`, cancels the stream (`cancels=1`), and stops after the first oversized chunk (`pulls=1` of up to 32 available).\n- **Suite + checks:** `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/openrouter-model-capabilities.test.ts --run` → **9 passed (9)** (7 existing + 2 new); `tsx proof.mts` → **ALL CHECKS PASSED**; `oxlint` on both changed files → **exit 0**; `tsc --noEmit -p tsconfig.json` → **exit 0**.\n\n## Summary\n\n`src/agents/embedded-agent-runner/openrouter-model-capabilities.ts` fetched the full OpenRouter `/models` catalog and parsed it with an unbounded `await response.json()`. A compromised, misconfigured, or hijacked endpoint could stream an arbitrarily large body and force the runtime to buffer the entire payload in memory before parsing — an unbounded-read DoS vector on an external, untrusted source.\n\nThis is the missing sibling of the same hardening already landed for the OpenRouter/LiteLLM pricing catalog in #95103 (`fix(gateway): bound pricing catalog streams`) and the Anthropic error streams in #95108 (`fix(agents): bound Anthropic error streams`). The capability-detection endpoint hits the same `https://openrouter.ai/api/v1/models` URL but was still reading without a cap.\n\n## Changes\n\n- Read the catalog body through the shared bounded reader `readResponseWithLimit` from `@openclaw/media-core/read-response-with-limit` (the exact helper #95103 uses), capping at `16 MiB` and cancelling the stream on overflow, then `JSON.parse` the bounded buffer.\n- Added a local `OPENROUTER_MODELS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024` constant, aligned with the 16 MiB `PROVIDER_*_RESPONSE_MAX_BYTES` convention used elsewhere in `src/agents`.\n- Malformed-JSON and non-OK behavior is unchanged: parse failures are still caught by the existing `catch` and logged via `log.warn`, and the existing `cancelUnreadResponseBody` finally-cancel still runs.\n- No new abstraction — reuses the existing media-core helper, symmetric with #95103/#95108.\n\n## Real behavior proof\n\n**What I ran:** the existing Vitest suite for this module (driving the real exported `loadOpenRouterModelCapabilities` → `doFetch` → `readResponseWithLimit` → `writeSqliteCache`/`readSqliteCache` against a real on-disk SQLite state dir), a standalone `tsx` proof driving the real `readResponseWithLimit` helper, `oxlint`, and a `tsc --noEmit` project typecheck.\n\n**Before (pre-fix, negative control):** with `await response.json()`, an oversized streamed body is drained completely:\n```\nnegative-control: pre-fix await response.json() DRAINS the whole oversized body\n  :: pulls=33 (read all 32 chunks) cancels=0 (no cap, no early cancel)\n```\n\n**After (fixed):** the bounded read stops at the first oversized chunk and cancels the stream:\n```\nfixed: oversized stream throws bounded overflow :: \"OpenRouter models response too large: 16777217 bytes\"\nfixed: stream cancelled after overflow (not drained) :: cancels=1\nfixed: stopped after the first oversized chunk (1 pull, not 32) :: pulls=1 of up to 32 available\nfixed: chunked under-cap body reassembles + parses correctly :: id=acme/chunked-model pulls=11 (multi-chunk reassembly)\n```\n\n**SQLite read-back (hardest boundary):** the new Vitest case `round-trips a chunked under-cap catalog through the SQLite cache` streams the catalog across many small chunks, lets the bounded reader reassemble it, and proves a *fresh module import* reads the parsed capabilities back from the cross-disk SQLite cache identical to the source — with `fetch` called exactly once (no refetch). New Vitest case `bounds an oversized streamed OpenRouter catalog instead of buffering it whole` proves the live `doFetch` path cancels the body (`cancel` called once, pull count ≤ 2) and leaves no poisoned cache entry.\n\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/openrouter-model-capabilities.test.ts --run` → **9 passed (9)** (7 existing + 2 new)\n- `tsx proof.mts` → **ALL CHECKS PASSED** (fixed stops early + throws bounded overflow; negative control drains everything)\n- `oxlint` on both changed files → **exit 0, no findings**\n- `tsc --noEmit -p tsconfig.json` → **exit 0** (no type errors)\n\n**Label**: trusted\n\nThis change was AI-assisted.\n",
-        "branch": "fix/bound-openrouter-model-capabilities",
-        "head_sha": "acb62c5c9193dbea16445604d8b35340d09739aa",
-        "author": "alix-007",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/openrouter-model-capabilities.test.ts",
-            "additions": 98,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/openrouter-model-capabilities.ts",
-            "additions": 16,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 114,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95420",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95420.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 91,
-          "gatingTotal": 86,
-          "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 23,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "target is not open"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:95420:4761129245:2026-06-21T06:27:37Z:re_review",
-      "comment_id": "4761129245",
-      "comment_version_key": "4761129245:2026-06-21T06:27:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95420#issuecomment-4761129245",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 95420,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-21T06:27:37Z",
-      "comment_updated_at": "2026-06-21T06:27:37Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review — added the `what problem this solves` and `evidence` headings the proof workflow expects (proof content unchanged, just restructured under the required sections). this should clear needs-pr-context",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "— Added the `What Problem This Solves` and `Evidence` headings the proof workflow expects (proof content unchanged, just restructured under the required sections). This should clear needs-pr-context.",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): bound OpenRouter model catalog response reads",
-        "body": "## What Problem This Solves\n\n`src/agents/embedded-agent-runner/openrouter-model-capabilities.ts` reads the full OpenRouter `/models` catalog from an external, untrusted endpoint with an unbounded `await response.json()`. A compromised, misconfigured, or hijacked provider endpoint can stream an arbitrarily large body and force the runtime to buffer the entire payload in memory before parsing — an unbounded-read OOM/DoS vector against anyone whose agent runner resolves model capabilities. This closes the missing sibling of the same hardening already landed for the OpenRouter/LiteLLM pricing catalog in #95103 and the Anthropic error streams in #95108; the capability-detection path hits the same `https://openrouter.ai/api/v1/models` URL but was still reading without a cap.\n\n## Evidence\n\n- **New Vitest case `bounds an oversized streamed OpenRouter catalog instead of buffering it whole`** drives the real `doFetch` path: on a stream whose first chunk exceeds the 16 MiB cap, the bounded read cancels the body (`cancel` called once, `pull` count ≤ 2 instead of draining the effectively-infinite stream) and leaves no poisoned cache entry (`getOpenRouterModelCapabilities` returns `undefined`).\n- **New Vitest case `round-trips a chunked under-cap catalog through the SQLite cache`** streams the catalog across many small chunks, lets the bounded reader reassemble it, and proves a *fresh module import* reads the parsed capabilities back from the cross-disk SQLite cache identical to the source — `fetch` called exactly once (no refetch). This is the hardest boundary: real reassembly + cross-import on-disk SQLite read-back.\n- **Negative control (pre-fix):** with `await response.json()`, the oversized stream is drained completely (`pulls=33`, all 32 chunks read, `cancels=0`). **After (fixed):** the bounded read throws `OpenRouter models response too large: 16777217 bytes`, cancels the stream (`cancels=1`), and stops after the first oversized chunk (`pulls=1` of up to 32 available).\n- **Suite + checks:** `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/openrouter-model-capabilities.test.ts --run` → **9 passed (9)** (7 existing + 2 new); `tsx proof.mts` → **ALL CHECKS PASSED**; `oxlint` on both changed files → **exit 0**; `tsc --noEmit -p tsconfig.json` → **exit 0**.\n\n## Summary\n\n`src/agents/embedded-agent-runner/openrouter-model-capabilities.ts` fetched the full OpenRouter `/models` catalog and parsed it with an unbounded `await response.json()`. A compromised, misconfigured, or hijacked endpoint could stream an arbitrarily large body and force the runtime to buffer the entire payload in memory before parsing — an unbounded-read DoS vector on an external, untrusted source.\n\nThis is the missing sibling of the same hardening already landed for the OpenRouter/LiteLLM pricing catalog in #95103 (`fix(gateway): bound pricing catalog streams`) and the Anthropic error streams in #95108 (`fix(agents): bound Anthropic error streams`). The capability-detection endpoint hits the same `https://openrouter.ai/api/v1/models` URL but was still reading without a cap.\n\n## Changes\n\n- Read the catalog body through the shared bounded reader `readResponseWithLimit` from `@openclaw/media-core/read-response-with-limit` (the exact helper #95103 uses), capping at `16 MiB` and cancelling the stream on overflow, then `JSON.parse` the bounded buffer.\n- Added a local `OPENROUTER_MODELS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024` constant, aligned with the 16 MiB `PROVIDER_*_RESPONSE_MAX_BYTES` convention used elsewhere in `src/agents`.\n- Malformed-JSON and non-OK behavior is unchanged: parse failures are still caught by the existing `catch` and logged via `log.warn`, and the existing `cancelUnreadResponseBody` finally-cancel still runs.\n- No new abstraction — reuses the existing media-core helper, symmetric with #95103/#95108.\n\n## Real behavior proof\n\n**What I ran:** the existing Vitest suite for this module (driving the real exported `loadOpenRouterModelCapabilities` → `doFetch` → `readResponseWithLimit` → `writeSqliteCache`/`readSqliteCache` against a real on-disk SQLite state dir), a standalone `tsx` proof driving the real `readResponseWithLimit` helper, `oxlint`, and a `tsc --noEmit` project typecheck.\n\n**Before (pre-fix, negative control):** with `await response.json()`, an oversized streamed body is drained completely:\n```\nnegative-control: pre-fix await response.json() DRAINS the whole oversized body\n  :: pulls=33 (read all 32 chunks) cancels=0 (no cap, no early cancel)\n```\n\n**After (fixed):** the bounded read stops at the first oversized chunk and cancels the stream:\n```\nfixed: oversized stream throws bounded overflow :: \"OpenRouter models response too large: 16777217 bytes\"\nfixed: stream cancelled after overflow (not drained) :: cancels=1\nfixed: stopped after the first oversized chunk (1 pull, not 32) :: pulls=1 of up to 32 available\nfixed: chunked under-cap body reassembles + parses correctly :: id=acme/chunked-model pulls=11 (multi-chunk reassembly)\n```\n\n**SQLite read-back (hardest boundary):** the new Vitest case `round-trips a chunked under-cap catalog through the SQLite cache` streams the catalog across many small chunks, lets the bounded reader reassemble it, and proves a *fresh module import* reads the parsed capabilities back from the cross-disk SQLite cache identical to the source — with `fetch` called exactly once (no refetch). New Vitest case `bounds an oversized streamed OpenRouter catalog instead of buffering it whole` proves the live `doFetch` path cancels the body (`cancel` called once, pull count ≤ 2) and leaves no poisoned cache entry.\n\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/openrouter-model-capabilities.test.ts --run` → **9 passed (9)** (7 existing + 2 new)\n- `tsx proof.mts` → **ALL CHECKS PASSED** (fixed stops early + throws bounded overflow; negative control drains everything)\n- `oxlint` on both changed files → **exit 0, no findings**\n- `tsc --noEmit -p tsconfig.json` → **exit 0** (no type errors)\n\n**Label**: trusted\n\nThis change was AI-assisted.\n",
-        "branch": "fix/bound-openrouter-model-capabilities",
-        "head_sha": "acb62c5c9193dbea16445604d8b35340d09739aa",
-        "author": "alix-007",
+        "title": "fix(telegram): explain disabled plugin approval failures",
+        "body": "## What Problem This Solves\nFixes #95800.\n\nTelegram-originated plugin approvals, such as `skill_workshop apply`, could fail with a generic no-route or timeout message when Telegram native approvals were disabled because `channels.telegram.execApprovals.approvers` and `commands.ownerAllowFrom` were not configured. The Telegram setup guidance already existed, but the agent-facing approval failure did not surface it.\n\n## Why This Change Was Made\nThe approval hook already receives the turn source. When a plugin approval fails with no route or times out, it now checks the initiating plugin approval surface. If that surface is disabled and provides native approval setup text, the blocked tool reason appends that guidance instead of only saying no route or timeout.\n\nThis keeps the current approver-gating model intact and does not auto-route or enable Telegram approvals.\n\n## User Impact\nTelegram-only operators get an actionable explanation telling them to use Web UI or terminal UI for now, or configure `channels.telegram.execApprovals.approvers` / `commands.ownerAllowFrom`, instead of a silent timeout-shaped denial.\n\n## Evidence\n- Behavior proof, focused on the reported approval path: `OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs src/agents/agent-tools.before-tool-call.e2e.test.ts extensions/telegram/src/approval-native.test.ts extensions/telegram/src/exec-approvals.test.ts src/gateway/server-methods/plugin-approval.test.ts src/infra/plugin-approval-forwarder.test.ts` passed 4 Vitest shards, 168 tests.\n- The new agent approval coverage asserts both failed routes now include the Telegram setup guidance:\n  - no-route: `Plugin approval unavailable (no approval route)` plus `Approve it from the Web UI or terminal UI for now... Configure channels.telegram.execApprovals.approvers or commands.ownerAllowFrom.`\n  - timeout: `Approval timed out` plus the same Telegram setup guidance.\n- Existing Telegram native approval availability, exec approval configuration, gateway plugin approval, and approval-forwarder tests still pass in the same focused run.\n- `git diff --check` passed.\n- GitHub PR checks currently report no failing checks; the draft PR's broad CI lanes are skipped, and Real behavior proof is passing.\n- Autoreview was attempted once but blocked before review by local Codex config: `Error loading config.toml: unknown variant priority, expected fast or flex in service_tier`.\n\n## Notes\n- The first push to `openclaw/openclaw` failed with GitHub 403, so this draft PR is from the `MonkeyLeeT/openclaw` fork with maintainer edits enabled.\n- Issue assignment to `@steipete` also failed from this token with GitHub 403.\n- Remote Crabbox/Testbox proof could not start from this machine: Blacksmith CLI was missing, Azure was not configured, and AWS broker login was missing. The focused local behavior proof above is the available proof for this draft.\n",
+        "branch": "codex/95800-telegram-approval-feedback",
+        "head_sha": "193c0449123007e04d8102fcfb9d834249392769",
+        "author": "monkeyleet",
         "labels": [
           "agents",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "size: S"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/openrouter-model-capabilities.test.ts",
-            "additions": 98,
+            "path": "src/agents/agent-tools.before-tool-call.e2e.test.ts",
+            "additions": 90,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/openrouter-model-capabilities.ts",
-            "additions": 16,
-            "deletions": 3,
+            "path": "src/agents/agent-tools.before-tool-call.ts",
+            "additions": 46,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 114,
-        "deletions": 3,
+        "additions": 136,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95420",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95420.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95973",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95973.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 91,
-          "gatingTotal": 86,
+          "total": 89,
+          "gatingTotal": 84,
           "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 23,
+            "SUCCESS": 63,
+            "SKIPPED": 24,
+            "FAILURE": 1,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2554,
+    "total_ms": 5157,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 426
+        "ms": 592
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1433
+        "ms": 1802
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -375,7 +170,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 671
+        "ms": 2735
       },
       {
         "name": "append_ledger",
