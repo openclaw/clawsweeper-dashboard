@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T20:53:01.094Z",
+  "generated_at": "2026-06-23T20:54:45.480Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T17:52:59.079Z",
+  "since": "2026-06-23T17:54:45.093Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96027
+    96032
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,224 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96027:4783342515:2026-06-23T20:52:55Z:clawsweeper_needs_human",
-      "comment_id": "4783342515",
-      "comment_version_key": "4783342515:2026-06-23T20:52:55Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96027#issuecomment-4783342515",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96027,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T20:48:30Z",
-      "comment_updated_at": "2026-06-23T20:52:55Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- No automated repair is needed; the remaining maintainer action is to accept the shared 16 MiB compatibility tradeoff and merge when normal gates are satisfied.; Cleared: The diff hardens an existing untrusted provider response path and does not add dependencies, workflows, secrets handling, or new code execution surfaces. (sha=8876908d1c11b724f061d26b8c80c6ba61ebf9bb)",
-      "review_summary": "The PR replaces Ollama `/api/tags` and `/api/show` `response.json()` reads with `readProviderJsonResponse` and adds a regression test for oversized discovery streams failing soft and canceling early.\n\nPR surface: Source +4, Tests +55. Total +59 across 2 files.\n\nReproducibility: yes. Current main source shows direct `response.json()` on both Ollama discovery success bodies, and the PR body gives a concrete local streaming-server proof path against the real exported functions.",
-      "review_followup": "- No automated repair is needed; the remaining maintainer action is to accept the shared 16 MiB compatibility tradeoff and merge when normal gates are satisfied.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "8876908d1c11b724f061d26b8c80c6ba61ebf9bb",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(ollama): bound model-discovery JSON response reads",
-        "body": "## What Problem This Solves\n\n`extensions/ollama/src/provider-models.ts` discovers Ollama models by calling `/api/tags`\n(`fetchOllamaModels`) and `/api/show` (`queryOllamaModelShowInfo`), and parsed both responses with\nan **unbounded** `await response.json()`. The Ollama base URL is user-supplied and can point at a\nremote/cloud endpoint (`https://ollama.com`, a self-hosted box, or a host reachable via SSRF), so\nthese discovery responses are untrusted input. A hostile or buggy server can return a\n`Content-Length`-less JSON body that streams forever (or many MiB), and `response.json()` buffers the\nentire payload before parsing — driving the provider model-discovery path into memory pressure / OOM\nor hanging the discovery call. This is not a cosmetic cleanup: the read sits on the provider\nonboarding/refresh path that runs against an attacker-influenceable endpoint.\n\n## Changes\n\n- Add a `OLLAMA_DISCOVERY_JSON_MAX_BYTES` cap (16 MiB, aligned with the merged provider-JSON\n  bound-stream PRs #95218 / #95418 / #95420) and a small `readOllamaDiscoveryJson<T>(response, label)`\n  helper that reads the success body via `readResponseWithLimit` from `@openclaw/media-core`\n  (re-exported through `openclaw/plugin-sdk/response-limit-runtime`, the same path style this module\n  already uses for `ssrf-runtime`), cancelling the stream on overflow, then `JSON.parse`s the decoded\n  bytes. No new abstraction — it reuses the shared bounded reader.\n- Route both `/api/tags` (`fetchOllamaModels`) and `/api/show` (`queryOllamaModelShowInfo`) through\n  the bounded reader instead of `await response.json()`.\n- **Fail-soft semantics preserved**: the overflow throw is caught by the existing discovery error\n  handling, so a capped endpoint degrades gracefully — `/api/tags` returns\n  `{ reachable: false, models: [] }` and `/api/show` returns `{}`. No OOM, no hang.\n\n## Real behavior proof\n\n- **Behavior addressed**: Unbounded `await response.json()` on the two Ollama discovery reads lets an\n  untrusted endpoint stream an unbounded JSON body into memory.\n- **Real environment tested**: A real local `node:http` server (`createServer`) bound to\n  `127.0.0.1`, returning a `Content-Length`-less body that streams 64 KiB chunks until the socket is\n  torn down (would total ~64 MiB, 4× the 16 MiB cap). The **real exported** `fetchOllamaModels` and\n  `queryOllamaModelShowInfo` were driven against it (through the real `fetchWithSsrFGuard` dispatcher,\n  with the loopback allowed by the existing `buildOllamaBaseUrlSsrFPolicy`).\n- **Exact steps**: `node --import tsx proof.mts` — start server → drive the real functions →\n  read back fail-soft results + the server's observed bytes-sent / socket-abort counters → run a\n  negative control (raw unbounded read of the same endpoint) → flip the server to small valid bodies\n  and re-drive the real functions.\n- **Evidence after fix**: `readResponseWithLimit` threw `... exceeds 16777216 bytes`; the server\n  observed the socket aborted after ~17–19 MiB (≪ the ~64 MiB it would have sent), confirming the\n  stream was **cancelled**, not drained. `fetchOllamaModels` returned `{ reachable: false, models: [] }`\n  and `queryOllamaModelShowInfo` returned `{}` (fail-soft intact).\n- **Observed result (all 8 checks PASS)**:\n  - `readResponseWithLimit throws bounded error on unbounded body` → threw, msg `exceeds 16777216 bytes`\n  - `stream cancelled: server saw socket abort` → aborted=true, bytesSent=19333120 (< 33554432)\n  - `fetchOllamaModels fail-soft on overflow` → `{ reachable:false, models:[] }`\n  - `queryOllamaModelShowInfo fail-soft on overflow` → `{}`\n  - `show stream cancelled` → aborted=true, bytesSent=17825792\n  - `negative control: unbounded read buffers PAST the 16 MiB cap` → buffered 16799524 bytes (> cap)\n    — proves the cap is load-bearing (without it the body keeps accumulating past 16 MiB).\n  - `happy path: small /api/tags still parsed` → `reachable:true, 2 models`\n  - `happy path: small /api/show still parsed` → `contextWindow=65536`\n- **What was not tested**: Did not exercise a live external Ollama Cloud endpoint (`ollama.com`); the\n  untrusted-body behavior is fully reproduced with a local streaming server, which is the same\n  transport path. The proof script is not committed.\n\n## Evidence\n\n```\n[proof] local server on http://127.0.0.1:46829, cap=16777216 bytes, would-stream≈67108864 bytes\n\nPASS  readResponseWithLimit throws bounded error on unbounded body :: threw=true msg=\"bounded: exceeds 16777216 bytes\"\nPASS  stream cancelled: server saw socket abort before sending the full ~64MiB :: aborted=true bytesSent=19333120 (<33554432)\nPASS  fetchOllamaModels fail-soft on overflow (reachable:false, models:[]) :: {\"reachable\":false,\"models\":[]}\nPASS  queryOllamaModelShowInfo fail-soft on overflow ({}) :: {}\nPASS  show stream cancelled: server saw socket abort, bytes ≪ full body :: aborted=true bytesSent=17825792\nPASS  negative control: unbounded read buffers PAST the 16MiB cap (cap is load-bearing) :: buffered=16799524 bytes (>16777216)\nPASS  happy path: small /api/tags still parsed (2 models) :: {\"reachable\":true,\"models\":[{\"name\":\"llama3:8b\"},{\"name\":\"qwen3:4b\"}]}\nPASS  happy path: small /api/show still parsed (contextWindow=65536) :: contextWindow=65536\n\n[proof] ALL PASS\n```\n\nRegression suite + checks (worktree on `upstream/main`):\n- `node scripts/run-vitest.mjs extensions/ollama/src/provider-models.test.ts --run` → **16/16 passed**\n- `oxlint extensions/ollama/src/provider-models.ts` → exit 0, clean\n- `tsgo -p tsconfig.extensions.json` → no errors in `extensions/ollama` (only pre-existing,\n  unrelated `extensions/qa-lab` `crabline` module-resolution failures present on untouched main)\n\nThis is the symmetric counterpart to the #95103 / #95108 response-limit campaign, applying the same\n`@openclaw/media-core` bounded reader to the two Ollama provider-discovery JSON reads.\n\n**Label**: security\n\n_AI-assisted._\n",
-        "branch": "fix/bound-ollama-model-discovery",
-        "head_sha": "8876908d1c11b724f061d26b8c80c6ba61ebf9bb",
-        "author": "alix-007",
-        "labels": [
-          "size: S",
-          "proof: sufficient",
-          "extensions: ollama",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/ollama/src/provider-models.test.ts",
-            "additions": 55,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/ollama/src/provider-models.ts",
-            "additions": 7,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 62,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96027",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96027.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 88,
-          "gatingTotal": 83,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 55,
-            "SKIPPED": 32
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96027:4778162679:2026-06-23T10:19:10Z:re_review",
-      "comment_id": "4778162679",
-      "comment_version_key": "4778162679:2026-06-23T10:19:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96027#issuecomment-4778162679",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96027,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T10:19:10Z",
-      "comment_updated_at": "2026-06-23T10:19:10Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(ollama): bound model-discovery JSON response reads",
-        "body": "## What Problem This Solves\n\n`extensions/ollama/src/provider-models.ts` discovers Ollama models by calling `/api/tags`\n(`fetchOllamaModels`) and `/api/show` (`queryOllamaModelShowInfo`), and parsed both responses with\nan **unbounded** `await response.json()`. The Ollama base URL is user-supplied and can point at a\nremote/cloud endpoint (`https://ollama.com`, a self-hosted box, or a host reachable via SSRF), so\nthese discovery responses are untrusted input. A hostile or buggy server can return a\n`Content-Length`-less JSON body that streams forever (or many MiB), and `response.json()` buffers the\nentire payload before parsing — driving the provider model-discovery path into memory pressure / OOM\nor hanging the discovery call. This is not a cosmetic cleanup: the read sits on the provider\nonboarding/refresh path that runs against an attacker-influenceable endpoint.\n\n## Changes\n\n- Add a `OLLAMA_DISCOVERY_JSON_MAX_BYTES` cap (16 MiB, aligned with the merged provider-JSON\n  bound-stream PRs #95218 / #95418 / #95420) and a small `readOllamaDiscoveryJson<T>(response, label)`\n  helper that reads the success body via `readResponseWithLimit` from `@openclaw/media-core`\n  (re-exported through `openclaw/plugin-sdk/response-limit-runtime`, the same path style this module\n  already uses for `ssrf-runtime`), cancelling the stream on overflow, then `JSON.parse`s the decoded\n  bytes. No new abstraction — it reuses the shared bounded reader.\n- Route both `/api/tags` (`fetchOllamaModels`) and `/api/show` (`queryOllamaModelShowInfo`) through\n  the bounded reader instead of `await response.json()`.\n- **Fail-soft semantics preserved**: the overflow throw is caught by the existing discovery error\n  handling, so a capped endpoint degrades gracefully — `/api/tags` returns\n  `{ reachable: false, models: [] }` and `/api/show` returns `{}`. No OOM, no hang.\n\n## Real behavior proof\n\n- **Behavior addressed**: Unbounded `await response.json()` on the two Ollama discovery reads lets an\n  untrusted endpoint stream an unbounded JSON body into memory.\n- **Real environment tested**: A real local `node:http` server (`createServer`) bound to\n  `127.0.0.1`, returning a `Content-Length`-less body that streams 64 KiB chunks until the socket is\n  torn down (would total ~64 MiB, 4× the 16 MiB cap). The **real exported** `fetchOllamaModels` and\n  `queryOllamaModelShowInfo` were driven against it (through the real `fetchWithSsrFGuard` dispatcher,\n  with the loopback allowed by the existing `buildOllamaBaseUrlSsrFPolicy`).\n- **Exact steps**: `node --import tsx proof.mts` — start server → drive the real functions →\n  read back fail-soft results + the server's observed bytes-sent / socket-abort counters → run a\n  negative control (raw unbounded read of the same endpoint) → flip the server to small valid bodies\n  and re-drive the real functions.\n- **Evidence after fix**: `readResponseWithLimit` threw `... exceeds 16777216 bytes`; the server\n  observed the socket aborted after ~17–19 MiB (≪ the ~64 MiB it would have sent), confirming the\n  stream was **cancelled**, not drained. `fetchOllamaModels` returned `{ reachable: false, models: [] }`\n  and `queryOllamaModelShowInfo` returned `{}` (fail-soft intact).\n- **Observed result (all 8 checks PASS)**:\n  - `readResponseWithLimit throws bounded error on unbounded body` → threw, msg `exceeds 16777216 bytes`\n  - `stream cancelled: server saw socket abort` → aborted=true, bytesSent=19333120 (< 33554432)\n  - `fetchOllamaModels fail-soft on overflow` → `{ reachable:false, models:[] }`\n  - `queryOllamaModelShowInfo fail-soft on overflow` → `{}`\n  - `show stream cancelled` → aborted=true, bytesSent=17825792\n  - `negative control: unbounded read buffers PAST the 16 MiB cap` → buffered 16799524 bytes (> cap)\n    — proves the cap is load-bearing (without it the body keeps accumulating past 16 MiB).\n  - `happy path: small /api/tags still parsed` → `reachable:true, 2 models`\n  - `happy path: small /api/show still parsed` → `contextWindow=65536`\n- **What was not tested**: Did not exercise a live external Ollama Cloud endpoint (`ollama.com`); the\n  untrusted-body behavior is fully reproduced with a local streaming server, which is the same\n  transport path. The proof script is not committed.\n\n## Evidence\n\n```\n[proof] local server on http://127.0.0.1:46829, cap=16777216 bytes, would-stream≈67108864 bytes\n\nPASS  readResponseWithLimit throws bounded error on unbounded body :: threw=true msg=\"bounded: exceeds 16777216 bytes\"\nPASS  stream cancelled: server saw socket abort before sending the full ~64MiB :: aborted=true bytesSent=19333120 (<33554432)\nPASS  fetchOllamaModels fail-soft on overflow (reachable:false, models:[]) :: {\"reachable\":false,\"models\":[]}\nPASS  queryOllamaModelShowInfo fail-soft on overflow ({}) :: {}\nPASS  show stream cancelled: server saw socket abort, bytes ≪ full body :: aborted=true bytesSent=17825792\nPASS  negative control: unbounded read buffers PAST the 16MiB cap (cap is load-bearing) :: buffered=16799524 bytes (>16777216)\nPASS  happy path: small /api/tags still parsed (2 models) :: {\"reachable\":true,\"models\":[{\"name\":\"llama3:8b\"},{\"name\":\"qwen3:4b\"}]}\nPASS  happy path: small /api/show still parsed (contextWindow=65536) :: contextWindow=65536\n\n[proof] ALL PASS\n```\n\nRegression suite + checks (worktree on `upstream/main`):\n- `node scripts/run-vitest.mjs extensions/ollama/src/provider-models.test.ts --run` → **16/16 passed**\n- `oxlint extensions/ollama/src/provider-models.ts` → exit 0, clean\n- `tsgo -p tsconfig.extensions.json` → no errors in `extensions/ollama` (only pre-existing,\n  unrelated `extensions/qa-lab` `crabline` module-resolution failures present on untouched main)\n\nThis is the symmetric counterpart to the #95103 / #95108 response-limit campaign, applying the same\n`@openclaw/media-core` bounded reader to the two Ollama provider-discovery JSON reads.\n\n**Label**: security\n\n_AI-assisted._\n",
-        "branch": "fix/bound-ollama-model-discovery",
-        "head_sha": "8876908d1c11b724f061d26b8c80c6ba61ebf9bb",
-        "author": "alix-007",
-        "labels": [
-          "size: S",
-          "proof: sufficient",
-          "extensions: ollama",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/ollama/src/provider-models.test.ts",
-            "additions": 55,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/ollama/src/provider-models.ts",
-            "additions": 7,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 62,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96027",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96027.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 88,
-          "gatingTotal": 83,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 55,
-            "SKIPPED": 32
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2224,
+    "total_ms": 702,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 324
+        "ms": 378
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1674
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -254,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 198
+        "ms": 316
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
