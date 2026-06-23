@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T09:29:24.305Z",
-  "repo": "openclaw/mcporter",
+  "generated_at": "2026-06-23T09:29:51.933Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T06:29:22.378Z",
+  "since": "2026-06-23T06:29:51.161Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4777753018
   ],
-  "status_comment_id": 4777753483,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,20 +33,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/mcporter:215:4777753018:2026-06-23T09:28:12Z:re_review",
-      "comment_id": "4777753018",
-      "comment_version_key": "4777753018:2026-06-23T09:28:12Z",
-      "comment_url": "https://github.com/openclaw/mcporter/pull/215#issuecomment-4777753018",
-      "repo": "openclaw/mcporter",
-      "target_branch": "main",
-      "issue_number": 215,
-      "author": "badmoo",
-      "author_id": 53557260,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-23T09:28:12Z",
-      "comment_updated_at": "2026-06-23T09:28:12Z",
-      "status_comment_id": 4777753483,
-      "trigger": "mention",
+      "idempotency_key": "comment-router:openclaw/openclaw:93207:4777746122:2026-06-23T09:27:28Z:re_review",
+      "comment_id": "4777746122",
+      "comment_version_key": "4777746122:2026-06-23T09:27:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93207#issuecomment-4777746122",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93207,
+      "author": "amknight",
+      "author_id": 15041791,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-06-23T09:27:28Z",
+      "comment_updated_at": "2026-06-23T09:27:28Z",
+      "status_comment_id": null,
+      "trigger": "slash",
       "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
@@ -62,102 +62,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-23T09:29:25.323Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 215
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-23T09:29:26.540Z",
-          "response_comment_id": "4777753483",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: flush stdout before forced exit to avoid 64KB pipe truncation",
-        "body": "## Summary\n\nFixes #214.\n\nLarge command output piped to another process was silently truncated at the kernel pipe buffer size (~64KB). Writing the same output to a file (`> out.json`) produced the complete result.\n\n### Root cause\n\nAfter a command completes, `closeRuntimeAfterCommand()` (`src/cli.ts`) schedules a forced `process.exit()` ~50ms later (force-exit is on by default), **without waiting for `stdout` to drain**. On POSIX, writes to a pipe are **asynchronous** — `console.log(JSON.stringify(...))` only enqueues the data in libuv's write buffer. Once the kernel pipe buffer (~64KB) is full, the remaining bytes stay queued in libuv; the forced `process.exit()` then discards them. File writes are synchronous, which is why `> file` was unaffected.\n\n> The existing `FORCE_EXIT_GRACE_MS = 50` (from #145 / #151) only *delays* the exit by a fixed window; it does not wait for the buffer to actually drain, so outputs larger than the pipe buffer were still truncated.\n\n## Fix\n\nFlush `stdout` before the forced exit, **bounded by a fallback deadline** so a consumer that keeps stdout open but never reads cannot block the exit indefinitely (preserving the anti-hang guarantee). No-op for TTY/file stdout, where writes are synchronous.\n\n```ts\nconst STDOUT_FLUSH_TIMEOUT_MS = 2000;\n\nconst scheduleForcedExit = () => {\n  if (shouldForceExit) {\n    setTimeout(() => {\n      let exited = false;\n      const exit = () => {\n        if (exited) return;\n        exited = true;\n        process.exit(process.exitCode ?? 0);\n      };\n      const fallback = setTimeout(exit, STDOUT_FLUSH_TIMEOUT_MS);\n      fallback.unref?.();\n      process.stdout.write('', () => {\n        clearTimeout(fallback);\n        exit();\n      });\n    }, FORCE_EXIT_GRACE_MS);\n  }\n};\n```\n\n## Behavior proof\n\nA `large-output` stdio MCP server returns a ~200KB text result. Running through a delayed pipe reader (`| (sleep 0.5; cat) | wc -c`) vs a file redirect:\n\n```\n=== BEFORE FIX (src/cli.ts @ origin/main) ===\n  > file (redirect)        : 200074 bytes\n  | (sleep 0.5; cat)|wc -c :  65536 bytes   <- TRUNCATED at the pipe buffer\n\n=== AFTER FIX ===\n  > file (redirect)        : 200074 bytes\n  | (sleep 0.5; cat)|wc -c : 200074 bytes   <- COMPLETE (matches file)\n```\n\nStalled-reader (anti-hang) check: with stdout piped to a consumer that keeps the fd open but never reads, the CLI still force-exits via the fallback deadline in ~2.25s (code 0) instead of hanging.\n\n## Tests\n\nAdds `tests/cli-stdout-pipe-truncation.integration.test.ts` (POSIX-only, gated with `describe.skipIf(process.platform === 'win32')` since it relies on `sh`/`sleep`/`cat`):\n\n- `does not truncate large output when stdout is a pipe` — asserts the piped output matches the complete file output byte-for-byte (fails without the fix at `65536`).\n- `still force-exits when stdout is piped to a consumer that never reads` — spawns the CLI with a paused (non-reading) stdout consumer and asserts the process still exits well within the timeout.\n\nGreen gate: `build`, `typecheck`, `lint:oxlint`, `oxfmt --check` all pass; existing `tests/cli-force-exit-behavior.integration.test.ts` still passes.\n",
-        "branch": "fix/stdout-pipe-truncation-on-forced-exit",
-        "head_sha": "d083a017a187aa37406479bc09b9102319cff50c",
-        "author": "badmoo",
-        "labels": [
-          "P2",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author",
-          "proof: sufficient",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility"
-        ],
-        "files": [
-          {
-            "path": "src/cli.ts",
-            "additions": 37,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "tests/cli-stdout-pipe-truncation.integration.test.ts",
-            "additions": 198,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 235,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-mcporter-215",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-mcporter-215.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 0,
-          "gatingTotal": 0,
-          "counts": {},
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4909,
+    "total_ms": 2724,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 636
+        "ms": 761
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1277
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -165,11 +93,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2970
+        "ms": 1952
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
