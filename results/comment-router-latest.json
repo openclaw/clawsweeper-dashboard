@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T22:10:53.670Z",
+  "generated_at": "2026-06-23T22:12:41.810Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T19:10:51.474Z",
+  "since": "2026-06-23T19:12:41.505Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96083
+    96088
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,142 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96083:4783838272:2026-06-23T22:10:48Z:clawsweeper_auto_repair",
-      "comment_id": "4783838272",
-      "comment_version_key": "4783838272:2026-06-23T22:10:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96083#issuecomment-4783838272",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96083,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T21:58:13Z",
-      "comment_updated_at": "2026-06-23T22:10:48Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=5b3acc1e3448fffe8e0602dc67233a85d841a2b9)",
-      "review_summary": "The PR adds persistent main-session restart-recovery attempt/quarantine fields, increments them at restart mark sites, quarantines over-budget rows, clears the budget on successful lifecycle completion, and adds focused tests plus reserved slot keys.\n\nPR surface: Source +102, Tests +135. Total +237 across 6 files.\n\nReproducibility: yes. at source level: current main selects running main-session rows with abortedLastRun=true and has no persisted cross-boot attempt ceiling, matching https://github.com/openclaw/openclaw/issues/95750. I did not run the full Telegram/systemd production loop in this read-only review.",
-      "review_followup": "- [P1] Human review/contributor action is needed because missing real behavior proof cannot be supplied by automation and the code still needs the guard-order fix before merge.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "5b3acc1e3448fffe8e0602dc67233a85d841a2b9",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): bound cross-boot restart-recovery with a persistent retry budget",
-        "body": "## What Problem This Solves\n\nCloses #95750.\n\nWhen a channel main-session turn wedges and a restart marks the entry `abortedLastRun: true`, the next boot's recovery pass calls back into the same resume path **unconditionally**. The in-process orchestrator (`MAX_RECOVERY_RETRIES = 3`) only bounds retries *within a single process invocation* — the counter is never persisted, so each fresh boot is a fresh retry budget. The result is a deterministic death loop until `systemd`'s `StartLimitBurst` is exhausted and an operator must intervene.\n\nThis adds a **persistent, cross-boot retry budget** to main-session restart recovery so a genuinely wedged session can no longer death-loop the gateway across reboots. A session that can't be safely resumed is **quarantined after a bounded number of attempts** (transcript preserved) instead of re-triggering recovery on every boot.\n\n## Changes\n\n- **`SessionEntry`** gains `restartRecoveryAttempts`, `restartRecoveryQuarantinedAt`, `restartRecoveryQuarantineReason` (all optional, backwards compatible).\n- **Mark phase** (`markRestartAbortedMainSessions`, the startup-orphan scan, the from-locks scan): increment `restartRecoveryAttempts` — but **only on a fresh interruption** (when the entry was not already `abortedLastRun`), so re-marking within one boot does not double-charge the budget.\n- **Recovery gate** (`recoverStore`): if `restartRecoveryAttempts > MAX_RECOVERY_RETRIES`, **quarantine** the entry — clear `abortedLastRun`, record `restartRecoveryQuarantinedAt` + reason `exceeded_restart_retry_budget`, WARN log — instead of resuming. The transcript pointer is preserved so the session is not lost; a future user-driven inbound can still use it.\n- **Budget reset on progress**: a successful run (`status: \"done\"`) clears `restartRecoveryAttempts` + quarantine via `derivePersistedSessionLifecyclePatch`, so an unrelated future interruption gets a fresh allowance.\n\nScoped to the **main-session** recovery surface. The subagent-orphan-recovery path shares the same architecture; that surface is a documented follow-up to keep this diff focused and reviewable.\n\n## Behavioral contract\n\n| Condition | Before | After |\n|---|---|---|\n| Wedged entry, 1st–3rd restart | Re-marked, resumed | Re-marked, resumed (`attempts` 1→3) |\n| Same entry, 4th restart | Re-marked, resumed (loop) | **Quarantined**; `abortedLastRun=false`, `quarantinedAt` set, WARN logged |\n| Successful run on the entry | n/a | budget + quarantine cleared |\n\n## Evidence\n\n**Behavior addressed:** an entry with `restartRecoveryAttempts: 4` (budget exceeded) must NOT be resumed; it must be quarantined with the transcript preserved.\n\n**Exact command run after the patch:**\n```\nnpx vitest run src/agents/main-session-restart-recovery.test.ts src/gateway/session-lifecycle-state.test.ts\n```\n\n**Captured output AFTER fix:**\n```\nTest Files  2 passed (2)\n     Tests  137 passed (137)\n```\n\nTargeted quarantine assertion:\n```\nnpx vitest run src/agents/main-session-restart-recovery.test.ts -t \"quarantine\" --project agents-core\n✓ agents-core ../../src/agents/main-session-restart-recovery.test.ts (38 tests | 37 skipped) 13ms\n      Tests  1 passed | 37 skipped (38)\n```\n\n**Regression tests (assert the NEW behavior, fail without the fix):**\n- `quarantines a wedged session once it exceeds the cross-boot recovery budget` — asserts `recovered:0, skipped:1`, no gateway resume call, `restartRecoveryQuarantineReason === \"exceeded_restart_retry_budget\"`, transcript pointer preserved.\n- `still resumes a wedged session while it is within the recovery budget` — `attempts:3` still resumes (boundary).\n- `increments restartRecoveryAttempts when marking a fresh interruption`.\n- `does not double-charge the budget when re-marking an already-aborted entry`.\n- `clears the restart-recovery budget + quarantine on a successful run` (lifecycle).\n\n**Type/format checks:** `npx tsc --noEmit` clean for the touched files; `oxfmt` applied.\n\n**What was NOT tested:** the subagent-orphan-recovery surface (out of scope, documented follow-up).\n",
-        "branch": "fix/95750-restart-recovery-cross-boot-budget",
-        "head_sha": "5b3acc1e3448fffe8e0602dc67233a85d841a2b9",
-        "author": "bartok9",
-        "labels": [
-          "gateway",
-          "agents",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/main-session-restart-recovery.test.ts",
-            "additions": 108,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/main-session-restart-recovery.ts",
-            "additions": 68,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/types.ts",
-            "additions": 16,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-lifecycle-state.test.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-lifecycle-state.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/session-entry-slot-keys.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 241,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96083",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96083.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 95,
-          "gatingTotal": 90,
-          "counts": {
-            "SUCCESS": 63,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2413,
+    "total_ms": 583,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 371
+        "ms": 292
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1810
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -176,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 201
+        "ms": 277
       },
       {
         "name": "append_ledger",
