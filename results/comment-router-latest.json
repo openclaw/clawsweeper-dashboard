@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T19:13:17.643Z",
+  "generated_at": "2026-06-23T19:14:22.922Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T16:13:17.322Z",
+  "since": "2026-06-23T16:14:21.400Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95967
+    89886
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,114 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89886:4613845934:2026-06-21T13:11:32Z:clawsweeper_needs_human",
+      "comment_id": "4613845934",
+      "comment_version_key": "4613845934:2026-06-21T13:11:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89886#issuecomment-4613845934",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 89886,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T15:10:03Z",
+      "comment_updated_at": "2026-06-21T13:11:32Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] No repair lane is needed; the open member-authored PR is already the fix candidate and has no discrete automated repair finding.; Cleared: The diff only changes context-engine source and tests, with no dependency, workflow, secret, packaging, lockfile, generated-code, or code-download surface. (sha=dbb14dfbb93eb7080ec1d761d81991148901184b)",
+      "review_summary": "The PR forwards `params.abortSignal` through `delegateCompactionToRuntime` into runtime compaction and adds delegate tests for forwarded and omitted signals.\n\nPR surface: Source +1, Tests +26. Total +27 across 2 files.\n\nReproducibility: yes. source-level reproduction is high confidence: current main passes a run abort signal into context-engine compaction and runtime compaction honors it if received, but `delegateCompactionToRuntime` drops it. I did not run the full live stop-button plus large-context scenario in this read-only review.",
+      "review_followup": "- [P2] No repair lane is needed; the open member-authored PR is already the fix candidate and has no discrete automated repair finding.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "dbb14dfbb93eb7080ec1d761d81991148901184b",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(context-engine): forward abortSignal through delegation bridge to runtime compaction",
+        "body": "### Summary\n\n- **Problem**: Issue #89868 reports that pressing stop during auto-compaction cancels the wait but allows the compaction LLM call to finish and write its result to the session. The next message sees a compacted session the user did not consent to (e.g. 239→4 messages), causing model confusion about ongoing work and instructions.\n- **Root Cause**: `delegateCompactionToRuntime` in `src/context-engine/delegate.ts` builds the `CompactEmbeddedAgentSessionDirect` params object without forwarding `params.abortSignal`. The `ContextEngine.compact()` public API (`types.ts:356`) and `CompactEmbeddedAgentSessionParams` (`compact.types.ts:91`) both carry `abortSignal?: AbortSignal`, and the runtime consumer (`compact.ts`) passes it to `compactWithSafetyTimeout` which honors it via a truthiness guard. The delegate bridge was introduced by PR #49061 and never wired this field, so every abort signal passed by the host to the public `compact()` contract was silently dropped at the bridge.\n- **Fix**: Add `abortSignal: params.abortSignal` to the `compactEmbeddedAgentSessionDirect` call in `delegateCompactionToRuntime`. The field is already part of `CompactEmbeddedAgentSessionParams` and the downstream runtime already handles `undefined` identically to omission, so no other change is needed.\n- **What changed**:\n  - `src/context-engine/delegate.ts` — one-line addition forwarding `params.abortSignal` to the runtime params object, placed after the `...runtimeContext` spread so a real caller signal always overrides any spread value.\n  - `src/context-engine/context-engine.test.ts` — two new tests: signal-forwarding verified with `toBe` reference identity; undefined-signal case confirmed to remain `undefined`.\n- **What did NOT change (scope boundary)**:\n  - The `delegateCompactionToRuntime` function signature is unchanged.\n  - `compactWithSafetyTimeout`, `compactEmbeddedAgentSessionDirect`, and all existing compaction paths are unchanged.\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - Gateway protocol unchanged.\n\n### Reproduction\n\n1. Start a session with enough context to trigger auto-compaction (~200K+ tokens).\n2. Wait for auto-compaction to begin (logs: `context overflow detected; attempting auto-compaction`).\n3. Press the stop button while the compaction LLM call is in-flight.\n4. **Before this PR**: abort signal cancels the wait but is dropped at the delegate bridge; the compaction LLM call runs to completion and writes its summary to the session file; the next turn sees a compacted session (e.g. 239→4 messages) and the model loses track of ongoing work and instructions.\n5. **After this PR**: abort signal is forwarded to `compactEmbeddedAgentSessionDirect`; when the signal fires, the runtime's `compactWithSafetyTimeout` honors it and the in-flight compaction is cancelled before it can write its result; the session remains in its pre-compaction state.\n\n### Real behavior proof\n\n**Behavior addressed (#89868)**: `delegateCompactionToRuntime` now forwards `params.abortSignal` to the runtime; when the caller's abort controller fires, the in-flight runtime compaction is cancelled instead of completing silently.\n\n**Real environment tested (Ubuntu Server Node 24, source-level — Vitest against the production `delegateCompactionToRuntime` function and the mocked `compactEmbeddedAgentSessionDirect` spy)**: the signal-forwarding test calls `delegateCompactionToRuntime` with a live `AbortController` signal and asserts `toBe` reference identity on the spy's received params. The spy intercept is the same one used by the existing delegate test at line 417, run under the same `beforeEach` mock-reset guard.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/context-engine/context-engine.test.ts` — 43 tests pass (41 pre-existing + 2 new). `pnpm exec oxlint src/context-engine/delegate.ts` clean. `pnpm format:check` clean.\n\n**Evidence after fix (Vitest output for the touched test file)**:\n\n```\nTests  43 passed (43)\n```\n\nThe two new tests cover: `delegateCompactionToRuntime forwards the caller abortSignal to the runtime (#89868)` and `delegateCompactionToRuntime passes undefined abortSignal when none supplied`.\n\n**Observed result after fix**: `requireCompactRuntimeParams(0).abortSignal` equals the caller's `controller.signal` by reference; without the fix the field is `undefined`.\n\n**What was not tested**: live stop-button + 200K-token compaction end-to-end gateway round-trip. The abort propagation from the delegate to the runtime's `compactWithSafetyTimeout` is exercised by existing safety-timeout tests; this PR closes the gap at the bridge entry point.\n\n**Repro confirmation**: the signal-forwarding test fails on the pre-patch tree — `compactRuntimeParams.abortSignal` is `undefined` — and passes with the single-line fix applied, confirming the bridge omission is the sole cause.\n\n### Risk / Mitigation\n\n- **Risk**: Signal forwarded when caller did not intend cancellation. **Mitigation**: `params.abortSignal` is `undefined` when the caller omits it; `compactWithSafetyTimeout` guards with `if (abortSignal) { ... }` so `undefined` is treated identically to the previous behavior where the field was absent.\n- **Risk**: `...runtimeContext` spread could carry a stale signal that overrides the caller's. **Mitigation**: `abortSignal: params.abortSignal` is placed after the spread, so the explicit caller value always wins.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] agents\n- [x] Context engine\n\n### Linked Issue/PR\n\nFixes #89868",
+        "branch": "fix/89868-delegate-abort-signal",
+        "head_sha": "ff5a439d762a9462cb4c8142bf10968973eeffcf",
+        "author": "openperf",
+        "labels": [
+          "size: XS",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/context-engine/context-engine.test.ts",
+            "additions": 26,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/context-engine/delegate.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 27,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89886",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89886.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 89,
+          "gatingTotal": 84,
+          "counts": {
+            "SUCCESS": 63,
+            "SKIPPED": 25,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 580,
+    "total_ms": 1775,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 313
+        "ms": 365
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1144
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +148,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 258
+        "ms": 242
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
