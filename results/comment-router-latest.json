@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T09:05:12.016Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-23T09:05:27.456Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T06:05:11.371Z",
+  "since": "2026-06-23T06:05:27.021Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95885
+    624
   ],
-  "comment_ids": [
-    4777517413
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,144 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:95885:4777517413:2026-06-23T09:02:55Z:re_review",
-      "comment_id": "4777517413",
-      "comment_version_key": "4777517413:2026-06-23T09:02:55Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95885#issuecomment-4777517413",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 95883,
-      "author": "anyech",
-      "author_id": 8743351,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T09:02:53Z",
-      "comment_updated_at": "2026-06-23T09:02:53Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: pass (sha=100c364cf617bd780fefe67b623a6964cf84cbbb); current checks are failing: build (windows-latest):FAILURE",
-      "review_summary": "The PR adds a bounded stdout/stderr flush before the CLI forced-exit timer and expands the force-exit integration test for JSON over 64 KiB plus cleanup-time EPIPE handling.\n\nReproducibility: yes. source-level: current main emits large CLI output through stdout and then schedules a forced hard exit without drain handling, matching the linked greater-than-64 KiB pipe reproduction. I did not run the live pipe reproduction in this read-only review.",
-      "review_followup": "- [P2] Needs maintainer selection between overlapping branches plus CI and timeout acceptance; there is no narrow automated repair from this read-only review.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "100c364cf617bd780fefe67b623a6964cf84cbbb",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Prevent repeated byte-triggered compactions",
-        "body": "## Summary\n\n- prevent repeated byte-triggered preflight compactions for the same active transcript when a previous byte-triggered compaction did not materially reduce the transcript below the configured threshold\n- record byte-triggered compaction retry state on `SessionEntry` so retries require the same threshold, the same active session file, and material new growth\n- preserve token-triggered preflight compaction behavior, including token compaction taking precedence when the byte retry is suppressed\n\n## What Problem This Solves\n\nWhen `agents.defaults.compaction.maxActiveTranscriptBytes` is configured, a byte-triggered preflight compaction can legitimately leave the active successor transcript above the threshold (for example when transcript rotation preserves branch/state history). Without retry hysteresis, the next turn can immediately trigger another byte-based preflight compaction, producing a repeated compaction loop.\n\nThis patch records the post-compaction active transcript size/file/threshold for byte-triggered compactions and suppresses another byte-triggered retry for that same active transcript until it grows materially. A retry is allowed when the active file changes, the threshold changes, or the transcript grows by at least `max(1 MiB, 10%)` from the previously recorded byte size.\n\nToken-triggered compaction remains unchanged.\n\n## Related\n\nAdjacent to #88188 because both involve `maxActiveTranscriptBytes` behavior, but this PR handles the opposite failure mode: byte-triggered preflight compaction firing repeatedly after a prior byte-triggered compaction leaves the active transcript above threshold.\n\n## Real setup tested\n\nSource-level regression validation in a clean upstream checkout on the current branch. No production runtime or private deployment state was used for PR validation.\n\n## Exact steps or command run after this patch\n\nFrom the repository checkout:\n\n```bash\nnode_modules/.bin/oxfmt --check \\\n  src/auto-reply/reply/agent-runner-memory.ts \\\n  src/auto-reply/reply/session-updates.ts \\\n  src/config/sessions/types.ts \\\n  src/plugins/session-entry-slot-keys.ts \\\n  src/auto-reply/reply/agent-runner-memory.test.ts \\\n  src/auto-reply/reply/session-updates.test.ts\n\ngit diff --check\n\nnode scripts/test-projects.mjs \\\n  src/auto-reply/reply/agent-runner-memory.test.ts -- --run\n\nnode scripts/test-projects.mjs \\\n  src/auto-reply/reply/session-updates.test.ts \\\n  src/auto-reply/reply/session-updates.lifecycle.test.ts -- --run\n\nnode scripts/run-tsgo.mjs \\\n  -p tsconfig.core.json \\\n  --incremental \\\n  --tsBuildInfoFile .artifacts/tsgo-cache/core-byteguard.tsbuildinfo\n```\n\n## Evidence\n\n- `agent-runner-memory.test.ts`: 53 tests passed\n- `session-updates.test.ts` + `session-updates.lifecycle.test.ts`: 5 tests passed\n- `tsgo` core project check passed\n- formatting check passed\n- diff whitespace check passed\n\nNew coverage includes:\n\n- first byte-threshold crossing still triggers preflight compaction\n- same active transcript + same threshold + no material growth suppresses repeated byte-triggered compaction\n- changed active session file does not suppress retry\n- changed threshold does not suppress retry\n- material transcript growth allows retry\n- token-triggered compaction still runs when byte retry is suppressed\n- rotated successor file and byte size are recorded after byte-triggered compaction\n- byte-triggered metadata is persisted through `incrementCompactionCount`\n- ordinary token compactions do not write byte-triggered retry metadata\n\n## Observed result after fix\n\nThe repeated byte-trigger retry condition is blocked for the same active transcript until there is material new growth, while token-triggered compaction and legitimate byte retries remain available.\n\n## What was not tested\n\n- No production runtime validation was performed for this PR.\n- This PR does not change successor transcript pruning semantics; it only prevents immediate retry loops when a byte-triggered compaction does not materially shrink the active transcript.\n- End-to-end UI notification behavior is not changed or tested here.\n",
-        "branch": "fix/auto-compact-byteguard-loop-20260622",
-        "head_sha": "bba688c7bc9de4aa9d511591a4b1a77b7ddacb34",
-        "author": "anyech",
-        "labels": [
-          "size: L"
-        ],
-        "files": [
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
-            "additions": 399,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.ts",
-            "additions": 139,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session-updates.test.ts",
-            "additions": 58,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session-updates.ts",
-            "additions": 42,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/types.ts",
-            "additions": 9,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/session-entry-slot-keys.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 651,
-        "deletions": 18,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95885",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95885.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build (windows-latest):FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "build (windows-latest):FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2943,
+    "total_ms": 755,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 633
+        "ms": 423
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1937
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -176,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2298
+        "ms": 321
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
