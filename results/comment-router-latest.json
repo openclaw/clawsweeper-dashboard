@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T18:38:57.921Z",
+  "generated_at": "2026-06-23T18:40:27.110Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T15:38:57.478Z",
+  "since": "2026-06-23T15:40:24.907Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95944
+    95729
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,222 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95729:4774852092:2026-06-23T18:40:21Z:clawsweeper_auto_repair",
+      "comment_id": "4774852092",
+      "comment_version_key": "4774852092:2026-06-23T18:40:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95729#issuecomment-4774852092",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95729,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-23T01:43:16Z",
+      "comment_updated_at": "2026-06-23T18:40:21Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=14ad61094de1e3d0831382e9afc72e85d465fa75)",
+      "review_summary": "The PR maps code-only structured OpenAI, Google-family, and Anthropic provider errors to failover reasons and adds focused regression tests.\n\nPR surface: Source +39, Tests +77. Total +116 across 2 files.\n\nReproducibility: yes. from source inspection: current main lacks these provider-native code-only mappings, and the runtime-kind classifier returns `empty_response` before structured code-only signals can be classified. I did not run tests because this review was read-only.",
+      "review_followup": "- [P2] The remaining blocker is a concrete owner-boundary repair that automation can attempt without choosing new product direction.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "14ad61094de1e3d0831382e9afc72e85d465fa75",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: classify provider code-only failover errors",
+        "body": "## Summary\n- Structured assistant errors that only carry an error `code` (no HTTP status, no body message) were falling through to `null` in the failover reason classifier, preventing model failover from working.\n- This fix extends `classifyFailoverReasonFromCode` with provider-owned code mappings for OpenAI, Google, and Anthropic, guarded by exact provider-id checks so OpenAI-compatible or gateway codes are not misclassified.\n- The adjacent `classifyProviderRuntimeFailureKind` classifier now treats structured code-only signals as real provider failures instead of reporting them as empty responses.\n- Scope boundary: this patch intentionally does NOT change any other provider's code mappings, does NOT change string-message-based classification, and does NOT add new exported functions.\n\n## Root Cause (full chain)\n\nSymptom: Code-only provider errors (e.g., Anthropic `API_ERROR`, Google `DEADLINE_EXCEEDED`, OpenAI `SERVER_ERROR`) cause failover to silently stop — the primary provider error is not recognized, so no fallback model is tried.\n\nLayer 1: `classifyFailoverReasonFromCode` receives the error `code` string but only matches generic codes like `RATE_LIMIT`, `OVERLOADED`, `INSUFFICIENT_QUOTA`, and a small set of Node timeout/network codes. Provider-native codes (`SERVER_ERROR` from OpenAI, `DEADLINE_EXCEEDED` from Google, `API_ERROR` from Anthropic) have no matching case → returns `null`.\n\nLayer 2: `classifyFailoverSignal` calls `classifyFailoverReasonFromCode` but gets `null` for these codes. Even though the code represents a transient failure, the classifier sees no reason and doesn't signal failover.\n\nLayer 3: Concurrently, `classifyProviderRuntimeFailureKind` checks `!message && typeof status !== \"number\"` and returns `\"empty_response\"` for code-only errors — treating structured provider errors as if no response was received at all.\n\nRoot cause: `classifyFailoverReasonFromCode` was provider-agnostic and could not distinguish which provider owned a given code. `SERVER_ERROR` could come from OpenAI (transient), a gateway (unknown), or any compatible provider — so the old code conservatively returned `null`. The fix adds provider-aware guards so each provider's contract codes map to the correct failover reason.\n\n## Fix\n- [errors.ts] `classifyFailoverReasonFromCode` now accepts a `provider` parameter and maps provider-owned codes: OpenAI `SERVER_ERROR` → `server_error`, `INSUFFICIENT_QUOTA` → `billing`; Google `UNAVAILABLE` → `overloaded`, `DEADLINE_EXCEEDED` → `timeout`, `INTERNAL` → `server_error`; Anthropic `RATE_LIMIT_ERROR` → `rate_limit`, `API_ERROR` → `timeout`.\n- [errors.ts] `classifyProviderRuntimeFailureKind` adds a `hasStructuredCodeSignal` guard so code-only errors are not misclassified as `empty_response`.\n- [errors.ts] `classifyFailoverSignal` passes `signal.provider` through to the updated `classifyFailoverReasonFromCode`.\n\n## Compatibility\n\n| Scenario | Before | After |\n|----------|--------|-------|\n| OpenAI SERVER_ERROR (code-only) | null → no failover | server_error → failover |\n| Google DEADLINE_EXCEEDED (code-only) | null → no failover | timeout → failover |\n| Anthropic API_ERROR (code-only) | null → no failover | timeout → failover |\n| Gateway/compatible provider UNAVAILABLE | null | null (unchanged — provider guard excludes it) |\n| Message-based classification | unchanged | unchanged |\n| `classifyProviderRuntimeFailureKind` with message + code | unchanged | unchanged |\n\n## Real behavior proof\n\n**Behavior addressed:** Code-only provider errors (structured assistant errors with only an error `code`) are now classified as specific failover reasons instead of returning `null` or `empty_response`.\n\n**Environment tested:** Node 22.22.0 on Linux x64, `node --import tsx` against production source at HEAD de94cb1f71.\n\n**Steps run after the patch:** Called `classifyAssistantFailoverReason` and `classifyProviderRuntimeFailureKind` from production source via `node --import tsx` with code-only error inputs across OpenAI, Google, Vertex, Antigravity, and Anthropic providers.\n\n**Evidence after fix:**\n\n```text\n=== classifyAssistantFailoverReason (code-only provider errors) ===\n\nOpenAI SERVER_ERROR        -> server_error\nOpenAI INSUFFICIENT_QUOTA  -> billing\nGoogle UNAVAILABLE         -> overloaded\nGoogle DEADLINE_EXCEEDED   -> timeout\nGoogle INTERNAL            -> server_error\nVertex DEADLINE_EXCEEDED   -> timeout\nAntigravity UNAVAILABLE    -> overloaded\nAnthropic RATE_LIMIT_ERROR -> rate_limit\nAnthropic API_ERROR        -> timeout\n\n--- Non-owned providers (should be null) ---\nGateway UNAVAILABLE               -> null\nOpenAI API_ERROR (not OpenAI-owned) -> null\nOpenAI-compatible INSUFFICIENT_QUOTA -> null\n\n=== classifyProviderRuntimeFailureKind ===\n\nGoogle DEADLINE_EXCEEDED + code, no msg -> timeout\nAnthropic RATE_LIMIT_ERROR + code, no msg -> rate_limit\nOpenAI INSUFFICIENT_QUOTA + code, no msg -> unclassified\nOpenAI SERVER_ERROR + code, no msg      -> unclassified\nNo code, no message                     -> empty_response\n```\n\n**Observed result after fix:** All 9 provider-owned code-only error codes are correctly classified as specific failover reasons. Non-owned providers (gateway, openai-compatible) correctly return `null`. The `empty_response` fix correctly upgrades code-only structured errors to `unclassified` for OpenAI codes and `timeout`/`rate_limit` for Google/Anthropic codes. Legacy empty-message-no-code case still returns `empty_response`.\n\n**What was not tested:** Live multi-model failover with real provider API errors was not exercised. Live gateway session with actual OAuth token rotation was not tested.\n\n## Regression Test Proof\n\n14 new regression tests (9 classification + 3 provider-guard + 5 runtime-kind) FAIL on `main` (without the fix) and all 160 tests PASS on the fix branch.\n\nBefore (errors.ts from main + test file from fix branch):\n\n```text\n FAIL  > classifyProviderRuntimeFailureKind > does not report code-only 'google' 'DEADLINE_EXCEEDED' failures as empty responses\n FAIL  > classifyProviderRuntimeFailureKind > does not report code-only 'google-vertex' 'DEADLINE_EXCEEDED' failures as empty responses\nAssertionError: expected 'empty_response' to be 'timeout'\n FAIL  > classifyProviderRuntimeFailureKind > does not report code-only 'anthropic' 'RATE_LIMIT_ERROR' failures as empty responses\nAssertionError: expected 'empty_response' to be 'rate_limit'\n FAIL  > classifyProviderRuntimeFailureKind > does not report code-only 'openai' 'INSUFFICIENT_QUOTA' failures as empty responses\n FAIL  > classifyProviderRuntimeFailureKind > does not report code-only 'openai' 'SERVER_ERROR' failures as empty responses\nAssertionError: expected 'empty_response' to be 'unclassified'\n      Tests  14 failed | 146 passed (160)\n```\n\nAfter (fix branch):\n\n```text\n      Tests  160 passed (160)\n```\n\n## Verification\n- `node scripts/run-vitest.mjs run src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts` — 160/160 passed\n- `node --import tsx` proof script calling production `classifyAssistantFailoverReason` and `classifyProviderRuntimeFailureKind` — all code-only codes produce correct reasons\n- Provider-guard verification: gateway, openai-compatible, and non-OpenAI-owned API_ERROR codes correctly return `null`\n- `git diff --check` passes\n",
+        "branch": "fix-provider-code-failover-reasons",
+        "head_sha": "14ad61094de1e3d0831382e9afc72e85d465fa75",
+        "author": "pick-cat",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 auth-provider",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts",
+            "additions": 77,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-helpers/errors.ts",
+            "additions": 44,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 121,
+        "deletions": 5,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95729",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95729.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "gatingTotal": 90,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 61,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95729:4775317641:2026-06-23T03:29:42Z:re_review",
+      "comment_id": "4775317641",
+      "comment_version_key": "4775317641:2026-06-23T03:29:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95729#issuecomment-4775317641",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95729,
+      "author": "Pick-cat",
+      "author_id": 266665499,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-23T03:29:42Z",
+      "comment_updated_at": "2026-06-23T03:29:42Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: classify provider code-only failover errors",
+        "body": "## Summary\n- Structured assistant errors that only carry an error `code` (no HTTP status, no body message) were falling through to `null` in the failover reason classifier, preventing model failover from working.\n- This fix extends `classifyFailoverReasonFromCode` with provider-owned code mappings for OpenAI, Google, and Anthropic, guarded by exact provider-id checks so OpenAI-compatible or gateway codes are not misclassified.\n- The adjacent `classifyProviderRuntimeFailureKind` classifier now treats structured code-only signals as real provider failures instead of reporting them as empty responses.\n- Scope boundary: this patch intentionally does NOT change any other provider's code mappings, does NOT change string-message-based classification, and does NOT add new exported functions.\n\n## Root Cause (full chain)\n\nSymptom: Code-only provider errors (e.g., Anthropic `API_ERROR`, Google `DEADLINE_EXCEEDED`, OpenAI `SERVER_ERROR`) cause failover to silently stop — the primary provider error is not recognized, so no fallback model is tried.\n\nLayer 1: `classifyFailoverReasonFromCode` receives the error `code` string but only matches generic codes like `RATE_LIMIT`, `OVERLOADED`, `INSUFFICIENT_QUOTA`, and a small set of Node timeout/network codes. Provider-native codes (`SERVER_ERROR` from OpenAI, `DEADLINE_EXCEEDED` from Google, `API_ERROR` from Anthropic) have no matching case → returns `null`.\n\nLayer 2: `classifyFailoverSignal` calls `classifyFailoverReasonFromCode` but gets `null` for these codes. Even though the code represents a transient failure, the classifier sees no reason and doesn't signal failover.\n\nLayer 3: Concurrently, `classifyProviderRuntimeFailureKind` checks `!message && typeof status !== \"number\"` and returns `\"empty_response\"` for code-only errors — treating structured provider errors as if no response was received at all.\n\nRoot cause: `classifyFailoverReasonFromCode` was provider-agnostic and could not distinguish which provider owned a given code. `SERVER_ERROR` could come from OpenAI (transient), a gateway (unknown), or any compatible provider — so the old code conservatively returned `null`. The fix adds provider-aware guards so each provider's contract codes map to the correct failover reason.\n\n## Fix\n- [errors.ts] `classifyFailoverReasonFromCode` now accepts a `provider` parameter and maps provider-owned codes: OpenAI `SERVER_ERROR` → `server_error`, `INSUFFICIENT_QUOTA` → `billing`; Google `UNAVAILABLE` → `overloaded`, `DEADLINE_EXCEEDED` → `timeout`, `INTERNAL` → `server_error`; Anthropic `RATE_LIMIT_ERROR` → `rate_limit`, `API_ERROR` → `timeout`.\n- [errors.ts] `classifyProviderRuntimeFailureKind` adds a `hasStructuredCodeSignal` guard so code-only errors are not misclassified as `empty_response`.\n- [errors.ts] `classifyFailoverSignal` passes `signal.provider` through to the updated `classifyFailoverReasonFromCode`.\n\n## Compatibility\n\n| Scenario | Before | After |\n|----------|--------|-------|\n| OpenAI SERVER_ERROR (code-only) | null → no failover | server_error → failover |\n| Google DEADLINE_EXCEEDED (code-only) | null → no failover | timeout → failover |\n| Anthropic API_ERROR (code-only) | null → no failover | timeout → failover |\n| Gateway/compatible provider UNAVAILABLE | null | null (unchanged — provider guard excludes it) |\n| Message-based classification | unchanged | unchanged |\n| `classifyProviderRuntimeFailureKind` with message + code | unchanged | unchanged |\n\n## Real behavior proof\n\n**Behavior addressed:** Code-only provider errors (structured assistant errors with only an error `code`) are now classified as specific failover reasons instead of returning `null` or `empty_response`.\n\n**Environment tested:** Node 22.22.0 on Linux x64, `node --import tsx` against production source at HEAD de94cb1f71.\n\n**Steps run after the patch:** Called `classifyAssistantFailoverReason` and `classifyProviderRuntimeFailureKind` from production source via `node --import tsx` with code-only error inputs across OpenAI, Google, Vertex, Antigravity, and Anthropic providers.\n\n**Evidence after fix:**\n\n```text\n=== classifyAssistantFailoverReason (code-only provider errors) ===\n\nOpenAI SERVER_ERROR        -> server_error\nOpenAI INSUFFICIENT_QUOTA  -> billing\nGoogle UNAVAILABLE         -> overloaded\nGoogle DEADLINE_EXCEEDED   -> timeout\nGoogle INTERNAL            -> server_error\nVertex DEADLINE_EXCEEDED   -> timeout\nAntigravity UNAVAILABLE    -> overloaded\nAnthropic RATE_LIMIT_ERROR -> rate_limit\nAnthropic API_ERROR        -> timeout\n\n--- Non-owned providers (should be null) ---\nGateway UNAVAILABLE               -> null\nOpenAI API_ERROR (not OpenAI-owned) -> null\nOpenAI-compatible INSUFFICIENT_QUOTA -> null\n\n=== classifyProviderRuntimeFailureKind ===\n\nGoogle DEADLINE_EXCEEDED + code, no msg -> timeout\nAnthropic RATE_LIMIT_ERROR + code, no msg -> rate_limit\nOpenAI INSUFFICIENT_QUOTA + code, no msg -> unclassified\nOpenAI SERVER_ERROR + code, no msg      -> unclassified\nNo code, no message                     -> empty_response\n```\n\n**Observed result after fix:** All 9 provider-owned code-only error codes are correctly classified as specific failover reasons. Non-owned providers (gateway, openai-compatible) correctly return `null`. The `empty_response` fix correctly upgrades code-only structured errors to `unclassified` for OpenAI codes and `timeout`/`rate_limit` for Google/Anthropic codes. Legacy empty-message-no-code case still returns `empty_response`.\n\n**What was not tested:** Live multi-model failover with real provider API errors was not exercised. Live gateway session with actual OAuth token rotation was not tested.\n\n## Regression Test Proof\n\n14 new regression tests (9 classification + 3 provider-guard + 5 runtime-kind) FAIL on `main` (without the fix) and all 160 tests PASS on the fix branch.\n\nBefore (errors.ts from main + test file from fix branch):\n\n```text\n FAIL  > classifyProviderRuntimeFailureKind > does not report code-only 'google' 'DEADLINE_EXCEEDED' failures as empty responses\n FAIL  > classifyProviderRuntimeFailureKind > does not report code-only 'google-vertex' 'DEADLINE_EXCEEDED' failures as empty responses\nAssertionError: expected 'empty_response' to be 'timeout'\n FAIL  > classifyProviderRuntimeFailureKind > does not report code-only 'anthropic' 'RATE_LIMIT_ERROR' failures as empty responses\nAssertionError: expected 'empty_response' to be 'rate_limit'\n FAIL  > classifyProviderRuntimeFailureKind > does not report code-only 'openai' 'INSUFFICIENT_QUOTA' failures as empty responses\n FAIL  > classifyProviderRuntimeFailureKind > does not report code-only 'openai' 'SERVER_ERROR' failures as empty responses\nAssertionError: expected 'empty_response' to be 'unclassified'\n      Tests  14 failed | 146 passed (160)\n```\n\nAfter (fix branch):\n\n```text\n      Tests  160 passed (160)\n```\n\n## Verification\n- `node scripts/run-vitest.mjs run src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts` — 160/160 passed\n- `node --import tsx` proof script calling production `classifyAssistantFailoverReason` and `classifyProviderRuntimeFailureKind` — all code-only codes produce correct reasons\n- Provider-guard verification: gateway, openai-compatible, and non-OpenAI-owned API_ERROR codes correctly return `null`\n- `git diff --check` passes\n",
+        "branch": "fix-provider-code-failover-reasons",
+        "head_sha": "14ad61094de1e3d0831382e9afc72e85d465fa75",
+        "author": "pick-cat",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 auth-provider",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts",
+            "additions": 77,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-helpers/errors.ts",
+            "additions": 44,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 121,
+        "deletions": 5,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95729",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95729.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "gatingTotal": 90,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 61,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 753,
+    "total_ms": 2475,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 434
+        "ms": 318
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1872
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +256,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 309
+        "ms": 257
       },
       {
         "name": "append_ledger",
