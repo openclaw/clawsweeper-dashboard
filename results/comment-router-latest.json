@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T16:48:07.414Z",
-  "repo": "openclaw/crabbox",
+  "generated_at": "2026-06-23T16:48:13.082Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T13:48:07.129Z",
+  "since": "2026-06-23T13:48:11.351Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    647
+    95614
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
+  "scanned_comments": 11,
+  "commands_seen": 6,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,384 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95614:4763547963:2026-06-22T08:31:14Z:clawsweeper_needs_human",
+      "comment_id": "4763547963",
+      "comment_version_key": "4763547963:2026-06-22T08:31:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95614#issuecomment-4763547963",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95614,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-21T22:57:24Z",
+      "comment_updated_at": "2026-06-22T08:31:14Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No ClawSweeper repair lane is needed; this PR is ready for ordinary maintainer review and normal merge gates.; Cleared: The diff changes memory-wiki TypeScript and tests only; no dependency, workflow, lockfile, secret-handling, permission, or external code-execution surface was added. (sha=bab77ff9257ae845fff6c7472ef39c7694af2ede)",
+      "review_summary": "The PR adds a shared memory-wiki helper that preserves existing human Notes blocks when regenerating local-ingest and imported-source pages, plus regressions for marker, heading, CRLF, and imported-source cases.\n\nPR surface: Source +58, Tests +329. Total +387 across 5 files.\n\nReproducibility: yes. Source inspection on current main shows both affected writers overwrite existing source pages, and the PR body includes before/after real on-disk output showing notes lost on base and preserved after the patch.",
+      "review_followup": "- No ClawSweeper repair lane is needed; this PR is ready for ordinary maintainer review and normal merge gates.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "bab77ff9257ae845fff6c7472ef39c7694af2ede",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-wiki): preserve human notes block on source re-ingest",
+        "body": "## Summary\n\nRe-ingesting an already-ingested memory-wiki source destroys the user's notes. memory-wiki source pages carry a `## Notes` block delimited by `<!-- openclaw:human:start -->` / `<!-- openclaw:human:end -->` markers that the user is meant to edit. When the page is regenerated (same slug, same `sources/<slug>.md` path), it is rewritten with an empty Notes block, silently dropping anything the user wrote inside the human-managed block. This affects every source-page writer: `openclaw wiki ingest <path>` / the gateway ingest tool, and the bridge and unsafe-local imported-source sync paths.\n\nThis contradicts the documented contract in `docs/plugins/memory-wiki.md:129`: \"Managed content stays inside generated blocks. Human note blocks are preserved.\"\n\n## Root cause\n\n`extensions/memory-wiki/src/ingest.ts` rebuilds the full page body with a hardcoded empty human block and writes it unconditionally, never reading the existing page:\n\n```ts\n// before\n      \"## Notes\",\n      \"<!-- openclaw:human:start -->\",\n      \"<!-- openclaw:human:end -->\",\n      \"\",\n    ].join(\"\\n\"),\n  });\n\n  await fs.writeFile(pagePath, markdown, \"utf8\");\n```\n\nThe shared imported-source writer `source-page-shared.ts` `writeImportedSourcePage` (used by `bridge.ts` and `unsafe-local.ts`) has the same defect: it reads the existing page only to compare, then writes the freshly rendered page over it. The synthesis (`apply.ts`) and ChatGPT-import (`chatgpt-import.ts`) writers already preserve the human block; ingest and the imported-source writer were the ones that skipped it.\n\n## Fix\n\nAdd one helper next to the existing human-block markers in `markdown.ts`, and call it from both writers before writing.\n\n```ts\n// after - markdown.ts\nconst SOURCE_CONTENT_HEADING = \"\\n## Content\\n\";\n\nfunction afterSourceContentFence(page: string): number {\n  const headingIndex = page.indexOf(SOURCE_CONTENT_HEADING);\n  if (headingIndex === -1) {\n    return 0;\n  }\n  const fenceLineStart = headingIndex + SOURCE_CONTENT_HEADING.length;\n  const fence = /^`+/.exec(page.slice(fenceLineStart))?.[0];\n  if (!fence) {\n    return fenceLineStart;\n  }\n  const closeIndex = page.indexOf(`\\n${fence}`, fenceLineStart + fence.length);\n  if (closeIndex === -1) {\n    return fenceLineStart;\n  }\n  return closeIndex + fence.length + 1;\n}\n\nfunction findNotesHumanBlock(page: string): { start: number; end: number } | null {\n  const searchFrom = afterSourceContentFence(page);\n  const start = page.indexOf(HUMAN_START_MARKER, searchFrom);\n  if (start === -1) {\n    return null;\n  }\n  const endMarker = page.lastIndexOf(HUMAN_END_MARKER);\n  if (endMarker < start) {\n    return null;\n  }\n  return { start, end: endMarker + HUMAN_END_MARKER.length };\n}\n\nexport function preserveHumanNotesBlock(rendered: string, existing: string): string {\n  const existingBlock = findNotesHumanBlock(existing);\n  const renderedBlock = findNotesHumanBlock(rendered);\n  if (!existingBlock || !renderedBlock) {\n    return rendered;\n  }\n  return (\n    rendered.slice(0, renderedBlock.start) +\n    existing.slice(existingBlock.start, existingBlock.end) +\n    rendered.slice(renderedBlock.end)\n  );\n}\n```\n\n```ts\n// after - ingest.ts\n  const existing = created ? \"\" : await fs.readFile(pagePath, \"utf8\").catch(() => \"\");\n  await fs.writeFile(\n    pagePath,\n    existing ? preserveHumanNotesBlock(markdown, existing) : markdown,\n    \"utf8\",\n  );\n```\n\n```ts\n// after - source-page-shared.ts (writeImportedSourcePage)\n  const existing = pageStat ? await vault.readText(params.pagePath).catch(() => \"\") : \"\";\n  const nextRendered = existing ? preserveHumanNotesBlock(rendered, existing) : rendered;\n  if (existing !== nextRendered) {\n    ...\n    await vault.write(params.pagePath, nextRendered);\n```\n\nThe only untrusted region on the page is the source text, which is fenced inside `## Content`. `renderMarkdownFence` chooses a fence delimiter strictly longer than any backtick run in the content, so the source can never close its own fence early; the rest of the page (the `## Notes` block, then the generated `## Related` block, which carries only `openclaw:wiki:related` markers) is structurally trusted. The helper scans for the human block only after that fence closes, taking the first start marker and the last end marker, so the whole Notes block is preserved verbatim even when the source content or the user's own note text contains the human marker comments or Markdown headings. New page creation is unchanged.\n\n## Why this is the right boundary\n\nThere are four memory-wiki source-page writers. Two already preserved the human block (synthesis, ChatGPT import); this change fixes the other two by routing both through one shared `preserveHumanNotesBlock` helper colocated with the markers it protects: `ingestMemoryWikiSource` (the `wiki ingest` CLI command at `cli.ts:588` and the gateway ingest tool) and `writeImportedSourcePage` (the bridge and unsafe-local sync paths). No writer is left one-sided.\n\n## Verification\n\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/ingest-human-notes.test.ts` (four ingest cases) and `extensions/memory-wiki/src/source-page-shared.test.ts` (imported-source update case) pass with the patch; each new case fails on the unpatched writer.\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/ingest.test.ts` (existing create-path assertion) passes unchanged.\n- `node scripts/run-oxlint.mjs` and `oxfmt --check` clean on the five changed files.\n- tsgo core typecheck clean.\n\n## Real behavior proof\n\nBehavior addressed: regenerating a memory-wiki source page (via `wiki ingest` or via the bridge/unsafe-local imported-source writer) wiped user notes in the human-managed `## Notes` block; with the patch the notes survive while the regenerated source content is still updated, including when the source content or the note text contains the human markers or a Markdown heading.\nReal environment tested: drove the real `ingestMemoryWikiSource` and the real `writeImportedSourcePage` runtime functions against a real on-disk vault on pristine base `4cb94cc2cf` and on the patched head `1095fe887c`, with identical inputs across five scenarios. Everything stayed real (real vault on disk, real render/write paths); nothing was stubbed.\nExact steps or command run after this patch: for each scenario, write the source page, edit its Notes block to add a note, change the source, write the page again through the real writer, then read the page back from disk.\nEvidence after fix:\n```\n# BEFORE (pristine base 4cb94cc2cf)\n[scenario 1: wiki ingest plain re-ingest]\nupdated source content present: true\nuser note present after re-ingest: false\n[scenario 2: wiki ingest, source content itself contains the human markers]\nsource content INJECTED FROM SOURCE present: true\nNotes block keeps user note: false\nNotes block free of source content: true\n[scenario 3: wiki ingest, note text itself contains a marker comment]\nnote kept before pasted marker (EARLY NOTE): false\nnote kept after pasted marker (LATE NOTE): false\n[scenario 4: wiki ingest, note text contains a Markdown heading]\nnote kept above pasted heading (NOTE TOP): false\nnote kept below pasted heading (NOTE BOTTOM): false\n[scenario 5: bridge/unsafe-local imported source page update via writeImportedSourcePage]\nupdated source content present: true\nuser note present after update: false\n\n# AFTER (this patch 1095fe887c, identical inputs)\n[scenario 1: wiki ingest plain re-ingest]\nupdated source content present: true\nuser note present after re-ingest: true\n[scenario 2: wiki ingest, source content itself contains the human markers]\nsource content INJECTED FROM SOURCE present: true\nNotes block keeps user note: true\nNotes block free of source content: true\n[scenario 3: wiki ingest, note text itself contains a marker comment]\nnote kept before pasted marker (EARLY NOTE): true\nnote kept after pasted marker (LATE NOTE): true\n[scenario 4: wiki ingest, note text contains a Markdown heading]\nnote kept above pasted heading (NOTE TOP): true\nnote kept below pasted heading (NOTE BOTTOM): true\n[scenario 5: bridge/unsafe-local imported source page update via writeImportedSourcePage]\nupdated source content present: true\nuser note present after update: true\n```\nObserved result after fix: across all five scenarios the regenerated page keeps the user's note while still showing the updated source content; on pristine base every note is gone. This holds for both the `wiki ingest` writer and the bridge/unsafe-local imported-source writer, and even when the source content or note text contains the markers or a `## Notes` heading.\nWhat was not tested: no live network or provider request is involved; full repo build not run.\n",
+        "branch": "fix/memory-wiki-ingest-preserve-notes",
+        "head_sha": "66a8e3cf56d1875b417ca799fd94aee0fa74241b",
+        "author": "yetval",
+        "labels": [
+          "size: M",
+          "extensions: memory-wiki",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-wiki/src/ingest-human-notes.test.ts",
+            "additions": 195,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/ingest.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/markdown.ts",
+            "additions": 46,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/source-page-shared.test.ts",
+            "additions": 134,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/source-page-shared.ts",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 392,
+        "deletions": 5,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95614",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95614.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 82,
+          "gatingTotal": 77,
+          "counts": {
+            "SUCCESS": 57,
+            "SKIPPED": 25
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95614:4763920481:2026-06-22T01:12:34Z:re_review",
+      "comment_id": "4763920481",
+      "comment_version_key": "4763920481:2026-06-22T01:12:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95614#issuecomment-4763920481",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95614,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-22T01:12:34Z",
+      "comment_updated_at": "2026-06-22T01:12:34Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-wiki): preserve human notes block on source re-ingest",
+        "body": "## Summary\n\nRe-ingesting an already-ingested memory-wiki source destroys the user's notes. memory-wiki source pages carry a `## Notes` block delimited by `<!-- openclaw:human:start -->` / `<!-- openclaw:human:end -->` markers that the user is meant to edit. When the page is regenerated (same slug, same `sources/<slug>.md` path), it is rewritten with an empty Notes block, silently dropping anything the user wrote inside the human-managed block. This affects every source-page writer: `openclaw wiki ingest <path>` / the gateway ingest tool, and the bridge and unsafe-local imported-source sync paths.\n\nThis contradicts the documented contract in `docs/plugins/memory-wiki.md:129`: \"Managed content stays inside generated blocks. Human note blocks are preserved.\"\n\n## Root cause\n\n`extensions/memory-wiki/src/ingest.ts` rebuilds the full page body with a hardcoded empty human block and writes it unconditionally, never reading the existing page:\n\n```ts\n// before\n      \"## Notes\",\n      \"<!-- openclaw:human:start -->\",\n      \"<!-- openclaw:human:end -->\",\n      \"\",\n    ].join(\"\\n\"),\n  });\n\n  await fs.writeFile(pagePath, markdown, \"utf8\");\n```\n\nThe shared imported-source writer `source-page-shared.ts` `writeImportedSourcePage` (used by `bridge.ts` and `unsafe-local.ts`) has the same defect: it reads the existing page only to compare, then writes the freshly rendered page over it. The synthesis (`apply.ts`) and ChatGPT-import (`chatgpt-import.ts`) writers already preserve the human block; ingest and the imported-source writer were the ones that skipped it.\n\n## Fix\n\nAdd one helper next to the existing human-block markers in `markdown.ts`, and call it from both writers before writing.\n\n```ts\n// after - markdown.ts\nconst SOURCE_CONTENT_HEADING = \"\\n## Content\\n\";\n\nfunction afterSourceContentFence(page: string): number {\n  const headingIndex = page.indexOf(SOURCE_CONTENT_HEADING);\n  if (headingIndex === -1) {\n    return 0;\n  }\n  const fenceLineStart = headingIndex + SOURCE_CONTENT_HEADING.length;\n  const fence = /^`+/.exec(page.slice(fenceLineStart))?.[0];\n  if (!fence) {\n    return fenceLineStart;\n  }\n  const closeIndex = page.indexOf(`\\n${fence}`, fenceLineStart + fence.length);\n  if (closeIndex === -1) {\n    return fenceLineStart;\n  }\n  return closeIndex + fence.length + 1;\n}\n\nfunction findNotesHumanBlock(page: string): { start: number; end: number } | null {\n  const searchFrom = afterSourceContentFence(page);\n  const start = page.indexOf(HUMAN_START_MARKER, searchFrom);\n  if (start === -1) {\n    return null;\n  }\n  const endMarker = page.lastIndexOf(HUMAN_END_MARKER);\n  if (endMarker < start) {\n    return null;\n  }\n  return { start, end: endMarker + HUMAN_END_MARKER.length };\n}\n\nexport function preserveHumanNotesBlock(rendered: string, existing: string): string {\n  const existingBlock = findNotesHumanBlock(existing);\n  const renderedBlock = findNotesHumanBlock(rendered);\n  if (!existingBlock || !renderedBlock) {\n    return rendered;\n  }\n  return (\n    rendered.slice(0, renderedBlock.start) +\n    existing.slice(existingBlock.start, existingBlock.end) +\n    rendered.slice(renderedBlock.end)\n  );\n}\n```\n\n```ts\n// after - ingest.ts\n  const existing = created ? \"\" : await fs.readFile(pagePath, \"utf8\").catch(() => \"\");\n  await fs.writeFile(\n    pagePath,\n    existing ? preserveHumanNotesBlock(markdown, existing) : markdown,\n    \"utf8\",\n  );\n```\n\n```ts\n// after - source-page-shared.ts (writeImportedSourcePage)\n  const existing = pageStat ? await vault.readText(params.pagePath).catch(() => \"\") : \"\";\n  const nextRendered = existing ? preserveHumanNotesBlock(rendered, existing) : rendered;\n  if (existing !== nextRendered) {\n    ...\n    await vault.write(params.pagePath, nextRendered);\n```\n\nThe only untrusted region on the page is the source text, which is fenced inside `## Content`. `renderMarkdownFence` chooses a fence delimiter strictly longer than any backtick run in the content, so the source can never close its own fence early; the rest of the page (the `## Notes` block, then the generated `## Related` block, which carries only `openclaw:wiki:related` markers) is structurally trusted. The helper scans for the human block only after that fence closes, taking the first start marker and the last end marker, so the whole Notes block is preserved verbatim even when the source content or the user's own note text contains the human marker comments or Markdown headings. New page creation is unchanged.\n\n## Why this is the right boundary\n\nThere are four memory-wiki source-page writers. Two already preserved the human block (synthesis, ChatGPT import); this change fixes the other two by routing both through one shared `preserveHumanNotesBlock` helper colocated with the markers it protects: `ingestMemoryWikiSource` (the `wiki ingest` CLI command at `cli.ts:588` and the gateway ingest tool) and `writeImportedSourcePage` (the bridge and unsafe-local sync paths). No writer is left one-sided.\n\n## Verification\n\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/ingest-human-notes.test.ts` (four ingest cases) and `extensions/memory-wiki/src/source-page-shared.test.ts` (imported-source update case) pass with the patch; each new case fails on the unpatched writer.\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/ingest.test.ts` (existing create-path assertion) passes unchanged.\n- `node scripts/run-oxlint.mjs` and `oxfmt --check` clean on the five changed files.\n- tsgo core typecheck clean.\n\n## Real behavior proof\n\nBehavior addressed: regenerating a memory-wiki source page (via `wiki ingest` or via the bridge/unsafe-local imported-source writer) wiped user notes in the human-managed `## Notes` block; with the patch the notes survive while the regenerated source content is still updated, including when the source content or the note text contains the human markers or a Markdown heading.\nReal environment tested: drove the real `ingestMemoryWikiSource` and the real `writeImportedSourcePage` runtime functions against a real on-disk vault on pristine base `4cb94cc2cf` and on the patched head `1095fe887c`, with identical inputs across five scenarios. Everything stayed real (real vault on disk, real render/write paths); nothing was stubbed.\nExact steps or command run after this patch: for each scenario, write the source page, edit its Notes block to add a note, change the source, write the page again through the real writer, then read the page back from disk.\nEvidence after fix:\n```\n# BEFORE (pristine base 4cb94cc2cf)\n[scenario 1: wiki ingest plain re-ingest]\nupdated source content present: true\nuser note present after re-ingest: false\n[scenario 2: wiki ingest, source content itself contains the human markers]\nsource content INJECTED FROM SOURCE present: true\nNotes block keeps user note: false\nNotes block free of source content: true\n[scenario 3: wiki ingest, note text itself contains a marker comment]\nnote kept before pasted marker (EARLY NOTE): false\nnote kept after pasted marker (LATE NOTE): false\n[scenario 4: wiki ingest, note text contains a Markdown heading]\nnote kept above pasted heading (NOTE TOP): false\nnote kept below pasted heading (NOTE BOTTOM): false\n[scenario 5: bridge/unsafe-local imported source page update via writeImportedSourcePage]\nupdated source content present: true\nuser note present after update: false\n\n# AFTER (this patch 1095fe887c, identical inputs)\n[scenario 1: wiki ingest plain re-ingest]\nupdated source content present: true\nuser note present after re-ingest: true\n[scenario 2: wiki ingest, source content itself contains the human markers]\nsource content INJECTED FROM SOURCE present: true\nNotes block keeps user note: true\nNotes block free of source content: true\n[scenario 3: wiki ingest, note text itself contains a marker comment]\nnote kept before pasted marker (EARLY NOTE): true\nnote kept after pasted marker (LATE NOTE): true\n[scenario 4: wiki ingest, note text contains a Markdown heading]\nnote kept above pasted heading (NOTE TOP): true\nnote kept below pasted heading (NOTE BOTTOM): true\n[scenario 5: bridge/unsafe-local imported source page update via writeImportedSourcePage]\nupdated source content present: true\nuser note present after update: true\n```\nObserved result after fix: across all five scenarios the regenerated page keeps the user's note while still showing the updated source content; on pristine base every note is gone. This holds for both the `wiki ingest` writer and the bridge/unsafe-local imported-source writer, and even when the source content or note text contains the markers or a `## Notes` heading.\nWhat was not tested: no live network or provider request is involved; full repo build not run.\n",
+        "branch": "fix/memory-wiki-ingest-preserve-notes",
+        "head_sha": "66a8e3cf56d1875b417ca799fd94aee0fa74241b",
+        "author": "yetval",
+        "labels": [
+          "size: M",
+          "extensions: memory-wiki",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-wiki/src/ingest-human-notes.test.ts",
+            "additions": 195,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/ingest.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/markdown.ts",
+            "additions": 46,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/source-page-shared.test.ts",
+            "additions": 134,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/source-page-shared.ts",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 392,
+        "deletions": 5,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95614",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95614.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 82,
+          "gatingTotal": 77,
+          "counts": {
+            "SUCCESS": 57,
+            "SKIPPED": 25
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95614:4763769246:2026-06-22T00:19:40Z:re_review",
+      "comment_id": "4763769246",
+      "comment_version_key": "4763769246:2026-06-22T00:19:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95614#issuecomment-4763769246",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95614,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-22T00:19:40Z",
+      "comment_updated_at": "2026-06-22T00:19:40Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95614:4763692649:2026-06-21T23:58:15Z:re_review",
+      "comment_id": "4763692649",
+      "comment_version_key": "4763692649:2026-06-21T23:58:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95614#issuecomment-4763692649",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95614,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-21T23:58:15Z",
+      "comment_updated_at": "2026-06-21T23:58:15Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95614:4763655526:2026-06-21T23:42:49Z:re_review",
+      "comment_id": "4763655526",
+      "comment_version_key": "4763655526:2026-06-21T23:42:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95614#issuecomment-4763655526",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95614,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-21T23:42:49Z",
+      "comment_updated_at": "2026-06-21T23:42:49Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95614:4763606257:2026-06-21T23:21:38Z:re_review",
+      "comment_id": "4763606257",
+      "comment_version_key": "4763606257:2026-06-21T23:21:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95614#issuecomment-4763606257",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95614,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-21T23:21:38Z",
+      "comment_updated_at": "2026-06-21T23:21:38Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 470,
+    "total_ms": 3443,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 276
+        "ms": 455
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1259
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -56,11 +414,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 185
+        "ms": 1701
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
