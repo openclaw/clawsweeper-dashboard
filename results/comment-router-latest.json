@@ -1,23 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T16:39:17.821Z",
+  "generated_at": "2026-06-23T16:40:05.968Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T13:39:15.475Z",
+  "since": "2026-06-23T13:40:03.853Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    95852
+    90226
   ],
   "comment_ids": [
-    4781367268
+    4781374601
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:95852:4781367268:2026-06-23T16:36:51Z:re_review",
-      "comment_id": "4781367268",
-      "comment_version_key": "4781367268:2026-06-23T16:36:51Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95852#issuecomment-4781367268",
+      "idempotency_key": "comment-router:openclaw/openclaw:90226:4781374601:2026-06-23T16:37:42Z:re_review",
+      "comment_id": "4781374601",
+      "comment_version_key": "4781374601:2026-06-23T16:37:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90226#issuecomment-4781374601",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95852,
-      "author": "yetval",
-      "author_id": 102706514,
+      "issue_number": 90226,
+      "author": "simplyclever914",
+      "author_id": 280986376,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T16:36:51Z",
-      "comment_updated_at": "2026-06-23T16:36:51Z",
+      "comment_created_at": "2026-06-23T16:37:42Z",
+      "comment_updated_at": "2026-06-23T16:37:42Z",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-run",
+      "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -67,52 +67,196 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(acpx): keep leaked non-openai model out of the Codex ACP thinking slot",
-        "body": "## What Problem This Solves\n\nSpawning the Codex ACP agent fails during setup when the fleet's default/primary model belongs to a non-OpenAI provider. `sessions_spawn(runtime=\"acp\", agentId=\"codex\")` resolves that default (for example `google/gemini-3.1-flash-lite`) into the Codex model slot, and the Codex ACP model parser then treats the segment after the `/` as a reasoning effort. The spawn aborts with:\n\n```\nspawn_failed: Codex ACP thinking level \"gemini-3.1-flash-lite\" is not supported.\nUse off, minimal, low, medium, high, or xhigh.\n```\n\nAn explicit `thinking=low` does not help, because the model id is mis-routed before the thinking value is applied. Reported in #95780.\n\n## Why This Change Was Made\n\nThe root cause is in the Codex ACP model translation in `extensions/acpx/src/runtime.ts`. The original parser split the ref on `/` and unconditionally treated the second segment as a reasoning effort, so `google/gemini-3.1-flash-lite` became model `google` and effort `gemini-3.1-flash-lite`, which Codex's reasoning-effort set rejects (Codex `ReasoningEffort` is the closed set {none, minimal, low, medium, high, xhigh}, codex-rs/protocol/src/openai_models.rs:40; `-c model=` is a free string forwarded to the provider, so a non-OpenAI model id is never valid there).\n\nThis revision replaces the earlier \"silently drop any non-OpenAI model\" approach (flagged in review as hiding explicit user intent) with a classifier whose policy is owned by each call site. `classifyCodexAcpModelRequest` returns a closed result:\n\n- `{ kind: \"override\", override }` for a usable request: `openai/<model>` (prefix stripped), a bare `<model>`, `<model>/<reasoning-effort>`, or a thinking-only override.\n- `{ kind: \"unsupported\", thinkingOverride? }` for a ref that is not a valid Codex model and is not `openai/`-qualified (a foreign `provider/model`, or a malformed `<model>/<bad-suffix>`); it carries any valid explicit thinking forward.\n- An `openai/`-qualified but malformed ref (for example `openai/foo/bar`) throws immediately, since the caller explicitly named OpenAI.\n\nThe two entry points then apply opposite policies, which distinguishes a leaked default from an explicit selection without threading new provenance through the cross-package ACP runtime contract (provenance is merged away upstream in `resolveConfiguredSubagentSpawnModelSelection`, so it is not available at the acpx boundary):\n\n- `ensureSession` (spawn) is where the inherited fleet default arrives (issue #95780 confirms the leaked value is \"not anything requested for this spawn\"). An unsupported model is dropped so Codex keeps its own default, while an explicit `thinking` level is still applied.\n- `setConfigOption` / `acp model` is an explicit runtime control. An unsupported model now fails closed with `ACP_INVALID_RUNTIME_OPTION` and never falls through to the delegate (which previously re-injected the bad ref and reproduced the crash on a later turn).\n\nThis addresses the three review blockers:\n1. Explicit selections fail clearly instead of silently falling back: an unsupported `acp model google/...` is rejected at the runtime-control path; the spawn path still drops the ambient default that #95780 is about.\n2. `setConfigOption(key=\"model\")` no longer falls through to the delegate for an unsupported model; it fails closed, with a regression test asserting the delegate is never called.\n3. A malformed ref such as `gpt-5.4/ultra` is no longer treated as a droppable non-OpenAI ref at the control path; it fails closed against the documented `<model>/<reasoning-effort>` contract.\n\nA model dropped at spawn is also removed from the session input via `withCodexSessionModel`, so the raw id never reaches the acpx delegate where `applyRequestedModelIfAdvertised` would throw `RequestedModelUnsupportedError`.\n\nThe change is confined to the Codex ACP owner boundary in `extensions/acpx/src/runtime.ts`. The Claude ACP sibling has no reasoning-effort slot, so it cannot misroute a model id into a thinking level; this issue (#95780) is specific to Codex.\n\nIntentional limitation: an explicit non-OpenAI model passed at `sessions_spawn` time (rather than via `acp model`) is dropped rather than erroring, because provenance is merged away before the acpx boundary and Codex is OpenAI-only, so there is no valid model to honor and the spawn still succeeds on Codex's default instead of crashing. The explicit runtime-control path does fail clearly.\n\n## User Impact\n\nCodex ACP spawns succeed again when the fleet default is a non-OpenAI model, falling back to Codex's own default model, and an explicit `thinking` level is honored. Setting an unsupported Codex model explicitly (`acp model google/...` or a malformed `<model>/<reasoning-effort>`) now fails clearly instead of silently falling back or re-injecting a bad ref. Explicit `openai/*` model selections and `<model>/<reasoning-effort>` overrides are unchanged.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs extensions/acpx/src/runtime.test.ts`: 69 passed; the new classifier, spawn-drop, and `setConfigOption` fail-closed cases fall through to the delegate (or mis-route) on the prior silent-drop revision and pass with this revision.\n- `oxlint` (type-aware, config/tsconfig/oxlint.core.json) on the changed files: clean.\n- `tsgo` extensions prod (`tsconfig.extensions.json`) and extensions test (`tsconfig.extensions.test.json`) lanes: clean.\n- End-to-end before/after against the real runtime: see Real behavior proof below.\n\n## Real behavior proof\n\nBehavior addressed: the prior revision silently dropped any non-OpenAI Codex model, so an explicit `acp model google/...` (and a malformed `gpt-5.4/ultra`) fell through `setConfigOption` to the delegate, re-injecting a model Codex cannot run; the spawn path also needs to keep dropping the leaked fleet default for #95780.\nReal environment tested: the real `AcpxRuntime.ensureSession` and `AcpxRuntime.setConfigOption` class paths on the prior reviewed revision (silent-drop, 00d75f8216) and on this revision (9baa49ae96), driven with the codex agent registry. The only stub is the acpx delegate that would spawn the codex-acp child process; the model classifier, the Codex command translation, the session-input handling, and the runtime-control dispatch all stay real.\nExact steps or command run after this patch: construct the real AcpxRuntime for agent \"codex\" and (a) call `ensureSession` with model `google/gemini-3.1-flash-lite` (no thinking, then thinking `low`), `gpt-5.4/ultra`, and an `openai/gpt-5.5` control; (b) call `setConfigOption(key=\"model\")` with `google/gemini-3.1-flash-lite`, `gpt-5.4/ultra`, and an `openai/gpt-5.4` control, recording what the delegate receives.\nEvidence after fix:\n```\n# BEFORE (prior silent-drop revision 00d75f8216, the reviewed head)\nSPAWN   google (leaked default, no thinking) -> OK; delegate model=undefined sessionOptions=undefined\nSPAWN   google + thinking=low                -> OK; delegate model=undefined sessionOptions=undefined\nSPAWN   gpt-5.4/ultra (malformed)            -> OK; delegate model=undefined sessionOptions=undefined\nSPAWN   openai/gpt-5.5 (control)             -> OK; delegate model=\"gpt-5.5\" sessionOptions={\"model\":\"gpt-5.5\"}\nCONTROL model=google/gemini-3.1-flash-lite   -> OK; delegate.setConfigOption CALLED value=\"google/gemini-3.1-flash-lite\"  [re-injected]\nCONTROL model=gpt-5.4/ultra                  -> OK; delegate.setConfigOption CALLED value=\"gpt-5.4/ultra\"                  [re-injected]\nCONTROL model=openai/gpt-5.4 (control)       -> OK; delegate.setConfigOption CALLED value=\"gpt-5.4\"\n\n# AFTER (this revision 9baa49ae96, identical inputs)\nSPAWN   google (leaked default, no thinking) -> OK; delegate model=undefined sessionOptions=undefined\nSPAWN   google + thinking=low                -> OK; delegate model=undefined sessionOptions=undefined\nSPAWN   gpt-5.4/ultra (malformed)            -> OK; delegate model=undefined sessionOptions=undefined\nSPAWN   openai/gpt-5.5 (control)             -> OK; delegate model=\"gpt-5.5\" sessionOptions={\"model\":\"gpt-5.5\"}\nCONTROL model=google/gemini-3.1-flash-lite   -> THREW ACP_INVALID_RUNTIME_OPTION; delegate.setConfigOption calls=0\nCONTROL model=gpt-5.4/ultra                  -> THREW ACP_INVALID_RUNTIME_OPTION; delegate.setConfigOption calls=0\nCONTROL model=openai/gpt-5.4 (control)       -> OK; delegate.setConfigOption CALLED value=\"gpt-5.4\"\n```\nObserved result after fix: the leaked non-OpenAI model id is dropped at spawn (Codex starts on its own default, explicit low thinking preserved) and an unsupported model set explicitly via `setConfigOption` is rejected with `ACP_INVALID_RUNTIME_OPTION` without ever calling the delegate; `openai/*` selections are unchanged.\nWhat was not tested: no live codex-acp child process or live provider request; the acpx process-spawn delegate was stubbed. Full build not run.\n\nFixes #95780\n",
-        "branch": "fix/codex-acp-model-thinking-slot",
-        "head_sha": "9baa49ae963eed5127585c60d7dc9ce491a734e5",
-        "author": "yetval",
+        "title": "[AI-assisted] Preserve thread sessions across daily reset by default",
+        "body": "## Problem\n\nThread-scoped chat sessions currently inherit the global implicit daily reset policy when users do not configure `session.resetByType.thread`. For long-running Telegram/Slack/Discord topics this can rotate the OpenClaw session after the daily boundary even though the human-facing thread is still the same conversation. That breaks continuity before normal context-budget compaction has a chance to manage the history.\n\n## Fix\n\nDefault implicit `thread` reset policy to `idle` with the existing default idle window (`0`, no inactivity expiry), while preserving all explicit configuration behavior:\n\n- `session.reset` still applies when configured.\n- `session.resetByType.thread` still overrides thread behavior.\n- Direct/group sessions keep the existing implicit daily default.\n- Legacy `session.idleMinutes` behavior is unchanged.\n\nThis lets long-running threads stay in the same session by default and rely on the existing compaction/context-budget path instead of being rotated daily.\n\n## Validation\n\n- `npm test -- --run src/config/sessions/sessions.test.ts src/auto-reply/reply/session.test.ts`\n  - 2 Vitest shards passed\n  - 142 tests passed\n- `npm run tsgo:test:src`\n  - passed\n- `git diff --check`\n  - passed\n\n`npm run check:test-types` could not run in this local environment because `pnpm` is not installed; I ran the src type gate directly with `npm run tsgo:test:src`.\n\n## Real Behavior Proof\n\n- **Behavior or issue addressed:** A thread-scoped Telegram session that started before the daily reset boundary should remain the same OpenClaw session after the boundary when there is no explicit thread reset config. This preserves conversation continuity so the existing compaction/context-budget path can manage long-running threads.\n- **Real environment tested:** Local OpenClaw checkout on this PR branch, run from a clean temporary session store under `/tmp` using the real `initSessionState` runtime path via `node_modules/.bin/tsx`. No mocks, no test runner, and no private production transcript data were used.\n- **Exact steps or command run after this patch:**\n  1. Created a temporary `sessions.json`.\n  2. Seeded `agent:main:telegram:group:-100123:topic:456` with `sessionId: \"proof-thread-session\"`.\n  3. Set `sessionStartedAt`, `lastInteractionAt`, and `updatedAt` to 03:00.\n  4. Invoked `initSessionState` at 05:00 with `Provider: \"telegram\"`, `Surface: \"telegram\"`, `ChatType: \"group\"`, and `MessageThreadId: 456`.\n  5. Left `session.reset` and `session.resetByType.thread` unset.\n- **Evidence after fix:** Terminal output from the local runtime smoke command:\n  ```json\n  {\"isNewSession\":false,\"sessionId\":\"proof-thread-session\",\"reusedExisting\":true}\n  ```\n- **Observed result after fix:** The thread session reused the existing `sessionId` after the 04:00 daily reset boundary. Before this change, the implicit daily reset policy would classify the same thread session as stale and rotate it to a new `sessionId`.\n- **What was not tested:** I did not run a live Telegram bot conversation or the full CI matrix. I also did not add family-history retrieval APIs such as `includeFamily` / `resetAncestors`; that is a separate follow-up if maintainers want tool-visible history stitching.\n",
+        "branch": "fix/thread-reset-continuity",
+        "head_sha": "f53724f2ca59a492737916bfff1451b012bda4db",
+        "author": "simplyclever914",
         "labels": [
+          "docs",
+          "channel: discord",
+          "gateway",
+          "scripts",
+          "agents",
           "size: M",
-          "extensions: acpx"
+          "proof: supplied",
+          "proof: sufficient",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author",
+          "proof: 🎥 video"
         ],
         "files": [
           {
-            "path": "extensions/acpx/src/runtime.test.ts",
-            "additions": 166,
+            "path": "docs/concepts/session.md",
+            "additions": 9,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/config-agents.md",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/reference/session-management-compaction.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/thread-session-close.test.ts",
+            "additions": 66,
+            "deletions": 33,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/thread-session-close.ts",
+            "additions": 14,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/check-kysely-guardrails.mjs",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/acpx/src/runtime.ts",
-            "additions": 94,
-            "deletions": 58,
+            "path": "src/agents/command/session.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session.test.ts",
+            "additions": 157,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session.ts",
+            "additions": 8,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/reset-policy.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/sessions.test.ts",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/session.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/host-hook-runtime.ts",
+            "additions": 6,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/session-entry-slot-keys.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/security/audit-config-include-perms.test.ts",
+            "additions": 31,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 260,
-        "deletions": 58,
+        "changedFiles": 17,
+        "additions": 341,
+        "deletions": 67,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95852",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95852.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90226",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90226.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "CHANGES_REQUESTED",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
         "checks": {
-          "total": 88,
-          "gatingTotal": 83,
+          "total": 89,
+          "gatingTotal": 84,
           "counts": {
-            "SUCCESS": 57,
-            "SKIPPED": 31
+            "IN_PROGRESS": 18,
+            "SUCCESS": 51,
+            "SKIPPED": 19,
+            "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
+          ],
+          "pending": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -124,23 +268,23 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2520,
+    "total_ms": 2304,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 528
+        "ms": 475
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1804
+        "ms": 1624
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -148,7 +292,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 174
+        "ms": 190
       },
       {
         "name": "append_ledger",
