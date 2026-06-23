@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T08:35:08.533Z",
-  "repo": "openclaw/mcporter",
+  "generated_at": "2026-06-23T08:35:12.734Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T05:35:06.878Z",
+  "since": "2026-06-23T05:35:08.097Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    215
+    96036
   ],
   "comment_ids": [
-    4777291703
+    4777288938
   ],
-  "status_comment_id": 4777292093,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
   "commands_seen": 1,
@@ -33,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/mcporter:215:4777291703:2026-06-23T08:34:03Z:re_review",
-      "comment_id": "4777291703",
-      "comment_version_key": "4777291703:2026-06-23T08:34:03Z",
-      "comment_url": "https://github.com/openclaw/mcporter/pull/215#issuecomment-4777291703",
-      "repo": "openclaw/mcporter",
-      "target_branch": "main",
-      "issue_number": 215,
-      "author": "badmoo",
-      "author_id": 53557260,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-23T08:34:03Z",
-      "comment_updated_at": "2026-06-23T08:34:03Z",
-      "status_comment_id": 4777292093,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "idempotency_key": "comment-router:openclaw/openclaw:96036:4777288938:2026-06-23T08:33:42Z:status",
+      "comment_id": "4777288938",
+      "comment_version_key": "4777288938:2026-06-23T08:33:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96036#issuecomment-4777288938",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96036,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-23T08:33:42Z",
+      "comment_updated_at": "2026-06-23T08:33:42Z",
+      "status_comment_id": null,
+      "trigger": "slash",
+      "command": "status",
+      "intent": "status",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -62,72 +62,61 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-23T08:35:09.338Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 215
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-23T08:35:10.423Z",
-          "response_comment_id": "4777292093",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "ignored",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix: flush stdout before forced exit to avoid 64KB pipe truncation",
-        "body": "## Summary\n\nFixes #214.\n\nLarge command output piped to another process was silently truncated at the kernel pipe buffer size (~64KB). Writing the same output to a file (`> out.json`) produced the complete result.\n\n### Root cause\n\nAfter a command completes, `closeRuntimeAfterCommand()` (`src/cli.ts`) schedules a forced `process.exit()` ~50ms later (force-exit is on by default), **without waiting for `stdout` to drain**. On POSIX, writes to a pipe are **asynchronous** — `console.log(JSON.stringify(...))` only enqueues the data in libuv's write buffer. Once the kernel pipe buffer (~64KB) is full, the remaining bytes stay queued in libuv; the forced `process.exit()` then discards them. File writes are synchronous, which is why `> file` was unaffected.\n\n> The existing `FORCE_EXIT_GRACE_MS = 50` (from #145 / #151) only *delays* the exit by a fixed window; it does not wait for the buffer to actually drain, so outputs larger than the pipe buffer were still truncated.\n\n## Fix\n\nFlush `stdout` before the forced exit, **bounded by a fallback deadline** so a consumer that keeps stdout open but never reads cannot block the exit indefinitely (preserving the anti-hang guarantee). No-op for TTY/file stdout, where writes are synchronous.\n\n```ts\nconst STDOUT_FLUSH_TIMEOUT_MS = 2000;\n\nconst scheduleForcedExit = () => {\n  if (shouldForceExit) {\n    setTimeout(() => {\n      let exited = false;\n      const exit = () => {\n        if (exited) return;\n        exited = true;\n        process.exit(process.exitCode ?? 0);\n      };\n      const fallback = setTimeout(exit, STDOUT_FLUSH_TIMEOUT_MS);\n      fallback.unref?.();\n      process.stdout.write('', () => {\n        clearTimeout(fallback);\n        exit();\n      });\n    }, FORCE_EXIT_GRACE_MS);\n  }\n};\n```\n\n## Behavior proof\n\nA `large-output` stdio MCP server returns a ~200KB text result. Running through a delayed pipe reader (`| (sleep 0.5; cat) | wc -c`) vs a file redirect:\n\n```\n=== BEFORE FIX (src/cli.ts @ origin/main) ===\n  > file (redirect)        : 200074 bytes\n  | (sleep 0.5; cat)|wc -c :  65536 bytes   <- TRUNCATED at the pipe buffer\n\n=== AFTER FIX ===\n  > file (redirect)        : 200074 bytes\n  | (sleep 0.5; cat)|wc -c : 200074 bytes   <- COMPLETE (matches file)\n```\n\nStalled-reader (anti-hang) check: with stdout piped to a consumer that keeps the fd open but never reads, the CLI still force-exits via the fallback deadline in ~2.25s (code 0) instead of hanging.\n\n## Tests\n\nAdds `tests/cli-stdout-pipe-truncation.integration.test.ts` (POSIX-only, gated with `describe.skipIf(process.platform === 'win32')` since it relies on `sh`/`sleep`/`cat`):\n\n- `does not truncate large output when stdout is a pipe` — asserts the piped output matches the complete file output byte-for-byte (fails without the fix at `65536`).\n- `still force-exits when stdout is piped to a consumer that never reads` — spawns the CLI with a paused (non-reading) stdout consumer and asserts the process still exits well within the timeout.\n\nGreen gate: `build`, `typecheck`, `lint:oxlint`, `oxfmt --check` all pass; existing `tests/cli-force-exit-behavior.integration.test.ts` still passes.\n",
-        "branch": "fix/stdout-pipe-truncation-on-forced-exit",
-        "head_sha": "35e9f08b4c7a8030d2828f9ac563317c6682841f",
-        "author": "badmoo",
+        "title": "fix(video-generation): bound dashscope task response reads",
+        "body": "## What Problem This Solves\n\n`src/video-generation/dashscope-compatible.ts` (the Wan-style async task\nprovider used by DashScope-compatible video backends) already routed its\n**video download** path through `readResponseWithLimit` to cap inbound\nbytes (`dashscope-compatible.ts:338`). The two **JSON status paths** did\nnot — `pollDashscopeVideoTaskUntilComplete` (line 203) and\n`runDashscopeVideoGenerationTask` (line 273) both used raw\n`response.json()`, which buffers the entire response body before parsing.\n\nThis is a class-of-bugs issue. The project already standardized on a\ncanonical bounded JSON reader — `readProviderJsonResponse` in\n`src/agents/provider-http-errors.ts:297`, re-exported through\n`openclaw/plugin-sdk/provider-http` — with a default 16 MiB cap and a\nclear `JSON response exceeds N bytes` error. Every other call site that\nneeds a provider JSON body (Anthropic, OpenRouter, Google, etc.) routes\nthrough it. The two dashscope JSON paths were the inconsistent holdouts.\n\nA faulty or hostile DashScope endpoint streaming an unbounded body would\ncause the runtime to OOM rather than fail-fast with a clear error. After\nthis patch, both call sites use the canonical helper, so the project\nbehavior on an oversize body is `throw \"JSON response exceeds 16777216\nbytes\"` instead of unbounded buffering.\n\nThis is a sibling of Alix-007's bounded-stream chain\n([#95108](https://github.com/openclaw/openclaw/pull/95108) Anthropic,\n[#95218](https://github.com/openclaw/openclaw/pull/95218) provider JSON,\n[#95417](https://github.com/openclaw/openclaw/pull/95417) Google prompt\ncache, [#95418](https://github.com/openclaw/openclaw/pull/95418) /\n[#95420](https://github.com/openclaw/openclaw/pull/95420) OpenRouter,\n[#95246](https://github.com/openclaw/openclaw/pull/95246) live model\ncatalog). Same defect class, different call site.\n\n## Changes\n\n- `src/video-generation/dashscope-compatible.ts` — add\n  `readProviderJsonResponse` to the existing\n  `openclaw/plugin-sdk/provider-http` import; replace the two raw\n  `response.json()` calls in `pollDashscopeVideoTaskUntilComplete` and\n  `runDashscopeVideoGenerationTask` with the canonical helper. The\n  download path (`readResponseWithLimit` at line 338) is unchanged.\n  Net source diff: `+9 / -2`.\n- `src/video-generation/dashscope-compatible.bounded-json.test.ts` —\n  new colocated file with 3 unit tests:\n  1. well-formed poll response parses through the bounded reader,\n  2. streaming body of 100 MiB stops well before completion with\n     `JSON response exceeds`,\n  3. submit-task response parses through the bounded reader.\n- `scripts/repro/issue-dashscope-response-cap.mjs` — standalone\n  real-environment repro that drives the production\n  `readProviderJsonResponse` helper against a 32 MiB streaming body and\n  a 2 MiB negative control via raw `response.json()`.\n\nNo new helpers, no new error class, no API surface change, no plugin\nSDK changes, no migration, no config changes.\n\n## Real behavior proof\n\n### BEFORE (raw `response.json()` on the 18 MiB submit path)\n\nWith the patch reverted on `pollDashscopeVideoTaskUntilComplete` and\n`runDashscopeVideoGenerationTask`, the 100 MiB streaming body in\n`caps the poll path JSON response when the body exceeds the canonical\nbyte cap` is fully buffered, then fails on JSON parse — proving the\nbounded read is the right shape:\n\n```\nAssertionError: expected [Function] to throw error matching\n/JSON response exceeds/ but got 'dashscope video generation: malformed\nJSON response'\n```\n\nThe raw reader reads all 100 chunks (the full 100 MiB body) before\nthrowing — exactly the failure mode the fix prevents.\n\n### NEGATIVE (raw `response.json()` on a 2 MiB body in the repro script)\n\n```\nPASS  negative control: raw response.json() buffered all 2 / 2 chunks\n(2 MiB) and failed only on JSON parse — proves bounded read is the\nright shape\n```\n\nRaw reads always buffer the entire body. This is the established\nbehavior of `Response.json()` in undici and the reason\n`readProviderJsonResponse` exists.\n\n### AFTER (bounded `readProviderJsonResponse` on the same 100 MiB body)\n\n```\n=== Reproduction for dashscope-compatible bounded JSON read ===\nPROVIDER_JSON_RESPONSE_MAX_BYTES = 16777216 bytes\n\nPASS  bounded read: threw \"dashscope video-generation task poll: JSON\nresponse exceeds 16777216 bytes\" after 17 / 32 chunks (stopped ~17\nMiB into a 32 MiB body)\nPASS  negative control: raw response.json() buffered all 2 / 2\nchunks (2 MiB) and failed only on JSON parse — proves bounded read is\nthe right shape\n=== All repro assertions passed ===\n```\n\n- `node scripts/repro/issue-dashscope-response-cap.mjs` — exit 0\n- `node scripts/run-vitest.mjs src/video-generation/dashscope-compatible.bounded-json.test.ts` — 3/3 passed\n- `node scripts/run-oxlint.mjs` on modified files — clean\n- `pnpm exec oxfmt` on modified files — clean\n- `git diff --numstat HEAD~1..HEAD` — `+9 -2` source, `+166` tests, `+94` repro\n\nReal environment tested: Linux 4.19, Node 24, pnpm-managed vitest 4.1.8\nshard via `node scripts/run-vitest.mjs`. The repro script uses the\nproduction `readProviderJsonResponse` import directly\n(`scripts/repro/issue-dashscope-response-cap.mjs:22`), not a vitest\nmock, so the bounded-reader assertion is exercised on the actual\nruntime code path.\n\n## Evidence\n\nBehavior addressed: bind DashScope video-generation JSON response reads\nto a 16 MiB cap so a faulty or hostile endpoint cannot force the runtime\nto buffer the full payload before parsing. Sibling of Alix-007's\nbounded-stream chain.\n\nReal environment tested: Linux 4.19, Node 24, pnpm-managed vitest\n4.1.8 shard via `node scripts/run-vitest.mjs`, on the personal-fork\nbranch `fix/dashscope-video-generation-bounded-json-response` rebased\non the latest `openclaw/main`. The repro script\n`scripts/repro/issue-dashscope-response-cap.mjs` imports the production\n`readProviderJsonResponse` from `src/agents/provider-http-errors.ts`\ndirectly — not a vitest mock.\n\nExact steps run after this patch:\n- `node scripts/repro/issue-dashscope-response-cap.mjs` → exit 0 (PASS\n  bounded read + PASS negative control)\n- `node scripts/run-vitest.mjs src/video-generation/dashscope-compatible.bounded-json.test.ts`\n  → 3/3 passed\n- `node scripts/run-oxlint.mjs` on the 3 modified files → clean\n- `pnpm exec oxfmt` on the 3 modified files → clean\n- `git diff --numstat HEAD~1..HEAD` → `+269 / -2` across 3 files\n  (`+9 -2` source, `+166` tests, `+94` repro)\n\nEvidence after fix: 100 MiB streaming body on the poll path throws\n`dashscope video-generation task poll: JSON response exceeds 16777216\nbytes` after the bounded reader pulls only 17 / 32 chunks (stops ~17\nMiB into the body). The negative control on a 2 MiB body with raw\n`response.json()` buffers all 2 / 2 chunks before failing on JSON parse\n— proving the bounded read is the right shape and not a tautology.\n\nObserved result after fix: dashscope poll and submit paths now fail-fast\nwith a clear `JSON response exceeds 16777216 bytes` error on an\noversize body, instead of buffering the entire payload. Behavior on a\nwell-formed body is unchanged (happy-path test still parses\n`output.task_status: \"SUCCEEDED\"` and `request_id: \"req_1\"`).\n\nWhat was not tested: live DashScope endpoint traffic (the repro drives\n`readProviderJsonResponse` against a synthetic `ReadableStream`, not a\nreal HTTP roundtrip). The bounded reader is already covered by\n`src/agents/provider-http-errors.test.ts` for streaming cancellation,\nmalformed JSON, and well-formed parse; this PR proves the dashscope\ncall sites route through it. No live Crabbox/Testbox proof run.\n\n## Tests and validation\n\n- New: `src/video-generation/dashscope-compatible.bounded-json.test.ts`\n  (3 tests)\n- Existing regression sweep:\n  - `node scripts/run-vitest.mjs src/video-generation/dashscope-compatible.bounded-json.test.ts` — 3/3 ✓\n- Lint: `node scripts/run-oxlint.mjs` on the 3 modified files — clean\n- Format: `pnpm exec oxfmt` on the 3 modified files — clean\n- Repro: `node scripts/repro/issue-dashscope-response-cap.mjs` — exit 0,\n  bounded-reader assertion + raw-reader negative control both pass\n\n## Risk checklist\n\n- **Scope**: 1 source file (`dashscope-compatible.ts`) + 1 new test\n  file + 1 new repro script. Net source diff `+9 / -2`.\n- **Behavior**: error message changes from\n  `Unexpected token 'a', \"aaa...\" is not valid JSON` to\n  `dashscope video-generation task poll: JSON response exceeds 16777216 bytes`.\n  No public API change. The error is still thrown from the same call\n  site and propagates the same way.\n- **Type check**: `node scripts/run-tsgo.mjs` clean (verified before\n  commit; no new types, only the existing `DashscopeVideoGenerationResponse`\n  generic argument).\n- **API/SDK surface**: none. `readProviderJsonResponse` was already\n  imported in the file's existing import block from the SDK barrel.\n- **Plugin/runtime boundaries**: no plugin code touched.\n- **Backwards compat**: the legacy error substring (e.g. `dashscope\n  video generation`) is preserved in the bounded-reader error label,\n  so any downstream log-scraping regex on it continues to match.\n\n## Out of scope\n\n- Bounded reads on **other** provider JSON paths in the codebase. The\n  dashscope video-generation plugin is the only Wan-style async task\n  provider with a non-standard JSON read shape. Other async-poll\n  providers (image, audio) already route through\n  `readProviderJsonResponse` or are out of scope for this PR.\n- Download path byte-cap tuning. The download path already used\n  `readResponseWithLimit` and the cap is configured via\n  `resolveGeneratedMediaMaxBytes`; this PR does not change that\n  configuration.\n- DashScope catalog/migration work. This is a runtime error-handling\n  fix only.\n- Sibling bounded-stream PRs in the chain\n  ([#95108](https://github.com/openclaw/openclaw/pull/95108),\n  [#95218](https://github.com/openclaw/openclaw/pull/95218),\n  [#95417](https://github.com/openclaw/openclaw/pull/95417),\n  [#95418](https://github.com/openclaw/openclaw/pull/95418),\n  [#95420](https://github.com/openclaw/openclaw/pull/95420),\n  [#95246](https://github.com/openclaw/openclaw/pull/95246)) — those\n  are Alix-007's and have already landed or are landing independently.",
+        "branch": "fix/dashscope-video-generation-bounded-json-response",
+        "head_sha": "c417fc25e51c4d856c43088f7f7987908ae824ba",
+        "author": "wangmiao0668000666",
         "labels": [
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof",
-          "P2",
-          "merge-risk: 🚨 availability"
+          "scripts",
+          "size: M"
         ],
         "files": [
           {
-            "path": "src/cli.ts",
-            "additions": 17,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "tests/cli-stdout-pipe-truncation.integration.test.ts",
-            "additions": 166,
+            "path": "scripts/repro/issue-dashscope-response-cap.mjs",
+            "additions": 114,
             "deletions": 0,
             "changeType": "ADDED"
+          },
+          {
+            "path": "src/video-generation/dashscope-compatible.bounded-json.test.ts",
+            "additions": 146,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/video-generation/dashscope-compatible.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 183,
-        "deletions": 1,
+        "changedFiles": 3,
+        "additions": 269,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-mcporter-215",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-mcporter-215.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96036",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96036.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 2,
-          "gatingTotal": 2,
+          "total": 95,
+          "gatingTotal": 90,
           "counts": {
-            "SUCCESS": 2
+            "SUCCESS": 62,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
@@ -136,20 +125,21 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": false,
+      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4256,
+    "total_ms": 4961,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 526
+        "ms": 2210
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1112
+        "ms": 2414
       },
       {
         "name": "classify_comment_commands",
@@ -165,7 +155,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2589
+        "ms": 325
       },
       {
         "name": "append_ledger",
