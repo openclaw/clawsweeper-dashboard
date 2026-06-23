@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T10:20:19.800Z",
+  "generated_at": "2026-06-23T10:20:20.884Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T07:20:17.428Z",
+  "since": "2026-06-23T07:20:17.469Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96033
+    96027
   ],
   "comment_ids": [
-    4778162427
+    4778162679
   ],
-  "status_comment_id": 4778162851,
+  "status_comment_id": 4778163013,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96033:4778162427:2026-06-23T10:19:08Z:re_review",
-      "comment_id": "4778162427",
-      "comment_version_key": "4778162427:2026-06-23T10:19:08Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96033#issuecomment-4778162427",
+      "idempotency_key": "comment-router:openclaw/openclaw:96027:4778162679:2026-06-23T10:19:10Z:re_review",
+      "comment_id": "4778162679",
+      "comment_version_key": "4778162679:2026-06-23T10:19:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96027#issuecomment-4778162679",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 96033,
+      "issue_number": 96027,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T10:19:08Z",
-      "comment_updated_at": "2026-06-23T10:19:08Z",
-      "status_comment_id": 4778162851,
+      "comment_created_at": "2026-06-23T10:19:10Z",
+      "comment_updated_at": "2026-06-23T10:19:10Z",
+      "status_comment_id": 4778163013,
       "trigger": "mention",
       "command": "review",
       "intent": "re_review",
@@ -68,70 +68,74 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-06-23T10:20:20.502Z",
+          "dispatched_at": "2026-06-23T10:20:21.718Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 96033
+          "item_number": 96027
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-06-23T10:20:21.730Z",
-          "response_comment_id": "4778162851",
+          "commented_at": "2026-06-23T10:20:22.875Z",
+          "response_comment_id": "4778163013",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(mattermost): bound successful REST JSON/text response reads",
-        "body": "## What Problem This Solves\n\n`extensions/mattermost/src/mattermost/client.ts` talks to a Mattermost server that the plugin does not control — self-hosted instances, LAN deployments, or a host that has been compromised or is malfunctioning. The client already hardened two of its three read paths:\n\n- error bodies are bounded via `readResponseTextLimited` (8 KiB), and\n- guarded responses are streamed through `responseWithRelease` instead of `arrayBuffer()`,\n\nbut the **successful** response path was still unbounded. `request()` called `await res.json()` / `await res.text()`, and `uploadMattermostFile()` called `await res.json()` on the file-info result. Each of those buffers the entire body into memory before parsing.\n\nA Mattermost server can return a response with **no `Content-Length`** and an arbitrarily large — or never-terminating — JSON/text body (every REST call goes through `request()`: users, channels, posts, file uploads). Because nothing capped the success path, the plugin would buffer the whole stream, applying unbounded memory pressure / hang to the plugin and the surrounding agent runtime. This is not generic cleanup: it closes the one remaining unbounded ingest point on an untrusted-server boundary.\n\n## Changes\n\n- `request()` success path: parse JSON via the shared `readProviderJsonResponse` (16 MiB cap; cancels the stream and throws a bounded `… exceeds 16777216 bytes` error on overflow, then wraps malformed JSON), matching the provider HTTP path used elsewhere in the repo.\n- `request()` non-JSON success path: read via `readResponseTextLimited` with a 64 KiB cap (non-JSON success bodies are a rare fallback; the API is JSON-first).\n- `uploadMattermostFile()` file-info JSON: bounded the same way through `readProviderJsonResponse`.\n- Reuses existing helpers only (`readProviderJsonResponse`, `readResponseTextLimited` from `openclaw/plugin-sdk/provider-http`) — no new abstraction, and no second buffering layer added to the guarded fetch adapter or the error path.\n- Added a regression test: oversized guarded success JSON throws the bounded error and cancels the upstream stream early.\n\n## Real behavior proof\n\n- **Behavior addressed**: a successful Mattermost REST JSON/text response with no `Content-Length` and a body larger than the cap is no longer buffered unbounded; the stream is cancelled at the cap and a bounded error is thrown. Normal small responses still parse intact.\n- **Real environment tested**: local `node:http` server bound to `127.0.0.1` (no `Content-Length`), driving the **real exported** `createMattermostClient(...).request(...)` and `uploadMattermostFile(...)` through the production guarded fetch path (`fetchWithSsrFGuard` + `allowPrivateNetwork`), under `node --import tsx`.\n- **Exact steps**:\n  1. Server streams 1 MiB `{`-chunks forever with `content-type: application/json` and **no** `Content-Length`.\n  2. `client.request(\"/flood-json\")` is awaited; the server counts chunks actually written and tracks socket close.\n  3. `uploadMattermostFile(...)` is pointed at the same flood endpoint.\n  4. Negative control: a finite-but-oversized 40 MiB body is read once via the **old** unbounded `await res.text()` and once via the new bounded `request()`.\n  5. Normal small JSON and small text responses are requested to confirm they still parse intact.\n- **Evidence after fix** (proof harness, 7/7 PASS):\n  ```\n  PASS normal-json-intact {\"id\":\"post-1\",\"message\":\"hello\"}\n  PASS normal-text-intact \"plain-ok-body\"\n  PASS oversized-json-throws-bounded Mattermost API /flood-json: JSON response exceeds 16777216 bytes\n  PASS oversized-json-cancelled-early chunksWrittenAtThrow=19\n  PASS oversized-json-socket-released socketClosed=true\n  PASS upload-oversized-throws-bounded Mattermost API /files: JSON response exceeds 16777216 bytes\n  PASS negative-control-unbounded-buffers-all unboundedBytes=42991618 serverWroteMiB=41 (bounded path cancelled at 19 MiB)\n  SUMMARY pass=7 fail=0\n  ```\n- **Observed result**: bounded path throws `JSON response exceeds 16777216 bytes`, the server stops after writing ~17-19 MiB (reader cancelled just past the 16 MiB cap), and the socket is released. The negative control proves the cap is load-bearing: the **old** `await res.text()` drained and buffered the entire 41 MiB body (42,991,618 bytes) — i.e. it would have OOM'd on a truly unbounded body — while the new path cancelled at ~19 MiB.\n- **What was not tested**: I did not run against a real production Mattermost server (used a local untrusted-server simulator), and did not change the websocket / media binary download paths or the `readMattermostError` `!res.body` in-memory fallback branch (already bounded / not an unbounded network read).\n\n## Evidence\n\n- Proof harness: `node --import ./node_modules/tsx/dist/loader.mjs proof.mts` → `SUMMARY pass=7 fail=0` (output above; harness not committed).\n- `node scripts/run-vitest.mjs extensions/mattermost/src/mattermost/client.test.ts --run` → **23 passed** (includes the new \"bounds and cancels oversized guarded Mattermost success JSON bodies\" regression test).\n- `oxlint extensions/mattermost/src/mattermost/client.ts` → clean.\n- `tsgo:extensions` (`tsconfig.extensions.json`, the CI extensions typecheck) → no `mattermost/client.ts` errors.\n- `check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal` → no violations (imports are public `plugin-sdk` entrypoints).\n\nThis is the symmetric follow-up to the #95103 / #95108 response-limit campaign, applying the same bounded-stream discipline to the last unbounded read point in the Mattermost REST client's success path.\n\n**Label**: security\n\nAI-assisted.\n",
-        "branch": "fix/bound-mattermost-client-response",
-        "head_sha": "b375d7343a59883612989542b512aef5a71664fd",
+        "title": "fix(ollama): bound model-discovery JSON response reads",
+        "body": "## What Problem This Solves\n\n`extensions/ollama/src/provider-models.ts` discovers Ollama models by calling `/api/tags`\n(`fetchOllamaModels`) and `/api/show` (`queryOllamaModelShowInfo`), and parsed both responses with\nan **unbounded** `await response.json()`. The Ollama base URL is user-supplied and can point at a\nremote/cloud endpoint (`https://ollama.com`, a self-hosted box, or a host reachable via SSRF), so\nthese discovery responses are untrusted input. A hostile or buggy server can return a\n`Content-Length`-less JSON body that streams forever (or many MiB), and `response.json()` buffers the\nentire payload before parsing — driving the provider model-discovery path into memory pressure / OOM\nor hanging the discovery call. This is not a cosmetic cleanup: the read sits on the provider\nonboarding/refresh path that runs against an attacker-influenceable endpoint.\n\n## Changes\n\n- Add a `OLLAMA_DISCOVERY_JSON_MAX_BYTES` cap (16 MiB, aligned with the merged provider-JSON\n  bound-stream PRs #95218 / #95418 / #95420) and a small `readOllamaDiscoveryJson<T>(response, label)`\n  helper that reads the success body via `readResponseWithLimit` from `@openclaw/media-core`\n  (re-exported through `openclaw/plugin-sdk/response-limit-runtime`, the same path style this module\n  already uses for `ssrf-runtime`), cancelling the stream on overflow, then `JSON.parse`s the decoded\n  bytes. No new abstraction — it reuses the shared bounded reader.\n- Route both `/api/tags` (`fetchOllamaModels`) and `/api/show` (`queryOllamaModelShowInfo`) through\n  the bounded reader instead of `await response.json()`.\n- **Fail-soft semantics preserved**: the overflow throw is caught by the existing discovery error\n  handling, so a capped endpoint degrades gracefully — `/api/tags` returns\n  `{ reachable: false, models: [] }` and `/api/show` returns `{}`. No OOM, no hang.\n\n## Real behavior proof\n\n- **Behavior addressed**: Unbounded `await response.json()` on the two Ollama discovery reads lets an\n  untrusted endpoint stream an unbounded JSON body into memory.\n- **Real environment tested**: A real local `node:http` server (`createServer`) bound to\n  `127.0.0.1`, returning a `Content-Length`-less body that streams 64 KiB chunks until the socket is\n  torn down (would total ~64 MiB, 4× the 16 MiB cap). The **real exported** `fetchOllamaModels` and\n  `queryOllamaModelShowInfo` were driven against it (through the real `fetchWithSsrFGuard` dispatcher,\n  with the loopback allowed by the existing `buildOllamaBaseUrlSsrFPolicy`).\n- **Exact steps**: `node --import tsx proof.mts` — start server → drive the real functions →\n  read back fail-soft results + the server's observed bytes-sent / socket-abort counters → run a\n  negative control (raw unbounded read of the same endpoint) → flip the server to small valid bodies\n  and re-drive the real functions.\n- **Evidence after fix**: `readResponseWithLimit` threw `... exceeds 16777216 bytes`; the server\n  observed the socket aborted after ~17–19 MiB (≪ the ~64 MiB it would have sent), confirming the\n  stream was **cancelled**, not drained. `fetchOllamaModels` returned `{ reachable: false, models: [] }`\n  and `queryOllamaModelShowInfo` returned `{}` (fail-soft intact).\n- **Observed result (all 8 checks PASS)**:\n  - `readResponseWithLimit throws bounded error on unbounded body` → threw, msg `exceeds 16777216 bytes`\n  - `stream cancelled: server saw socket abort` → aborted=true, bytesSent=19333120 (< 33554432)\n  - `fetchOllamaModels fail-soft on overflow` → `{ reachable:false, models:[] }`\n  - `queryOllamaModelShowInfo fail-soft on overflow` → `{}`\n  - `show stream cancelled` → aborted=true, bytesSent=17825792\n  - `negative control: unbounded read buffers PAST the 16 MiB cap` → buffered 16799524 bytes (> cap)\n    — proves the cap is load-bearing (without it the body keeps accumulating past 16 MiB).\n  - `happy path: small /api/tags still parsed` → `reachable:true, 2 models`\n  - `happy path: small /api/show still parsed` → `contextWindow=65536`\n- **What was not tested**: Did not exercise a live external Ollama Cloud endpoint (`ollama.com`); the\n  untrusted-body behavior is fully reproduced with a local streaming server, which is the same\n  transport path. The proof script is not committed.\n\n## Evidence\n\n```\n[proof] local server on http://127.0.0.1:46829, cap=16777216 bytes, would-stream≈67108864 bytes\n\nPASS  readResponseWithLimit throws bounded error on unbounded body :: threw=true msg=\"bounded: exceeds 16777216 bytes\"\nPASS  stream cancelled: server saw socket abort before sending the full ~64MiB :: aborted=true bytesSent=19333120 (<33554432)\nPASS  fetchOllamaModels fail-soft on overflow (reachable:false, models:[]) :: {\"reachable\":false,\"models\":[]}\nPASS  queryOllamaModelShowInfo fail-soft on overflow ({}) :: {}\nPASS  show stream cancelled: server saw socket abort, bytes ≪ full body :: aborted=true bytesSent=17825792\nPASS  negative control: unbounded read buffers PAST the 16MiB cap (cap is load-bearing) :: buffered=16799524 bytes (>16777216)\nPASS  happy path: small /api/tags still parsed (2 models) :: {\"reachable\":true,\"models\":[{\"name\":\"llama3:8b\"},{\"name\":\"qwen3:4b\"}]}\nPASS  happy path: small /api/show still parsed (contextWindow=65536) :: contextWindow=65536\n\n[proof] ALL PASS\n```\n\nRegression suite + checks (worktree on `upstream/main`):\n- `node scripts/run-vitest.mjs extensions/ollama/src/provider-models.test.ts --run` → **16/16 passed**\n- `oxlint extensions/ollama/src/provider-models.ts` → exit 0, clean\n- `tsgo -p tsconfig.extensions.json` → no errors in `extensions/ollama` (only pre-existing,\n  unrelated `extensions/qa-lab` `crabline` module-resolution failures present on untouched main)\n\nThis is the symmetric counterpart to the #95103 / #95108 response-limit campaign, applying the same\n`@openclaw/media-core` bounded reader to the two Ollama provider-discovery JSON reads.\n\n**Label**: security\n\n_AI-assisted._\n",
+        "branch": "fix/bound-ollama-model-discovery",
+        "head_sha": "fc1804c38d202316fbb7e37d8c7a9ed22373af1e",
         "author": "alix-007",
         "labels": [
-          "channel: mattermost",
-          "size: S"
+          "size: S",
+          "extensions: ollama"
         ],
         "files": [
           {
-            "path": "extensions/mattermost/src/mattermost/client.test.ts",
-            "additions": 43,
+            "path": "extensions/ollama/src/provider-models.test.ts",
+            "additions": 55,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/client.ts",
-            "additions": 21,
-            "deletions": 4,
+            "path": "extensions/ollama/src/provider-models.ts",
+            "additions": 7,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 64,
-        "deletions": 4,
+        "additions": 62,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96033",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96033.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96027",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96027.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 89,
-          "gatingTotal": 84,
+          "total": 88,
+          "gatingTotal": 83,
           "counts": {
-            "SUCCESS": 57,
+            "SUCCESS": 56,
             "SKIPPED": 31,
-            "NEUTRAL": 1
+            "FAILURE": 1
           },
-          "blockers": [],
+          "blockers": [
+            "check-test-types:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "check-test-types:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
@@ -141,15 +145,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4839,
+    "total_ms": 6100,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 638
+        "ms": 1692
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1722
+        "ms": 1709
       },
       {
         "name": "classify_comment_commands",
@@ -165,11 +169,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2454
+        "ms": 2670
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 4
       }
     ]
   }
