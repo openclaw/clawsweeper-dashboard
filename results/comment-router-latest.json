@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T04:40:49.928Z",
+  "generated_at": "2026-06-23T04:41:15.229Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T01:40:48.210Z",
+  "since": "2026-06-23T01:41:14.587Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     91399
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4775635137
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
@@ -37,16 +39,16 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/91399#issuecomment-4648125212",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 91399,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 95824,
+      "author": "ats3v",
+      "author_id": 1550392,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-08T10:53:57Z",
-      "comment_updated_at": "2026-06-23T04:40:44Z",
+      "comment_created_at": "2026-06-23T04:39:04Z",
+      "comment_updated_at": "2026-06-23T04:39:04Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -62,124 +64,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): keep no-channel implicit cron runs successful instead of failing delivery (#56078)",
-        "body": "## Summary\nOn a local / no-channel setup, backend- or Control-UI-created isolated `agentTurn` cron jobs fail their whole run with `Channel is required (no configured channels detected)` even though the agent turn ran successfully (e.g. it wrote a report file). The run is marked `status:\"error\"` and the user sees no output. This patch keeps such runs successful: an implicit announce-to-`last` delivery that cannot resolve a channel now finishes as a silent ok (`delivered:false`) instead of hard-failing, while explicit delivery targets still fail-closed.\n\n## Root Cause\n- `src/cron/delivery-plan.ts:resolveCronDeliveryPlan`: isolated/current/session `agentTurn`|`command` jobs with no explicit delivery config default to `mode:\"announce\"`, `channel:\"last\"`, `requested:true`.\n- `src/cron/isolated-agent/delivery-target.ts:resolveDeliveryTarget` (≈249-260): with no previously-used channel, returns `{ ok:false, error:\"Channel is required when delivery.channel=last has no previous channel.\" }`.\n- `src/cron/isolated-agent/delivery-dispatch.ts:dispatchCronDelivery` (the `if (deliveryRequested && !skipHeartbeatDelivery && !sourceDeliverySatisfied) { if (!resolvedDelivery.ok) { if (!deliveryBestEffort) ... } }` branch): for the non-best-effort default it called `failDeliveryTarget(...)` → `status:\"error\"`, `errorKind:\"delivery-target\"`. Execution path: `run.ts dispatchCronDelivery -> resolvedDelivery.ok===false -> failDeliveryTarget`.\n- clawsweeper direction on #56078: *\"current main and the latest release still default Control UI and backend-created isolated agent-turn cron jobs to strict `announce` delivery against `last`, so a local/no-channel setup can still hit the reported `Channel is required` delivery-target failure.\"*\n\nAn implicit announce-to-`last` with no resolvable channel never had a sendable target, so hard-erroring delivers nothing — it only marks a successful turn as failed and drops its output.\n\n## Changes\n- `src/cron/isolated-agent/delivery-dispatch.ts`: add `deliveryTargetExplicit` to `DispatchCronDeliveryParams`; gate the unresolved-target hard-fail on it — `if (deliveryTargetExplicit && !deliveryBestEffort)` still calls `failDeliveryTarget`, otherwise it takes the existing silent-ok path (`logCronDeliveryWarn` + `status:\"ok\"`, `delivered:false`, `deliveryAttempted:false`), the same graceful path best-effort delivery already uses.\n- `src/cron/isolated-agent/run.ts`: pass `deliveryTargetExplicit: hasExplicitCronDeliveryTarget(prepared.deliveryPlan)` (already-imported helper; `delivery-plan.ts:25-29` returns true only for a concrete `channel!==\"last\"` / `to` / `threadId` / `accountId`).\n- `src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts`: regression coverage for both sides.\n\n## Reproduction (before fix)\n~~~text\nFAIL  downgrades an unresolved implicit last-channel delivery to a silent ok (#56078)\nAssertionError: status: expected 'error' to deeply equal 'ok'\n  at expectResultFields (delivery-dispatch.double-announce.test.ts:282)\nTest Files  1 failed | ... ; Tests  1 failed | 69 passed (70)\n~~~\n\n## Verification (after fix)\n~~~text\nTests  70 passed (70)\n  ✓ downgrades an unresolved implicit last-channel delivery to a silent ok (#56078)\n  ✓ still fails the run when an explicit delivery target cannot be resolved (#56078 guard)\n~~~\n\n## Test\n- `pnpm test src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts` — 70 passed (was 69/70 RED before the one-line gate; 68 pre-existing cases unchanged)\n- `pnpm tsgo:core` — passed (clean)\n\n## Notes\n- Scope: single issue, smallest complete fix — one gated condition + one threaded boolean. ~70 LOC across 3 files (2 prod + 1 test).\n- No message loss: only IMPLICIT announce-to-`last` with an unresolvable channel is downgraded; jobs that named a concrete channel/recipient/thread/account still fail-closed exactly as before. This mirrors the already-shipped best-effort branch.\n- Discriminator: `hasExplicitCronDeliveryTarget(deliveryPlan)`, not `resolvedDelivery.mode` — `mode` only tracks an explicit `to`, so an explicit channel-only job would otherwise be wrongly downgraded.\n- Downstream: `status:\"ok\"` + `delivered:false` records `not-delivered` and intentionally stops retry/backoff/error alerts for the no-channel default; explicit targets keep the prior error path.\n- Not tested locally: full cross-lane CI integration suite (run by CI). Local proof is the direct unit test of `dispatchCronDelivery` + `tsgo:core`.\n\nCloses #56078\n",
-        "branch": "fix/cron-no-channel-output",
-        "head_sha": "dfef8a80abbb77973be8a4dca24a373263c3b9c3",
-        "author": "moerai",
-        "labels": [
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "src/cron/delivery-preview.test.ts",
-            "additions": 48,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/delivery-preview.ts",
-            "additions": 23,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts",
-            "additions": 84,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/delivery-dispatch.ts",
-            "additions": 18,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 174,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91399",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91399.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 89,
-          "gatingTotal": 84,
-          "counts": {
-            "FAILURE": 9,
-            "SUCCESS": 54,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-compact-small-whole-2:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-compact-small-whole-2:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2021,
+    "total_ms": 2728,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 352
+        "ms": 632
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1353
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -191,7 +93,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 293
+        "ms": 2087
       },
       {
         "name": "append_ledger",
