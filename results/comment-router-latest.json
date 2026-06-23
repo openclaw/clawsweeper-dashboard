@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T13:09:46.605Z",
+  "generated_at": "2026-06-23T13:10:01.352Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T10:09:42.464Z",
+  "since": "2026-06-23T10:10:01.028Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    95819
+    95789
   ],
-  "comment_ids": [
-    4779528832
-  ],
-  "status_comment_id": 4779529291,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,149 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:95819:4779528832:2026-06-23T13:08:29Z:re_review",
-      "comment_id": "4779528832",
-      "comment_version_key": "4779528832:2026-06-23T13:08:29Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95819#issuecomment-4779528832",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 95819,
-      "author": "CrypticDriver",
-      "author_id": 107245892,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-23T13:08:29Z",
-      "comment_updated_at": "2026-06-23T13:08:29Z",
-      "status_comment_id": 4779529291,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-23T13:09:47.824Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 95819
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-23T13:09:50.410Z",
-          "response_comment_id": "4777618075",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(bedrock): stop replaying stale signed thinking from completed turns",
-        "body": "## What Problem This Solves\n\nOn Amazon Bedrock (Converse), the message converter replays **every** historical signed `thinking` block unconditionally. Over a long, tool-heavy session these signed reasoning blocks from already-completed turns accumulate, and Bedrock eventually rejects the entire request with a Bedrock-specific validation error:\n\n```\nValidation error: The model returned the following errors: messages.N.content.M: Invalid signature in `thinking` block...\n```\n\nOnce this happens the session is effectively bricked: every retry resends the same stale signatures, and recovery never kicks in on the Bedrock path (the validation failure is delivered as an in-stream `{type:\"error\"}` event rather than a thrown rejection — see #95429 / #95430). The only manual workaround is to physically strip the offending thinking blocks from the persisted transcript and restart.\n\nThe native Anthropic provider already guards against this in #94493: it only replays signed thinking when the current request keeps thinking enabled, otherwise it keeps just the **active tool turn's** reasoning and drops the rest. The Bedrock Converse converter never received the equivalent logic.\n\n## Changes\n\n- **`extensions/amazon-bedrock/stream.runtime.ts`** — mirror the native provider. Derive `replayThinkingEnabled` (true for Fable 5, or when the request sends `thinking: { type: \"enabled\" | \"adaptive\" }`) and use `findActiveAnthropicToolTurnAssistantIndex(...)`. When replay is disabled, drop signed thinking from completed turns and keep only the active tool turn's reasoning, inserting the `[assistant reasoning omitted]` placeholder when a turn would otherwise become empty.\n- **`extensions/amazon-bedrock/thinking-replay.ts`** — a small dependency-free copy of the native `findActiveAnthropicToolTurnAssistantIndex` helper and `ANTHROPIC_OMITTED_REASONING_TEXT`, so the Bedrock converter mirrors the native behavior without growing the public plugin-sdk export surface (kept in sync with `src/llm/providers/anthropic-thinking-replay.ts`).\n- **`src/llm/providers/anthropic.ts`** — also drop `redacted_thinking` blocks whose `thinkingSignature` payload is missing/blank (aborted stream or corrupted persistence), which otherwise trigger the same invalid-signature rejection on the native path.\n- Tests for all of the above.\n\n## Evidence\n\n### After-fix real Bedrock run (the proof the previous review asked for)\n\nReproduced end-to-end against **real Amazon Bedrock** (`bedrock-converse-stream`, region redacted) with a genuine signed thinking block returned by the model. A completed assistant turn carries a signed thinking block whose signature Bedrock no longer validates — the exact state stale, accumulated cross-turn signatures reach in a long session. Sending it the way the **old** converter did (replay all signed thinking from completed turns) reproduces the create-side rejection; applying this PR's `convertMessages(replayThinkingEnabled=false)` drop logic makes the identical request succeed:\n\n```\nLABEL: PRE-FIX  (replay stale signed thinking from completed turn)\nRESULT: REJECTED  The model returned the following errors: messages.1.content.0: Invalid `signature` in `thinking` block\n\nLABEL: POST-FIX (drop completed-turn signed thinking, keep visible answer)\nRESULT: SUCCESS  stopReason=end_turn  answer='4'\n\nLABEL: POST-FIX (turn was reasoning-only -> placeholder text)\nRESULT: SUCCESS  stopReason=end_turn  answer='4'\n```\n\nThe three cases map 1:1 to the converter branches this PR adds: (1) the old unconditional replay is what bricks the request, (2) dropping a completed turn's signed thinking while keeping its visible content recovers it, and (3) a turn that was reasoning-only falls back to the `[assistant reasoning omitted]` placeholder so turn ordering is preserved. A self-contained, dependency-free repro script (boto3 + `converse`) is available and reruns in a few seconds against any Bedrock account with Anthropic Claude access.\n\n### Production telemetry (redacted) behind the pre-fix observations\n\nFrom a real fleet running the `amazon-bedrock` provider, the gateway trajectory logs recorded the create-side failure as a `bedrock-converse-stream` error. Counts/dates/provider only — no transcript content:\n\n```\nerror string (verbatim, as logged): Invalid `signature` in `thinking` block\n\nInvalid-signature request failures  : 145\ndate range                          : 2026-06-04 .. 2026-06-23\nby day                              : 06-04:13  06-05:30  06-21:53  06-22:41  06-23:8\nprovider / api                      : amazon-bedrock / bedrock-converse-stream  (100%)\nmodels                              : global.anthropic.claude-opus-4-8 (102), global.anthropic.claude-opus-4-7 (43)\ndistinct sessions bricked           : 6\n```\n\nEvery affected session stayed bricked on retry until the documented manual workaround was applied (strip the persisted thinking blocks + reset the session). The session that logged 53 of these failures on 06-21 was only recovered by a manual reset at `2026-06-21T23:37Z`; the most recent one was reset at `2026-06-23T05:05Z`. This is the create-side root cause behind the recovery gap tracked in #95429 / #95430.\n\n### Unit tests on this branch\n\n```\n$ vitest run extensions/amazon-bedrock/stream.runtime.test.ts src/llm/providers/anthropic.test.ts\n Test Files  2 passed (2)\n      Tests  62 passed (62)\n```\n\nThe 4 new Bedrock cases cover: drop stale signed thinking from completed turns / keep the active tool turn's reasoning / insert the omitted-reasoning placeholder / replay when thinking stays enabled. `oxfmt --check` and the plugin-sdk surface budget (`scripts/plugin-sdk-surface-report.mjs --check`) are both clean.\n\n## Related\n\n- #94493 — native Anthropic equivalent (this PR ports the same fix to the Bedrock Converse path)\n- #95429 / #95430 — recovery side (complementary; this PR addresses the create side that produces the invalid payload)\n",
-        "branch": "fix/bedrock-thinking-signature-replay",
-        "head_sha": "ee64ab94754504f2f3f3aed1131e7c4d7cfe8b6e",
-        "author": "crypticdriver",
-        "labels": [
-          "size: M",
-          "extensions: amazon-bedrock",
-          "rating: 🧂 unranked krab",
-          "status: 🛠️ actively grinding"
-        ],
-        "files": [
-          {
-            "path": "extensions/amazon-bedrock/stream.runtime.test.ts",
-            "additions": 106,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/amazon-bedrock/stream.runtime.ts",
-            "additions": 36,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/amazon-bedrock/thinking-replay.ts",
-            "additions": 66,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/llm/providers/anthropic.test.ts",
-            "additions": 144,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/anthropic.ts",
-            "additions": 12,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 364,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95819",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95819.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 8850,
+    "total_ms": 622,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2009
+        "ms": 312
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2116
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -185,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 4696
+        "ms": 299
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
