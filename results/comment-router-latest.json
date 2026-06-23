@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T13:56:03.373Z",
+  "generated_at": "2026-06-23T13:56:16.817Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T10:55:57.967Z",
+  "since": "2026-06-23T10:56:16.367Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    95615
+    95800
   ],
-  "comment_ids": [
-    4779975570
-  ],
-  "status_comment_id": 4779976179,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,249 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:95615:4779975570:2026-06-23T13:54:37Z:re_review",
-      "comment_id": "4779975570",
-      "comment_version_key": "4779975570:2026-06-23T13:54:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95615#issuecomment-4779975570",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 95615,
-      "author": "anagnorisis2peripeteia",
-      "author_id": 129746152,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T13:54:37Z",
-      "comment_updated_at": "2026-06-23T13:54:37Z",
-      "status_comment_id": 4779976179,
-      "trigger": "mention",
-      "command": "re-review — force-pushed the reframed fix (baf12e8c34): default-cap-only drop on cli, explicit restrictions still fail closed, flag persisted + preserved across updates. real-behaviour before proof (live claude-cli gateway prepare.ts rejection) in the description",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "— force-pushed the reframed fix (baf12e8c34): default-cap-only drop on CLI, explicit restrictions still fail closed, flag persisted + preserved across updates. Real-behaviour BEFORE proof (live claude-cli gateway prepare.ts rejection) in the description.",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-23T13:56:04.465Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 95615
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-23T13:56:05.831Z",
-          "response_comment_id": "4779976179",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): drop unenforceable default toolsAllow cap on CLI-backed runs",
-        "body": "## Problem\n\n#91499 auto-stamps the creator's tool surface as a default `toolsAllow` cap on `agentTurn` cron payloads whenever the creating session is tool-restricted (a narrowing allow-policy or an explicit deny). CLI backends cannot enforce a runtime `toolsAllow` — `cli-runner/prepare.ts` rejects any defined allow-list — so every scheduled `agentTurn` that resolves to a CLI backend (e.g. `claude-cli`) fails to start. This silently broke per-thread scheduled continuations on CLI backends.\n\n## Fix\n\nA CLI backend is not a runtime tool-policy boundary: it runs with its own configured tool set, as the operator, on the local machine, and refuses a runtime allow-list outright. An inherited default cap is therefore unenforceable on a CLI backend. Decide at run time, where the backend is known:\n\n- **Flag the default.** `capCronAgentTurnToolsAllow` stamps `toolsAllowIsDefault` when it fills in the creator surface because the cron requested nothing (or a bare `*`). An explicit narrowing or empty allow-list is a real per-cron restriction and carries no flag.\n- **Drop only the default, only on CLI.** The run-executor drops a flagged default in the CLI branch and lets the run proceed. An explicit per-cron restriction (no flag) is deliberately passed through, so `prepare.ts` still fails it closed and surfaces that the requested policy needs an embedded runtime. Embedded runs are untouched and keep the full cap enforced.\n- **Persist the flag.** New nullable `cron_jobs.payload_tools_allow_is_default` column (additive `ensureColumn` migration + codec read/write), plus `toolsAllowIsDefault` on the gateway-protocol `agentTurn` payload schema — the stamped payload is otherwise rejected by the contract's `additionalProperties: false`.\n- **Preserve the flag across updates.** A no-`toolsAllow` update (reschedule, prompt edit) re-derives the default (flag intact) instead of carrying the stored value forward as a literal — which previously routed it through the explicit-narrowing branch, stripped the flag, and re-broke the job on CLI after the next restart.\n\nNet policy: on CLI only the unenforceable inherited default is relaxed; explicit per-cron restrictions still fail closed; embedded backends are unchanged.\n\n## Verification\n\n- `tsgo:core` clean; `oxlint` clean on changed files.\n- 683 passing across the cron + store + isolated-agent suites, including new coverage: run-executor drops the flagged default but propagates an explicit restriction on CLI; cron-tool stamps/clears the flag across create and update and preserves it across a no-`toolsAllow` update; store round-trips the flag (and its absence) through SQLite.\n\n## Real-behaviour proof — BEFORE (the regression, live)\n\nCaptured on a production `claude-cli` gateway running the pre-fix build, by force-running an `agentTurn` cron that carries a `toolsAllow` cap:\n\n- **Scenario:** `agentTurn` cron, `toolsAllow` cap stamped by capCron (sent `[\"exec\"]`, capped to `[]`), forced run, resolves to the `claude-cli` backend.\n- **Result:** run errors in **205 ms, before any agent work**:\n  `Error: CLI backend claude-cli cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy`\n- **Mechanism:** the cap reaches `cli-runner/prepare.ts`, which rejects any defined runtime `toolsAllow` → the scheduled continuation never starts. This is the exact failure the fix removes for the *default* (unenforceable) cap.\n\nAFTER behaviour (run-executor drops the flagged default on CLI and the run proceeds) is covered by `run.message-tool-policy.test.ts`; a filmed before/after cron-wake capture (reply landing back in the Telegram topic) is being assembled as a follow-up artifact.\n\n## Risk / mitigation\n\n- **Risk:** a reloaded job loses the in-memory flag and re-hits the rejection. **Mitigation:** the flag is persisted (SQLite column + wire-schema field) and round-tripped by the codec; preserved across no-`toolsAllow` updates.\n- **Not covered:** `agentTurn` crons created during the regression window carry a flagless `toolsAllow` and remain fail-closed on CLI until recreated or updated with an explicit `toolsAllow`.\n",
-        "branch": "cameron/cron-toolsallow-cli-optin",
-        "head_sha": "baf12e8c3472e1992f2ec3735a71be5f0f0b0de3",
-        "author": "anagnorisis2peripeteia",
-        "labels": [
-          "app: web-ui",
-          "gateway",
-          "agents",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "packages/gateway-protocol/src/schema/cron.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/cron-tool.test.ts",
-            "additions": 48,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/cron-tool.ts",
-            "additions": 24,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run-executor.ts",
-            "additions": 28,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.message-tool-policy.test.ts",
-            "additions": 35,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/store.test.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/store/payload-codec.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/types.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-db.generated.d.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-db.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-schema.generated.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-schema.sql",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 12,
-        "additions": 209,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95615",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95615.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 94,
-          "gatingTotal": 89,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 41,
-            "SKIPPED": 29,
-            "IN_PROGRESS": 22,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 8643,
+    "total_ms": 801,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2895
+        "ms": 438
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2497
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -285,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3224
+        "ms": 352
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
