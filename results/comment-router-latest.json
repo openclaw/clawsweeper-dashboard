@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T20:05:24.779Z",
+  "generated_at": "2026-06-23T20:05:50.187Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T17:05:24.442Z",
+  "since": "2026-06-23T17:05:47.822Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96005
+    92398
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 12,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,396 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92398:4689379674:2026-06-23T20:05:43Z:clawsweeper_needs_human",
+      "comment_id": "4689379674",
+      "comment_version_key": "4689379674:2026-06-23T20:05:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92398#issuecomment-4689379674",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92398,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T09:04:55Z",
+      "comment_updated_at": "2026-06-23T20:05:43Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] Human maintainer review is needed to accept the compatibility and delivery semantics of the migration-time cron activation boundary; no narrow automated repair is identified.; Cleared: No concrete security or supply-chain issue found; the diff touches cron scheduler state, doctor SQLite migration, protocol schema, and tests without new dependencies, workflows, secrets, or external code execut... (sha=6a00c36e666751b5818b4678a82b27fb86c032cd)",
+      "review_summary": "The PR adds scheduler-owned cron schedule activation state, uses it to bound restart/backoff missed-slot replay, adds a doctor backfill for legacy rows, updates the protocol state schema, and adds focused cron/doctor tests.\n\nPR surface: Source +118, Tests +403. Total +521 across 14 files.\n\nReproducibility: yes. Current main is source-reproducible: cron.update can move nextRunAtMs without recording schedule activation, and restart catch-up can still replay a previous cron slot solely because it is newer than lastRunAtMs.",
+      "review_followup": "- [P2] Human maintainer review is needed to accept the compatibility and delivery semantics of the migration-time cron activation boundary; no narrow automated repair is identified.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "6a00c36e666751b5818b4678a82b27fb86c032cd",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): bound restart catch-up to schedule activation",
+        "body": "## Summary\n\nFixes #91944.\n\nCron restart catch-up now replays only schedule slots that occurred after the schedule was activated. The scheduler records `state.scheduleActivatedAtMs` when a job is created or when its schedule/enabled state changes, and both startup catch-up and error-backoff replay use that boundary.\n\nExisting cron rows are handled by `openclaw doctor --fix`: the cron preflight first imports legacy cron state, then transactionally stamps rows missing the activation field with the migration time. Runtime reads only the canonical field and fails closed when it is absent, so an upgrade cannot infer and send stale pre-upgrade outbound slots.\n\nMetadata-only edits do not move the boundary. Public create/update inputs cannot inject scheduler-owned activation state.\n\n## Verification\n\n- 146 focused cron, doctor, protocol, and service tests passed locally.\n- Targeted oxfmt and oxlint passed.\n- Azure Linux Crabbox focused proof passed: lease `cbx_4ce772051720`, run `run_6f4988261933`, 120 tests.\n- Fresh Codex autoreview: no actionable findings, patch correct at 0.91 confidence.\n- Exact-head GitHub CI is running on `0e30df1f5a45d4a83d095e6cdf559db1ee05eda6`.\n\n## Real behavior proof\n\nBehavior addressed: An API-updated cron schedule must not replay a slot that predates the schedule activation after a gateway restart.\n\nReal environment tested: The contributor ran a real macOS Gateway with a scratch SQLite cron store, created and edited the job through the real CLI/Gateway RPC path, injected the historical prior-schedule run, and restarted the Gateway. The final repaired head was additionally validated on Azure Linux Crabbox against the focused cron/doctor/SQLite suites.\n\nExact steps or command run after this patch: Create the cron job through `openclaw cron add`, change its expression through `openclaw cron edit`, set the prior-schedule `lastRunAtMs` in the scratch SQLite row, restart the Gateway, and inspect the job state and missed-job logs. For the final doctor-owned legacy path, remove `scheduleActivatedAtMs`, run the cron doctor preflight migration, and verify the canonical activation boundary is written before restart evaluation.\n\nEvidence after fix:\n\n```text\nreal Gateway, activation field present:\n  nextRunAtMs: 2026-07-11T14:18:00.000Z (unchanged after restart)\n  lastRunAtMs: 2026-05-11T07:18:00.000Z (unchanged; job did not fire)\n  new missed-job log lines: 0\n\nfinal repaired head:\n  Azure Linux lease: cbx_4ce772051720\n  run: run_6f4988261933\n  focused cron/doctor/SQLite tests: 120 passed\n  doctor migration transactionally stamps only cron rows missing scheduleActivatedAtMs\n  runtime does not infer a legacy activation boundary\n```\n\nObserved result after fix: The updated job remains on its future API-selected schedule after restart. Existing rows receive one conservative doctor-owned activation boundary, preventing stale pre-upgrade outbound replay.\n\nWhat was not tested: A full version-to-version `openclaw update` install flow. The real Gateway restart covered the field-present runtime path; the final legacy migration replacement is covered by current-head SQLite integration tests and the Azure Linux run, so a maintainer proof override is applied for that portion.\n\n## Risk\n\nThis changes restart delivery behavior and persisted cron state. The conservative migration may skip a pre-upgrade missed slot, but it will not send an inferred stale outbound job. No config or environment surface is added.\n\nRelease-note context: cron jobs no longer fire slots that predate their current schedule activation after a gateway restart or upgrade. Reported by @suifatt7799-oss in #91944.\n",
+        "branch": "fix/cron-startup-replay-updated-schedule",
+        "head_sha": "6a00c36e666751b5818b4678a82b27fb86c032cd",
+        "author": "amersheeny",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "commands",
+          "size: L",
+          "proof: override",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "packages/gateway-protocol/src/schema/cron.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-config-preflight.state-migration.test.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-config-preflight.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/cron/index.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/cron/schedule-activation-migration.test.ts",
+            "additions": 99,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/doctor/cron/schedule-activation-migration.ts",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/cron-protocol-schema.test.ts",
+            "additions": 19,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service.jobs.test.ts",
+            "additions": 34,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service.restart-catchup.test.ts",
+            "additions": 206,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/jobs.ts",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/ops.test.ts",
+            "additions": 35,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/ops.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 21,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/types.ts",
+            "additions": 13,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 14,
+        "additions": 543,
+        "deletions": 22,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92398",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92398.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 89,
+          "gatingTotal": 84,
+          "counts": {
+            "SUCCESS": 65,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92398:4701246667:2026-06-14T08:53:36Z:re_review",
+      "comment_id": "4701246667",
+      "comment_version_key": "4701246667:2026-06-14T08:53:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92398#issuecomment-4701246667",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92398,
+      "author": "amersheeny",
+      "author_id": 7223047,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-14T08:53:36Z",
+      "comment_updated_at": "2026-06-14T08:53:36Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): bound restart catch-up to schedule activation",
+        "body": "## Summary\n\nFixes #91944.\n\nCron restart catch-up now replays only schedule slots that occurred after the schedule was activated. The scheduler records `state.scheduleActivatedAtMs` when a job is created or when its schedule/enabled state changes, and both startup catch-up and error-backoff replay use that boundary.\n\nExisting cron rows are handled by `openclaw doctor --fix`: the cron preflight first imports legacy cron state, then transactionally stamps rows missing the activation field with the migration time. Runtime reads only the canonical field and fails closed when it is absent, so an upgrade cannot infer and send stale pre-upgrade outbound slots.\n\nMetadata-only edits do not move the boundary. Public create/update inputs cannot inject scheduler-owned activation state.\n\n## Verification\n\n- 146 focused cron, doctor, protocol, and service tests passed locally.\n- Targeted oxfmt and oxlint passed.\n- Azure Linux Crabbox focused proof passed: lease `cbx_4ce772051720`, run `run_6f4988261933`, 120 tests.\n- Fresh Codex autoreview: no actionable findings, patch correct at 0.91 confidence.\n- Exact-head GitHub CI is running on `0e30df1f5a45d4a83d095e6cdf559db1ee05eda6`.\n\n## Real behavior proof\n\nBehavior addressed: An API-updated cron schedule must not replay a slot that predates the schedule activation after a gateway restart.\n\nReal environment tested: The contributor ran a real macOS Gateway with a scratch SQLite cron store, created and edited the job through the real CLI/Gateway RPC path, injected the historical prior-schedule run, and restarted the Gateway. The final repaired head was additionally validated on Azure Linux Crabbox against the focused cron/doctor/SQLite suites.\n\nExact steps or command run after this patch: Create the cron job through `openclaw cron add`, change its expression through `openclaw cron edit`, set the prior-schedule `lastRunAtMs` in the scratch SQLite row, restart the Gateway, and inspect the job state and missed-job logs. For the final doctor-owned legacy path, remove `scheduleActivatedAtMs`, run the cron doctor preflight migration, and verify the canonical activation boundary is written before restart evaluation.\n\nEvidence after fix:\n\n```text\nreal Gateway, activation field present:\n  nextRunAtMs: 2026-07-11T14:18:00.000Z (unchanged after restart)\n  lastRunAtMs: 2026-05-11T07:18:00.000Z (unchanged; job did not fire)\n  new missed-job log lines: 0\n\nfinal repaired head:\n  Azure Linux lease: cbx_4ce772051720\n  run: run_6f4988261933\n  focused cron/doctor/SQLite tests: 120 passed\n  doctor migration transactionally stamps only cron rows missing scheduleActivatedAtMs\n  runtime does not infer a legacy activation boundary\n```\n\nObserved result after fix: The updated job remains on its future API-selected schedule after restart. Existing rows receive one conservative doctor-owned activation boundary, preventing stale pre-upgrade outbound replay.\n\nWhat was not tested: A full version-to-version `openclaw update` install flow. The real Gateway restart covered the field-present runtime path; the final legacy migration replacement is covered by current-head SQLite integration tests and the Azure Linux run, so a maintainer proof override is applied for that portion.\n\n## Risk\n\nThis changes restart delivery behavior and persisted cron state. The conservative migration may skip a pre-upgrade missed slot, but it will not send an inferred stale outbound job. No config or environment surface is added.\n\nRelease-note context: cron jobs no longer fire slots that predate their current schedule activation after a gateway restart or upgrade. Reported by @suifatt7799-oss in #91944.\n",
+        "branch": "fix/cron-startup-replay-updated-schedule",
+        "head_sha": "6a00c36e666751b5818b4678a82b27fb86c032cd",
+        "author": "amersheeny",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "commands",
+          "size: L",
+          "proof: override",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "packages/gateway-protocol/src/schema/cron.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-config-preflight.state-migration.test.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-config-preflight.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/cron/index.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/cron/schedule-activation-migration.test.ts",
+            "additions": 99,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/doctor/cron/schedule-activation-migration.ts",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/cron-protocol-schema.test.ts",
+            "additions": 19,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service.jobs.test.ts",
+            "additions": 34,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service.restart-catchup.test.ts",
+            "additions": 206,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/jobs.ts",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/ops.test.ts",
+            "additions": 35,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/ops.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 21,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/types.ts",
+            "additions": 13,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 14,
+        "additions": 543,
+        "deletions": 22,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92398",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92398.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 89,
+          "gatingTotal": 84,
+          "counts": {
+            "SUCCESS": 65,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92398:4701197647:2026-06-14T08:31:25Z:re_review",
+      "comment_id": "4701197647",
+      "comment_version_key": "4701197647:2026-06-14T08:31:25Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92398#issuecomment-4701197647",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92398,
+      "author": "amersheeny",
+      "author_id": 7223047,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-14T08:31:25Z",
+      "comment_updated_at": "2026-06-14T08:31:25Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 564,
+    "total_ms": 2826,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 326
+        "ms": 351
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1998
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +430,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 228
+        "ms": 449
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
