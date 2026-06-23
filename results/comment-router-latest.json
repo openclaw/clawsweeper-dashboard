@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-23T19:28:45.882Z",
+  "generated_at": "2026-06-23T19:29:38.822Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T16:28:45.434Z",
+  "since": "2026-06-23T16:29:36.632Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    95980
+    93567
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 6,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,220 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93567:4751890546:2026-06-22T15:08:47Z:clawsweeper_needs_human",
+      "comment_id": "4751890546",
+      "comment_version_key": "4751890546:2026-06-22T15:08:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93567#issuecomment-4751890546",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93567,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-19T13:14:58Z",
+      "comment_updated_at": "2026-06-22T15:08:47Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] No repair lane is needed because the open PR already contains the narrow source/test fix with sufficient proof and no actionable findings.; Cleared: The diff tightens cron run-log job ID validation and adds tests; it does not change dependencies, CI, lockfiles, secrets, install scripts, or external code execution paths. (sha=4a71c41b62a99d77976ba1046f82003a9f9b62f0)",
+      "review_summary": "The PR normalizes cron run-log job IDs on write and adds regression tests for padded and unsafe IDs.\n\nPR surface: Source +10, Tests +31. Total +41 across 2 files.\n\nReproducibility: yes. Source inspection on current main shows raw write IDs flowing into exact SQLite job_id storage while read paths trim and validate before querying.",
+      "review_followup": "- [P2] No repair lane is needed because the open PR already contains the narrow source/test fix with sufficient proof and no actionable findings.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "4a71c41b62a99d77976ba1046f82003a9f9b62f0",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): normalize run-log jobId on write to match read-side validation",
+        "body": "## Summary\n\n`appendCronRunLog` stored `entry.jobId` verbatim, while reads (`readCronRunLogEntriesSync` / `readCronRunLogEntriesPage`) trim + validate via `assertSafeCronRunLogJobId`. The result was an asymmetric write/read roundtrip:\n\n- a jobId with surrounding whitespace (`\"  job  \"`) is **written but never read back** — reads trim to `\"job\"` before querying, while the stored row keeps the padded key\n- a jobId containing `/` or `\\` is **rejected on read yet silently accepted on write**\n\n## What changed\n\n`src/cron/run-log.ts`: `appendCronRunLog` now normalizes `entry.jobId` with the same `assertSafeCronRunLogJobId` the read path uses — before computing the write key, inserting the row, and pruning. Rows are stored and queried under one consistent normalized key. Single-file change; well-formed jobIds (the common case) are unaffected.\n\n## Real behavior proof\n\n**Behavior addressed**: cron run-log jobId is normalized identically on write and read, so a whitespace-padded jobId is found on readback, and an unsafe jobId is rejected on write the same way it already is on read.\n\n**Real environment tested**: Worktree of `origin/main` at the PR head, Node v22.22.0, with an isolated `OPENCLAW_STATE_DIR` temp dir. Drove the real exported `appendCronRunLog` + `readCronRunLogEntriesSync` via `node --import tsx` against a real SQLite state DB — no mocks/stubs.\n\n**Exact steps or command run after this patch**:\n```\nOPENCLAW_STATE_DIR=<tmpdir> node --import tsx ./proof.mts   # real appendCronRunLog + readCronRunLogEntriesSync\nnode scripts/run-vitest.mjs src/cron/run-log.test.ts\n```\n\n**Evidence after fix**: Real console output driving the production functions against a real SQLite store:\n```\n[1] wrote run-log entry with jobId=\"  spaced-job  \" (whitespace-padded)\n[2] read jobId=\"spaced-job\"   → 1 row(s), stored jobId=\"spaced-job\"\n[3] read jobId=\"  spaced-job  \" → 1 row(s)\n[4] write jobId=\"nested/job\" rejected with: \"invalid cron run log job id\"\n\nRESULT: PASS - jobId write/read roundtrip is symmetric (normalized on write, found on read across real SQLite; unsafe jobId rejected on write like reads).\n```\n\n**Observed result after fix**: The padded jobId is stored normalized (`\"spaced-job\"`) and found under both the trimmed and padded query forms; the unsafe jobId is rejected on write. Before the fix the padded row is written but reads return 0 rows (see negative control).\n\n**What was not tested**: No live cron scheduler run; the change is in the run-log store's deterministic write path, exercised directly via the real exported functions + real SQLite.\n\n## Tests and validation\n\n- `src/cron/run-log.test.ts` (+2 regression tests): write-side jobId normalization roundtrip (padded jobId found on read, stored normalized) + write-side rejection of unsafe jobIds (`/`, `\\`, blank). **18/18 pass.**\n- **Negative control**: reverting the write-side normalization makes both new tests fail — the padded row is written but not read back, and unsafe jobIds are silently accepted on write.\n- `node scripts/run-tsgo.mjs` clean on the changed file.\n",
+        "branch": "fix/cron-runlog-jobid-roundtrip",
+        "head_sha": "ee41f84b53a5a0eca874959e456052f42acc8920",
+        "author": "alix-007",
+        "labels": [
+          "size: XS",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/cron/run-log.test.ts",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/run-log.ts",
+            "additions": 13,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 44,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93567",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93567.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "gatingTotal": 90,
+          "counts": {
+            "SUCCESS": 61,
+            "SKIPPED": 32,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:93567:4717110396:2026-06-16T09:42:11Z:re_review",
+      "comment_id": "4717110396",
+      "comment_version_key": "4717110396:2026-06-16T09:42:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93567#issuecomment-4717110396",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93567,
+      "author": "Alix-007",
+      "author_id": 267018309,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-16T09:42:11Z",
+      "comment_updated_at": "2026-06-16T09:42:11Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): normalize run-log jobId on write to match read-side validation",
+        "body": "## Summary\n\n`appendCronRunLog` stored `entry.jobId` verbatim, while reads (`readCronRunLogEntriesSync` / `readCronRunLogEntriesPage`) trim + validate via `assertSafeCronRunLogJobId`. The result was an asymmetric write/read roundtrip:\n\n- a jobId with surrounding whitespace (`\"  job  \"`) is **written but never read back** — reads trim to `\"job\"` before querying, while the stored row keeps the padded key\n- a jobId containing `/` or `\\` is **rejected on read yet silently accepted on write**\n\n## What changed\n\n`src/cron/run-log.ts`: `appendCronRunLog` now normalizes `entry.jobId` with the same `assertSafeCronRunLogJobId` the read path uses — before computing the write key, inserting the row, and pruning. Rows are stored and queried under one consistent normalized key. Single-file change; well-formed jobIds (the common case) are unaffected.\n\n## Real behavior proof\n\n**Behavior addressed**: cron run-log jobId is normalized identically on write and read, so a whitespace-padded jobId is found on readback, and an unsafe jobId is rejected on write the same way it already is on read.\n\n**Real environment tested**: Worktree of `origin/main` at the PR head, Node v22.22.0, with an isolated `OPENCLAW_STATE_DIR` temp dir. Drove the real exported `appendCronRunLog` + `readCronRunLogEntriesSync` via `node --import tsx` against a real SQLite state DB — no mocks/stubs.\n\n**Exact steps or command run after this patch**:\n```\nOPENCLAW_STATE_DIR=<tmpdir> node --import tsx ./proof.mts   # real appendCronRunLog + readCronRunLogEntriesSync\nnode scripts/run-vitest.mjs src/cron/run-log.test.ts\n```\n\n**Evidence after fix**: Real console output driving the production functions against a real SQLite store:\n```\n[1] wrote run-log entry with jobId=\"  spaced-job  \" (whitespace-padded)\n[2] read jobId=\"spaced-job\"   → 1 row(s), stored jobId=\"spaced-job\"\n[3] read jobId=\"  spaced-job  \" → 1 row(s)\n[4] write jobId=\"nested/job\" rejected with: \"invalid cron run log job id\"\n\nRESULT: PASS - jobId write/read roundtrip is symmetric (normalized on write, found on read across real SQLite; unsafe jobId rejected on write like reads).\n```\n\n**Observed result after fix**: The padded jobId is stored normalized (`\"spaced-job\"`) and found under both the trimmed and padded query forms; the unsafe jobId is rejected on write. Before the fix the padded row is written but reads return 0 rows (see negative control).\n\n**What was not tested**: No live cron scheduler run; the change is in the run-log store's deterministic write path, exercised directly via the real exported functions + real SQLite.\n\n## Tests and validation\n\n- `src/cron/run-log.test.ts` (+2 regression tests): write-side jobId normalization roundtrip (padded jobId found on read, stored normalized) + write-side rejection of unsafe jobIds (`/`, `\\`, blank). **18/18 pass.**\n- **Negative control**: reverting the write-side normalization makes both new tests fail — the padded row is written but not read back, and unsafe jobIds are silently accepted on write.\n- `node scripts/run-tsgo.mjs` clean on the changed file.\n",
+        "branch": "fix/cron-runlog-jobid-roundtrip",
+        "head_sha": "ee41f84b53a5a0eca874959e456052f42acc8920",
+        "author": "alix-007",
+        "labels": [
+          "size: XS",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/cron/run-log.test.ts",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/run-log.ts",
+            "additions": 13,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 44,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93567",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93567.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "gatingTotal": 90,
+          "counts": {
+            "SUCCESS": 61,
+            "SKIPPED": 32,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 766,
+    "total_ms": 2541,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 442
+        "ms": 472
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1703
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +254,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 318
+        "ms": 342
       },
       {
         "name": "append_ledger",
