@@ -1,23 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T05:59:46.429Z",
+  "generated_at": "2026-06-24T06:00:32.621Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T02:59:44.134Z",
+  "since": "2026-06-24T03:00:28.521Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    96004
+    95889
   ],
   "comment_ids": [
-    4786329220
+    4786326556
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,22 +31,117 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95889:4786326556:2026-06-24T05:57:56Z:re_review",
+      "comment_id": "4786326556",
+      "comment_version_key": "4786326556:2026-06-24T05:57:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95889#issuecomment-4786326556",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95889,
+      "author": "xzh-icenter",
+      "author_id": 279172199,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T05:57:56Z",
+      "comment_updated_at": "2026-06-24T05:57:56Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): preserve pending replies on forced restart",
+        "body": "## Summary\n\n- Problem: Forced gateway restart (`force: true` / SIGUSR1) returns `drainTimeoutMs=0` from `resolveRestartDrainTimeoutMs`, which causes the drain logic to skip waiting for pending replies and the `server.close()` reply-drain to time out immediately, silently dropping in-flight user-facing messages.\n- What changed: `resolveRestartDrainTimeoutMs` now returns `RESTART_FORCE_DRAIN_MIN_MS` (5s) instead of `0` when `force=true`. The force-restart path in the drain section now actually waits for active tasks/runs within that window after aborting embedded runs, instead of skipping drain entirely.\n- What did NOT change: Non-forced restart behavior, `server.close()` drain logic, `SHUTDOWN_TIMEOUT_MS`, `DEFAULT_RESTART_DRAIN_TIMEOUT_MS`, the `resolveRestartCloseDrainTimeoutMs` function.\n\nFixes #95866\n\n## Verification\n\n```bash\nnode scripts/run-vitest.mjs src/cli/gateway-cli/run-loop.test.ts\n```\n\n## Impact Assessment\n\n- Scope: Gateway forced restart path only (`force: true` or `SIGUSR1` with force intent). Normal restart and stop paths are unchanged.\n- Downstream: Any tool or cron job that triggers a forced gateway restart. Pending replies are now preserved instead of silently dropped.\n- Edge cases: If the 5s drain window is not enough (e.g., a very slow provider), the force restart still proceeds after the window expires — same as before, but now with a best-effort drain attempt. The `SHUTDOWN_TIMEOUT_MS` (25s) force-exit timer still caps the overall shutdown.\n- Existing PRs: No competing PRs found for #95866.\n\n## Real behavior proof\n\n**Behavior addressed:** Forced gateway restart silently drops pending in-flight replies because drain timeout is 0ms and the force path skips `waitForActiveTasks`/`waitForActiveEmbeddedRuns` entirely. After the fix, the force path uses a 5s drain budget and waits for active work to complete.\n\n**Environment tested:** Node.js v24.16.0, Linux 6.18 (WSL2), worktree at /mnt/g/code/openclaw-worktrees/pr-95889-verify\n\n**Steps run after the patch:**\n\n```bash\ncd /mnt/g/code/openclaw-worktrees/pr-95889-verify && node --input-type=module -e \"\nimport { readFileSync } from 'node:fs';\n\nconst src = readFileSync('src/cli/gateway-cli/run-loop.ts', 'utf8');\nconst serverClose = readFileSync('src/gateway/server-close.ts', 'utf8');\n\n// --- Check 1: resolveRestartDrainTimeoutMs returns 5000 for force=true ---\nconst constMatch = src.match(/const RESTART_FORCE_DRAIN_MIN_MS\\s*=\\s*(\\d[\\d_]*);/);\nconsole.log('RESTART_FORCE_DRAIN_MIN_MS value:', constMatch?.[1] ?? 'NOT FOUND');\n\nconst forceReturn = src.match(/if \\(restartIntent\\?\\.force\\)\\s*\\{\\s*return\\s+(\\w+);/s);\nconsole.log('force branch returns:', forceReturn?.[1] ?? 'NOT FOUND');\nconsole.log('force returns 5000 constant:', forceReturn?.[1] === 'RESTART_FORCE_DRAIN_MIN_MS');\n\n// --- Check 2: force path now waits for active work ---\nconsole.log('force path calls waitForActiveTasks:', src.includes('waitForActiveTasks(restartDrainTimeoutMs)'));\nconsole.log('force path calls waitForActiveEmbeddedRuns:', src.includes('waitForActiveEmbeddedRuns(restartDrainTimeoutMs)'));\nconsole.log('force path has drain timeout exhausted log:', src.includes('forced restart drain window exhausted'));\nconsole.log('force path has all-drained log:', src.includes('all active work drained after force abort'));\n\n// --- Check 3: server-close reply drain respects timeout ---\nconsole.log('waitForRestartReplyDrain exists:', serverClose.includes('async function waitForRestartReplyDrain'));\nconsole.log('returns undrained when timeoutMs <= 0:', serverClose.includes('if (timeoutMs <= 0)') && serverClose.includes('drained: false, elapsedMs: 0'));\nconsole.log('polls when timeoutMs > 0:', serverClose.includes('const startedAt = Date.now()'));\n\n// --- Check 4: behavioral simulation of the drain function ---\nfunction resolveDrainMs(intent) {\n  if (intent?.force) return 5000;\n  if (typeof intent?.waitMs === 'number' && Number.isFinite(intent.waitMs))\n    return intent.waitMs > 0 ? Math.floor(intent.waitMs) : undefined;\n  return 300000;\n}\nconsole.log('');\nconsole.log('=== behavioral simulation ===');\nconsole.log('force=true => drainMs:', resolveDrainMs({ force: true }));\nconsole.log('force=false => drainMs:', resolveDrainMs({ force: false }));\nconsole.log('no intent => drainMs:', resolveDrainMs(undefined));\n\n// --- Check 5: simulate waitForRestartReplyDrain behavior ---\nfunction waitForRestartReplyDrain(timeoutMs) {\n  const t = Math.max(0, Math.floor(timeoutMs));\n  if (t <= 0) return { drained: false, elapsedMs: 0 };\n  return { drained: true, elapsedMs: t - 1 };\n}\nconsole.log('');\nconsole.log('=== reply drain simulation ===');\nconsole.log('timeoutMs=0 => drained:', waitForRestartReplyDrain(0).drained, '(old behavior: 0ms drain budget)');\nconsole.log('timeoutMs=5000 => drained:', waitForRestartReplyDrain(5000).drained, '(new behavior: 5s drain budget)');\nconsole.log('timeoutMs=300000 => drained:', waitForRestartReplyDrain(300000).drained, '(normal restart: 5min budget)');\n\"\n```\n\n**Evidence after fix (console output):**\n\n```text\nRESTART_FORCE_DRAIN_MIN_MS value: 5_000\nforce branch returns: RESTART_FORCE_DRAIN_MIN_MS\nforce returns 5000 constant: true\nforce path calls waitForActiveTasks: true\nforce path calls waitForActiveEmbeddedRuns: true\nforce path has drain timeout exhausted log: true\nforce path has all-drained log: true\nwaitForRestartReplyDrain exists: true\nreturns undrained when timeoutMs <= 0: true\npolls when timeoutMs > 0: true\n\n=== behavioral simulation ===\nforce=true => drainMs: 5000\nforce=false => drainMs: 300000\nno intent => drainMs: 300000\n\n=== reply drain simulation ===\ntimeoutMs=0 => drained: false (old behavior: 0ms drain budget)\ntimeoutMs=5000 => drained: true (new behavior: 5s drain budget)\ntimeoutMs=300000 => drained: true (normal restart: 5min budget)\n```\n\n**Observed result:** The forced restart path now uses a 5000ms drain budget instead of 0ms. When `timeoutMs=0`, the `waitForRestartReplyDrain` function in `server-close.ts` returns `{drained: false, elapsedMs: 0}` immediately — this is the bug. After the fix, `timeoutMs=5000` allows the drain to poll and wait for pending replies to complete. The force path also now calls `waitForActiveTasks(5000)` and `waitForActiveEmbeddedRuns(5000)` after aborting embedded runs, instead of skipping active work drain entirely.\n\n**Not tested:** Live gateway restart with real pending replies over connected channels (requires full gateway startup with channel providers). The drain behavior is verified through source-level proof, unit tests (36 tests passing), and behavioral simulation of the drain functions.\n",
+        "branch": "fix/issue-95866",
+        "head_sha": "aaa5b62c758422da01c70f7df2c0d9cec4d0bf5e",
+        "author": "xzh-icenter",
+        "labels": [
+          "cli",
+          "size: XS",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/gateway-cli/run-loop.test.ts",
+            "additions": 6,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 25,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 31,
+        "deletions": 8,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95889",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95889.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "gatingTotal": 90,
+          "counts": {
+            "SUCCESS": 64,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2518,
+    "total_ms": 4325,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2287
+        "ms": 2131
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1954
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -58,7 +153,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 223
+        "ms": 225
       },
       {
         "name": "append_ledger",
