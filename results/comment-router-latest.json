@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T09:13:01.681Z",
+  "generated_at": "2026-06-24T09:13:12.599Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T06:12:58.517Z",
+  "since": "2026-06-24T06:13:12.320Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96351
+    96346
   ],
-  "comment_ids": [
-    4787659364
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,174 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96351:4787659364:2026-06-24T09:10:03Z:re_review",
-      "comment_id": "4787659364",
-      "comment_version_key": "4787659364:2026-06-24T09:10:03Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96351#issuecomment-4787659364",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96351,
-      "author": "anagnorisis2peripeteia",
-      "author_id": 129746152,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T09:10:03Z",
-      "comment_updated_at": "2026-06-24T09:10:03Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(gateway): scoped attach grants for external MCP loopback clients",
-        "body": "## What Problem This Solves\n\nThe gateway's in-process loopback MCP server (`src/gateway/mcp-http.ts`) lets the gateway-spawned cli-backend reach scoped gateway tools. It authenticates with two **process-global** bearer tokens (owner / non-owner) and derives the session scope from a client-supplied header — `resolveMcpRequestContext` reads `x-session-key`. That is safe for the cli-backend, which the gateway launches and trusts. But there is no safe way for an **external, human-driven** harness (Claude Code, OpenCode — and later a harness reached via a node or companion app) to use that surface: it would have to be handed the process-global token *and* be trusted to set its own `x-session-key`, i.e. it could scope-shop into any session.\n\n## Why This Change Was Made\n\nThis is the keystone primitive for an `attach` surface — the middle ground between ACP (the gateway drives a headless agent) and pointing a raw, unassociated terminal at the gateway (tracking: openclaw/openclaw#96205). The fix is a per-session **grant**: a short-lived, revocable bearer whose scope is **bound to a `sessionKey` server-side**. Root cause of the gap is that scope was header-derived (`resolveMcpRequestContext` → `x-session-key`); a less-trusted token holder could therefore widen scope. The grant is deliberately transport-independent so the same mechanism extends to nodes / companion apps (as conduits over their existing authenticated channel) without a redesign.\n\n## User Impact\n\nNo user-visible change yet — this ships the gateway primitive only; the user-facing launcher + client adapters are a follow-up (PR2 in #96205). Operators gain two admin-scoped RPC methods, `attach.grant` / `attach.revoke`.\n\n- **Additive, no behavior change to existing paths.** The owner/non-owner cli-backend auth path is byte-identical; the grant check is a new branch reached only when neither process token matches.\n- **No new config/env surface.** The grant response reuses the existing `OPENCLAW_MCP_TOKEN` / `OPENCLAW_MCP_SESSION_KEY` placeholders already emitted by `createMcpLoopbackServerConfig`.\n- **In-memory store** (mirrors the existing loopback tokens — process-scoped, ephemeral), so no SQLite/migration.\n\nScope boundary: gateway-internal only. The launcher/adapters, and wiring `revokeAttachGrantsForSession` into session teardown, are explicit follow-ups in #96205 (a leaked grant is bounded by its TTL meanwhile).\n\n## Evidence\n\n**Security core — scope-shop blocked** (`src/gateway/mcp-http.test.ts`): a real loopback HTTP server, a request carrying a grant token **plus a spoofed `x-session-key`**, asserts the resolved session is the grant's bound key — not the header.\n\n**Live real-behavior proof** (real server, real HTTP, no mocks):\n```\n[1] lazy cold-start: real loopback MCP server up on 127.0.0.1:52243\n[2] minted grant: token=5de63799bb78… sessionKey=agent:main:main ttl→…\n[3] tools/list with grant      → HTTP 200   (authenticated; destructive tools excluded)\n[4] tools/list grant+spoofed   → HTTP 200   (served; session bound to grant, header ignored)\n[5] tools/list bogus bearer    → HTTP 401   (no grant, no access)\n```\n(Tool list is empty in this standalone harness — no plugin runtime is loaded to populate it; the auth + cold-start + grant-binding path is what's exercised. Which tools resolve, and the destructive-tool exclusion, are asserted in `mcp-http.test.ts`.)\n\n**Gates** (SHA `faba904a4`, branch `feat/attach-grants` off `upstream/main`):\n- build ✓ · oxlint 0 · vitest **590 green** (12 new: grant-store 11, attach method 4, scope-shop 1)\n- autoreview (qwen): no actionable findings\n- clawsweeper (qwen): findings addressed — sweep-on-mint bounds the store; `attach.grant` is `controlPlaneWrite` (rate-limited mint), `attach.revoke` intentionally not (cheap, idempotent, frees memory)\n- mutation (stryker, changed files): **83.3%** (90/108 killed, 0 timeout) — `mcp-grant-store.ts` 94.6%, `attach.ts` 71.7%\n\n**Risks → mitigations:** leaked grant → TTL (1 h default, 12 h ceiling) + explicit revoke; mint flooding → control-plane write budget; scope-shop → scope bound to grant server-side, `x-session-key` ignored for grant tokens.\n",
-        "branch": "feat/attach-grants",
-        "head_sha": "faba904a4784116e2c5a06f871cd50add9854472",
-        "author": "anagnorisis2peripeteia",
-        "labels": [
-          "gateway",
-          "size: M"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/mcp-grant-store.test.ts",
-            "additions": 91,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/mcp-grant-store.ts",
-            "additions": 128,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/mcp-http.request.ts",
-            "additions": 20,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/mcp-http.test.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/methods/core-descriptors.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/attach.test.ts",
-            "additions": 99,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-methods/attach.ts",
-            "additions": 66,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 8,
-        "additions": 441,
-        "deletions": 8,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96351",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96351.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 3,
-          "gatingTotal": 3,
-          "counts": {
-            "SUCCESS": 55,
-            "SKIPPED": 32,
-            "IN_PROGRESS": 9,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3484,
+    "total_ms": 482,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 685
+        "ms": 267
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2466
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -206,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 321
+        "ms": 204
       },
       {
         "name": "append_ledger",
