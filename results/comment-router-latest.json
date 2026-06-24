@@ -1,24 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T08:37:47.825Z",
+  "generated_at": "2026-06-24T08:38:07.784Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T05:37:47.201Z",
+  "since": "2026-06-24T05:38:05.481Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96304
-  ],
-  "comment_ids": [
-    4787389129
+    96307
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 6,
-  "commands_seen": 2,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -34,18 +31,132 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96304:4787389129:2026-06-24T08:35:21Z:re_review",
-      "comment_id": "4787389129",
-      "comment_version_key": "4787389129:2026-06-24T08:35:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96304#issuecomment-4787389129",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96307:4786579716:2026-06-24T08:38:01Z:clawsweeper_auto_repair",
+      "comment_id": "4786579716",
+      "comment_version_key": "4786579716:2026-06-24T08:38:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96307#issuecomment-4786579716",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96304,
-      "author": "ly-wang19",
-      "author_id": 94427531,
+      "issue_number": 96307,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T08:35:21Z",
-      "comment_updated_at": "2026-06-24T08:35:21Z",
+      "comment_created_at": "2026-06-24T06:40:17Z",
+      "comment_updated_at": "2026-06-24T08:38:01Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=242d856dc75ae205e5001159a5fca635a287a49b)",
+      "review_summary": "The PR adds persistent main-session restart-recovery attempt/quarantine fields, uses them to quarantine over-budget recovery rows, reserves the new session keys for plugin slots, and adds focused recovery tests.\n\nPR surface: Source +59, Tests +59. Total +118 across 4 files.\n\nReproducibility: yes. at source level: a quarantined row has `abortedLastRun=false` with attempts still over budget, and current lifecycle/admission code does not clear those new fields on a normal user-driven turn. I did not run the full Telegram/systemd loop.",
+      "review_followup": "- [P2] The remaining blocker is a narrow session-state cleanup bug that an automated repair can attempt on the PR branch.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "242d856dc75ae205e5001159a5fca635a287a49b",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): add cross-boot retry budget to restart recovery",
+        "body": "## Summary\n\n**Problem**: When a main-session turn wedges,  flags the entry and  retries it on every boot. There's no persistent retry counter or quarantine—a wedged session death-loops the gateway across restarts until systemd exhausts StartLimitBurst. See #95750 for the full production incident report (6 cycles before operator intervention).\n\n**Solution**: Add `abortedLastRunAttempts` (persistent counter) with a `> MAX_RECOVERY_RETRIES` ceiling. When exceeded, quarantine the session instead of resuming it. On successful resume, reset the counter and clear quarantine. The quarantine check runs AFTER all existing skip/routing/owner/dedupe guards to avoid suppressing owning recovery paths in configured or duplicate stores.\n\n**What changed** (4 files, +140/−22):\n- `src/config/sessions/types.ts`: +10 — `abortedLastRunAttempts`, `quarantinedAt`, `quarantineReason`\n- `src/plugins/session-entry-slot-keys.ts`: +3 — register new fields in compile guard\n- `src/agents/main-session-restart-recovery.ts`: +61/−7 — increment at 4 mark sites, quarantine AFTER guards with `> MAX_RECOVERY_RETRIES`, reset on success\n- `src/agents/main-session-restart-recovery.test.ts`: +88/−15 — quarantine + counter increment + successful-resume reset tests\n\n**What did NOT change**: In-process retry orchestration, subagent-orphan-recovery (already bounded with SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS), channel dispatch, model routing, auth.\n\nFixes #95750. Supersedes #86239.\n\n## Behavioral contract\n\n| Condition | Before | After |\n|---|---|---|\n| 1st restart | Re-marked, resumed | attempts=1, resumed |\n| 2nd restart | Re-marked, resumed | attempts=2, resumed |\n| 3rd restart | Re-marked, resumed | attempts=3, resumed (last valid retry) |\n| **4th restart** | Re-marked, resumed (loop!) | **Quarantined**: abortedLastRun=false, quarantinedAt set, WARN logged |\n| Successful auto-resume | abortedLastRun=false | **+** attempts=0, quarantine cleared |\n| Existing sessions (no field) | resumed | attempts starts at 0, backward-compatible |\n\n`MAX_RECOVERY_RETRIES = 3` is reused from the existing in-process budget. The gate is `> MAX_RECOVERY_RETRIES`, so the 3rd restart is the last valid retry (attempts=3), and the 4th triggers quarantine (attempts=4).\n\n## Real behavior proof\n\n**Runtime**: Node 24.13, Linux x86_64 — **Branch**: `fix/issue-95750-recovery-retry-budget` @ `242d856dc7` — **Vitest**: 4.1.8\n\n### Proof A — Real sessions.json state transitions\n\nScript exercises the exact recovery functions against a temp directory (full source at `proof-recovery-budget.ts` on the branch):\n\n```\n=== Phase 1: Quarantine (4th restart, attempts=4 > MAX=3) ===\n\n-- Before --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 4 }\n\nrecoverRestartAbortedMainSessions result: {\"recovered\":0,\"failed\":0,\"skipped\":0,\"quarantined\":1}\n\n[main-session-restart-recovery] quarantined agent:main:telegram:dm after 4\n  aborted-restart attempts (>= 3); the session will not be auto-resumed\n\n-- After --\n{ \"status\": \"running\", \"abortedLastRun\": false, \"abortedLastRunAttempts\": 4,\n  \"quarantinedAt\": 1782288650123, \"quarantineReason\": \"exceeded_restart_retry_budget\" }\n\n=== Phase 2: Counter increment (3→4, crosses ceiling) ===\n\n-- Before --\n{ \"status\": \"running\", \"abortedLastRun\": false, \"abortedLastRunAttempts\": 3 }\n\nmarkRestartAbortedMainSessions → \"marked 1 interrupted main session(s)\"\n\n-- After --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 4 }\n\n=== Phase 3: Backward-compatible defaults ===\n\n-- Before (no abortedLastRunAttempts field) --\n{ \"status\": \"running\", \"abortedLastRun\": false }\n\n-- After mark (undefined → 1 via ?? 0) --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 1 }\n```\n\n### Proof B — Full test suite (36/36 passed)\n\n```\n$ node scripts/run-vitest.mjs run src/agents/main-session-restart-recovery.test.ts --reporter=verbose\n[test] starting test/vitest/vitest.agents.config.ts\n RUN  v4.1.8\n ✓ marks only matching running main sessions by active session key\n … (33 existing tests pass unchanged)\n ✓ quarantines sessions that exceed the cross-boot retry budget (regression #95750)\n ✓ increments abortedLastRunAttempts at each mark phase (regression #95750)\n Test Files  1 passed (1)\n      Tests  36 passed (36)\n[test] passed 1 Vitest shard in 19.25s\n```\n\n### Proof C — Custom-store recovery resets counter on success\n\n```\n$ node scripts/run-vitest.mjs run src/agents/main-session-restart-recovery.test.ts   -t \"marks active sessions in a configured custom session store\" --reporter=verbose\n\n ✓ marks active sessions in a configured custom session store\n   └─ asserts: abortedLastRunAttempts === 0, quarantinedAt === undefined\n```\n\n**Observed result**: The fourth restart quarantines instead of resuming. The counter correctly increments through all four mark sites. Successful auto-resume clears the counter and quarantine. Existing sessions without the field start at 0.\n\n**What was not tested**: Live gateway restart with systemd supervision (not reproducible here). Proof covers every lifecycle boundary via real filesystem operations and 36 dedicated tests.\n\n## Risk checklist\n\n**Highest-risk area**: Counter increment at mark sites and quarantine gate ordering.\n\n**Risk level**: Medium — 3 new persistent SessionEntry fields. Existing entries default safely. Quarantine check runs AFTER guards. Operator intervention for quarantined sessions is better than a death-loop.\n\n**Mitigation**: All 4 mark sites instrumented. Reset on success. 36 tests cover all boundaries. `session-entry-slot-keys.ts` compile guard prevents drift.\n\n**Merge risk**:\n- `session-state` — 3 new SessionEntry fields, backward-compatible defaults (counter=0)\n- `availability` — quarantine skips auto-recovery, intentional (death-loop is worse)\n- `compatibility` — existing sessions without the field default to 0, upgrade-safe\n\n## All ClawSweeper P1 findings resolved\n\n1. ✅ **Move quarantine after guards** — check now runs after skip/routing/owner/dedupe guards\n2. ✅ **Honor retry budget boundary** — changed `>= MAX_RECOVERY_RETRIES` to `> MAX_RECOVERY_RETRIES`; 3rd restart is last valid retry, 4th triggers quarantine\n3. ✅ **Reset on progress** — successful `resumeMainSession` clears `abortedLastRunAttempts`, `quarantinedAt`, `quarantineReason`\n\n`@clawsweeper re-review`",
+        "branch": "fix/issue-95750-recovery-retry-budget",
+        "head_sha": "242d856dc75ae205e5001159a5fca635a287a49b",
+        "author": "zhangqueping",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 74,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 53,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/session-entry-slot-keys.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 140,
+        "deletions": 22,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96307",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96307.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "gatingTotal": 91,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 32,
+            "SUCCESS": 61,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96307:4787310790:2026-06-24T08:24:43Z:re_review",
+      "comment_id": "4787310790",
+      "comment_version_key": "4787310790:2026-06-24T08:24:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96307#issuecomment-4787310790",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96307,
+      "author": "zhangqueping",
+      "author_id": 3436352,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T08:24:43Z",
+      "comment_updated_at": "2026-06-24T08:24:43Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -68,106 +179,78 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat: add interactive launcher menu as thin wrapper over existing CLI",
-        "body": "## What Problem This Solves\n\nUsers need a simple interactive menu to launch OpenClaw without remembering CLI commands. This PR adds a thin wrapper launcher that provides a friendly menu UX while delegating all operations to existing audited CLI commands.\n\n## Why This Change Was Made\n\nThe launcher provides a single double-click entry point for common operations (TUI, WebUI, update, gateway management) without duplicating any existing OpenClaw surfaces. All sensitive operations remain in the existing audited code paths.\n\n## User Impact\n\n- **Interactive menu**: Run launcher to see TUI/WebUI/Update/Gateway options\n- **No security risks**: Token handling remains in `openclaw dashboard`, no plaintext storage\n- **No destructive operations**: Update delegates to `openclaw update` safe path\n- **Proper service management**: Gateway uses `openclaw gateway install` (launchd/systemd/schtasks)\n\n## Evidence\n\n### Delegation Map\n| Launcher Menu | Delegated To |\n|--------------|--------------|\n| [1] TUI | `openclaw tui` |\n| [2] WebUI | `openclaw dashboard` |\n| [3] Update | `openclaw update` |\n| [4] Gateway | `openclaw gateway start/stop/restart/install` |\n\n### What This PR Adds\n- `launcher/src/main.rs` (347 lines) - Thin wrapper with interactive menu\n- `launcher/README.md` - Documentation\n- `launcher/Cargo.toml` - Rust project config\n- `package.json` - Added `launcher:build` script\n\n### What This PR Does NOT Do\n- No plaintext token storage\n- No custom git/pnpm operations\n- No child-process gateway spawning\n- No duplicate macOS packaging\n- No custom updater logic\n\nAll operations delegate to existing canonical `openclaw` CLI commands.\n",
-        "branch": "feat/launcher-menu",
-        "head_sha": "c2571bc23e08ec63b4b9667de9c2e10442354518",
-        "author": "sangjiexun",
+        "title": "fix(agents): add cross-boot retry budget to restart recovery",
+        "body": "## Summary\n\n**Problem**: When a main-session turn wedges,  flags the entry and  retries it on every boot. There's no persistent retry counter or quarantine—a wedged session death-loops the gateway across restarts until systemd exhausts StartLimitBurst. See #95750 for the full production incident report (6 cycles before operator intervention).\n\n**Solution**: Add `abortedLastRunAttempts` (persistent counter) with a `> MAX_RECOVERY_RETRIES` ceiling. When exceeded, quarantine the session instead of resuming it. On successful resume, reset the counter and clear quarantine. The quarantine check runs AFTER all existing skip/routing/owner/dedupe guards to avoid suppressing owning recovery paths in configured or duplicate stores.\n\n**What changed** (4 files, +140/−22):\n- `src/config/sessions/types.ts`: +10 — `abortedLastRunAttempts`, `quarantinedAt`, `quarantineReason`\n- `src/plugins/session-entry-slot-keys.ts`: +3 — register new fields in compile guard\n- `src/agents/main-session-restart-recovery.ts`: +61/−7 — increment at 4 mark sites, quarantine AFTER guards with `> MAX_RECOVERY_RETRIES`, reset on success\n- `src/agents/main-session-restart-recovery.test.ts`: +88/−15 — quarantine + counter increment + successful-resume reset tests\n\n**What did NOT change**: In-process retry orchestration, subagent-orphan-recovery (already bounded with SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS), channel dispatch, model routing, auth.\n\nFixes #95750. Supersedes #86239.\n\n## Behavioral contract\n\n| Condition | Before | After |\n|---|---|---|\n| 1st restart | Re-marked, resumed | attempts=1, resumed |\n| 2nd restart | Re-marked, resumed | attempts=2, resumed |\n| 3rd restart | Re-marked, resumed | attempts=3, resumed (last valid retry) |\n| **4th restart** | Re-marked, resumed (loop!) | **Quarantined**: abortedLastRun=false, quarantinedAt set, WARN logged |\n| Successful auto-resume | abortedLastRun=false | **+** attempts=0, quarantine cleared |\n| Existing sessions (no field) | resumed | attempts starts at 0, backward-compatible |\n\n`MAX_RECOVERY_RETRIES = 3` is reused from the existing in-process budget. The gate is `> MAX_RECOVERY_RETRIES`, so the 3rd restart is the last valid retry (attempts=3), and the 4th triggers quarantine (attempts=4).\n\n## Real behavior proof\n\n**Runtime**: Node 24.13, Linux x86_64 — **Branch**: `fix/issue-95750-recovery-retry-budget` @ `242d856dc7` — **Vitest**: 4.1.8\n\n### Proof A — Real sessions.json state transitions\n\nScript exercises the exact recovery functions against a temp directory (full source at `proof-recovery-budget.ts` on the branch):\n\n```\n=== Phase 1: Quarantine (4th restart, attempts=4 > MAX=3) ===\n\n-- Before --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 4 }\n\nrecoverRestartAbortedMainSessions result: {\"recovered\":0,\"failed\":0,\"skipped\":0,\"quarantined\":1}\n\n[main-session-restart-recovery] quarantined agent:main:telegram:dm after 4\n  aborted-restart attempts (>= 3); the session will not be auto-resumed\n\n-- After --\n{ \"status\": \"running\", \"abortedLastRun\": false, \"abortedLastRunAttempts\": 4,\n  \"quarantinedAt\": 1782288650123, \"quarantineReason\": \"exceeded_restart_retry_budget\" }\n\n=== Phase 2: Counter increment (3→4, crosses ceiling) ===\n\n-- Before --\n{ \"status\": \"running\", \"abortedLastRun\": false, \"abortedLastRunAttempts\": 3 }\n\nmarkRestartAbortedMainSessions → \"marked 1 interrupted main session(s)\"\n\n-- After --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 4 }\n\n=== Phase 3: Backward-compatible defaults ===\n\n-- Before (no abortedLastRunAttempts field) --\n{ \"status\": \"running\", \"abortedLastRun\": false }\n\n-- After mark (undefined → 1 via ?? 0) --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 1 }\n```\n\n### Proof B — Full test suite (36/36 passed)\n\n```\n$ node scripts/run-vitest.mjs run src/agents/main-session-restart-recovery.test.ts --reporter=verbose\n[test] starting test/vitest/vitest.agents.config.ts\n RUN  v4.1.8\n ✓ marks only matching running main sessions by active session key\n … (33 existing tests pass unchanged)\n ✓ quarantines sessions that exceed the cross-boot retry budget (regression #95750)\n ✓ increments abortedLastRunAttempts at each mark phase (regression #95750)\n Test Files  1 passed (1)\n      Tests  36 passed (36)\n[test] passed 1 Vitest shard in 19.25s\n```\n\n### Proof C — Custom-store recovery resets counter on success\n\n```\n$ node scripts/run-vitest.mjs run src/agents/main-session-restart-recovery.test.ts   -t \"marks active sessions in a configured custom session store\" --reporter=verbose\n\n ✓ marks active sessions in a configured custom session store\n   └─ asserts: abortedLastRunAttempts === 0, quarantinedAt === undefined\n```\n\n**Observed result**: The fourth restart quarantines instead of resuming. The counter correctly increments through all four mark sites. Successful auto-resume clears the counter and quarantine. Existing sessions without the field start at 0.\n\n**What was not tested**: Live gateway restart with systemd supervision (not reproducible here). Proof covers every lifecycle boundary via real filesystem operations and 36 dedicated tests.\n\n## Risk checklist\n\n**Highest-risk area**: Counter increment at mark sites and quarantine gate ordering.\n\n**Risk level**: Medium — 3 new persistent SessionEntry fields. Existing entries default safely. Quarantine check runs AFTER guards. Operator intervention for quarantined sessions is better than a death-loop.\n\n**Mitigation**: All 4 mark sites instrumented. Reset on success. 36 tests cover all boundaries. `session-entry-slot-keys.ts` compile guard prevents drift.\n\n**Merge risk**:\n- `session-state` — 3 new SessionEntry fields, backward-compatible defaults (counter=0)\n- `availability` — quarantine skips auto-recovery, intentional (death-loop is worse)\n- `compatibility` — existing sessions without the field default to 0, upgrade-safe\n\n## All ClawSweeper P1 findings resolved\n\n1. ✅ **Move quarantine after guards** — check now runs after skip/routing/owner/dedupe guards\n2. ✅ **Honor retry budget boundary** — changed `>= MAX_RECOVERY_RETRIES` to `> MAX_RECOVERY_RETRIES`; 3rd restart is last valid retry, 4th triggers quarantine\n3. ✅ **Reset on progress** — successful `resumeMainSession` clears `abortedLastRunAttempts`, `quarantinedAt`, `quarantineReason`\n\n`@clawsweeper re-review`",
+        "branch": "fix/issue-95750-recovery-retry-budget",
+        "head_sha": "242d856dc75ae205e5001159a5fca635a287a49b",
+        "author": "zhangqueping",
         "labels": [
-          "size: L",
+          "agents",
+          "size: S",
           "proof: sufficient",
-          "P3",
+          "P1",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 automation",
           "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
           "status: ⏳ waiting on author",
-          "proof: 📸 screenshot"
+          "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "HEARTBEAT.md",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "SOUL.md",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "TOOLS.md",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "launcher/Cargo.lock",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "launcher/Cargo.toml",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "launcher/README.md",
-            "additions": 54,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "launcher/src/main.rs",
-            "additions": 355,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "openclaw-workspace-state.json",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "package.json",
-            "additions": 1,
-            "deletions": 1,
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 74,
+            "deletions": 15,
             "changeType": "MODIFIED"
           },
           {
-            "path": "xiugaiyijian.md",
-            "additions": 134,
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 53,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 10,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/session-entry-slot-keys.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 10,
-        "additions": 655,
-        "deletions": 1,
+        "changedFiles": 4,
+        "additions": 140,
+        "deletions": 22,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96265",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96265.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96307",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96307.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 68,
-          "gatingTotal": 63,
+          "total": 96,
+          "gatingTotal": 91,
           "counts": {
-            "SUCCESS": 58,
-            "SKIPPED": 10
+            "CANCELLED": 2,
+            "SKIPPED": 32,
+            "SUCCESS": 61,
+            "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -175,23 +258,91 @@
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
       "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96307:4787064616:2026-06-24T07:52:30Z:re_review",
+      "comment_id": "4787064616",
+      "comment_version_key": "4787064616:2026-06-24T07:52:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96307#issuecomment-4787064616",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96307,
+      "author": "zhangqueping",
+      "author_id": 3436352,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T07:52:30Z",
+      "comment_updated_at": "2026-06-24T07:52:30Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96307:4786955060:2026-06-24T07:37:39Z:re_review",
+      "comment_id": "4786955060",
+      "comment_version_key": "4786955060:2026-06-24T07:37:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96307#issuecomment-4786955060",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96307,
+      "author": "zhangqueping",
+      "author_id": 3436352,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T07:37:39Z",
+      "comment_updated_at": "2026-06-24T07:37:39Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2611,
+    "total_ms": 3574,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 612
+        "ms": 328
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1955
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 4
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -203,11 +354,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1987
+        "ms": 1252
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 2
       }
     ]
   }
