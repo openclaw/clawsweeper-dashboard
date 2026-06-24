@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T10:13:34.090Z",
+  "generated_at": "2026-06-24T10:13:43.331Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T07:13:31.627Z",
+  "since": "2026-06-24T07:13:40.449Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    96033
+    96031
   ],
   "comment_ids": [
-    4788159633
+    4788160554
   ],
-  "status_comment_id": 4788160308,
+  "status_comment_id": 4788161277,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96033:4788159633:2026-06-24T10:12:21Z:re_review",
-      "comment_id": "4788159633",
-      "comment_version_key": "4788159633:2026-06-24T10:12:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96033#issuecomment-4788159633",
+      "idempotency_key": "comment-router:openclaw/openclaw:96031:4788160554:2026-06-24T10:12:26Z:re_review",
+      "comment_id": "4788160554",
+      "comment_version_key": "4788160554:2026-06-24T10:12:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96031#issuecomment-4788160554",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 96033,
+      "issue_number": 96031,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T10:12:21Z",
-      "comment_updated_at": "2026-06-24T10:12:21Z",
-      "status_comment_id": 4788160308,
+      "comment_created_at": "2026-06-24T10:12:26Z",
+      "comment_updated_at": "2026-06-24T10:12:26Z",
+      "status_comment_id": 4788161277,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,81 +68,68 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-06-24T10:13:35.266Z",
+          "dispatched_at": "2026-06-24T10:13:44.376Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 96033
+          "item_number": 96031
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-06-24T10:13:36.744Z",
-          "response_comment_id": "4788160308",
+          "commented_at": "2026-06-24T10:13:45.555Z",
+          "response_comment_id": "4788161277",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(mattermost): bound successful REST JSON/text response reads",
-        "body": "## What Problem This Solves\n\n`extensions/mattermost/src/mattermost/client.ts` talks to a Mattermost server that the plugin does not control — self-hosted instances, LAN deployments, or a host that has been compromised or is malfunctioning. The client already hardened two of its three read paths:\n\n- error bodies are bounded via `readResponseTextLimited` (8 KiB), and\n- guarded responses are streamed through `responseWithRelease` instead of `arrayBuffer()`,\n\nbut the **successful** response path was still unbounded. `request()` called `await res.json()` / `await res.text()`, and `uploadMattermostFile()` called `await res.json()` on the file-info result. Each of those buffers the entire body into memory before parsing.\n\nA Mattermost server can return a response with **no `Content-Length`** and an arbitrarily large — or never-terminating — JSON/text body (every REST call goes through `request()`: users, channels, posts, file uploads). Because nothing capped the success path, the plugin would buffer the whole stream, applying unbounded memory pressure / hang to the plugin and the surrounding agent runtime. This is not generic cleanup: it closes the one remaining unbounded ingest point on an untrusted-server boundary.\n\n## Changes\n\n- `request()` success path: parse JSON via the shared `readProviderJsonResponse` (16 MiB cap; cancels the stream and throws a bounded `… exceeds 16777216 bytes` error on overflow, then wraps malformed JSON), matching the provider HTTP path used elsewhere in the repo.\n- `request()` non-JSON success path: read via `readResponseTextLimited` with a 64 KiB cap (non-JSON success bodies are a rare fallback; the API is JSON-first).\n- `uploadMattermostFile()` file-info JSON: bounded the same way through `readProviderJsonResponse`.\n- Reuses existing helpers only (`readProviderJsonResponse`, `readResponseTextLimited` from `openclaw/plugin-sdk/provider-http`) — no new abstraction, and no second buffering layer added to the guarded fetch adapter or the error path.\n- Added a regression test: oversized guarded success JSON throws the bounded error and cancels the upstream stream early.\n\n## Real behavior proof\n\n- **Behavior addressed**: a successful Mattermost REST JSON/text response with no `Content-Length` and a body larger than the cap is no longer buffered unbounded; the stream is cancelled at the cap and a bounded error is thrown. Normal small responses still parse intact.\n- **Real environment tested**: local `node:http` server bound to `127.0.0.1` (no `Content-Length`), driving the **real exported** `createMattermostClient(...).request(...)` and `uploadMattermostFile(...)` through the production guarded fetch path (`fetchWithSsrFGuard` + `allowPrivateNetwork`), under `node --import tsx`.\n- **Exact steps**:\n  1. Server streams 1 MiB `{`-chunks forever with `content-type: application/json` and **no** `Content-Length`.\n  2. `client.request(\"/flood-json\")` is awaited; the server counts chunks actually written and tracks socket close.\n  3. `uploadMattermostFile(...)` is pointed at the same flood endpoint.\n  4. Negative control: a finite-but-oversized 40 MiB body is read once via the **old** unbounded `await res.text()` and once via the new bounded `request()`.\n  5. Normal small JSON and small text responses are requested to confirm they still parse intact.\n- **Evidence after fix** (proof harness, 7/7 PASS):\n  ```\n  PASS normal-json-intact {\"id\":\"post-1\",\"message\":\"hello\"}\n  PASS normal-text-intact \"plain-ok-body\"\n  PASS oversized-json-throws-bounded Mattermost API /flood-json: JSON response exceeds 16777216 bytes\n  PASS oversized-json-cancelled-early chunksWrittenAtThrow=19\n  PASS oversized-json-socket-released socketClosed=true\n  PASS upload-oversized-throws-bounded Mattermost API /files: JSON response exceeds 16777216 bytes\n  PASS negative-control-unbounded-buffers-all unboundedBytes=42991618 serverWroteMiB=41 (bounded path cancelled at 19 MiB)\n  SUMMARY pass=7 fail=0\n  ```\n- **Observed result**: bounded path throws `JSON response exceeds 16777216 bytes`, the server stops after writing ~17-19 MiB (reader cancelled just past the 16 MiB cap), and the socket is released. The negative control proves the cap is load-bearing: the **old** `await res.text()` drained and buffered the entire 41 MiB body (42,991,618 bytes) — i.e. it would have OOM'd on a truly unbounded body — while the new path cancelled at ~19 MiB.\n- **What was not tested**: I did not run against a real production Mattermost server (used a local untrusted-server simulator), and did not change the websocket / media binary download paths or the `readMattermostError` `!res.body` in-memory fallback branch (already bounded / not an unbounded network read).\n\n## Evidence\n\n- Proof harness: `node --import ./node_modules/tsx/dist/loader.mjs proof.mts` → `SUMMARY pass=7 fail=0` (output above; harness not committed).\n- `node scripts/run-vitest.mjs extensions/mattermost/src/mattermost/client.test.ts --run` → **23 passed** (includes the new \"bounds and cancels oversized guarded Mattermost success JSON bodies\" regression test).\n- `oxlint extensions/mattermost/src/mattermost/client.ts` → clean.\n- `tsgo:extensions` (`tsconfig.extensions.json`, the CI extensions typecheck) → no `mattermost/client.ts` errors.\n- `check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal` → no violations (imports are public `plugin-sdk` entrypoints).\n\nThis is the symmetric follow-up to the #95103 / #95108 response-limit campaign, applying the same bounded-stream discipline to the last unbounded read point in the Mattermost REST client's success path.\n\n**Label**: security\n\nAI-assisted.\n",
-        "branch": "fix/bound-mattermost-client-response",
-        "head_sha": "404cfeefa666cf8337ce88177294d1a58199dfb8",
+        "title": "fix(nextcloud-talk): bound external send/reaction response reads to prevent OOM",
+        "body": "## What Problem This Solves\n\nThe Nextcloud Talk channel sends to **self-hosted** servers, so its HTTP responses are not under our control and are not trusted to be small. Three external response bodies in `send.ts` were buffered with no byte cap:\n\n- success JSON via `await response.json()` (every successful send/receipt parse)\n- send error text via `await response.text()` (non-2xx send responses)\n- reaction error text via `await response.text()` (non-2xx reaction responses)\n\nA hostile or misbehaving Nextcloud endpoint can return a response **without a `content-length` header** and stream an unbounded body. With the old code that body was fully buffered into memory, creating memory pressure / a potential hang on the plugin (and the provider/outbound) path — a small reaction error or a bogus 200 body could expand to gigabytes. This is the symmetric counterpart to the `#95103` / `#95108` response-limit campaign, which is hardening exactly these unbounded `response.json()` / `response.text()` reads across channels and providers.\n\n## Changes\n\n- `extensions/nextcloud-talk/src/send.ts`\n  - Success receipt JSON now reads through `readResponseWithLimit` (cap **16 MiB**, the same cap used for provider JSON in `#95218`), then `JSON.parse` on the decoded prefix. On overflow the stream is **cancelled** and a bounded error is thrown.\n  - Both send and reaction error bodies now read through the already-public `readResponseTextLimited` (from `openclaw/plugin-sdk/provider-http`, cap **8 KiB**, cancels the upstream stream once the byte budget is full), then a small local `collapseErrorSnippet` collapses whitespace and caps the prefix at 200 chars. This is wrapped in `readNextcloudTalkErrorSnippet`, which returns `\"\"` on any read failure (matching the previous `.catch(() => \"\")` semantics). No new plugin-SDK surface is added.\n  - **Preserved fault tolerance:** the existing \"message was sent but the receipt JSON could not be parsed -> keep the `unknown` receipt\" behavior is intact. An over-limit success body now also flows through that same `try/catch`, so a hostile success body never throws to the caller — it just yields the `unknown` receipt.\n- `extensions/nextcloud-talk/src/send.cfg-threading.test.ts`\n  - Added a `bounded response reads` suite driving the real exported functions against streamed `ReadableStream` bodies with **no `content-length`**: over-limit success JSON keeps the `unknown` receipt, over-limit send/reaction error bodies stay bounded (error message far below the streamed 17 MiB body), and a normal small body still parses fully.\n\n## Real behavior proof\n\n- **Behavior addressed:** Nextcloud Talk outbound send success JSON, send error text, and reaction error text are no longer read with unbounded `response.json()` / `response.text()` from a self-hosted server. Oversized no-`Content-Length` streams are bounded, while normal small success JSON still parses.\n- **Real environment tested:** Local OpenClaw checkout on Linux, running a standalone `node --import tsx --input-type=module` harness from the repository root. The harness starts a real local `node:http` server on `127.0.0.1`, enables `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork`, and drives the real exported `sendMessageNextcloudTalk` / `sendReactionNextcloudTalk` functions through the real `fetchWithSsrFGuard` path.\n- **Exact steps or command run after this patch:** The harness exercised four paths against live HTTP responses with no `Content-Length`: a 17 MiB streamed 200 success body, a normal small 200 success JSON body, a 17 MiB streamed 400 send error body, and a 17 MiB streamed 500 reaction error body.\n- **Evidence after fix:**\n\n  ```text\n  PASS oversized-success-falls-back-unknown {\"result\":{\"messageId\":\"unknown\"},\"stats\":{\"chunks\":17,\"bytes\":17825792,\"closed\":true}}\n  PASS small-success-json-intact {\"messageId\":\"99\",\"timestamp\":1700000000}\n  PASS oversized-send-error-snippet-bounded {\"messageLength\":231,\"stats\":{\"chunks\":1,\"bytes\":1048576,\"closed\":false}}\n  PASS oversized-reaction-error-snippet-bounded {\"messageLength\":237,\"stats\":{\"chunks\":1,\"bytes\":1048576,\"closed\":false}}\n  SUMMARY pass=4 fail=0 port=37819\n  ```\n\n- **Observed result after fix:** The over-cap success body no longer throws to the caller and preserves the existing `messageId=\"unknown\"` fallback; small JSON still returns `messageId=\"99\"` and the timestamp; send/reaction error messages remain short (`231` / `237` chars) instead of embedding streamed multi-MiB bodies.\n- **What was not tested:** A live production Nextcloud Talk deployment. The proof uses a local HTTP server because it must deterministically stream oversized no-`Content-Length` bodies; the exercised code path still uses the real exported send/reaction functions and real SSRF-guarded fetch path.\n\n## Evidence\n\n```\n$ node scripts/run-vitest.mjs extensions/nextcloud-talk/src/send.cfg-threading.test.ts --run\n Test Files  1 passed (1)\n      Tests  passed (bounded response reads suite included)\n\n$ node scripts/plugin-sdk-surface-report.mjs --check    # exit 0 (no new plugin-SDK surface)\n\n$ npx oxlint extensions/nextcloud-talk/src/send.ts src/plugin-sdk/response-limit-runtime.ts\n# clean (exit 0)\n```\n\n**Label**: security\n\n---\n\n*AI-assisted.* This is the symmetric continuation of the `#95103` / `#95108` response-limit campaign, applying the same `@openclaw/media-core` `readResponseWithLimit` hardening to the Nextcloud Talk success JSON, and bounding the send/reaction error bodies through the already-public `readResponseTextLimited` plus a local snippet collapse (no new plugin-SDK surface).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
+        "branch": "fix/bound-nextcloud-talk-send",
+        "head_sha": "f9ec5619a496dfd744952584c70005ce656ae064",
         "author": "alix-007",
         "labels": [
-          "channel: mattermost",
+          "channel: nextcloud-talk",
           "size: S",
-          "proof: sufficient",
           "P2",
-          "rating: 🦐 gold shrimp",
-          "status: ⏳ waiting on author"
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/mattermost/src/mattermost/client.test.ts",
-            "additions": 43,
+            "path": "extensions/nextcloud-talk/src/send.cfg-threading.test.ts",
+            "additions": 126,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/client.ts",
-            "additions": 17,
+            "path": "extensions/nextcloud-talk/src/send.ts",
+            "additions": 41,
             "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/probe.test.ts",
-            "additions": 31,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/probe.ts",
-            "additions": 2,
-            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 93,
-        "deletions": 5,
+        "changedFiles": 2,
+        "additions": 167,
+        "deletions": 4,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96033",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96033.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96031",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96031.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 86,
-          "gatingTotal": 81,
+          "total": 89,
+          "gatingTotal": 84,
           "counts": {
-            "SUCCESS": 61,
-            "SKIPPED": 24,
+            "SUCCESS": 58,
+            "SKIPPED": 30,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -157,19 +144,19 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5938,
+    "total_ms": 5796,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 572
+        "ms": 675
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1877
+        "ms": 2194
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -181,7 +168,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3463
+        "ms": 2903
       },
       {
         "name": "append_ledger",
