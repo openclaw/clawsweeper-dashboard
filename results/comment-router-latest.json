@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T22:21:41.554Z",
+  "generated_at": "2026-06-24T22:22:41.026Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T19:21:39.309Z",
+  "since": "2026-06-24T19:22:40.561Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96100
+    96566
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 7,
-  "commands_seen": 4,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,296 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96100:4784042035:2026-06-24T22:21:35Z:clawsweeper_needs_human",
-      "comment_id": "4784042035",
-      "comment_version_key": "4784042035:2026-06-24T22:21:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96100#issuecomment-4784042035",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96100,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T22:31:04Z",
-      "comment_updated_at": "2026-06-24T22:21:35Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- No automated repair is indicated; the remaining action is maintainer/owner acceptance of a session-state-sensitive lock-ordering fix and its relationship to adjacent cleanup PRs.; Cleared: The diff only changes internal TypeScript session-lock cleanup and colocated tests, with no dependency, workflow, secret, package, or supply-chain surface changes. (sha=457aa1ebbccab9e3e6727b839e1f5e2f8b36aaaf)",
-      "review_summary": "The PR defers retained session held-lock release when abort cleanup runs inside an active write scope, then retries the release after that scope unwinds, with three regression tests.\n\nPR surface: Source +13, Tests +97. Total +110 across 2 files.\n\nReproducibility: yes. at source level: current main can return early from retained-lock abort cleanup inside an active write scope, and the linked production issue shows the corresponding session lock timeout symptom. I did not run a live current-main multi-channel reproduction in this read-only review.",
-      "review_followup": "- No automated repair is indicated; the remaining action is maintainer/owner acceptance of a session-state-sensitive lock-ordering fix and its relationship to adjacent cleanup PRs.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "457aa1ebbccab9e3e6727b839e1f5e2f8b36aaaf",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agent): replace self-wait with deferred release in retained-lock abort cleanup",
-        "body": "## Root Cause\n\nWhen embedded run abort fires during an active retained session write, `releaseHeldLockWithFence()` bails out because `waitForRetainedLockIdle()` returns `false` when the current active write-lock scope is still alive. The held lock is left unreleased, and `acquireCleanupLock()` then tries `acquireLock()` which fails with EEXIST (the file lock is still held), returning a noopLock that never releases the underlying file lock. The session write lock leaks until the `maxHoldMs` watchdog timer fires (90–350s).\n\nThe initial fix (commit `3213604`) added a wait on `retainedLockIdleWaiters` inside `takeHeldLockAfterRetainedIdle()` and `disposeHeldLockAfterRetainedIdle()`, but this introduced a self-deadlock: the waiter resolves when `releaseRetainedUse()` releases the retained count to zero, which only happens when the active scope unwinds — but the await is inside that same active scope, so unwinding can never complete.\n\n## Summary\n\n- Removed the self-wait on `retainedLockIdleWaiters` from `takeHeldLockAfterRetainedIdle()` and `disposeHeldLockAfterRetainedIdle()`. When called from inside the active write scope, these now return early (`undefined` / `void`) instead of deadlocking.\n- Added a `releaseHeldLockDeferred` flag that `releaseHeldLockWithFence()` sets when it bails out because the active write scope is still alive.\n- In `runWithPhysicalWriteLockScope`, after the scope is deactivated and the retained-use count is released, check `releaseHeldLockDeferred` and re-attempt `releaseHeldLockWithFence()`. At this point `waitForRetainedLockIdle()` can safely wait (the current scope is no longer the active one).\n- Added 3 regression tests: deferred release after active scope, full lifecycle (abort→reacquire→release), and no-self-deadlock when `acquireForCleanup` is called from inside the active scope.\n- Revised per ClawSweeper review (`cc37eda`): tightened the `takeHeldLockAfterRetainedIdle` active-scope cleanup test so the fallback `acquireLock` rejects with `SessionWriteLockTimeoutError` (same-pid lock-timeout branch), and the test asserts `EmbeddedAttemptSessionTakeoverError` from scope completion.\n- Fixes #95915\n\n## Verification\n\n- `pnpm test src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts` — **108 passed** (0 regressions)\n- `pnpm check:test-types` — passed\n- `pnpm build` — succeeded, binary matches HEAD (`cc37eda`)\n- Autoreview: revised per ClawSweeper review\n\n## Real behavior proof\n\nBehavior addressed: Session write-lock abort cleanup during an active retained session write — `releaseHeldLockWithFence` bails out when scope is active, deferred release re-attempted after scope deactivation, preventing lock leaks until the 300s watchdog.\n\nReal environment tested: Linux x86_64 (kernel 4.19.112-2.el8), Node v24.13.1, branch `fix/issue-95915-session-lock-abort`, commit `cc37edaac6`, binary `OpenClaw 2026.6.9 (cc37eda)`\n\nExact steps or command run after this patch:\n\n```\npnpm build\npnpm openclaw --version\npnpm openclaw agent --local --agent main_assistant --model zte-maas/Qwen3-235B-A22B \\\n  --session-key agent:main_assistant:abort-timeout \\\n  --message \"Write a very detailed 3000 word essay...\" --timeout 3\n```\n\nEvidence after fix:\n\n**Runtime abort during active retained write** — real embedded agent turn with forced timeout, exercising the abort cleanup path during an active model call + session transcript write:\n\n```\n$ pnpm openclaw agent --local --agent main_assistant --model zte-maas/Qwen3-235B-A22B \\\n    --session-key agent:main_assistant:abort-timeout \\\n    --message \"Write a very detailed 3000 word essay...\" --timeout 3\n\n[agent/embedded] [trace:embedded-run] startup stages:\n  runId=6d86e596-6b4e-4d02-bb6f-4810a469cdbb\n  sessionId=61066bed-ee93-4453-b7c2-66ef216a2513\n  phase=attempt-dispatch totalMs=12247\n\n[provider-transport-fetch] [model-fetch] start\n  provider=zte-maas api=openai-completions model=Qwen3-235B-A22B\n  method=POST url=https://maas-apigateway.dt.zte.com.cn/.../chat/completions\n\n[provider-transport-fetch] [model-fetch] response\n  provider=zte-maas api=openai-completions model=Qwen3-235B-A22B\n  status=200 elapsedMs=1719 contentType=text/event-stream\n\n← model was streaming response (active retained write in progress)\n\n[agent/embedded] embedded run timeout:\n  runId=6d86e596-6b4e-4d02-bb6f-4810a469cdbb\n  sessionId=61066bed-ee93-4453-b7c2-66ef216a2513 timeoutMs=3000\n\n← timeout fires during active write → abort cleanup path triggered\n\n[agent/embedded] embedded run failover decision:\n  runId=6d86e596-6b4e-4d02-bb6f-4810a469cdbb\n  decision=surface_error failoverReason=timeout\n  provider=zte-maas model=Qwen3-235B-A22B\n  timedOut=true aborted=true\n  rawErrorPreview=\"Request was aborted\"\n```\n\n**Post-abort lock verification:**\n\n- Runtime log searched for `SessionWriteLockTimeoutError`, `lock leak`, `releasing lock held for` after abort run — **zero hits**\n- Directory `/home/0668000452/.openclaw/agents/main_assistant/sessions/` searched for stale `.jsonl.lock` files — **zero stale lock files**\n- The abort cleanup (`releaseHeldLockForAbort` → `releaseHeldLockWithFence` → deferred release) completed silently without leaving a leaked lock\n\n**Runtime log evidence — no lock errors post-abort:**\n\n```\n$ grep -i \"SessionWriteLock\\|lock.*leak\\|lock.*held\" /tmp/openclaw/openclaw-2026-06-24.log\n(sessionId=61066bed...): zero matches — no lock leak detected\n$ ls ~/.openclaw/agents/main_assistant/sessions/*.jsonl.lock\n(no files found) — no stale lock files\n```\n\n**Comparison with the original bug (#95915):**\n\n| Symptom (from issue) | Before fix | After fix |\n|---|---|---|\n| `released=0` on abort | 100% of aborts | Not observed |\n| `.jsonl.lock` persists after abort | 90s–350s | 0s (immediate deferred release) |\n| `SessionWriteLockTimeoutError` after abort | Every message to affected session | None |\n| Lock watchdog forced to compensate | yes (external scripts needed) | No stale locks detected |\n\nObserved result after fix: The embedded agent run was aborted (`aborted=true`) during an active model call (streaming in progress, status=200). The timeout fired at 3s while the write lock scope was active. The deferred release mechanism released the held lock at scope deactivation — no stale `.jsonl.lock` files remain, no lock timeout errors in runtime logs, and subsequent agent turns on the same session work without `SessionWriteLockTimeoutError`.\n\nWhat was not tested: Multi-channel production deployment with stuck-session recovery firing at `stuckSessionAbortMs` (requires gateway with live channels and concurrent sessions that are beyond what this contributor environment has). The deferred-release mechanism is validated via: (1) this real timeout-abort proof showing clean lock teardown after `aborted=true`, (2) 108 controller regression tests covering the 3 key abort-during-scope scenarios, (3) compiled dist code verification confirming 4 `releaseHeldLockDeferred` references in the production build.\n",
-        "branch": "fix/issue-95915-session-lock-abort",
-        "head_sha": "457aa1ebbccab9e3e6727b839e1f5e2f8b36aaaf",
-        "author": "xialonglee",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
-            "additions": 97,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 110,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96100",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96100.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 92,
-          "gatingTotal": 87,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 24,
-            "IN_PROGRESS": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96100:4787675926:2026-06-24T09:12:11Z:re_review",
-      "comment_id": "4787675926",
-      "comment_version_key": "4787675926:2026-06-24T09:12:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96100#issuecomment-4787675926",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96100,
-      "author": "xialonglee",
-      "author_id": 22994703,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T09:12:11Z",
-      "comment_updated_at": "2026-06-24T09:12:11Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agent): replace self-wait with deferred release in retained-lock abort cleanup",
-        "body": "## Root Cause\n\nWhen embedded run abort fires during an active retained session write, `releaseHeldLockWithFence()` bails out because `waitForRetainedLockIdle()` returns `false` when the current active write-lock scope is still alive. The held lock is left unreleased, and `acquireCleanupLock()` then tries `acquireLock()` which fails with EEXIST (the file lock is still held), returning a noopLock that never releases the underlying file lock. The session write lock leaks until the `maxHoldMs` watchdog timer fires (90–350s).\n\nThe initial fix (commit `3213604`) added a wait on `retainedLockIdleWaiters` inside `takeHeldLockAfterRetainedIdle()` and `disposeHeldLockAfterRetainedIdle()`, but this introduced a self-deadlock: the waiter resolves when `releaseRetainedUse()` releases the retained count to zero, which only happens when the active scope unwinds — but the await is inside that same active scope, so unwinding can never complete.\n\n## Summary\n\n- Removed the self-wait on `retainedLockIdleWaiters` from `takeHeldLockAfterRetainedIdle()` and `disposeHeldLockAfterRetainedIdle()`. When called from inside the active write scope, these now return early (`undefined` / `void`) instead of deadlocking.\n- Added a `releaseHeldLockDeferred` flag that `releaseHeldLockWithFence()` sets when it bails out because the active write scope is still alive.\n- In `runWithPhysicalWriteLockScope`, after the scope is deactivated and the retained-use count is released, check `releaseHeldLockDeferred` and re-attempt `releaseHeldLockWithFence()`. At this point `waitForRetainedLockIdle()` can safely wait (the current scope is no longer the active one).\n- Added 3 regression tests: deferred release after active scope, full lifecycle (abort→reacquire→release), and no-self-deadlock when `acquireForCleanup` is called from inside the active scope.\n- Revised per ClawSweeper review (`cc37eda`): tightened the `takeHeldLockAfterRetainedIdle` active-scope cleanup test so the fallback `acquireLock` rejects with `SessionWriteLockTimeoutError` (same-pid lock-timeout branch), and the test asserts `EmbeddedAttemptSessionTakeoverError` from scope completion.\n- Fixes #95915\n\n## Verification\n\n- `pnpm test src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts` — **108 passed** (0 regressions)\n- `pnpm check:test-types` — passed\n- `pnpm build` — succeeded, binary matches HEAD (`cc37eda`)\n- Autoreview: revised per ClawSweeper review\n\n## Real behavior proof\n\nBehavior addressed: Session write-lock abort cleanup during an active retained session write — `releaseHeldLockWithFence` bails out when scope is active, deferred release re-attempted after scope deactivation, preventing lock leaks until the 300s watchdog.\n\nReal environment tested: Linux x86_64 (kernel 4.19.112-2.el8), Node v24.13.1, branch `fix/issue-95915-session-lock-abort`, commit `cc37edaac6`, binary `OpenClaw 2026.6.9 (cc37eda)`\n\nExact steps or command run after this patch:\n\n```\npnpm build\npnpm openclaw --version\npnpm openclaw agent --local --agent main_assistant --model zte-maas/Qwen3-235B-A22B \\\n  --session-key agent:main_assistant:abort-timeout \\\n  --message \"Write a very detailed 3000 word essay...\" --timeout 3\n```\n\nEvidence after fix:\n\n**Runtime abort during active retained write** — real embedded agent turn with forced timeout, exercising the abort cleanup path during an active model call + session transcript write:\n\n```\n$ pnpm openclaw agent --local --agent main_assistant --model zte-maas/Qwen3-235B-A22B \\\n    --session-key agent:main_assistant:abort-timeout \\\n    --message \"Write a very detailed 3000 word essay...\" --timeout 3\n\n[agent/embedded] [trace:embedded-run] startup stages:\n  runId=6d86e596-6b4e-4d02-bb6f-4810a469cdbb\n  sessionId=61066bed-ee93-4453-b7c2-66ef216a2513\n  phase=attempt-dispatch totalMs=12247\n\n[provider-transport-fetch] [model-fetch] start\n  provider=zte-maas api=openai-completions model=Qwen3-235B-A22B\n  method=POST url=https://maas-apigateway.dt.zte.com.cn/.../chat/completions\n\n[provider-transport-fetch] [model-fetch] response\n  provider=zte-maas api=openai-completions model=Qwen3-235B-A22B\n  status=200 elapsedMs=1719 contentType=text/event-stream\n\n← model was streaming response (active retained write in progress)\n\n[agent/embedded] embedded run timeout:\n  runId=6d86e596-6b4e-4d02-bb6f-4810a469cdbb\n  sessionId=61066bed-ee93-4453-b7c2-66ef216a2513 timeoutMs=3000\n\n← timeout fires during active write → abort cleanup path triggered\n\n[agent/embedded] embedded run failover decision:\n  runId=6d86e596-6b4e-4d02-bb6f-4810a469cdbb\n  decision=surface_error failoverReason=timeout\n  provider=zte-maas model=Qwen3-235B-A22B\n  timedOut=true aborted=true\n  rawErrorPreview=\"Request was aborted\"\n```\n\n**Post-abort lock verification:**\n\n- Runtime log searched for `SessionWriteLockTimeoutError`, `lock leak`, `releasing lock held for` after abort run — **zero hits**\n- Directory `/home/0668000452/.openclaw/agents/main_assistant/sessions/` searched for stale `.jsonl.lock` files — **zero stale lock files**\n- The abort cleanup (`releaseHeldLockForAbort` → `releaseHeldLockWithFence` → deferred release) completed silently without leaving a leaked lock\n\n**Runtime log evidence — no lock errors post-abort:**\n\n```\n$ grep -i \"SessionWriteLock\\|lock.*leak\\|lock.*held\" /tmp/openclaw/openclaw-2026-06-24.log\n(sessionId=61066bed...): zero matches — no lock leak detected\n$ ls ~/.openclaw/agents/main_assistant/sessions/*.jsonl.lock\n(no files found) — no stale lock files\n```\n\n**Comparison with the original bug (#95915):**\n\n| Symptom (from issue) | Before fix | After fix |\n|---|---|---|\n| `released=0` on abort | 100% of aborts | Not observed |\n| `.jsonl.lock` persists after abort | 90s–350s | 0s (immediate deferred release) |\n| `SessionWriteLockTimeoutError` after abort | Every message to affected session | None |\n| Lock watchdog forced to compensate | yes (external scripts needed) | No stale locks detected |\n\nObserved result after fix: The embedded agent run was aborted (`aborted=true`) during an active model call (streaming in progress, status=200). The timeout fired at 3s while the write lock scope was active. The deferred release mechanism released the held lock at scope deactivation — no stale `.jsonl.lock` files remain, no lock timeout errors in runtime logs, and subsequent agent turns on the same session work without `SessionWriteLockTimeoutError`.\n\nWhat was not tested: Multi-channel production deployment with stuck-session recovery firing at `stuckSessionAbortMs` (requires gateway with live channels and concurrent sessions that are beyond what this contributor environment has). The deferred-release mechanism is validated via: (1) this real timeout-abort proof showing clean lock teardown after `aborted=true`, (2) 108 controller regression tests covering the 3 key abort-during-scope scenarios, (3) compiled dist code verification confirming 4 `releaseHeldLockDeferred` references in the production build.\n",
-        "branch": "fix/issue-95915-session-lock-abort",
-        "head_sha": "457aa1ebbccab9e3e6727b839e1f5e2f8b36aaaf",
-        "author": "xialonglee",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
-            "additions": 97,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 110,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96100",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96100.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 92,
-          "gatingTotal": 87,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 24,
-            "IN_PROGRESS": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96100:4785599457:2026-06-24T03:27:23Z:re_review",
-      "comment_id": "4785599457",
-      "comment_version_key": "4785599457:2026-06-24T03:27:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96100#issuecomment-4785599457",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96100,
-      "author": "xialonglee",
-      "author_id": 22994703,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T03:27:23Z",
-      "comment_updated_at": "2026-06-24T03:27:23Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96100:4780743016:2026-06-23T15:26:14Z:re_review",
-      "comment_id": "4780743016",
-      "comment_version_key": "4780743016:2026-06-23T15:26:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96100#issuecomment-4780743016",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96100,
-      "author": "xialonglee",
-      "author_id": 22994703,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-23T15:26:14Z",
-      "comment_updated_at": "2026-06-23T15:26:14Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3334,
+    "total_ms": 810,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 488
+        "ms": 454
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1739
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -330,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1076
+        "ms": 345
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
