@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T13:16:58.018Z",
+  "generated_at": "2026-06-24T13:18:13.512Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T10:16:55.306Z",
+  "since": "2026-06-24T10:18:12.732Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4789679418
   ],
-  "status_comment_id": 4789679898,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4789679418:2026-06-24T13:15:49Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4789679418",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 89039,
       "author": "Jerry-Xin",
       "author_id": 3401616,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-24T13:15:49Z",
       "comment_updated_at": "2026-06-24T13:15:49Z",
-      "status_comment_id": 4789679898,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,255 +62,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-24T13:16:59.151Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 89039
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-24T13:17:00.821Z",
-          "response_comment_id": "4789679898",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: prevent silent message loss from EmbeddedAttemptSessionTakeoverError",
-        "body": "## Summary\n\nWhen the OpenAI SDK retried an `ECONNRESET` internally (default `maxRetries=2`), the session write lock was released during the retry window. Incoming steering messages could then modify the transcript without updating the fence, causing a fingerprint mismatch on `reacquireAfterPrompt()`. The resulting `EmbeddedAttemptSessionTakeoverError` was caught by `model-fallback.ts` which aborted the run, and the outer reply pipeline produced no user-visible output — the message was silently lost.\n\n## Root Cause Chain\n\n```\nAPI ECONNRESET\n  → OpenAI SDK default maxRetries=2, internal retry\n  → session write lock released during retry window\n  → incoming message arrives via queueHandle.queueMessage\n  → activeSession.steer writes directly (bypassing withOwnedSessionTranscriptWrites)\n  → transcript changes without updating fence\n  → original attempt reacquireAfterPrompt() fingerprint mismatch\n  → EmbeddedAttemptSessionTakeoverError thrown\n  → model-fallback.ts aborts the run\n  → outer layer hits generic failure branch\n  → assistantTexts/payloads never enter buildReplyPayloads()\n  → message silently lost (user sees generic error or nothing)\n```\n\n## Fix\n\nFive coordinated changes that address the bug at multiple layers:\n\n### 1. Wrap steering in `withOwnedSessionTranscriptWrites` (`attempt.ts`)\nSteering writes that arrive during prompt lock release now go through `withOwnedSessionTranscriptWrites`, keeping fence tracking consistent and preventing the fingerprint mismatch that triggers the takeover error.\n\n### 2. Dedicated error handler for takeover (`agent-runner-execution.ts`, `failover-error.ts`)\nAdded `isEmbeddedAttemptSessionTakeoverError()` export and a dedicated catch block in `runAgentTurnWithFallback`. Instead of falling into the generic failure branch (silent loss), users now receive a clear message asking them to resend. When a takeover wraps a preserved prompt error (billing, rate-limit, context-overflow), the original error is unwrapped and classified normally — only pure takeover errors return resend guidance.\n\n### 3. Scope SDK retry disable to embedded prompt lock path (`attempt.ts`, `attempt.session-lock.ts`)\nExtracted `installEmbeddedPromptRetryDefault` helper that wraps the session's `streamFn` with `{ maxRetries: 0, ...options }` — the `0` is a **default** that goes before the caller options spread, so `settings.retry.provider.maxRetries` (surfaced via `options.maxRetries` per the chain in `sdk.ts:360`) takes precedence when explicitly configured. Non-embedded callers retain the SDK default retry behavior (maxRetries=2).\n\n### 4. Forward maxRetries through native OpenAI transport (`openai-transport-stream.ts`)\n`buildOpenAISdkRequestOptions` previously accepted only `model` and `signal`, dropping the `maxRetries` injected by `installEmbeddedPromptRetryDefault`. Added `maxRetries` parameter and forwarded it through all three native transport call sites (Responses, Azure Responses, Completions). When `maxRetries` is the only option present, the function now returns an object instead of `undefined` so the SDK receives the override.\n\n### 5. Phase tracking in `EmbeddedAttemptSessionTakeoverError` (`attempt.session-lock.ts`)\nAdded a `phase` field (`prompt_reacquire`, `cleanup`, `write`, `fence_check`) for better diagnostics when this error does occur. Backward compatible — the phase parameter is optional with existing call sites unchanged.\n\n## Real behavior proof\n\n> **Refreshed at current head `bf4c277c9b` (supersedes the v6 proof below, which targeted older head `2fc3ecee2d`).**\n\n- **Behavior addressed**: A session takeover during the embedded prompt-lock release window must not silently drop the user's reply, and the injected embedded retry default must refresh with the latest configured `settings.retry.provider.maxRetries` across repeated installs (not freeze the first-captured value).\n- **Real environment tested**: Local patched checkout at `bf4c277c9b`, macOS arm64, Node.js `v24.10.0`, freshly installed deps (`pnpm install --frozen-lockfile`).\n- **Exact steps or command run after this patch**: Ran the affected suites at this head with `node scripts/run-vitest.mjs <suite>` — the organic session-takeover regression (real on-disk session + real local HTTP model server + real OpenAI-completions transport + real prompt-lock fence), the retry-default live-ref unit suite (V1–V5), and the reply-runtime regression — plus `tsgo:test:src` for typecheck.\n- **Evidence after fix**: Copied live terminal output captured at head `bf4c277c9b`:\n```\n ✓ surfaces resend guidance after an organic EmbeddedAttemptSessionTakeoverError  724ms\n ✓ src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts (72 tests) 141ms\n      Tests  72 passed (72)\n      Tests  205 passed (205)\n tsgo:test:src exits 0 with no errors\n```\n- **Observed result after fix**: The organic session takeover now surfaces explicit resend guidance (\"⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.\") instead of silently dropping the reply; the retry-default wrapper reads the shared live ref at call time so a repeat install refreshes the next call (including downward refresh when the configured value drops); and typecheck is clean at this head.\n- **What was not tested**: The live Feishu/DeepSeek ECONNRESET timing race that originally surfaced #87180 is not reproduced here; the takeover is reproduced deterministically via a real on-disk fence-drift, which exercises the same `EmbeddedAttemptSessionTakeoverError` path. The CI matrix on this head was still running at proof time.\n\n\n### Current-head proof (`bf4c277c9b`)\n\n- **Behavior addressed**: A session takeover during the embedded prompt-lock release window must not silently drop the user's reply, and the injected embedded retry default must refresh with the latest configured `settings.retry.provider.maxRetries` across repeated installs (not freeze the first-captured value).\n- **Real environment tested**: Local patched checkout at `bf4c277c9b`, macOS arm64, Node.js `v24.10.0`, freshly installed deps (`pnpm install --frozen-lockfile`).\n- **Why refreshed**: The previous proof targeted an older head; the retry-default wrapper was reworked to read a shared live ref at call time (commit on this head), so proof is regenerated on the resulting head.\n\n### 1. Organic session-takeover regression (real on-disk session + real local HTTP model server + real OpenAI-completions transport + real prompt-lock fence)\n```\n     ✓ surfaces resend guidance after an organic EmbeddedAttemptSessionTakeoverError  724ms\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n```\nThe takeover error is thrown organically by the real prompt-lock fence (a concurrent steering write rewrites the same session file mid-call), and `runAgentTurnWithFallback` surfaces resend guidance instead of dropping the reply.\n\n### 2. Retry-default live-ref unit proof (the wrapper fix, V1–V5)\n```\n ✓  agents  src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts (72 tests) 141ms\n      Tests  72 passed (72)\n```\nCovers: refresh through the buried wrapper after lock-release wraps it; call-time live read so a repeat install changes the next call; downward refresh when the configured value drops (the original bug's essence); shared ref identity across both install orders; and no wrapper stacking on repeated installs.\n\n### 3. Reply-runtime regression (no behavior regression on the takeover catch path)\n```\n      Tests  205 passed (205)\n```\n\n### Typecheck\n`tsgo:test:src` exits 0 with no errors at this head.\n\n### What was not tested\nThe live Feishu/DeepSeek ECONNRESET timing race that originally surfaced #87180 is not reproduced here; the takeover is reproduced deterministically via a real on-disk fence-drift, which exercises the same `EmbeddedAttemptSessionTakeoverError` path. The CI matrix on this head was still running at proof time.\n\n\n<details>\n<summary>Earlier proof (v6, head 2fc3ecee2d) — historical</summary>\n\n\n- **Behavior or issue addressed**: Silent message loss on session takeover during the released prompt-lock window. When the OpenAI SDK retried an `ECONNRESET` internally, an incoming steering write changed the transcript without updating the fence, raising `EmbeddedAttemptSessionTakeoverError`, which `model-fallback.ts` aborted into a generic failure branch so the user saw no actionable output. After this fix the pure-takeover path returns explicit resend guidance, the SDK retry default is scoped to the embedded prompt-lock window (with configured `settings.retry.provider.maxRetries` taking precedence), and `maxRetries` is forwarded through the native OpenAI transport.\n- **Real environment tested**: Clean Docker container `node:24-bookworm` (Node.js `v24.16.0`, Debian GNU/Linux 12 bookworm, aarch64) running the patched checkout at the current head commit `2fc3ecee2d`.\n- **Exact steps or command run after this patch**: Built the patched checkout in the container and ran the affected suites plus a real-setup organic takeover test (real on-disk session file + real local `node:http` model server on an `openai-completions` baseUrl + real transport + real fence) and code-path verification, as captured in the v6 proof log below.\n- **Evidence after fix**: Copied live terminal output from the patched container at head `2fc3ecee2d` (full v6 log reproduced in the section below):\n\n```\n$ docker run --rm -v \"$PWD:/app\" -w /app node:24-bookworm bash /proof.sh\n=== PR #89039 Real Behavior Proof (v6, current head) ===\nEnvironment: Docker container, v24.16.0, aarch64, \"Debian GNU/Linux 12 (bookworm)\"\nCommit: 2fc3ecee2d\n--- A: Real-setup organic session-takeover proof (resend guidance) ---\n ✓ surfaces resend guidance after an organic EmbeddedAttemptSessionTakeoverError 1456ms\nAFTER-fix user-facing payload text (exact):\n⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.\nBEFORE-fix user-facing payload text (exact, parent 86150a3e51):\n⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.\n=== PROOF COMPLETE @ 2fc3ecee2d ===\n```\n- **Observed result after fix**: The organic session takeover now surfaces a specific, actionable resend message (the after-fix payload line above) instead of the generic non-actionable failure seen at the parent; the configured provider retry survives through `sdk.ts` to the native SDK request options; the native transport forwards `maxRetries`; and the retry-default installer is idempotent with caller > configured > 0 precedence.\n- **What was not tested**: No live multi-user deployment against a real upstream provider with an actual network-level `ECONNRESET` was run. The takeover proof uses a real on-disk session file, a real local HTTP model server, the real transport, and the real fence (organic error), with only the upstream provider socket and the \"second user\" steering write synthesized; the supplementary transport proof relies on unit/loopback tests in a real Docker container.\n\n### Current-head proof (commit `2fc3ecee2d`, Docker `node:24-bookworm`)\n\nRefreshed at the latest head, which adds the configured-provider-retry precedence. Run in a clean Docker container (`node:24-bookworm`, Node.js `v24.16.0`, Debian GNU/Linux 12 bookworm, aarch64):\n\n```\n=== PR #89039 Real Behavior Proof (v6, current head) ===\nEnvironment: Docker container, v24.16.0, aarch64, \"Debian GNU/Linux 12 (bookworm)\"\nCommit: 2fc3ecee2d\n\n--- A: Real-setup organic session-takeover proof (resend guidance) ---\n ✓ auto-reply  agent-runner-session-takeover.real.test.ts (1 test)\n   ✓ surfaces resend guidance after an organic EmbeddedAttemptSessionTakeoverError 1456ms\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n\n--- B: Embedded prompt retry default — idempotence + configured-override precedence ---\n Test Files  1 passed (1)\n      Tests  51 passed (51)\n\n--- C: Configured provider retry survives through sdk.ts to native SDK options ---\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n--- D: Transport forwards maxRetries (native OpenAI) + failover classification ---\n Test Files  1 passed (1)    Tests  83 passed (83)\n Test Files  1 passed (1)    Tests  241 passed (241)\n\n--- E: Code-path verification at current head ---\ninstallEmbeddedPromptRetryDefault accepts configured default:\n1088:  options?: { maxRetries?: number },\n1098:  const defaultMaxRetries = options?.maxRetries ?? 0;\nInstall site passes configured provider retry:\n3994:              maxRetries: settingsManager.getProviderRetrySettings().maxRetries,\n\n=== PROOF COMPLETE @ 2fc3ecee2d ===\n```\n\nThis confirms at the current head: the organic session-takeover path still yields visible resend guidance (A); the retry-default installer is idempotent and applies the configured-override precedence caller > configured > 0 (B); a configured `settings.retry.provider.maxRetries` survives through `sdk.ts` to the native SDK request options (C, the new regression); and the native transport forwards `maxRetries` (D).\n\n### Real session-takeover path (organic error, real transport + real fence)\n\nThis proof drives the actual user-visible takeover path end to end and captures the real user-facing reply, rather than relying only on focused unit tests. Committed as `src/auto-reply/reply/agent-runner-session-takeover.real.test.ts`.\n\n**What is real (not hand-built):**\n- A real on-disk session transcript file in a temp dir.\n- A real local `node:http` server as the model `baseUrl` (`api: openai-completions`) that announces in-flight, then blocks before finishing the SSE body.\n- The real `openai-completions` transport doing real HTTP I/O.\n- The real embedded prompt-lock controller + fence (`createEmbeddedAttemptSessionLockController`), wired through the real `installEmbeddedPromptRetryDefault` / `installPromptSubmissionLockRelease` helpers — the exact helpers `attempt.ts` uses in production.\n- The `EmbeddedAttemptSessionTakeoverError` is thrown **organically** by `assertSessionFileFence(\"prompt_reacquire\")` when a concurrent steering write changes the session-file fingerprint during the released-lock window — it is **not** constructed by hand.\n- The real `isNonProviderRuntimeCoordinationError` classification and the real `runAgentTurnWithFallback` catch branch producing the user-facing payload.\n\n**Mechanism (deterministic Promise handshakes, no sleeps):**\n1. A real temp session file is created with one session line.\n2. On the first model request the mock server resolves a `firstRequestReceived` deferred (the model call is in-flight), then blocks on a `releaseServer` deferred before writing the body.\n3. `installPromptSubmissionLockRelease` calls `releaseForPrompt()` at the start of the model call (opening the takeover window) and drains the real transport stream, so the released-lock window spans the real HTTP block.\n4. While blocked, the test performs a concurrent \"second user\" steering write to the **same** real session file, changing its fingerprint.\n5. `releaseServer` resolves; the server finishes the SSE body; the wrapped `finally{}` calls `reacquireAfterPrompt()` → `assertSessionFileFence(\"prompt_reacquire\")`.\n6. The fingerprint mismatch trips the fence → `EmbeddedAttemptSessionTakeoverError` thrown organically → real classification → real `runAgentTurnWithFallback` catch.\n\n**Before / after (run at this PR's parent `86150a3e51` in a separate worktree; the session-lock + fence code is byte-identical between parent and HEAD, so the organic error reproduces identically — the only difference is the runner's new catch branch):**\n\n```\nAFTER fix (HEAD) — vitest verbose\n RUN  v4.1.7\n ✓ |auto-reply| agent-runner-session-takeover.real.test.ts > surfaces resend guidance after an organic EmbeddedAttemptSessionTakeoverError 487ms\n Test Files  1 passed (1)\n      Tests  1 passed (1)\nAFTER-fix user-facing payload text (exact):\n⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.\n\nBEFORE fix (parent 86150a3e51, separate worktree) — vitest verbose\n RUN  v4.1.7\n ✓ |auto-reply| agent-runner-session-takeover.real.test.ts > BEFORE FIX: organic EmbeddedAttemptSessionTakeoverError yields no resend guidance 483ms\n Test Files  1 passed (1)\n      Tests  1 passed (1)\nBEFORE-fix user-facing payload text (exact):\n⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.\n```\n\n**What this proves:** an organic session takeover during a real released-lock model call produces, after this fix, a specific actionable resend message instead of the generic non-actionable failure the user saw before. Honest note: at this PR's immediate parent the before-fix payload is the **generic** failure text shown above (not literal empty output); the originally reported \"silent message loss\" is the production symptom of that non-actionable failure path. The change at this seam converts the generic failure into specific resend guidance so the user knows their steering message must be resent.\n\n### Supplementary: transport + retry-suppression proof (Docker `node:24-bookworm`)\n\n- **Behavior addressed**: Silent message loss when SDK retries race with session takeover → visible resend guidance for pure takeover, correct error classification for wrapped prompt errors, provider retry settings respected, maxRetries forwarded through native OpenAI transport\n- **Real environment tested**: Docker container (`node:24-bookworm`, Node.js `v24.16.0`, Debian GNU/Linux 12 bookworm, aarch64) running patched checkout at commit `80bbe803e2`\n- **Failing proof before fix**: On upstream/main, `buildOpenAISdkRequestOptions` only accepts `model` and `signal` — it drops `maxRetries`. Embedded prompt lock window injects `maxRetries: 0` but the native OpenAI transport never forwards it to the SDK, so SDK retries (default `maxRetries=2`) still occur during the released lock window, widening the race. Additionally, `queueMessage` steering writes bypass `withOwnedSessionTranscriptWrites`, causing fingerprint mismatch → `EmbeddedAttemptSessionTakeoverError` → generic failure branch → silent message loss.\n- **Exact steps and commands run after this patch**:\n\n```\n$ docker run --rm -e CI=true -v \"$(pwd):/app\" -w /app node:24-bookworm bash /proof.sh\n=== PR #89039 Real Behavior Proof (v5) ===\nEnvironment: Docker container, v24.16.0, aarch64, \"Debian GNU/Linux 12 (bookworm)\"\nCommit: 80bbe803e2\n\n--- Installing dependencies (pnpm) ---\ninstall exit: 0\nDone in 47s using pnpm v11.2.2\n\n--- Test 1: Native OpenAI transport forwards maxRetries ---\n Test Files  1 passed (1)\n Tests  241 passed (241)\n\n--- Test 2: Embedded prompt lock defaults + override ---\n Test Files  1 passed (1)\n Tests  48 passed (48)\n\n--- Test 3: Takeover error handling + unwrapping (agent-runner-execution) ---\n Test Files  1 passed (1)\n Tests  184 passed (184)\n\n--- Test 4: failover-error classification ---\n Test Files  1 passed (1)\n Tests  83 passed (83)\n\n--- Test 5: SDK transport paths (openai-completions + openai-responses-shared) ---\n Test Files  2 passed (2)\n Tests  32 passed (32)\n\n--- Test 6: Code path verification ---\nbuildOpenAISdkRequestOptions accepts+forwards maxRetries:\n1843:  maxRetries?: number,\n1844:): { signal?: AbortSignal; timeout?: number; maxRetries?: number } | undefined {\n1846:  if (timeout === undefined && !signal && maxRetries === undefined) {\n1852:    ...(maxRetries !== undefined ? { maxRetries } : {}),\n1940:          options?.maxRetries,\n2380:          options?.maxRetries,\n2614:          buildOpenAISdkRequestOptions(model, options?.signal, options?.maxRetries),\n\nEmbedded retry default (maxRetries:0 BEFORE options spread):\n1083:    return innerStreamFn(model, context, { maxRetries: 0, ...requestOptions });\n```\n\n- **Evidence after fix**: All 588 tests pass across the 6 affected test suites in a clean Docker environment.\n  - **Transport retry suppression proven end-to-end**: A loopback regression test in `openai-transport-stream.test.ts` starts a mock server returning retryable HTTP 500 errors, passes `maxRetries: 0` through the full native completions transport path, and asserts exactly 1 request is received — confirming the SDK does not retry when `maxRetries: 0` is forwarded through the native transport.\n  - Default SDK retry behavior preserved for non-embedded callers (no `maxRetries` in default request options).\n  - Embedded prompt lock window correctly injects `maxRetries: 0` as a default that configured `settings.retry.provider.maxRetries` can override.\n  - Native OpenAI transport (`buildOpenAISdkRequestOptions`) correctly forwards `maxRetries` to all 3 SDK call sites.\n  - Pure takeover errors produce visible resend guidance. Wrapped prompt errors are unwrapped and classified normally.\n- **What was not tested**: No live multi-user deployment against a real upstream provider with an actual network-level ECONNRESET was run. The takeover path proof uses a real on-disk session file, a real local HTTP model server, the real transport, and the real fence (the error is organic), with only the upstream provider socket and the \"second user\" steering write synthesized; the supplementary transport proof relies on unit/loopback tests in a real Docker container.\n\n\n</details>\n\n## Tests\n\nAll affected test suites pass (Docker `node:24-bookworm`, aarch64):\n\n| Test File | Tests |\n|-----------|-------|\n| `agent-runner-session-takeover.real.test.ts` (real-setup takeover proof) | 1 |\n| `openai-transport-stream.test.ts` | 241 |\n| `attempt.session-lock.test.ts` | 48 |\n| `agent-runner-execution.test.ts` | 184 |\n| `failover-error.test.ts` | 83 |\n| `openai-completions.test.ts` + `openai-responses-shared.test.ts` | 32 |\n\nNew test coverage includes:\n- Real-setup organic session-takeover proof: real session file + real HTTP model server + real transport + real fence producing `EmbeddedAttemptSessionTakeoverError`, asserting the after-fix resend guidance (and its absence at the parent)\n- `buildOpenAISdkRequestOptions` forwards `maxRetries` when provided, omits when undefined\n- `maxRetries`-only call returns an object (not `undefined`)\n- Loopback end-to-end test: mock 500 server + `maxRetries: 0` → exactly 1 request (no SDK retry)\n- `installEmbeddedPromptRetryDefault` default behavior (no caller options → maxRetries:0)\n- Explicit `maxRetries` override preserved over embedded default\n- Takeover detection during owned steering writes\n- User-facing resend message for pure session takeover\n- Preserved prompt error unwrapping from cleanup takeover\n- Backward compatibility for `assertSessionFileFence` without phase parameter\n\n## Changed Files\n\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.ts`\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n- `src/agents/embedded-agent-runner/run/attempt.ts`\n- `src/agents/failover-error.ts`\n- `src/agents/failover-error.test.ts`\n- `src/agents/openai-transport-stream.ts`\n- `src/agents/openai-transport-stream.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.ts`\n- `src/auto-reply/reply/agent-runner-session-takeover.real.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.test.ts`\n- `src/llm/providers/openai-completions.ts`\n- `src/llm/providers/openai-completions.test.ts`\n- `src/llm/providers/openai-responses-shared.ts`\n- `src/llm/providers/openai-responses-shared.test.ts`\n\nFixes #87180\n\n\n\n\n\n\n",
-        "branch": "fix/session-takeover-silent-message-loss-87180",
-        "head_sha": "eae8b845c13b9bce3a586fd5a3c9946b71454ada",
-        "author": "jerry-xin",
-        "labels": [
-          "agents",
-          "size: XL",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
-            "additions": 320,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
-            "additions": 86,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 12,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.ts",
-            "additions": 22,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/sdk.test.ts",
-            "additions": 57,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
-            "additions": 196,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 51,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-session-takeover.real.test.ts",
-            "additions": 498,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/llm/providers/openai-completions.test.ts",
-            "additions": 32,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-responses-shared.test.ts",
-            "additions": 43,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 13,
-        "additions": 1405,
-        "deletions": 26,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89039",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89039.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 89,
-          "gatingTotal": 84,
-          "counts": {
-            "IN_PROGRESS": 38,
-            "SUCCESS": 25,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6260,
+    "total_ms": 2877,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 617
+        "ms": 767
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2081
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -318,11 +93,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3538
+        "ms": 2097
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
