@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T18:48:41.436Z",
+  "generated_at": "2026-06-24T18:49:10.807Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T15:48:41.010Z",
+  "since": "2026-06-24T15:49:07.944Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    88838
+    95244
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4792578943
+  ],
+  "status_comment_id": 4792579372,
   "max_autoclose_targets": 8,
-  "scanned_comments": 35,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,22 +31,132 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95244:4792578943:2026-06-24T18:48:02Z:re_review",
+      "comment_id": "4792578943",
+      "comment_version_key": "4792578943:2026-06-24T18:48:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95244#issuecomment-4792578943",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 95244,
+      "author": "sallyom",
+      "author_id": 11166065,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T18:48:02Z",
+      "comment_updated_at": "2026-06-24T18:48:02Z",
+      "status_comment_id": 4792579372,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-24T18:49:11.790Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 95244
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-24T18:49:13.181Z",
+          "response_comment_id": "4792579372",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(providers): bound self-hosted provider discovery JSON reads",
+        "body": "## Summary\n\n`discoverLlamaCppRuntimeContextTokens` and `discoverOpenAICompatibleLocalModels` in `src/plugins/provider-self-hosted-setup.ts` parsed their HTTP responses with an unbounded `await response.json()`. Self-hosted provider base URLs are user-supplied and untrusted — an endpoint reachable via SSRF (or simply a buggy/hostile local server) could stream an unbounded JSON body, driving the setup wizard into OOM. Both reads now go through the shared byte-bounded reader under a single cap before parsing.\n\nThis is the symmetric counterpart to #95108, which hardened the Anthropic Messages error-body read with the same `@openclaw/media-core` bound-stream reader. Here we apply the byte-cap to the two provider-discovery JSON reads.\n\n## Changes\n\n- Add a shared `SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES` cap (4 MiB) and a `readSelfHostedDiscoveryJson(response, label)` helper that reads the body via `readResponseWithLimit` from `@openclaw/media-core/read-response-with-limit` (cancels the stream on overflow), then `JSON.parse`s the decoded bytes.\n- Route both `discoverLlamaCppRuntimeContextTokens` (`/props`) and `discoverOpenAICompatibleLocalModels` (`/models`) through the bounded reader instead of `await response.json()`. Overflow throws are swallowed by the existing discovery error handling, so a capped endpoint degrades gracefully: `/models` returns `[]`, `/props` skips the runtime context-token probe — no OOM.\n- Add two regression tests that feed an effectively-unbounded streamed body and assert the stream is cancelled exactly once and the read stays under the cap (instead of being drained/buffered).\n\n## Real behavior proof\n\n**Behavior addressed**: Unbounded `await response.json()` on untrusted self-hosted discovery endpoints (`/models` and llama.cpp `/props`) could buffer an unbounded body into memory (OOM); the reads are now capped at 4 MiB and the stream is cancelled on overflow.\n\n**Real environment tested**: Local clone on Node v22.22.0; a real loopback `http` server streaming 1 MiB JSON chunks \"forever\", driven through the real `discoverOpenAICompatibleLocalModels` (real `fetchWithSsrFGuard` + undici network stack) over a real socket. Vitest run via the repo's `scripts/run-vitest.mjs`.\n\n**Exact steps or command run after this patch**:\n- Real-runtime proof (tsx, real socket): `node --import tsx scripts/proof-bound-self-hosted-discovery.mts` — starts an unbounded-JSON loopback server and calls the real discovery function against it.\n- Regression tests: `node scripts/run-vitest.mjs src/plugins/provider-self-hosted-setup.test.ts --run`\n- Lint: `oxlint src/plugins/provider-self-hosted-setup.ts src/plugins/provider-self-hosted-setup.test.ts`\n\n**Evidence after fix**:\n```\n[proof] unbounded JSON server on http://127.0.0.1:32865/v1\n[proof] byte cap under test = 4 MiB (4194304 bytes)\n[plugins/self-hosted-provider-setup] Failed to discover proof-vllm models: Error: proof-vllm discovery response body too large: 4256527 bytes (limit: 4194304 bytes)\n\n=== READBACK (after fix) ===\nreturned models           : []\nserver bytes flushed      : 5242880 (5.0 MiB)\nserver saw early abort    : true     <- reader cancelled the stream\nelapsed                   : 259ms\nRESULT: PASS — discovery read was bounded then the reader cancelled the stream. No OOM.\n```\nVitest: `Test Files 1 passed (1) / Tests 12 passed (12)`. oxlint: clean.\n\n**Observed result after fix**: The unbounded body is capped at 4 MiB — the loopback server is hung up on (early abort) after ~5 MiB, the overflow error fires, and discovery returns `[]` instead of buffering. Negative control: reverting the source to `await response.json()` and re-running the two new tests fails with `cancelCount expected 1, received 0` (the unbounded read never cancels and drained for ~200s instead of being capped), confirming the tests genuinely catch the bug.\n\n**What was not tested**: A live production SSRF chain to a real malicious provider (the threat model is reproduced with a local unbounded-stream server). Full-project `tsc` could not run to completion on this constrained host (heap OOM in the type checker itself, unrelated to this change); the changed files type-check cleanly under a scoped check and the vitest transform pipeline.\n\n---\n\nAI-assisted: this change was prepared with AI assistance (analysis, implementation, and proof authoring); all code, tests, and the proof were reviewed and the proof executed locally by the contributor.\n",
+        "branch": "fix/bound-self-hosted-discovery-json",
+        "head_sha": "d84f514a1f17bae66ddcf0f2e76306fea626e17a",
+        "author": "alix-007",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/plugins/provider-self-hosted-setup.test.ts",
+            "additions": 105,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/provider-self-hosted-setup.ts",
+            "additions": 30,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 135,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95244",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95244.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 31,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 705,
+    "total_ms": 5946,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 415
+        "ms": 505
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2348
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +168,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 279
+        "ms": 3073
       },
       {
         "name": "append_ledger",
