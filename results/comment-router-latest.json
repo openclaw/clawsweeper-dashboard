@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T12:01:13.190Z",
+  "generated_at": "2026-06-24T12:01:32.597Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T09:01:10.671Z",
+  "since": "2026-06-24T09:01:28.838Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    94964
+    96351
   ],
   "comment_ids": [
-    4789050383
+    4789054159
   ],
-  "status_comment_id": 4789050816,
+  "status_comment_id": 4789054518,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:94964:4789050383:2026-06-24T12:00:08Z:re_review",
-      "comment_id": "4789050383",
-      "comment_version_key": "4789050383:2026-06-24T12:00:08Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94964#issuecomment-4789050383",
+      "idempotency_key": "comment-router:openclaw/openclaw:96351:4789054159:2026-06-24T12:00:36Z:re_review",
+      "comment_id": "4789054159",
+      "comment_version_key": "4789054159:2026-06-24T12:00:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96351#issuecomment-4789054159",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 94964,
-      "author": "lzyyzznl",
-      "author_id": 41978486,
+      "issue_number": 96351,
+      "author": "anagnorisis2peripeteia",
+      "author_id": 129746152,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T12:00:08Z",
-      "comment_updated_at": "2026-06-24T12:00:08Z",
-      "status_comment_id": 4789050816,
+      "comment_created_at": "2026-06-24T12:00:36Z",
+      "comment_updated_at": "2026-06-24T12:00:36Z",
+      "status_comment_id": 4789054518,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,99 +68,191 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-06-24T12:01:13.972Z",
+          "dispatched_at": "2026-06-24T12:01:33.828Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 94964
+          "item_number": 96351
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-06-24T12:01:16.808Z",
-          "response_comment_id": "4789030717",
+          "commented_at": "2026-06-24T12:01:35.228Z",
+          "response_comment_id": "4789054518",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(reload): cancel deferred channel reload on in-process restart",
-        "body": "## Summary\n\n**Problem**: When SIGUSR1 fires during a deferred channel reload (triggered by a config change requiring channel restart), both code paths race to start the same channel. The deferred reload polls for active work to drain, then starts the channel — but the in-process restart also starts the channel. On Telegram, this double-spawns the webhook listener and the loser gets EADDRINUSE, entering a permanent crash loop with up to 10 auto-restart attempts. This race condition can cause the gateway to become permanently unavailable after a SIGUSR1 during active reload.\n\nThe race manifests through a specific sequence of events. First, a config change triggers a hot reload that requires restarting the Telegram channel. The reload handler enters waitForActiveWorkBeforeChannelReload, polling every 500ms for active operations (pending replies, queue items) to drain before it proceeds to stopChannel then startChannel. While this poll loop is running, an operator sends SIGUSR1 for an in-process restart. The restart path in run-loop.ts consumes the signal, authorizes it, and calls resetGatewayRestartStateForInProcessRestart in restart.ts, which schedules a new gateway lifecycle. Meanwhile, the deferred reload poll loop has no awareness of the in-process restart — it continues waiting and, once active work drains, proceeds to stopChannel then startChannel for the Telegram channel. At the same time, the in-process restart lifecycle also calls startChannel for Telegram. Two concurrent startChannel calls for the same Telegram webhook listener result in the second call failing with EADDRINUSE because the first one already bound the port.\n\nThe EADDRINUSE error is particularly damaging on Telegram because the webhook listener binds to a specific port. When the second startChannel attempt fails, Telegram's channel supervisor enters its auto-restart logic, retrying up to 10 times. Each retry also attempts to bind the same port, which remains occupied by the first (successful) startChannel from the in-process restart. The Telegram channel enters a crash loop — repeatedly failing to bind, auto-restarting, failing again — while the gateway itself may appear healthy because the overall process is still running. Users experience silent message delivery failures on Telegram without obvious gateway-level errors. This race is timing-dependent and requires active work (pending replies or queue items) at the moment SIGUSR1 arrives, making it difficult to reproduce in test environments but consistently triggered under production load.\n\n**Solution**: Add an abort flag (`pendingChannelReloadAborted`) checked by the deferred reload poll loop, and set it from `resetGatewayRestartStateForInProcessRestart` via a dynamic import. When the in-process restart fires, any waiting deferred reload aborts immediately. The flag is a module-level boolean in `server-reload-handlers.ts` that starts as `false`, gets reset to `false` at the start of each `createGatewayReloadHandlers` call, and is set to `true` by the exported `abortPendingChannelReloads()` function. Both the SIGUSR1 signal handler in `run-loop.ts` and the in-process restart state reset in `restart.ts` call `abortPendingChannelReloads()` via dynamic import to avoid circular dependencies between the gateway lifecycle module and the reload handlers module.\n\nThree specific safety check points are added. First, inside the `waitForActiveWorkBeforeChannelReload` poll loop, the abort flag is checked after each `await` point — once immediately after waking from the poll sleep timer, and once before the `totalActive <= 0` drain check. This ensures that even if the poll sleep timer fires while the SIGUSR1 handler is mid-execution, the abort is detected on the very next iteration. Second, between `stopChannel` and `startChannel` in the restart channel loop, the abort flag is checked so that if the deferred reload was mid-execution (already stopped channels but not yet started them), it bails out before starting any channel. Third, `abortPendingChannelReloads` is called only after SIGUSR1 authorization passes in `run-loop.ts`, ensuring we don't cancel reloads for unauthenticated signals. The `waitForActiveWorkBeforeChannelReload` function is changed from returning `void` to returning `Promise<boolean>` — `true` when the wait was aborted by in-process restart, `false` when active work drained normally. The callers at both the plugin-replace-before-channel-restart path and the channel-only-reload path check this return value and skip the restart sequence when `true`.\n\n**What changed**: Four files, +58/-9 across all changes.\n\n`src/gateway/server-reload-handlers.ts` (+29/-9): The core of the fix. Added a module-level `pendingChannelReloadAborted` boolean flag initialized to `false`, and an exported `abortPendingChannelReloads()` function that sets it to `true`. The `waitForActiveWorkBeforeChannelReload` function signature changed from `Promise<void>` to `Promise<boolean>` — returns `true` when cancelled by abort, `false` on normal drain or timeout. The poll loop gains two abort checks: one after `await`-ing the sleep timer (before the active-work check) and one at the top of the loop iteration (in case the flag was set before the sleep started). Both callers of `waitForActiveWorkBeforeChannelReload` — the plugin-replace-with-channel-restart path and the channel-only-restart path — check the return value and log + early-return when cancelled. In the `restartChannel` closure for the non-plugin-reload path, an abort check is inserted between `stopChannel` and `startChannel` to prevent the race on channel startup. The `pendingChannelReloadAborted` flag is reset to `false` at the top of `createGatewayReloadHandlers` to ensure a fresh state for each reload cycle.\n\n`src/cli/gateway-cli/run-loop.ts` (+13/-0): Added a local `doAbortPendingChannelReloads` closure that dynamically imports `server-reload-handlers.js` and calls `abortPendingChannelReloads()` with a best-effort catch. This closure is called from two SIGUSR1 handling paths: (1) the authorization-gated path (after SIGUSR1 authorization via `consumeGatewaySigusr1RestartAuthorization()` returns true, before the restart request is dispatched), and (2) the non-authorized path (after logging the unauthorized signal and scheduling the restart). Both paths need to cancel pending reloads because the in-process restart is imminent regardless of authorization — the authorization only controls whether the restart proceeds with the intended reason code.\n\n`src/infra/restart.ts` (+9/-0): Added a dynamic import of `server-reload-handlers.js` inside `resetGatewayRestartStateForInProcessRestart()`, calling `abortPendingChannelReloads()` with a best-effort catch. This is the belt-and-suspenders coverage: the restart state reset happens early in the in-process restart flow, before the SIGUSR1 handler in run-loop.ts gets a chance to fire its own abort call. The dynamic import pattern is used here (and in run-loop.ts) to avoid a static import dependency from the infra module into the gateway module, which would create a circular dependency.\n\n`src/auto-reply/reply/dispatch-from-config.ts` (+2/-2): Fixed reasoning payload suppression logic. The two existing `if (payload.isReasoning === true)` guards unconditionally suppressed reasoning payloads from channel delivery via the generic dispatch path. This caused Telegram to lose reasoning content when its dispatch went through the generic path instead of the dedicated Telegram reasoning lane. The fix adds `&& deliveryChannel !== \"telegram\"` to both guards, allowing Telegram to receive reasoning content through the generic path as a fallback. This change is included in this PR because it was discovered during the EADDRINUSE race investigation — the Telegram channel restart race occasionally surfaced this latent bug when the restart path triggered a different dispatch code path.\n\n**What did NOT change**: No changes to the channel reload start work flow itself — the `waitForActiveWorkBeforeChannelReload` poll logic (interval, timeout, still-pending warnings) is identical except for the abort checks. No changes to non-SIGUSR1 restart paths (config change reloads without a concurrent SIGUSR1 work identically to before). No changes to channel lifecycle outside the reload path. The dispatch-from-config.ts change is scoped to the two reasoning guards and does not affect any other delivery logic. All existing tests pass including the updated stable runtime boundary test. The abort flag best-effort design means that even if the dynamic import fails or the flag check is somehow missed (e.g. the reload poll loop exits between two check points), channels will not be left in a broken state — the worst case is a redundant channel restart that gets EADDRINUSE and auto-retries as before this fix.\n\nFixes #94964\n\n## Real behavior proof\n\n**Behavior addressed**: Deferred channel reload cancellation on in-process restart (SIGUSR1). Prevents race between deferred channel reload and in-process restart that caused EADDRINUSE on Telegram webhook listener.\n\n**Real environment tested**: Linux / OpenClaw Gateway with OPENCLAW_NO_RESPAWN=1 (in-process restart mode) / SIGUSR1 signal / Telegram and Feishu channels active with pending work\n\n**Exact steps or command run after this patch**:\n\n```bash\nOPENCLAW_NO_RESPAWN=1 ./openclaw gateway --config /etc/openclaw/config.yaml &\nGATEWAY_PID=$!\necho $GATEWAY_PID > /tmp/gateway-94964.pid\nsleep 10\nkill -SIGUSR1 $GATEWAY_PID\nsleep 30\ncat /tmp/gateway-94964.ip.log\n```\n\n```bash\nps -p $GATEWAY_PID -o pid,state,etime\n```\n\n**After-fix evidence**:\n\nLive Gateway runtime logs showing SIGUSR1 triggered in-process restart with deferred channel reload correctly cancelled:\n\n```\n2026-06-24T17:51:46.890+08:00 [gateway] loading configuration...\n2026-06-24T17:51:53.922+08:00 [gateway] agent model: stepfun-plan/step-3.5-flash\n2026-06-24T17:51:53.924+08:00 [gateway] http server listening (13 plugins; 6.9s)\n2026-06-24T17:51:53.929+08:00 [gateway] starting channels and sidecars...\n2026-06-24T17:51:57.835+08:00 [gateway] ready\n2026-06-24T17:52:36.808+08:00 [gateway] signal SIGUSR1 received\n2026-06-24T17:52:36.813+08:00 [gateway] received SIGUSR1; restarting\n2026-06-24T17:52:37.401+08:00 [feishu] feishu[default]: abort signal received, stopping\n2026-06-24T17:52:37.446+08:00 [gateway] restart mode: in-process restart (OPENCLAW_NO_RESPAWN)\n2026-06-24T17:52:37.451+08:00 [gateway] waiting for active work to drain before channel reload...\n2026-06-24T17:52:37.451+08:00 [feishu] feishu[default]: received abort, cancelling deferred channel reload\n2026-06-24T17:52:37.451+08:00 [gateway] deferred channel reload aborted, in-process restart in progress\n2026-06-24T17:52:37.695+08:00 [gateway] abortPendingChannelReloads cleared all pending reloads\n2026-06-24T17:52:37.696+08:00 [gateway] loading configuration...\n2026-06-24T17:52:37.701+08:00 [gateway] agent model: stepfun-plan/step-3.5-flash\n2026-06-24T17:52:37.702+08:00 [gateway] http server listening (13 plugins; 0.1s)\n2026-06-24T17:52:37.705+08:00 [gateway] starting channels and sidecars...\n2026-06-24T17:52:37.709+08:00 [gateway] ready\n```\n\nKey log events in sequence: (1) SIGUSR1 received at 17:52:36.808, (2) deferred reload poll loop starts waiting at 17:52:37.451, (3) Feishu channel receives abort at 17:52:37.401 via its own abort mechanism, (4) server-reload-handlers detects the abort flag and logs \"deferred channel reload aborted\" at 17:52:37.451, (5) abortPendingChannelReloads confirms cancellation at 17:52:37.695, (6) gateway reloads cleanly without EADDRINUSE or crash loop. The entire restart completes in under 1 second (17:52:36.808 to 17:52:37.709).\n\n**Observed result after the fix**: SIGUSR1 triggers in-process restart. Deferred channel reload is correctly cancelled as shown by \"deferred channel reload aborted\" log lines. No EADDRINUSE or crash loop occurs. The Telegram webhook listener starts exactly once under the new gateway lifecycle.\n\n**What was not tested**: Fresh-start (non-reload) gateway initialization scenarios where no deferred channel reload is in progress — the abort flag is `false` by default and never checked in these paths. Concurrent SIGUSR1 signals arriving faster than 500ms poll interval — each signal independently triggers the abort path, and multiple calls to `abortPendingChannelReloads` are idempotent (setting a boolean to `true` multiple times is harmless). Scenarios where the dynamic import itself fails (module not found, syntax error) — the best-effort catch silences the error and the deferred reload proceeds as before, which is the same behavior as pre-fix.\n\n**Real evidence artifact links**: Runtime log transcript captured inline above from gateway stderr output during the test run.\n\n## Risk checklist\n\n- [x] **merge-risk**: Medium. Changes the restart lifecycle ordering; potential for missed abort if the dynamic import fails silently or the poll loop exits between check points. The abort is a best-effort signal — channels continue to function even if abort is missed. Three independent abort check points provide defense in depth. All test suites pass including the updated stable runtime boundary test.\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [x] I have updated relevant documentation\n- [ ] Breaking changes (if any) are documented in Summary",
-        "branch": "fix/issue-79487-channel-reload-restart-race",
-        "head_sha": "3af74c547fa9acedbbf13bbde9cdc29d92350ac3",
-        "author": "lzyyzznl",
+        "title": "feat(gateway): scoped attach grants for external MCP loopback clients",
+        "body": "## What Problem This Solves\n\nThe gateway's in-process loopback MCP server (`src/gateway/mcp-http.ts`) lets the gateway-spawned cli-backend reach scoped gateway tools. It authenticates with two **process-global** bearer tokens (owner / non-owner) and derives the whole request context — session **and** delivery/action context — from client-supplied headers (`resolveMcpRequestContext`). That is safe for the cli-backend, which the gateway launches and trusts. But there is no safe way for an **external, human-driven** harness (Claude Code, OpenCode — and later a harness reached via a node or companion app) to use that surface: it would need the process-global token *and* be trusted to set its own `x-session-key` and `x-openclaw-*` context, i.e. it could scope-shop into any session and spoof channel/account/thread/delivery context.\n\n## Why This Change Was Made\n\nThis is the keystone primitive for an `attach` surface — the middle ground between ACP (the gateway drives a headless agent) and pointing a raw, unassociated terminal at the gateway (tracking: openclaw/openclaw#96205). The fix is a per-session **grant**: a short-lived, revocable bearer treated as a **lower-trust boundary**. For a grant-authenticated request the gateway binds the session **server-side** and **fail-closes on every caller-supplied context header** — not just `x-session-key`, but also `x-openclaw-message-channel`, `account-id`, `current-channel-id`, thread/message, `source-reply-delivery-mode`, and `inbound-event-kind`. Root cause of the gap is that the whole request context was header-derived; a less-trusted token holder could otherwise scope-shop the session *and* spoof delivery/action context that feeds scoped tools and the message tool. The grant is deliberately transport-independent so the same mechanism extends to nodes / companion apps (as conduits over their existing authenticated channel) without a redesign.\n\n## User Impact\n\nNo user-visible change yet — this ships the gateway primitive only; the user-facing launcher + client adapters are a follow-up (PR2 in #96205). Operators gain two admin-scoped RPC methods, `attach.grant` / `attach.revoke`.\n\n- **Additive, no behavior change to existing paths.** The owner/non-owner cli-backend auth path is byte-identical; the grant check is a new branch reached only when neither process token matches.\n- **No new config/env surface.** The grant response reuses the existing `OPENCLAW_MCP_TOKEN` / `OPENCLAW_MCP_SESSION_KEY` placeholders already emitted by `createMcpLoopbackServerConfig`.\n- **In-memory store** (mirrors the existing loopback tokens — process-scoped, ephemeral), so no SQLite/migration.\n\nScope boundary: gateway-internal only. The launcher/adapters, and wiring `revokeAttachGrantsForSession` into session teardown, are explicit follow-ups in #96205 (a leaked grant is bounded by its TTL meanwhile).\n\n## Evidence\n\n**Security core — scope-shop + context-spoof blocked** (`src/gateway/mcp-http.test.ts`): a real loopback HTTP server; a request carrying a grant token **plus a spoofed `x-session-key` and spoofed `message-channel`/`account-id`/`current-channel-id`/`thread`/`source-reply` headers** asserts the resolved session is the grant's bound key **and every other context header is ignored** (undefined) — so a grant holder can neither scope-shop nor spoof delivery/action context.\n\n**Live real-behavior proof** (real server, real HTTP, no mocks):\n```\n[1] cold-start: real loopback MCP server up on 127.0.0.1:<port>\n[3] tools/list with grant                         → HTTP 200  (authenticated)\n[4] tools/list grant + spoofed session/channel/account → HTTP 200  (served; session bound to grant, all context headers ignored server-side)\n[5] tools/list bogus bearer                        → HTTP 401  (no grant, no access)\n```\n(Tool list is empty in this standalone harness — no plugin runtime is loaded to populate it; the auth + cold-start + grant-binding path is what's exercised. Which tools resolve, and the destructive-tool exclusion, are asserted in `mcp-http.test.ts`.)\n\n**Gates** (SHA `2a3905230`, branch `feat/attach-grants` off `upstream/main`; full changed-scope CI run locally):\n- build ✓ · oxlint 0 · gateway suite **5402 green** + full `test:changed` core suite (3285 + 83 + 740) green — one unrelated pre-existing flake (`install-policy.test.ts`, a forked-process pid race; not in this diff's path)\n- autoreview (qwen): no actionable findings\n- clawsweeper: context-spoof finding fixed — grant requests fail-close on **all** caller context headers; sweep-on-mint bounds the store; `attach.grant` is `controlPlaneWrite` (rate-limited mint), `attach.revoke` intentionally not\n- mutation (stryker, changed files): **83.3%** (90/108 killed, 0 timeout) — `mcp-grant-store.ts` 94.6%, `attach.ts` 71.7%\n\n**Risks → mitigations:** leaked grant → TTL (1 h default, 12 h ceiling) + explicit revoke; mint flooding → control-plane write budget; scope-shop / context-spoof → grant binds the session server-side and fail-closes on **all** caller context headers (session + channel/account/thread/delivery), so a grant holder can influence neither tool scope nor message-delivery context.\n",
+        "branch": "feat/attach-grants",
+        "head_sha": "2a3905230b5da86bf3e3b9ee688a75635b03d974",
+        "author": "anagnorisis2peripeteia",
         "labels": [
           "gateway",
-          "cli",
-          "size: S",
-          "proof: supplied",
-          "mantis: telegram-visible-proof",
+          "size: M",
+          "proof: sufficient",
           "P2",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 2,
-            "deletions": 2,
+            "path": "src/gateway/mcp-grant-store.test.ts",
+            "additions": 91,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/mcp-grant-store.ts",
+            "additions": 128,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/mcp-http.request.ts",
+            "additions": 38,
+            "deletions": 7,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 11,
+            "path": "src/gateway/mcp-http.test.ts",
+            "additions": 42,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-reload-handlers.ts",
-            "additions": 65,
-            "deletions": 29,
+            "path": "src/gateway/methods/core-descriptors.ts",
+            "additions": 5,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/restart.ts",
-            "additions": 9,
+            "path": "src/gateway/server-methods.ts",
+            "additions": 8,
             "deletions": 0,
             "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/attach.test.ts",
+            "additions": 99,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-methods/attach.ts",
+            "additions": 66,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 87,
-        "deletions": 31,
+        "changedFiles": 8,
+        "additions": 477,
+        "deletions": 7,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94964",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94964.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96351",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96351.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 89,
+          "gatingTotal": 84,
           "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 24,
-            "IN_PROGRESS": 1,
-            "FAILURE": 1,
+            "IN_PROGRESS": 38,
+            "SUCCESS": 25,
+            "SKIPPED": 25,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Run agentic native Telegram proof:IN_PROGRESS",
-            "checks-node-compact-small-6:FAILURE"
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
-            "Run agentic native Telegram proof:IN_PROGRESS"
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
-          "terminalBlockers": [
-            "checks-node-compact-small-6:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -170,15 +262,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6752,
+    "total_ms": 7312,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 615
+        "ms": 718
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1888
+        "ms": 3025
       },
       {
         "name": "classify_comment_commands",
@@ -194,7 +286,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 4221
+        "ms": 3542
       },
       {
         "name": "append_ledger",
