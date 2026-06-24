@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T22:22:41.026Z",
+  "generated_at": "2026-06-24T22:22:45.106Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T19:22:40.561Z",
+  "since": "2026-06-24T19:22:43.073Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96566
+    96550
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,123 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96550:4793370027:2026-06-24T22:22:39Z:clawsweeper_needs_human",
+      "comment_id": "4793370027",
+      "comment_version_key": "4793370027:2026-06-24T22:22:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96550#issuecomment-4793370027",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96550,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T20:31:47Z",
+      "comment_updated_at": "2026-06-24T22:22:39Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The remaining blocker is contributor or maintainer-provided real Telegram proof, not a narrow code repair for ClawSweeper to apply.; Cleared: No concrete security or supply-chain concern found; the diff only changes core session initialization retry logic and a focused test. (sha=dce5d661bb56ffb4f610d522b8cb5a4c1d7775d5)",
+      "review_summary": "Adds a bounded stale-snapshot retry budget to core reply-session initialization and a regression test for concurrent Telegram topic initializers.\n\nPR surface: Source +4, Tests +63. Total +67 across 2 files.\n\nReproducibility: yes. at source level: current main retries one stale snapshot then throws on repeated stale commits, and the PR regression test models six concurrent same-topic initializers. I did not run a live Telegram repro in this read-only review.",
+      "review_followup": "- [P1] The remaining blocker is contributor or maintainer-provided real Telegram proof, not a narrow code repair for ClawSweeper to apply.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "dce5d661bb56ffb4f610d522b8cb5a4c1d7775d5",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(telegram): topic replies stall after session conflicts",
+        "body": "## Summary\n\nRecover reply-session initialization when same-session Telegram/topic bursts stack multiple optimistic-concurrency commits, so fresh inbound replies do not fail before the agent run starts.\n\n## What Problem This Solves\n\nFixes a Telegram-visible pause where a live forum-topic session could accept one reply and then reject later same-topic replies with a reply-session initialization conflict. The old stale-spool loop was one symptom, but the live follow-up showed the deeper issue: fresh/bursty same-session initialization could still collide inside the guarded session-store commit.\n\n## Root Cause\n\n`commitReplySessionInitialization` compares a whole-entry revision for the active session. That guard is correct because the commit writes the resolved session entry back into the store, but it also means any sibling initializer that commits metadata first invalidates older snapshots. `initSessionState` only retried one stale snapshot before throwing `reply session initialization conflicted for <redacted session route>`, so stacked same-session Telegram replies could fail before an agent run even though rereading a fresh snapshot would be safe.\n\nA full-diff review also showed that the earlier Telegram spool tombstone approach was too broad: a reply-session init conflict is an optimistic-concurrency race, not proof that the Telegram update can never succeed. This revision keeps those conflicts retryable at the transport layer and fixes the race at the reply-session owner boundary instead.\n\n## Why This Change Was Made\n\nThe reply-session initializer now allows a bounded number of fresh snapshot retries before surfacing a real writer conflict. This preserves the existing compare-and-commit protection while absorbing normal burst contention from Telegram/webhook delivery.\n\nNo timeout or Telegram spool duration behavior changes here; the custom long spool timeout is not the cause of this failure.\n\nNo session-entry fields, schema, storage path, or migration contract changes; existing persisted session entries keep the same shape.\n\n## User Impact\n\nTelegram forum-topic sessions should continue through bursty replies instead of pausing on transient session metadata contention. The fix is in core reply-session initialization, so it also helps other delivery paths that can stack same-session initializers.\n\n## Real Behavior Proof\n\nBefore: redacted live Gateway logs from a private Telegram topic showed one same-topic turn completing, followed by later same-topic turns failing quickly with `reply session initialization conflicted for <redacted session route>`. The failure happened before a new agent run started.\n\nAfter: the regression test seeds an existing topic session, launches six concurrent same-session initializers, and verifies every initializer fulfills against the same session entry with the topic metadata persisted. That exercises the stale-snapshot race directly without using private Telegram identifiers.\n\n## Evidence\n\n```text\nnode scripts/run-vitest.mjs src/auto-reply/reply/session.test.ts -t \"retries stacked stale snapshots\"\n\nTest Files  1 passed (1)\nTests       1 passed | 119 skipped (120)\n```\n\n```text\npnpm exec oxfmt --check --threads=1 src/auto-reply/reply/session.ts src/auto-reply/reply/session.test.ts\n\nAll matched files use the correct format.\n```\n\n```text\ngit diff --check origin/main...HEAD\n\n(no output)\n```\n\n```text\n.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main\n\nautoreview clean: no accepted/actionable findings reported\noverall: patch is correct (0.86)\n```\n\n## Verification\n\nFocused session initialization regression coverage passed on the clean PR head rebased onto `origin/main` at `c6f5725906d`. Branch-level autoreview passed after removing the broad Telegram dead-letter classifier.\n\n## What Was Not Tested\n\nI did not run the full test suite or final live Telegram proof against production credentials from this head. Public proof intentionally omits private Telegram links, chat IDs, message IDs, account identifiers, and raw session routes.\n",
+        "branch": "fix/telegram-spool-session-conflict",
+        "head_sha": "dce5d661bb56ffb4f610d522b8cb5a4c1d7775d5",
+        "author": "vacinc",
+        "labels": [
+          "size: S",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/session.test.ts",
+            "additions": 63,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session.ts",
+            "additions": 8,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 71,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96550",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96550.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 90,
+          "gatingTotal": 85,
+          "counts": {
+            "SUCCESS": 62,
+            "SKIPPED": 25,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 810,
+    "total_ms": 2254,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 454
+        "ms": 304
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1714
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +157,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 345
+        "ms": 210
       },
       {
         "name": "append_ledger",
