@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T10:14:44.789Z",
+  "generated_at": "2026-06-24T10:14:47.399Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T07:14:42.644Z",
+  "since": "2026-06-24T07:14:45.264Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96026
+    96033
   ],
   "comment_ids": [
-    4788160006
+    4788159633
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96026:4788160006:2026-06-24T10:12:22Z:re_review",
-      "comment_id": "4788160006",
-      "comment_version_key": "4788160006:2026-06-24T10:12:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96026#issuecomment-4788160006",
+      "idempotency_key": "comment-router:openclaw/openclaw:96033:4788159633:2026-06-24T10:12:21Z:re_review",
+      "comment_id": "4788159633",
+      "comment_version_key": "4788159633:2026-06-24T10:12:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96033#issuecomment-4788159633",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96026,
+      "issue_number": 96033,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T10:12:22Z",
-      "comment_updated_at": "2026-06-24T10:12:22Z",
+      "comment_created_at": "2026-06-24T10:12:21Z",
+      "comment_updated_at": "2026-06-24T10:12:21Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -67,55 +67,66 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(tavily): bound untrusted JSON response reads",
-        "body": "## What Problem This Solves\n\n`extensions/tavily/src/tavily-client.ts` reads the `/search` and `/extract` responses with an unbounded `await response.json()` inside `readTavilyJsonResponse`. Those responses are **untrusted external web content** (the whole point of the Tavily plugin is to fetch arbitrary web data), and Tavily / a reverse proxy / a hostile-or-buggy upstream can send a body with **no `Content-Length`**.\n\nWith the unbounded read, `response.json()` keeps consuming the stream until it completes, so a single oversized or slow/hung JSON body forces the runtime to buffer the *entire* payload into memory before parsing. On the web-search/extract path this is memory pressure (and, for a body that streams indefinitely without ever closing, a hang) driven entirely by the untrusted remote — a classic unbounded-external-input issue.\n\nThis is the symmetric counterpart to the response-limit campaign that already bounded the core provider read paths: #95103 (gateway pricing catalog streams), #95108 (Anthropic error streams), and #95218 (`readProviderJsonResponse` for provider JSON). The Tavily plugin was on the same unbounded `response.json()` shape and was missed.\n\n## Changes\n\n- `readTavilyJsonResponse` now reads through the shared bounded reader `readResponseWithLimit` (from `openclaw/plugin-sdk/response-limit-runtime`, backed by `@openclaw/media-core`), which **cancels the stream on overflow**, then `JSON.parse`s the decoded prefix.\n- Cap is `16 * 1024 * 1024` (16 MiB), aligned with the existing provider JSON ceiling in `src/agents` (`readProviderJsonResponse`).\n- Overflow throws a stable `\"<label>: JSON response exceeds <n> bytes\"` error; malformed JSON keeps its existing `\"<label>: malformed JSON response\"` error.\n- No new abstraction — reuses the existing helper, mirroring `readProviderJsonResponse`.\n- Adds regression tests: small valid JSON still parses unchanged under the cap, and an oversized streaming body (20 × 1 KiB behind a 2 KiB cap) rejects with the bounded error while the reader stops early (`getReadCount() < 20`).\n\n## Real behavior proof\n\n- **Behavior addressed**: an untrusted Tavily response with no `Content-Length` that streams past the cap must be cancelled and rejected with a bounded error, instead of buffering the whole body; small valid responses must still parse.\n- **Real environment tested**: a local `node:http` server (`node --import tsx`) streaming a JSON body in 1 MiB chunks with **no `Content-Length`**, driving the **real exported** `__testing.readTavilyJsonResponse` over a real `fetch()` `Response` (real `ReadableStream` body, not a mock).\n- **Exact steps**:\n  1. Start a `node:http` server with a `/oversized` route that opens `{\"results\":[` and keeps `res.write()`-ing 1 MiB string chunks (tracking total bytes pushed), and a `/small` route returning a normal JSON object.\n  2. `fetch()` `/oversized`, pass the live `Response` to `readTavilyJsonResponse(res, \"Tavily Search\")`, time it and capture the thrown error and the server-side bytes pushed before the socket closed.\n  3. **Negative control**: `fetch()` `/oversized` again and read it with the *old* path inlined verbatim — `await r.json()` with no cap — racing against a 1.5 s timer, and record how many bytes the server pushed.\n  4. `fetch()` `/small` and parse it through the same real function.\n- **Evidence after fix**:\n  - `[oversized] content-length header: null` → `threw: Tavily Search: JSON response exceeds 16777216 bytes (after ~200ms)`; server pushed ~18–21 MiB before the cancel stopped it (the 16 MiB cap plus socket buffering), far below the 64 MiB safety ceiling the fixture would otherwise reach.\n  - `[negative-control] unbounded json() ... server pushed 68157375 bytes` → with no cap the read consumed the **full ~64 MiB** until the fixture self-terminated; the cap is therefore load-bearing.\n  - `[small] PASS: small valid JSON parses unchanged under the cap`.\n  - `vitest extensions/tavily/src/tavily-client.test.ts --run` → **6 passed** (4 existing + 2 new boundary tests).\n- **Observed result**: oversized stream is cancelled at the cap and rejected with the bounded error; the unbounded control buffers ~64 MiB (proving the fix is what stops it); small JSON is unaffected.\n- **What was not tested**: live calls against the real Tavily API (would need a paid key and cannot be made to stream an oversized body deterministically); the 16 MiB ceiling itself is asserted at a scaled-down 2 KiB cap in the unit test for speed.\n\n## Evidence\n\n```\n[oversized] content-length header: null\n[oversized] threw: Tavily Search: JSON response exceeds 16777216 bytes (after 274ms)\n[oversized] server bytes pushed before cancel: 20971500\n[oversized] PASS: stream cancelled well below the 64 MiB ceiling\n[negative-control] unbounded json() after 964ms => threw:Unexpected token ']' ...; server pushed 68157375 bytes\n[negative-control] PASS: unbounded await response.json() buffers past the 16 MiB cap (cap is load-bearing)\n[small] parsed: {\"results\":[{\"title\":\"ok\",\"url\":\"https://e.com\"}],\"answer\":\"hi\"}\n[small] PASS: small valid JSON parses unchanged under the cap\n\nPROOF PASSED: bounded read cancels oversized stream; cap is load-bearing; small JSON intact\n```\n\n```\n$ node scripts/run-vitest.mjs extensions/tavily/src/tavily-client.test.ts --run\n Test Files  1 passed (1)\n      Tests  6 passed (6)\n```\n\n`oxlint` clean on the changed files; `tsgo -p extensions/tavily/tsconfig.json` type-checks clean.\n\n**Label**: security\n\n---\n\n_AI-assisted: implementation and proof harness were written with AI assistance; all changes were reviewed and the proof was run locally by the author._\n\n_This is the symmetric counterpart of the #95103 / #95108 / #95218 response-limit campaign, extending the same bounded-read treatment to the Tavily plugin's untrusted web-search/extract path._\n",
-        "branch": "fix/bound-tavily-response",
-        "head_sha": "54627d3c34eeb6729bab24d6e401f637b1b1f9c8",
+        "title": "fix(mattermost): bound successful REST JSON/text response reads",
+        "body": "## What Problem This Solves\n\n`extensions/mattermost/src/mattermost/client.ts` talks to a Mattermost server that the plugin does not control — self-hosted instances, LAN deployments, or a host that has been compromised or is malfunctioning. The client already hardened two of its three read paths:\n\n- error bodies are bounded via `readResponseTextLimited` (8 KiB), and\n- guarded responses are streamed through `responseWithRelease` instead of `arrayBuffer()`,\n\nbut the **successful** response path was still unbounded. `request()` called `await res.json()` / `await res.text()`, and `uploadMattermostFile()` called `await res.json()` on the file-info result. Each of those buffers the entire body into memory before parsing.\n\nA Mattermost server can return a response with **no `Content-Length`** and an arbitrarily large — or never-terminating — JSON/text body (every REST call goes through `request()`: users, channels, posts, file uploads). Because nothing capped the success path, the plugin would buffer the whole stream, applying unbounded memory pressure / hang to the plugin and the surrounding agent runtime. This is not generic cleanup: it closes the one remaining unbounded ingest point on an untrusted-server boundary.\n\n## Changes\n\n- `request()` success path: parse JSON via the shared `readProviderJsonResponse` (16 MiB cap; cancels the stream and throws a bounded `… exceeds 16777216 bytes` error on overflow, then wraps malformed JSON), matching the provider HTTP path used elsewhere in the repo.\n- `request()` non-JSON success path: read via `readResponseTextLimited` with a 64 KiB cap (non-JSON success bodies are a rare fallback; the API is JSON-first).\n- `uploadMattermostFile()` file-info JSON: bounded the same way through `readProviderJsonResponse`.\n- Reuses existing helpers only (`readProviderJsonResponse`, `readResponseTextLimited` from `openclaw/plugin-sdk/provider-http`) — no new abstraction, and no second buffering layer added to the guarded fetch adapter or the error path.\n- Added a regression test: oversized guarded success JSON throws the bounded error and cancels the upstream stream early.\n\n## Real behavior proof\n\n- **Behavior addressed**: a successful Mattermost REST JSON/text response with no `Content-Length` and a body larger than the cap is no longer buffered unbounded; the stream is cancelled at the cap and a bounded error is thrown. Normal small responses still parse intact.\n- **Real environment tested**: local `node:http` server bound to `127.0.0.1` (no `Content-Length`), driving the **real exported** `createMattermostClient(...).request(...)` and `uploadMattermostFile(...)` through the production guarded fetch path (`fetchWithSsrFGuard` + `allowPrivateNetwork`), under `node --import tsx`.\n- **Exact steps**:\n  1. Server streams 1 MiB `{`-chunks forever with `content-type: application/json` and **no** `Content-Length`.\n  2. `client.request(\"/flood-json\")` is awaited; the server counts chunks actually written and tracks socket close.\n  3. `uploadMattermostFile(...)` is pointed at the same flood endpoint.\n  4. Negative control: a finite-but-oversized 40 MiB body is read once via the **old** unbounded `await res.text()` and once via the new bounded `request()`.\n  5. Normal small JSON and small text responses are requested to confirm they still parse intact.\n- **Evidence after fix** (proof harness, 7/7 PASS):\n  ```\n  PASS normal-json-intact {\"id\":\"post-1\",\"message\":\"hello\"}\n  PASS normal-text-intact \"plain-ok-body\"\n  PASS oversized-json-throws-bounded Mattermost API /flood-json: JSON response exceeds 16777216 bytes\n  PASS oversized-json-cancelled-early chunksWrittenAtThrow=19\n  PASS oversized-json-socket-released socketClosed=true\n  PASS upload-oversized-throws-bounded Mattermost API /files: JSON response exceeds 16777216 bytes\n  PASS negative-control-unbounded-buffers-all unboundedBytes=42991618 serverWroteMiB=41 (bounded path cancelled at 19 MiB)\n  SUMMARY pass=7 fail=0\n  ```\n- **Observed result**: bounded path throws `JSON response exceeds 16777216 bytes`, the server stops after writing ~17-19 MiB (reader cancelled just past the 16 MiB cap), and the socket is released. The negative control proves the cap is load-bearing: the **old** `await res.text()` drained and buffered the entire 41 MiB body (42,991,618 bytes) — i.e. it would have OOM'd on a truly unbounded body — while the new path cancelled at ~19 MiB.\n- **What was not tested**: I did not run against a real production Mattermost server (used a local untrusted-server simulator), and did not change the websocket / media binary download paths or the `readMattermostError` `!res.body` in-memory fallback branch (already bounded / not an unbounded network read).\n\n## Evidence\n\n- Proof harness: `node --import ./node_modules/tsx/dist/loader.mjs proof.mts` → `SUMMARY pass=7 fail=0` (output above; harness not committed).\n- `node scripts/run-vitest.mjs extensions/mattermost/src/mattermost/client.test.ts --run` → **23 passed** (includes the new \"bounds and cancels oversized guarded Mattermost success JSON bodies\" regression test).\n- `oxlint extensions/mattermost/src/mattermost/client.ts` → clean.\n- `tsgo:extensions` (`tsconfig.extensions.json`, the CI extensions typecheck) → no `mattermost/client.ts` errors.\n- `check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal` → no violations (imports are public `plugin-sdk` entrypoints).\n\nThis is the symmetric follow-up to the #95103 / #95108 response-limit campaign, applying the same bounded-stream discipline to the last unbounded read point in the Mattermost REST client's success path.\n\n**Label**: security\n\nAI-assisted.\n",
+        "branch": "fix/bound-mattermost-client-response",
+        "head_sha": "404cfeefa666cf8337ce88177294d1a58199dfb8",
         "author": "alix-007",
         "labels": [
+          "channel: mattermost",
           "size: S",
-          "extensions: tavily",
           "proof: sufficient",
           "P2",
           "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
           "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "extensions/tavily/src/tavily-client.test.ts",
-            "additions": 55,
-            "deletions": 1,
+            "path": "extensions/mattermost/src/mattermost/client.test.ts",
+            "additions": 43,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/tavily/src/tavily-client.ts",
+            "path": "extensions/mattermost/src/mattermost/client.ts",
+            "additions": 17,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/mattermost/src/mattermost/probe.test.ts",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/mattermost/src/mattermost/probe.ts",
             "additions": 2,
-            "deletions": 6,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 57,
-        "deletions": 7,
+        "changedFiles": 4,
+        "additions": 93,
+        "deletions": 5,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96026",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96026.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96033",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96033.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 83,
-          "gatingTotal": 78,
+          "total": 86,
+          "gatingTotal": 81,
           "counts": {
-            "SUCCESS": 57,
-            "SKIPPED": 25,
-            "IN_PROGRESS": 1
+            "SUCCESS": 61,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
           },
           "blockers": [
             "ci-timings-summary:IN_PROGRESS"
@@ -134,15 +145,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2461,
+    "total_ms": 2376,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 672
+        "ms": 590
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1459
+        "ms": 1524
       },
       {
         "name": "classify_comment_commands",
@@ -158,7 +169,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 316
+        "ms": 241
       },
       {
         "name": "append_ledger",
