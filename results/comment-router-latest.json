@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T01:42:46.990Z",
+  "generated_at": "2026-06-24T01:43:53.642Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T22:42:44.259Z",
+  "since": "2026-06-23T22:43:53.097Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4785142479
   ],
-  "status_comment_id": 4785142729,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4785142479:2026-06-24T01:41:39Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/96144#issuecomment-4785142479",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 96144,
       "author": "wangmiao0668000666",
       "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-24T01:41:39Z",
       "comment_updated_at": "2026-06-24T01:41:39Z",
-      "status_comment_id": 4785142729,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,179 +62,26 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-24T01:42:48.187Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96144
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-24T01:42:49.415Z",
-          "response_comment_id": "4785142729",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(video-generation): bound OpenAI video submitted response reads",
-        "body": "## What Problem This Solves\n\n`extensions/openai/video-generation-provider.ts:427` parses the Sora submit\nresponse with a raw `await response.json()`. That call has no byte cap, so a\nmalicious or runaway Sora submit response (a misbehaving proxy, a 200 OK\nwith an enormous body, a streaming endpoint that never closes) can pull\nunbounded bytes into the agent process and trigger OOM before any\ncontent-type / shape validation runs. The same file already caps the\n**download** path at `readResponseWithLimit(response, maxBytes, ...)`\n(line 268), so the asymmetry is the bug.\n\nThe shared `readProviderJsonResponse` helper in\n`openclaw/plugin-sdk/provider-http` (used by the bound-stream family\nmerged in #95218, #95417, #95418, #95420, #95246) caps the read at 16 MiB\nand surfaces an actionable error before OOM. This PR routes the Sora\nsubmit response through that helper, mirroring the recently merged\n`fix(image-generation): bound OpenAI-compatible image response reads` in\n#96136 (same fix shape, sibling surface in the same provider family).\n\n## Why This Change Was Made\n\n- Cap is symmetric with the download path already in the same file.\n- Bounded-read helper is generic, owned by `provider-http`, and already\n  proven on image generation (`#96136`) plus six upstream Alix-007\n  bound-stream PRs.\n- Single-file source change + regression tests, low review surface, no\n  public API change.\n- The error label `\"OpenAI video generation failed\"` is reused for both\n  `assertOkOrThrowHttpError` and `readProviderJsonResponse`, so users\n  see one consistent failure context whether the response is HTTP-error\n  or oversize-body.\n\n## Changes\n\n- `extensions/openai/video-generation-provider.ts` — `+6/-2` — import\n  `readProviderJsonResponse` from `openclaw/plugin-sdk/provider-http`;\n  replace `(await response.json()) as OpenAIVideoResponse` with\n  `await readProviderJsonResponse<OpenAIVideoResponse>(response, \"OpenAI\n  video generation failed\")`.\n- `extensions/openai/video-generation-provider.test.ts` — `+118/-45` —\n  destructure `readProviderJsonResponseMock` from `getProviderHttpMocks()`,\n  migrate 7 existing `postJsonRequest` / `postMultipartRequest` setups to\n  the new mock (the previous `response: { json: async () => payload }`\n  shape is no longer reached), and add 2 regression tests that lock the\n  bounded-reader call (label + payload) and the verbatim overflow error.\n- `src/plugin-sdk/test-helpers/provider-http-mocks.ts` — `+6/-0` — add\n  `readProviderJsonResponseMock` field to `ProviderHttpMocks`,\n  `vi.hoisted` default, `vi.mock(\"openclaw/plugin-sdk/provider-http\", ...)`\n  export, and `installProviderHttpMockCleanup` reset. Existing extension\n  tests that don't use the new field are unaffected (verified: ran\n  `extensions/alibaba/video-generation-provider.test.ts`, 3/3 passed;\n  the helper is shared by 9 extension test files including openai,\n  runway, xai, byteplus, deepinfra, together, alibaba, qwen, pixverse,\n  google speech — none break).\n\n## Evidence\n\n- `node scripts/run-vitest.mjs extensions/openai/video-generation-provider.test.ts`\n  — 16/16 passed (14 existing + 2 new bounded-reader regression tests)\n- `node scripts/run-vitest.mjs extensions/alibaba/video-generation-provider.test.ts`\n  — 3/3 passed (sibling extension sharing the helper, no regression)\n- `npx oxlint --import-plugin --config .oxlintrc.json` on the 3 changed\n  files — exit 0\n\nSample failure when the body exceeds the 16 MiB cap (matches the helper\nbehavior verified in #96136):\n```\nError: OpenAI video generation failed: JSON response exceeds 16777216 bytes\n```\n\n## Real behavior proof\n\nThe ClawSweeper review (patch quality 🐚 platinum hermit, proof 🧂 unranked krab) flagged that the PR body had Vitest + lint + CI proof plus a sample helper error, but no real-environment output driving the OpenAI video submit path through the bounded reader. This revision adds a standalone repro that drives the production `readProviderJsonResponse` directly (no vitest mock) with three assertions on a real streaming body.\n\n### Real-environment repro output\n\n```\n$ pnpm exec tsx scripts/repro/issue-96144-openai-video-cap.mjs\n=== Reproduction for PR #96144 — OpenAI video submit response cap policy ===\nPROVIDER_JSON_RESPONSE_MAX_BYTES = 16777216 bytes\nbounded-reader label = \"OpenAI video generation\"\nValid envelope: 4194419 bytes (4.00 MiB) id=video_abc123 status=queued\nPASS  valid OpenAI video submit response: accepted, id=video_abc123\nPASS  hostile 64 MiB response: rejected with \"OpenAI video generation: JSON response exceeds 16777216 bytes\"\nPASS  negative control: raw response.json() on 64 MiB body failed with \"SyntaxError\" (no bounded-reader wrapping)\n=== All repro assertions passed ===\n```\n\nThe three assertions:\n1. **Valid** — 4 MiB prompt response under the 16 MiB cap is accepted; id, model, status, and prompt are preserved verbatim. Mirrors the realistic Sora submit envelope the provider path actually returns.\n2. **Hostile** — 64 MiB streaming body is rejected with the canonical `<label>: JSON response exceeds 16777216 bytes` overflow error from the bounded reader, so a misbehaving Sora endpoint cannot OOM the runtime.\n3. **Negative control** — raw `response.json()` on the same 64 MiB body buffers the full payload and only fails on JSON parse, proving the bounded read is the right shape (and that the `readProviderJsonResponse` swap in `extensions/openai/video-generation-provider.ts:427` is the meaningful change, not an inert re-export).\n\nThe repro is the same helper the PR routes the OpenAI video submit response through, so the bounded-reader behavior exercised in the repro is the exact behavior the PR enables in production.\n\n## ClawSweeper finding addressed in this revision\n\nPrevious review said: \"the PR body lists mocked tests, lint, CI, and an example helper error, but no terminal/live output or artifact for the changed provider path.\"\n\n- Added `scripts/repro/issue-96144-openai-video-cap.mjs` with a real-environment run output (above) driving `readProviderJsonResponse` against a 4 MiB valid envelope and a 64 MiB hostile body.\n- The repro exercises the exact helper the PR enables, so the real-environment output proves the bounded-reader cap fires on a 64 MiB body and the valid envelope round-trips through the same code path the PR opens.\n- Negative control verifies the helper is the source of the cap, not just an indirection.\n\n## Out of scope\n\n- Sibling surfaces in `src/agents/chutes-oauth.ts` (4 sites),\n  `src/infra/clawhub.ts` (3 sites), and others are intentionally\n  left for follow-up PRs; each gets its own narrow diff in the\n  same Alix-007 bound-read family.\n- The `pollProviderOperationJson` polling path and the\n  `readResponseWithLimit` download path are already bounded in this file\n  and do not need changes.\n\n",
-        "branch": "fix/openai-video-bounded-json-response",
-        "head_sha": "2efc462989aa6632d5af8facd8cafcd7d3033f56",
-        "author": "wangmiao0668000666",
-        "labels": [
-          "scripts",
-          "size: M",
-          "extensions: openai",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/openai/video-generation-provider.test.ts",
-            "additions": 118,
-            "deletions": 49,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/video-generation-provider.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/repro/issue-96144-openai-video-cap.mjs",
-            "additions": 141,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/test-helpers/provider-http-mocks.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 270,
-        "deletions": 50,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96144",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96144.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 95,
-          "gatingTotal": 90,
-          "counts": {
-            "SUCCESS": 33,
-            "SKIPPED": 30,
-            "IN_PROGRESS": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "Critical Quality (plugin-boundary):IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "Critical Quality (plugin-boundary):IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5965,
+    "total_ms": 1779,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 645
+        "ms": 532
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2069
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -246,7 +93,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3220
+        "ms": 1233
       },
       {
         "name": "append_ledger",
