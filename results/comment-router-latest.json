@@ -1,23 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T06:16:54.376Z",
+  "generated_at": "2026-06-24T06:17:41.721Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T03:16:51.771Z",
+  "since": "2026-06-24T03:17:39.443Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    96293
+    95091
   ],
   "comment_ids": [
-    4786416494
+    4786426443
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,196 +31,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96293:4786416494:2026-06-24T06:14:44Z:re_review",
-      "comment_id": "4786416494",
-      "comment_version_key": "4786416494:2026-06-24T06:14:44Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96293#issuecomment-4786416494",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96293,
-      "author": "ZengWen-DT",
-      "author_id": 290981215,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T06:14:44Z",
-      "comment_updated_at": "2026-06-24T06:14:44Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): clear agentTurn thinking override by blanking the field",
-        "body": "## What Problem This Solves\n\nClearing the **Model** and **Thinking/Effort** fields in the Cron Control UI did not remove previously saved `agentTurn` overrides. After blanking a field and saving, reopening the job (or running `openclaw cron get <id>`) showed the old value again.\n\nTwo distinct gaps combined to cause this:\n\n1. **Control UI** omitted blank Model/Thinking fields from the `cron.update` patch instead of sending an explicit clear. Because cron updates are partial/merge-based, an omitted nested payload key means \"leave unchanged\", so a cleared field was indistinguishable from an untouched one.\n2. **Backend `thinking` had no clear path at all.** `model`, `fallbacks`, and `toolsAllow` already accept `null` end-to-end (schema → normalizer → merge), but `thinking` did not: the patch schema/normalizer dropped `thinking: null` before validation, and `mergeCronPayload` only handled a string value. So even an API/CLI caller could not clear a stored thinking override.\n\nFixes #96287.\n\n## Why This Change Was Made\n\nThe clear-by-null contract was already established for the sibling fields and is the canonical way cron patches express \"remove this override\" (see prior #91298 for `model`, #95874 for the CLI `--clear-model`). `thinking` was simply missing from that contract on every layer, and the UI never emitted a clear for any field on edit. This change closes that asymmetry rather than introducing a new mechanism:\n\n- `packages/gateway-protocol/src/schema/cron.ts` — `thinking` in an `agentTurn` **patch** now accepts `string | null` (create stays `string`), mirroring `model`/`fallbacks`/`toolsAllow`.\n- `src/cron/types.ts` — `CronAgentTurnPayloadPatch.thinking` is now `string | null`.\n- `src/cron/normalize.ts` — preserves an explicit `thinking: null` instead of dropping it (same branch shape as `model`).\n- `src/cron/service/jobs.ts` — `mergeCronPayload` deletes `thinking` on `null`; `buildPayloadFromPatch` coalesces `null` → `undefined` when materializing a fresh payload (matching `model`).\n- `ui/src/ui/controllers/cron.ts` — when editing a job, a blanked field that previously held a **stored** override now sends an explicit `null` clear (consolidated with the existing `lightContext` edit-clear logic). The form only displays stored overrides, not inherited defaults, so a blank input over a stored value is treated as an intentional clear; new jobs and inherited-default displays still omit the key.\n- `src/cli/cron-cli/register.cron-edit.ts` — adds `--clear-thinking` for parity with `--clear-model`/`--clear-fallbacks`/`--clear-tools`.\n- `docs/automation/cron-jobs.md`, `docs/cli/cron.md` — document `--clear-thinking` beside the sibling clear flags, including that it cannot be combined with `--thinking`.\n\n## User Impact\n\n- Blanking **Model** or **Thinking/Effort** on an existing cron job in the Control UI now removes the override; the job inherits the default model/thinking on the next run.\n- `openclaw cron edit <id> --clear-thinking` removes a stored thinking override from the CLI.\n- No migration or config change. Existing behavior for omitted fields (\"leave unchanged\"), `model` clearing, and new-job creation is unchanged. The create payload schema is untouched, so stored jobs and existing API/CLI snippets keep working.\n\n## Evidence\n\n### Live behavior proof (real Gateway + DeepSeek, CLI roundtrip)\n\nRan against a real `openclaw gateway run` instance with a live `deepseek/deepseek-v4-pro` agent. Created an `agentTurn` job with a stored `thinking` override, cleared it with the new flag, and re-read the persisted job. `thinking` is removed while the sibling `model` override is preserved, and the mutual-exclusion guard fires (`<job-id>` is the ephemeral UUID):\n\n```text\n$ openclaw cron add --every 1h --name clear-thinking-demo --message ping --thinking high --model deepseek/deepseek-v4-pro\n  \"payload\": {\n    \"kind\": \"agentTurn\",\n    \"message\": \"ping\",\n    \"model\": \"deepseek/deepseek-v4-pro\",\n    \"thinking\": \"high\"\n  }\n\n$ openclaw cron get <job-id>          # BEFORE: stored payload has thinking:high + model\n  \"payload\": {\n    \"kind\": \"agentTurn\",\n    \"message\": \"ping\",\n    \"model\": \"deepseek/deepseek-v4-pro\",\n    \"thinking\": \"high\"\n  }\n\n$ openclaw cron edit <job-id> --clear-thinking\n  \"payload\": {\n    \"kind\": \"agentTurn\",\n    \"message\": \"ping\",\n    \"model\": \"deepseek/deepseek-v4-pro\"\n  }\n\n$ openclaw cron get <job-id>          # AFTER: thinking removed from the persisted job, model preserved\n  \"payload\": {\n    \"kind\": \"agentTurn\",\n    \"message\": \"ping\",\n    \"model\": \"deepseek/deepseek-v4-pro\"\n  }\n\n$ openclaw cron edit <job-id> --thinking low --clear-thinking   # mutual-exclusion guard\nError: Use --thinking or --clear-thinking, not both\n```\n\nThis exercises the full runtime path: CLI patch (`payload.thinking: null`) → gateway `cron.update` → schema validation → normalize → `mergeCronPayload` delete → SQLite persist → `cron get` read-back.\n\n### Automated proof\n\n`build`/`test`/`typecheck`/`format` all green on the changed surfaces (worktree-scoped runner + tsgo). Highlights:\n\n**Negative control — revert only the production code, keep the new tests → the thinking-clear paths fail (bug reproduced):**\n\n```\n× clears agentTurn payload.thinking when patch requests null\n× omits null thinking when patch builds a replacement agentTurn payload\n× preserves explicit null thinking clear in payload patches\n Test Files  2 failed (2)\n      Tests  3 failed | 123 passed (126)\n```\n\n**With the fix — all targeted suites pass:**\n\n```\n# src/cron/normalize.test.ts + src/cron/service.jobs.test.ts\n Test Files  2 passed (2)\n      Tests  126 passed (126)\n# src/cli/cron-cli/register.cron-edit.test.ts\n Test Files  1 passed (1)\n      Tests  21 passed (21)\n# ui/src/ui/controllers/cron.test.ts\n Test Files  1 passed (1)\n      Tests  42 passed (42)\n```\n\n**Typecheck (tsgo) clean:**\n\n```\n# tsgo -p tsconfig.core.json            → exit 0, 0 errors\n# tsgo -p test/tsconfig/tsconfig.test.ui.json → exit 0, 0 errors\n```\n\n**Format:** `oxfmt --check` clean on all changed files.\n\nNew tests added cover: normalizer preserves `thinking: null` (and the patch validates), merge clears `thinking` on `null`, merge updates `thinking` on a string, fresh-build omits `null` thinking, CLI `--clear-thinking` emits `payload.thinking: null`, CLI rejects `--thinking` + `--clear-thinking`, UI sends explicit `model`/`thinking` null clears when blanking stored overrides on edit, and UI does **not** send null for a new job with blank fields.\n\n---\n\nAI-assisted.\n",
-        "branch": "fix/96287-cron-clear-thinking-override",
-        "head_sha": "cfcf4212d71a965ca6b47cd173ad24f612c65eda",
-        "author": "zengwen-dt",
-        "labels": [
-          "docs",
-          "app: web-ui",
-          "gateway",
-          "cli",
-          "size: M",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/automation/cron-jobs.md",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/cli/cron.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/cron.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/cron-cli/register.cron-edit.test.ts",
-            "additions": 39,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/cron-cli/register.cron-edit.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/normalize.test.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/normalize.ts",
-            "additions": 10,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.jobs.test.ts",
-            "additions": 69,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/jobs.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/types.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/controllers/cron.test.ts",
-            "additions": 102,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/controllers/cron.ts",
-            "additions": 18,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 12,
-        "additions": 280,
-        "deletions": 19,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96293",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96293.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 95,
-          "gatingTotal": 90,
-          "counts": {
-            "SUCCESS": 58,
-            "SKIPPED": 29,
-            "IN_PROGRESS": 7,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2853,
+    "total_ms": 2516,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 642
+        "ms": 2264
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1949
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -232,7 +58,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 248
+        "ms": 239
       },
       {
         "name": "append_ledger",
