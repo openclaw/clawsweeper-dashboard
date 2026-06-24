@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T20:55:02.380Z",
+  "generated_at": "2026-06-24T20:55:10.010Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T17:54:59.526Z",
+  "since": "2026-06-24T17:55:09.380Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     96552
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4793515604
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -37,16 +39,16 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/96552#issuecomment-4793450865",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96552,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 77127,
+      "author": "anyech",
+      "author_id": 8743351,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T20:43:23Z",
-      "comment_updated_at": "2026-06-24T20:54:56Z",
+      "comment_created_at": "2026-06-24T20:52:34Z",
+      "comment_updated_at": "2026-06-24T20:52:34Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -62,82 +64,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(session): defer transcript archive when active run crosses daily reset boundary (fixes #96546) (AI-assisted)",
-        "body": "## What Problem This Solves\n\nWith the default daily session reset (`session.reset.mode: \"daily\"`, `atHour: 4`), if a second inbound message arrives while a turn is still generating and the clock has just crossed the daily boundary, the inbound path archives the previous transcript by renaming the live `.jsonl` out from under the running turn. The running turn keeps appending by path and recreates a fresh orphan file at the original path, so one turn's output is split across the archived file and the orphan, and the newly started session references neither.\n\n## Why This Change Was Made\n\n`initSessionState` runs for every inbound message and archives the previous transcript before the active-run/busy gate is evaluated. The daily staleness check keys on session start time, not on whether a turn is running. A session started at 03:58 is judged stale the instant a message arrives after 04:00, regardless of an in-flight turn.\n\nThe fix adds a guard: when the session is stale due to an implicit daily/idle boundary (not an explicit `/new` or `/reset`) and an active reply run exists for that session, the archive is deferred. The next inbound message after the turn completes will perform the archive normally.\n\nThe gateway RPC compaction path already has `interruptSessionRunIfActive` for this pattern; this fix brings the same protection to the auto-reply inbound daily-reset path.\n\n## User Impact\n\nUsers relying on daily session reset will no longer experience split transcript files when a slow turn crosses the daily boundary. Previously, the running turn's output was silently split across two files, and the new session referenced neither.\n\n## Evidence\n\n- **Behavior addressed:** Daily-reset boundary crossed during an in-flight turn renames that turn's live transcript, splitting its output across an archived file and a recreated orphan.\n- **Environment tested:** Local OpenClaw build from `upstream/main` at d23977ed, macOS.\n- **Steps run after the patch:** Built the project with `pnpm build`, ran the session verification suite covering 120 scenarios including the new regression case, and verified the compiled guard in the production bundle.\n- **Evidence after fix:**\n\n```\n$ node scripts/run-vitest.mjs run src/auto-reply/reply/session.test.ts\n✓ auto-reply  src/auto-reply/reply/session.test.ts (120 tests) 925ms\nTest Files  1 passed (1)\n     Tests  120 passed (120)\n```\n\nThe new regression case (\"defers transcript archive when an active run exists during daily stale rollover\") verifies that `previousSessionEntry` is `undefined` when `isReplyRunActiveForSessionId` returns `true` for a stale session, confirming the archive is deferred.\n\nCompiled guard in production bundle:\n\n```\n$ grep -n \"activeRunPreventsArchive\" dist/get-reply-w7uNcekh.js\n4628:  const activeRunPreventsArchive = !resetTriggered && !freshEntry && entry?.sessionId && isReplyRunActiveForSessionId(entry.sessionId);\n4629:  const previousSessionEntry = (resetTriggered || !freshEntry && !activeRunPreventsArchive) && entry ? { ...entry } : void 0;\n```\n\n- **Observed result after fix:** The archive guard is present in the compiled production code. When an active reply run exists for a stale session, `previousSessionEntry` is `undefined`, preventing `commitReplySessionInitialization` from calling `archivePreviousSessionTranscript` and renaming the live transcript file.\n- **What was not tested:** The race condition was not reproduced with a live OpenClaw instance crossing a real daily boundary mid-turn, as this requires precise timing around the reset hour. The fix is validated by the focused regression case that directly exercises the guard logic with the production code path.\n\n## Real behavior proof\n\n- **Behavior addressed:** Daily-reset boundary crossed during an in-flight turn renames that turn's live transcript, splitting its output across an archived file and a recreated orphan.\n- **Environment tested:** Local OpenClaw build from `upstream/main` at d23977ed, macOS.\n- **Steps run after the patch:** Ran the session verification suite (120 scenarios including the new regression), verified the compiled guard in `dist/get-reply-w7uNcekh.js`.\n- **Evidence after fix:**\n\n```\n$ node scripts/run-vitest.mjs run src/auto-reply/reply/session.test.ts\n✓ auto-reply  src/auto-reply/reply/session.test.ts (120 tests) 925ms\nTest Files  1 passed (1)\n     Tests  120 passed (120)\n\n$ grep -n \"activeRunPreventsArchive\" dist/get-reply-w7uNcekh.js\n4628:  const activeRunPreventsArchive = !resetTriggered && !freshEntry && entry?.sessionId && isReplyRunActiveForSessionId(entry.sessionId);\n4629:  const previousSessionEntry = (resetTriggered || !freshEntry && !activeRunPreventsArchive) && entry ? { ...entry } : void 0;\n```\n\n- **Observed result after fix:** The guard prevents transcript archiving when an active run exists. The session still rolls over (new sessionId is minted), but the previous transcript is not renamed, keeping the running turn's output intact.\n- **What was not tested:** Live reproduction of the race condition with a real OpenClaw instance crossing a daily boundary mid-turn.\n\n- [x] AI-assisted (Hermes Agent)\n",
-        "branch": "fix/session-daily-reset-active-run-guard",
-        "head_sha": "67b25f308dda86154300f546822d59a55bed0cd1",
-        "author": "liuhao1024",
-        "labels": [
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/auto-reply/reply/session.test.ts",
-            "additions": 55,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 14,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 69,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96552",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96552.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 99,
-          "gatingTotal": 94,
-          "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 32,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3222,
+    "total_ms": 2717,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 427
+        "ms": 618
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2413
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -149,11 +93,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 357
+        "ms": 2087
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
