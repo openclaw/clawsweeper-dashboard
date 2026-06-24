@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T09:25:50.997Z",
+  "generated_at": "2026-06-24T09:26:18.396Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T06:25:50.733Z",
+  "since": "2026-06-24T06:26:16.207Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96350
+    96349
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,134 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96349:4787725016:2026-06-24T09:26:09Z:clawsweeper_needs_human",
+      "comment_id": "4787725016",
+      "comment_version_key": "4787725016:2026-06-24T09:26:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96349#issuecomment-4787725016",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96349,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T09:18:32Z",
+      "comment_updated_at": "2026-06-24T09:26:09Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=6394ffe9971d3eb507aba6e4722e576fefba0419)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "6394ffe9971d3eb507aba6e4722e576fefba0419",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(session): initialize execSecurity from config on cold boot (#92206)",
+        "body": "**AI-assisted**: This PR was developed with Claude Code (Anthropic) assistance.\r\n\r\n## What Problem This Solves\r\n\r\nIssue [#92206](https://github.com/openclaw/openclaw/issues/92206) reports that `tools.exec.security` settings are lost on Gateway restart. When a user configures `tools.exec.security: \"deny\"` (or \"allowlist\"/\"full\") in `openclaw.json`, the value is respected on the first session creation but is completely ignored after Gateway restart.\r\n\r\n**Impact**: Users who rely on `tools.exec.security` to restrict agent command execution (e.g., setting to \"deny\" for safety) lose this protection silently on every Gateway restart. The session-layer exec policy falls through to the base default (\"deny\" for sandbox, \"full\" for non-sandbox), potentially allowing unintended command execution.\r\n\r\n## Root Cause\r\n\r\nIn `src/auto-reply/reply/session.ts`, the `initSessionState()` function constructs session entry objects but never initializes `execSecurity` from `cfg.tools.exec.security`. Unlike `thinkingLevel`, `verboseLevel`, and other behavior overrides that propagate from config to the session entry, `execSecurity` was missing from the initialization path.\r\n\r\nThe full chain:\r\n\r\n1. `initSessionState()` creates/reuses session entries at `session.ts:248`\r\n2. On cold boot, no persisted session entry exists → `baseEntry` is undefined\r\n3. The session entry object (constructed at `session.ts:726`) omits `execSecurity`\r\n4. When `resolveExecDefaults()` at `exec-defaults.ts:141` evaluates the session layer via `applySessionLegacyExecPolicyLayer()`, it calls `normalizeExecSecurity(undefined)` → returns `null`\r\n5. The session layer is a no-op, falling through to the base default policy\r\n\r\nThe `gate-node` path (`invoke-system-run.ts:196`) reads `cfg.tools.exec` directly and works correctly — only the gate-reply path (used by auto-reply sessions) is affected.\r\n\r\n## Fix\r\n\r\nOne line added in `src/auto-reply/reply/session.ts:726` (between `subagentControlScope` and `sendPolicy`):\r\n\r\n```\r\nexecSecurity: baseEntry?.execSecurity ?? cfg.tools?.exec?.security,\r\n```\r\n\r\nThis mirrors the pattern used by `thinkingLevel`, `verboseLevel`, etc. for reading config defaults:\r\n\r\n- Uses `baseEntry.execSecurity` first (persisted session value takes precedence)\r\n- Falls back to `cfg.tools.exec.security` (config default for new sessions)\r\n\r\n## Evidence\r\n\r\n### Real Behavior Proof\r\n\r\n#### Proof script output (live run on the fix)\r\n\r\n```\r\n── Test 1: normalizeExecSecurity handles expected values ──\r\n  ✅ deny → deny\r\n  ✅ allowlist → allowlist\r\n  ✅ full → full\r\n  ✅ undefined → null (no session override)\r\n  ✅ null → null\r\n\r\n── Test 2: stripUnknownConfigKeys preserves tools.exec.security ──\r\n  ✅ strips badKey\r\n  ✅ preserves tools.exec.security\r\n  ✅ tools.exec.security value retained (deny)\r\n\r\n── Test 3: Session entry construction logic ──\r\n  ✅ no baseEntry → falls back to cfg.tools.exec.security (deny)\r\n  ✅ baseEntry has execSecurity → config is NOT used (full)\r\n  ✅ baseEntry has no execSecurity → falls back to config (deny)\r\n  ✅ no config exec.security → result is undefined\r\n  ✅ persisted execSecurity wins over config default (data integrity)\r\n\r\n── Result: 13 passed, 0 failed ──\r\n```\r\n\r\n#### Behavior comparison\r\n\r\n| Scenario                                                     | Before fix                                  | After fix                                  |\r\n| ------------------------------------------------------------ | ------------------------------------------- | ------------------------------------------ |\r\n| New session with `tools.exec.security: \"deny\"`               | `execSecurity` undefined → base policy used | `execSecurity: \"deny\"` correctly set       |\r\n| Existing session with `execSecurity: \"full\"` + config \"deny\" | Persisted value lost                        | Persisted value preserved (data integrity) |\r\n| Gateway restart with `execSecurity` in session store         | Survives (read from store)                  | Survives (same behavior)                   |\r\n| No `tools.exec.security` in config                           | `execSecurity` undefined                    | `execSecurity` undefined (no regression)   |\r\n\r\n### Test Results\r\n\r\n```\r\n$ pnpm test src/auto-reply/reply/session.test.ts -- -t \"execSecurity\"\r\nTest Files  1 passed (1)\r\n     Tests  4 passed | 119 skipped (123)\r\n\r\n$ pnpm test src/auto-reply/reply/get-reply-exec-overrides.test.ts\r\nTest Files  1 passed (1)\r\n     Tests  3 passed (3)\r\n```\r\n\r\n#### Negative control (before fix)\r\n\r\nWithout the fix, `initSessionState()` produces:\r\n\r\n- `sessionEntry.execSecurity === undefined` → `normalizeExecSecurity(undefined)` → `null` → session layer is a no-op\r\n- Config `tools.exec.security: \"deny\"` has no effect on gateway-reply exec policy\r\n- User relies on the base default: \"deny\" for sandbox targets, \"full\" for non-sandbox\r\n\r\n#### Live Gateway restart verification (real runtime on fix)\r\n\r\n1. Patched `~/.openclaw-dev/openclaw.json` to include `tools.exec.security: \"deny\"`\r\n2. Started gateway from source (includes fix) — gateway runs doctor on startup\r\n3. Verified value survives Gateway restart with doctor's unknown-key stripping\r\n\r\n```\r\n$ cat ~/.openclaw-dev/openclaw.json\r\n{\r\n  \"tools\": {\r\n    \"exec\": {\r\n      \"security\": \"deny\"            ← set before restart\r\n    }\r\n  },\r\n  ...\r\n}\r\n\r\n$ pnpm gateway:dev --port 18790\r\n2026-06-24T17:03:51.416+08:00 [gateway] loading configuration…\r\n2026-06-24T17:03:51.509+08:00 [gateway] resolving authentication…\r\n2026-06-24T17:03:51.523+08:00 [gateway] starting...\r\n2026-06-24T17:03:52.070+08:00 [gateway] starting HTTP server...\r\n2026-06-24T17:03:52.558+08:00 [gateway] ready\r\n  ← doctor ran stripUnknownConfigKeys during startup\r\n\r\n$ grep -A2 '\"tools\"' ~/.openclaw-dev/openclaw.json\r\n  \"tools\": {\r\n    \"exec\": {\r\n      \"security\": \"deny\"            ← survived!\r\n```\r\n\r\n### All Proof Cases Passed\r\n\r\n```\r\n── Result: 13 passed, 0 failed ──\r\n```\r\n\r\n### oxlint clean\r\n\r\n```\r\n$ node scripts/run-oxlint.mjs src/auto-reply/reply/session.ts src/auto-reply/reply/session.test.ts scripts/repro/issue-92206-exec-security-proof.mts\r\n(no output — 0 errors, 0 warnings)\r\n```\r\n\r\n## Merge Risk\r\n\r\n**Risk category**: Low — session entry initialization / config read.\r\n\r\n**What could go wrong**: A user could rely on the unintentional behavior where the session-layer exec policy never applies (base defaults used instead). After the fix, session-layer exec policy correctly applies the config value.\r\n\r\n**Why it's safe**:\r\n\r\n- Single-line additive change — no removed code paths\r\n- Mirrors the existing pattern used by `thinkingLevel`, `verboseLevel`, etc.\r\n- All 4 regression tests + 13 proof script assertions pass\r\n- **0** config surface changed / **0** removed / **1** initialization path fixed\r\n- Backward compatible: when `cfg.tools.exec.security` is undefined, `execSecurity` remains undefined (same as before)\r\n- The `gate-node` path (`invoke-system-run.ts`) already reads `cfg.tools.exec` directly and is unaffected\r\n\r\n## Pre-submit checklist\r\n\r\n- [x] `pnpm build` — no type errors\r\n- [x] `pnpm check` — oxlint clean\r\n- [x] `pnpm test` — 4 + 3 tests passed\r\n- [x] Single logical change (add one line to session entry initialization)\r\n- [x] Root cause at mechanism layer (missing execSecurity in initSessionState)\r\n- [x] Real behavior proof: proof script + test suite + behavior comparison table\r\n- [x] Proof script at `scripts/repro/issue-92206-exec-security-proof.mts`\r\n- [x] Merge risk declared with mitigation\r\n- [x] AI-assisted (Claude Code)\r\n",
+        "branch": "fix/init-exec-security-on-cold-boot-92206",
+        "head_sha": "6394ffe9971d3eb507aba6e4722e576fefba0419",
+        "author": "maweibin",
+        "labels": [
+          "scripts",
+          "size: M",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/repro/issue-92206-exec-security-proof.mts",
+            "additions": 106,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/repro/pr-body-92206.md",
+            "additions": 163,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/session.test.ts",
+            "additions": 113,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 383,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96349",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96349.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "gatingTotal": 91,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 62,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 408,
+    "total_ms": 2398,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 253
+        "ms": 314
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1859
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +168,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 143
+        "ms": 199
       },
       {
         "name": "append_ledger",
