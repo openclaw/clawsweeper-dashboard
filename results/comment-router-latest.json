@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T12:45:54.186Z",
+  "generated_at": "2026-06-24T12:45:59.396Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T09:45:51.449Z",
+  "since": "2026-06-24T09:45:58.983Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96406
+    96415
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,121 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96406:4789375029:2026-06-24T12:45:47Z:clawsweeper_auto_repair",
-      "comment_id": "4789375029",
-      "comment_version_key": "4789375029:2026-06-24T12:45:47Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96406#issuecomment-4789375029",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96406,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T12:40:23Z",
-      "comment_updated_at": "2026-06-24T12:45:47Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=4a7250bd9027270537dd35c28d084bfdf8b7a667)",
-      "review_summary": "The PR changes Matrix poll result normalization to dedupe duplicate answer IDs before enforcing max_selections and adds a regression test for that ordering.\n\nPR surface: Source -1, Tests +42. Total +41 across 2 files.\n\nReproducibility: yes. from source: current main truncates the filtered answer array before Set deduping, so [\"a1\",\"a1\",\"a2\"] under max_selections=2 produces only a1. The Matrix MSC text indicates that behavior is the expected processing contract rather than a confirmed bug.",
-      "review_followup": "- [P1] The PR needs author or maintainer action because its premise conflicts with the Matrix poll contract and external-contributor real behavior proof is not present.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "4a7250bd9027270537dd35c28d084bfdf8b7a667",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(matrix): dedupe poll answers before applying max_selections",
-        "body": "## What Problem This Solves\n\n`buildPollResultsSummary` in `extensions/matrix/src/matrix/poll-types.ts` capped each voter's selections with `.slice(0, parsed.maxSelections)` **before** `new Set(...)` deduplicated the answer ids. When a voter's `m.poll.response` repeated a valid answer id, the duplicate consumed a selection slot, silently dropping a distinct, valid vote.\n\n**Repro:** a multi-select poll (`max_selections: 2`) with answers `a1, a2, a3`, and one voter whose `answers` array is `[\"a1\",\"a1\",\"a2\"]`.\n\n- **Before (wrong):** `[\"a1\",\"a1\",\"a2\"]` -> `.slice(0,2)` -> `[\"a1\",\"a1\"]` -> `Set` -> `[\"a1\"]`. Result entries: `a1=1`, `a2=0`, `a3=0`; `totalVotes=1`. The valid vote for `a2` is dropped.\n- **After (fixed):** `[\"a1\",\"a1\",\"a2\"]` -> `Set` -> `[\"a1\",\"a2\"]` -> `.slice(0,2)` -> `[\"a1\",\"a2\"]`. Result entries: `a1=1`, `a2=1`, `a3=0`; `totalVotes=1`. Both distinct selections (within `max_selections=2`) are counted.\n\nThe fix is a one-line reordering: move `.slice(0, parsed.maxSelections)` to **after** the `Set` dedup, so duplicate answer ids no longer consume selection slots. The `max_selections` cap is still enforced, now over distinct selections.\n\n```diff\n     const normalizedAnswers = Array.from(\n       new Set(\n         rawAnswers\n           .map((answerId) => normalizeOptionalString(answerId) ?? \"\")\n-          .filter((answerId) => answerIds.has(answerId))\n-          .slice(0, parsed.maxSelections),\n+          .filter((answerId) => answerIds.has(answerId)),\n       ),\n-    );\n+    ).slice(0, parsed.maxSelections);\n```\n\nA unit test in `extensions/matrix/src/matrix/poll-types.test.ts` (`dedupes duplicate answer ids before applying max_selections`) fails on the old ordering and passes after the fix.\n\n## Evidence\n\nNode red/green proof replicating both the buggy and fixed normalization orderings:\n\n```\nPASS RED buggy drops valid a2 -> [\"a1\"]\nPASS GREEN fixed keeps a1 and a2 -> [\"a1\",\"a2\"]\nPASS normal single select unchanged -> [\"a1\"]\nPASS normal single select (buggy) identical -> [\"a1\"]\nPASS limit still enforced on distinct ids -> [\"a1\",\"a2\"]\nPASS invalid filtered + dedup + slice -> [\"a2\",\"a1\"]\n\nALL ASSERTIONS PASSED\n```\n\n- **RED** confirms the original `slice`-before-`Set` ordering reproduces the wrong output (`[\"a1\"]`, dropping `a2`).\n- **GREEN** confirms the fixed `Set`-before-`slice` ordering yields `[\"a1\",\"a2\"]`.\n- The normal single-select case is **unchanged** by the reordering (identical under both orderings).\n- The `max_selections` cap is **still enforced** over distinct ids (`[\"a1\",\"a2\",\"a3\"]` with cap 2 -> `[\"a1\",\"a2\"]`).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "fix/matrix-poll-dedup-before-slice",
-        "head_sha": "4a7250bd9027270537dd35c28d084bfdf8b7a667",
-        "author": "ly-wang19",
-        "labels": [
-          "channel: matrix",
-          "size: XS",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/matrix/src/matrix/poll-types.test.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/poll-types.ts",
-            "additions": 2,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 44,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96406",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96406.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 90,
-          "gatingTotal": 85,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 32,
-            "SUCCESS": 55,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3010,
+    "total_ms": 739,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 418
+        "ms": 403
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2305
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -155,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 262
+        "ms": 326
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
