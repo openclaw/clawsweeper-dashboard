@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T00:22:31.410Z",
+  "generated_at": "2026-06-24T00:22:38.145Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T21:22:30.761Z",
+  "since": "2026-06-23T21:22:36.440Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96123
+    94912
   ],
-  "comment_ids": [
-    4784732528
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 5,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,18 +31,112 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96109:4784724216:2026-06-24T00:19:39Z:re_review",
-      "comment_id": "4784724216",
-      "comment_version_key": "4784724216:2026-06-24T00:19:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96109#issuecomment-4784724216",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94912:4750518363:2026-06-24T00:22:31Z:clawsweeper_auto_repair",
+      "comment_id": "4750518363",
+      "comment_version_key": "4750518363:2026-06-24T00:22:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94912#issuecomment-4750518363",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96109,
-      "author": "hanZeng-08",
-      "author_id": 290268296,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-24T00:19:39Z",
-      "comment_updated_at": "2026-06-24T00:19:39Z",
+      "issue_number": 94912,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-19T09:58:47Z",
+      "comment_updated_at": "2026-06-24T00:22:31Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=b36d16d492d284a1d0b92615b499d5a4b7625055)",
+      "review_summary": "The PR changes Nextcloud Talk webhook decoding to parse JSON separately from schema validation, returning 200 for schema mismatches while preserving 400 for malformed JSON, with replay test updates.\n\nPR surface: Source +11, Tests +29. Total +40 across 2 files.\n\nReproducibility: yes. source-level. Current main rejects a signed malformed Create/Note fixture with HTTP 400, and PR head changes that same message-shaped schema-miss class to 200/no dispatch.",
+      "review_followup": "- [P1] Human or contributor follow-up is needed because the branch needs a classifier correction plus contributor-owned real behavior proof before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "b36d16d492d284a1d0b92615b499d5a4b7625055",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(nextcloud-talk): silently ignore non-message Talk events instead of returning 400",
+        "body": "## Summary\n\n**Problem**: Nextcloud Talk sends various event types (calls, system notifications, file shares) whose webhook payloads may not have `object.type === \"Note\"` or `actor.type === \"Person\"`. The Zod schema was too strict, returning HTTP 400 \"Invalid payload format\" for any non-matching payload. This caused Nextcloud to log errors and could trigger retry loops for non-message events that the bot should simply acknowledge silently.\n\n**Solution**: Two-stage webhook payload decoding — Stage 1: JSON.parse (malformed JSON still returns 400), Stage 2: schema validation (schema mismatches return 200 without dispatching). This preserves the error signal for genuinely broken payloads while silently ignoring non-message events.\n\n**What changed**: \n- `extensions/nextcloud-talk/src/monitor.ts`: +18/-7 — switch from `safeParseJsonWithSchema` to `safeParseWithSchema` + explicit `JSON.parse` with two-stage error handling\n- `extensions/nextcloud-talk/src/monitor.replay.test.ts`: +31/-2 — split test: schema-mismatch→200 + malformed JSON→400\n\n**What did NOT change**:\n- Valid chat message processing — unchanged\n- Signature verification — unchanged\n- Auth rate limiting — unchanged\n- Protocol or config\n\nFixes #81566\n\n## Real behavior proof (required for external PRs)\n\n**Behavior addressed**: Nextcloud Talk webhook handler returned 400 for non-message Talk events whose payload passed signature verification but failed the chat-message schema check. The 400 caused Nextcloud to log errors and could trigger retry loops.\n\n**Real setup tested**:\n- **Runtime**: Node 24.13, Linux x86_64\n- **Branch**: `fix/issue-81566-nextcloud-talk-400` rebased onto `upstream/main`\n- **Test runner**: `scripts/run-vitest.mjs` (project-standard wrapper)\n- **Vitest**: 4.1.8\n\n**Root cause**: `decodeWebhookCreateMessage` in `monitor.ts` called `safeParseJsonWithSchema(NextcloudTalkWebhookPayloadSchema, body)` which performs JSON parse + Zod schema validation as a single atomic step. The helper function takes a raw string body and a Zod schema, internally calls `JSON.parse`, then validates the parsed object against the schema. If either step fails, it returns `null` — collapsing two semantically distinct failure modes into one undifferentiated error.\n\nThe caller interpreted the null result as `{ kind: \"invalid\" }` and wrote HTTP 400. But \"not matching the chat message schema\" and \"not being valid JSON\" have fundamentally different meanings:\n\n- **Malformed JSON**: The HTTP body is not parseable as JSON at all. This is a genuine protocol error — the sender is not sending valid HTTP. Returning 400 is correct.\n- **Schema mismatch**: The JSON is valid but the fields don't match the expected shape (e.g., `object.type` is `\"Call\"` instead of `\"Note\"`, or `actor.type` is `\"Bot\"` instead of `\"Person\"`). This is NOT an error — it's a legitimate Nextcloud Talk event of a different type. Nextcloud expects the webhook endpoint to acknowledge receipt with 200.\n\nThe fix splits the combined `safeParseJsonWithSchema` step into two explicit stages:\n\nStage 1 (`JSON.parse`): If the body is not valid JSON at all, return 400. This preserves the error signal for truly broken payloads where the sender or transport is malfunctioning.\n\nStage 2 (`safeParseWithSchema`): If JSON parsing succeeds but the schema validation fails (e.g., `object.type` is not `\"Note\"`, or `target.id` is empty), return `{ kind: \"ignore\" }` and write HTTP 200. This is the key behavioral change — non-message Talk events are now silently acknowledged instead of rejected.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs run extensions/nextcloud-talk/src/monitor.replay.test.ts` at Node 24.13 Linux x86_64\n\n**After-fix evidence**:\n```\n[test] starting test/vitest/vitest.extension-nextcloud-talk.config.ts\n RUN  v4.1.8\n Test Files  1 passed (1)\n      Tests  11 passed (11)\n[test] passed 1 Vitest shard in 21.45s\n```\n\nTest behavior after fix:\n\n| Test | Before | After |\n|------|--------|-------|\n| Schema-mismatch (valid JSON, invalid values) | Expected 400 | **Expected 200** — silently ignored |\n| Malformed JSON (unparseable) | Expected 400 | Expected 400 — unchanged |\n\nThe new test \"returns 200 for schema-mismatch payloads after signature verification\" passes (changed from the old test name \"rejects malformed webhook payloads\") and confirms that a payload with valid JSON structure but schema-incompatible values (e.g., `target.id` is empty) returns 200. The test \"rejects malformed JSON payloads with 400 after signature verification\" confirms that truly broken JSON still returns 400.\n\n**Observed result after the fix**: Non-message Talk events that pass Nextcloud's HMAC signature verification but fail the chat-message Zod schema now return HTTP 200 with `{ status: \"ignored\" }` instead of HTTP 400. Truly malformed JSON (unparseable input) continues to return HTTP 400. Valid chat messages continue to be processed with no change to the dispatch path or message handling. The 200 response tells Nextcloud \"I received your webhook, this isn't a message I need to handle\" — preventing the platform from logging errors or triggering webhook retry loops for call events, system notifications, and file share events.\n\n**What was not tested**: Live Nextcloud Talk server with real non-message events (incoming calls, system notifications, file share events). This requires a self-hosted Nextcloud instance with the Talk app installed, configured webhooks pointing to the bot, and real Nextcloud activity generating non-message events. Nextcloud is a self-hosted platform — there are no public sandbox instances or QA credential pools available for external contributors.\n\n**Evidence provenance**: Terminal output from real local checkout of rebased branch (`fix/issue-81566-nextcloud-talk-400`) on Node 24.13.1 / Linux x86_64, 2026-06-23. The branch was rebased onto `upstream/main` at `bde5be874a`. Three prior commits were squashed into one clean commit: the initial implementation (`5bd5ce0bc`), a merge with main (`58820ab1a`), and a review-feedback revision (`ccdb3b751`) that added explicit two-stage parsing after feedback identified that collapsing both failure modes into \"ignore\" would silently accept malformed JSON.\n\n## Tests and validation\n| Test Type | Result | Details |\n|-----------|--------|---------|\n| Unit Tests | ✅ 11/11 | monitor.replay.test.ts — all passing including new split tests |\n| Rebase | ✅ | Clean rebase onto upstream/main, 1 commit, 2 nextcloud-talk files only |\n| Scope | ✅ | 2 nextcloud-talk files only |\n\n## Design decisions\n\n**Why two explicit stages instead of a try-catch on `safeParseJsonWithSchema`?**\n\n`safeParseJsonWithSchema` hides the distinction between JSON parse failures and schema validation failures behind a single `null` return value. A try-catch wrapper around it could catch the JSON parse error but would lose the type safety of the `safeParseWithSchema` path. The explicit two-stage approach makes the intent clear in code: Stage 1 is a protocol-level gate (valid JSON or reject), Stage 2 is a business-logic gate (is this a chat message or something else). This pattern is also easier for future maintainers to understand than a nested try-catch with a combined utility function.\n\n**Why not just widen the Zod schema to accept all event types?**\n\nA wider schema that accepts any `object.type` would silently pass through non-message events to the dispatch pipeline, where they would cause harder-to-diagnose failures downstream. The message handler expects chat-message-shaped data — passing it a call event or a system notification would result in confusing errors like \"missing message content\" at a deeper layer. Explicitly returning `{ kind: \"ignore\" }` at the webhook boundary is the correct place to filter: as early as possible, with clear intent, before any message processing begins.\n\n**Why 200 instead of 204 (No Content)?**\n\nNextcloud Talk's webhook documentation expects a 200 response with optional JSON body for successful processing. While 204 would also signal success, 200 with `{ status: \"ignored\" }` provides a minimal payload that could be logged or inspected during debugging. The response body is small (under 30 bytes) and costs nothing extra in HTTP overhead compared to 204.\n\n## Risk checklist\n\n**What is the highest-risk area of this change?**\n\nThe two-stage parsing changes the error contract from a single opaque \"invalid payload\" response to a differentiated response. If there is a case where valid JSON that fails the schema should NOT be silently ignored (e.g., a new message format from a future Nextcloud version), this change would suppress what was previously a visible error.\n\n**Risk level**: Low risk — Nextcloud Talk's webhook contract explicitly documents multiple event types, of which chat messages are only one category. Other channel handlers already follow the same \"silently ignore unknown events\" pattern. If Nextcloud introduces a new message format that fails the current schema, the schema would need to be updated to support it — but this was already true before the fix, as the old code would just reject it with 400 instead of ignoring it.\n\n**Mitigation**: The two replay tests directly exercise the webhook server with real HTTP requests via `fetch`, testing the full stack from `createServer` through `decodeWebhookCreateMessage` to HTTP response. The schema-mismatch test uses a payload with `target.id: \"\"` (empty string) which is valid JSON according to `JSON.parse` but invalid according to the Zod schema's `z.string().min(1)` constraint on `target.id`. The malformed JSON test sends literally `\"{ broken json payload\"` which throws a `SyntaxError` from `JSON.parse`. Both paths are exercised through the actual HTTP handler to confirm the correct status code reaches the caller.\n\n**Merge risk declaration**:\n- `merge-risk: 🚨 message-delivery` — The change modifies the webhook handler's response for non-matching payloads from 400 to 200. This changes how Nextcloud perceives bot health for non-message events. However, 200 \"I received this but am ignoring it\" is the correct response per webhook best practices (RFC-compliant webhooks should not treat non-actionable events as errors).\n\n## Current review state\n**What is the next action?** Maintainer review requested. Code is mature (review feedback incorporated), all 11 tests pass, and the `triage: needs-real-behavior-proof` gate requires maintainer decision given the self-hosted nature of Nextcloud Talk.\n",
+        "branch": "fix/issue-81566-nextcloud-talk-400",
+        "head_sha": "b36d16d492d284a1d0b92615b499d5a4b7625055",
+        "author": "zhangqueping",
+        "labels": [
+          "channel: nextcloud-talk",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/nextcloud-talk/src/monitor.replay.test.ts",
+            "additions": 31,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/nextcloud-talk/src/monitor.ts",
+            "additions": 18,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 49,
+        "deletions": 9,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94912",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94912.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 83,
+          "gatingTotal": 78,
+          "counts": {
+            "SUCCESS": 58,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:94912:4780444874:2026-06-23T14:49:07Z:re_review",
+      "comment_id": "4780444874",
+      "comment_version_key": "4780444874:2026-06-23T14:49:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94912#issuecomment-4780444874",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 94912,
+      "author": "zhangqueping",
+      "author_id": 3436352,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-23T14:49:07Z",
+      "comment_updated_at": "2026-06-23T14:49:07Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -67,63 +159,59 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(telegram): preserve inline buttons when capabilities array is empty",
-        "body": "Fixes #96098\r\n\r\n## What Problem This Solves\r\n\r\nFixes an issue where Telegram bots would stop generating inline keyboard buttons when `channels.telegram.capabilities` is set to an empty array `[]`. After updating to 2026.6.9, users observed that button options were rendered as plain text lists (e.g., `- Option A\\n- Option B`) instead of clickable inline keyboards, breaking interactive workflows.\r\n\r\n## Why This Change Was Made\r\n\r\n`resolveTelegramInlineButtonsScopeFromCapabilities` was returning `undefined` when given an empty capabilities array, which is not a valid `TelegramInlineButtonsScope` value. An empty array should mean \"no explicit capabilities declared\" and fall back to the default `\"allowlist\"` scope, rather than being interpreted as a signal to disable inline buttons. The fix changes one line: return `DEFAULT_INLINE_BUTTONS_SCOPE` instead of `undefined` when the normalized array is empty.\r\n\r\n## User Impact\r\n\r\nTelegram users with an empty `capabilities` array in their config will now see inline buttons restored to their normal behavior. Users who explicitly set `capabilities: [\"inlinebuttons\"]` or `capabilities: { inlineButtons: \"off\" }` are unaffected.\r\n\r\n## Evidence\r\n\r\n**Environment**: Linux, Node v22.23.0, pnpm v11.2.2, worktree SHA 2af06042c2\r\n\r\n**Before fix** (new regression test on old code):\r\n\r\n```bash\r\n$ git stash\r\n$ pnpm test extensions/telegram/src/inline-buttons.test.ts\r\nAssertionError: expected undefined to be 'allowlist' // Object.is equality\r\nExpected: \"allowlist\"\r\nReceived: undefined\r\n```\r\n\r\n**After fix** (new regression test on new code):\r\n\r\n```bash\r\n$ pnpm test extensions/telegram/src/inline-buttons.test.ts\r\nTest Files  1 passed (1)\r\n     Tests  16 passed (16)\r\n```\r\n\r\n**No other tests broken**:\r\n\r\n```bash\r\n$ pnpm test src/config/channel-capabilities.test.ts\r\nTest Files  1 passed (1)\r\n     Tests   7 passed (7)\r\n```\r\n\r\n**Lint/format clean**:\r\n\r\n```bash\r\n$ npx oxlint@latest extensions/telegram/src/inline-buttons.ts\r\nFound 0 warnings and 0 errors.\r\n$ oxfmt --check extensions/telegram/src/inline-buttons.ts\r\nAll matched files use the correct format.\r\n```\r\n",
-        "branch": "fix/96098-telegram-inline-buttons-empty-array",
-        "head_sha": "96661e886dd03f085eac4230309a1ddaca3095f2",
-        "author": "hanzeng-08",
+        "title": "fix(nextcloud-talk): silently ignore non-message Talk events instead of returning 400",
+        "body": "## Summary\n\n**Problem**: Nextcloud Talk sends various event types (calls, system notifications, file shares) whose webhook payloads may not have `object.type === \"Note\"` or `actor.type === \"Person\"`. The Zod schema was too strict, returning HTTP 400 \"Invalid payload format\" for any non-matching payload. This caused Nextcloud to log errors and could trigger retry loops for non-message events that the bot should simply acknowledge silently.\n\n**Solution**: Two-stage webhook payload decoding — Stage 1: JSON.parse (malformed JSON still returns 400), Stage 2: schema validation (schema mismatches return 200 without dispatching). This preserves the error signal for genuinely broken payloads while silently ignoring non-message events.\n\n**What changed**: \n- `extensions/nextcloud-talk/src/monitor.ts`: +18/-7 — switch from `safeParseJsonWithSchema` to `safeParseWithSchema` + explicit `JSON.parse` with two-stage error handling\n- `extensions/nextcloud-talk/src/monitor.replay.test.ts`: +31/-2 — split test: schema-mismatch→200 + malformed JSON→400\n\n**What did NOT change**:\n- Valid chat message processing — unchanged\n- Signature verification — unchanged\n- Auth rate limiting — unchanged\n- Protocol or config\n\nFixes #81566\n\n## Real behavior proof (required for external PRs)\n\n**Behavior addressed**: Nextcloud Talk webhook handler returned 400 for non-message Talk events whose payload passed signature verification but failed the chat-message schema check. The 400 caused Nextcloud to log errors and could trigger retry loops.\n\n**Real setup tested**:\n- **Runtime**: Node 24.13, Linux x86_64\n- **Branch**: `fix/issue-81566-nextcloud-talk-400` rebased onto `upstream/main`\n- **Test runner**: `scripts/run-vitest.mjs` (project-standard wrapper)\n- **Vitest**: 4.1.8\n\n**Root cause**: `decodeWebhookCreateMessage` in `monitor.ts` called `safeParseJsonWithSchema(NextcloudTalkWebhookPayloadSchema, body)` which performs JSON parse + Zod schema validation as a single atomic step. The helper function takes a raw string body and a Zod schema, internally calls `JSON.parse`, then validates the parsed object against the schema. If either step fails, it returns `null` — collapsing two semantically distinct failure modes into one undifferentiated error.\n\nThe caller interpreted the null result as `{ kind: \"invalid\" }` and wrote HTTP 400. But \"not matching the chat message schema\" and \"not being valid JSON\" have fundamentally different meanings:\n\n- **Malformed JSON**: The HTTP body is not parseable as JSON at all. This is a genuine protocol error — the sender is not sending valid HTTP. Returning 400 is correct.\n- **Schema mismatch**: The JSON is valid but the fields don't match the expected shape (e.g., `object.type` is `\"Call\"` instead of `\"Note\"`, or `actor.type` is `\"Bot\"` instead of `\"Person\"`). This is NOT an error — it's a legitimate Nextcloud Talk event of a different type. Nextcloud expects the webhook endpoint to acknowledge receipt with 200.\n\nThe fix splits the combined `safeParseJsonWithSchema` step into two explicit stages:\n\nStage 1 (`JSON.parse`): If the body is not valid JSON at all, return 400. This preserves the error signal for truly broken payloads where the sender or transport is malfunctioning.\n\nStage 2 (`safeParseWithSchema`): If JSON parsing succeeds but the schema validation fails (e.g., `object.type` is not `\"Note\"`, or `target.id` is empty), return `{ kind: \"ignore\" }` and write HTTP 200. This is the key behavioral change — non-message Talk events are now silently acknowledged instead of rejected.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs run extensions/nextcloud-talk/src/monitor.replay.test.ts` at Node 24.13 Linux x86_64\n\n**After-fix evidence**:\n```\n[test] starting test/vitest/vitest.extension-nextcloud-talk.config.ts\n RUN  v4.1.8\n Test Files  1 passed (1)\n      Tests  11 passed (11)\n[test] passed 1 Vitest shard in 21.45s\n```\n\nTest behavior after fix:\n\n| Test | Before | After |\n|------|--------|-------|\n| Schema-mismatch (valid JSON, invalid values) | Expected 400 | **Expected 200** — silently ignored |\n| Malformed JSON (unparseable) | Expected 400 | Expected 400 — unchanged |\n\nThe new test \"returns 200 for schema-mismatch payloads after signature verification\" passes (changed from the old test name \"rejects malformed webhook payloads\") and confirms that a payload with valid JSON structure but schema-incompatible values (e.g., `target.id` is empty) returns 200. The test \"rejects malformed JSON payloads with 400 after signature verification\" confirms that truly broken JSON still returns 400.\n\n**Observed result after the fix**: Non-message Talk events that pass Nextcloud's HMAC signature verification but fail the chat-message Zod schema now return HTTP 200 with `{ status: \"ignored\" }` instead of HTTP 400. Truly malformed JSON (unparseable input) continues to return HTTP 400. Valid chat messages continue to be processed with no change to the dispatch path or message handling. The 200 response tells Nextcloud \"I received your webhook, this isn't a message I need to handle\" — preventing the platform from logging errors or triggering webhook retry loops for call events, system notifications, and file share events.\n\n**What was not tested**: Live Nextcloud Talk server with real non-message events (incoming calls, system notifications, file share events). This requires a self-hosted Nextcloud instance with the Talk app installed, configured webhooks pointing to the bot, and real Nextcloud activity generating non-message events. Nextcloud is a self-hosted platform — there are no public sandbox instances or QA credential pools available for external contributors.\n\n**Evidence provenance**: Terminal output from real local checkout of rebased branch (`fix/issue-81566-nextcloud-talk-400`) on Node 24.13.1 / Linux x86_64, 2026-06-23. The branch was rebased onto `upstream/main` at `bde5be874a`. Three prior commits were squashed into one clean commit: the initial implementation (`5bd5ce0bc`), a merge with main (`58820ab1a`), and a review-feedback revision (`ccdb3b751`) that added explicit two-stage parsing after feedback identified that collapsing both failure modes into \"ignore\" would silently accept malformed JSON.\n\n## Tests and validation\n| Test Type | Result | Details |\n|-----------|--------|---------|\n| Unit Tests | ✅ 11/11 | monitor.replay.test.ts — all passing including new split tests |\n| Rebase | ✅ | Clean rebase onto upstream/main, 1 commit, 2 nextcloud-talk files only |\n| Scope | ✅ | 2 nextcloud-talk files only |\n\n## Design decisions\n\n**Why two explicit stages instead of a try-catch on `safeParseJsonWithSchema`?**\n\n`safeParseJsonWithSchema` hides the distinction between JSON parse failures and schema validation failures behind a single `null` return value. A try-catch wrapper around it could catch the JSON parse error but would lose the type safety of the `safeParseWithSchema` path. The explicit two-stage approach makes the intent clear in code: Stage 1 is a protocol-level gate (valid JSON or reject), Stage 2 is a business-logic gate (is this a chat message or something else). This pattern is also easier for future maintainers to understand than a nested try-catch with a combined utility function.\n\n**Why not just widen the Zod schema to accept all event types?**\n\nA wider schema that accepts any `object.type` would silently pass through non-message events to the dispatch pipeline, where they would cause harder-to-diagnose failures downstream. The message handler expects chat-message-shaped data — passing it a call event or a system notification would result in confusing errors like \"missing message content\" at a deeper layer. Explicitly returning `{ kind: \"ignore\" }` at the webhook boundary is the correct place to filter: as early as possible, with clear intent, before any message processing begins.\n\n**Why 200 instead of 204 (No Content)?**\n\nNextcloud Talk's webhook documentation expects a 200 response with optional JSON body for successful processing. While 204 would also signal success, 200 with `{ status: \"ignored\" }` provides a minimal payload that could be logged or inspected during debugging. The response body is small (under 30 bytes) and costs nothing extra in HTTP overhead compared to 204.\n\n## Risk checklist\n\n**What is the highest-risk area of this change?**\n\nThe two-stage parsing changes the error contract from a single opaque \"invalid payload\" response to a differentiated response. If there is a case where valid JSON that fails the schema should NOT be silently ignored (e.g., a new message format from a future Nextcloud version), this change would suppress what was previously a visible error.\n\n**Risk level**: Low risk — Nextcloud Talk's webhook contract explicitly documents multiple event types, of which chat messages are only one category. Other channel handlers already follow the same \"silently ignore unknown events\" pattern. If Nextcloud introduces a new message format that fails the current schema, the schema would need to be updated to support it — but this was already true before the fix, as the old code would just reject it with 400 instead of ignoring it.\n\n**Mitigation**: The two replay tests directly exercise the webhook server with real HTTP requests via `fetch`, testing the full stack from `createServer` through `decodeWebhookCreateMessage` to HTTP response. The schema-mismatch test uses a payload with `target.id: \"\"` (empty string) which is valid JSON according to `JSON.parse` but invalid according to the Zod schema's `z.string().min(1)` constraint on `target.id`. The malformed JSON test sends literally `\"{ broken json payload\"` which throws a `SyntaxError` from `JSON.parse`. Both paths are exercised through the actual HTTP handler to confirm the correct status code reaches the caller.\n\n**Merge risk declaration**:\n- `merge-risk: 🚨 message-delivery` — The change modifies the webhook handler's response for non-matching payloads from 400 to 200. This changes how Nextcloud perceives bot health for non-message events. However, 200 \"I received this but am ignoring it\" is the correct response per webhook best practices (RFC-compliant webhooks should not treat non-actionable events as errors).\n\n## Current review state\n**What is the next action?** Maintainer review requested. Code is mature (review feedback incorporated), all 11 tests pass, and the `triage: needs-real-behavior-proof` gate requires maintainer decision given the self-hosted nature of Nextcloud Talk.\n",
+        "branch": "fix/issue-81566-nextcloud-talk-400",
+        "head_sha": "b36d16d492d284a1d0b92615b499d5a4b7625055",
+        "author": "zhangqueping",
         "labels": [
-          "channel: telegram",
-          "size: XS",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
+          "channel: nextcloud-talk",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/telegram/src/inline-buttons.test.ts",
-            "additions": 14,
-            "deletions": 0,
+            "path": "extensions/nextcloud-talk/src/monitor.replay.test.ts",
+            "additions": 31,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/inline-buttons.ts",
-            "additions": 7,
-            "deletions": 3,
+            "path": "extensions/nextcloud-talk/src/monitor.ts",
+            "additions": 18,
+            "deletions": 7,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 21,
-        "deletions": 3,
+        "additions": 49,
+        "deletions": 9,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96109",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96109.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94912",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94912.md",
         "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 17,
-          "gatingTotal": 12,
+          "total": 83,
+          "gatingTotal": 78,
           "counts": {
-            "SUCCESS": 10,
-            "SKIPPED": 6,
-            "FAILURE": 1
+            "SUCCESS": 58,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
           },
-          "blockers": [
-            "Run agentic native Telegram proof:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Run agentic native Telegram proof:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -132,17 +220,17 @@
       "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 875,
+    "total_ms": 1966,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 638
+        "ms": 398
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1291
       },
       {
         "name": "classify_comment_commands",
@@ -150,7 +238,7 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -158,11 +246,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 226
+        "ms": 246
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
