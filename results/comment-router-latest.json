@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T08:32:16.516Z",
+  "generated_at": "2026-06-24T08:32:33.766Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T05:32:16.188Z",
+  "since": "2026-06-24T05:32:31.637Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96334
+    93307
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 7,
+  "commands_seen": 5,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,326 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93307:4708629838:2026-06-24T08:32:27Z:clawsweeper_auto_repair",
+      "comment_id": "4708629838",
+      "comment_version_key": "4708629838:2026-06-24T08:32:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93307#issuecomment-4708629838",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93307,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-15T13:52:28Z",
+      "comment_updated_at": "2026-06-24T08:32:27Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=57eb9907b31dce25b9a1bd29b4450f6253f1326c)",
+      "review_summary": "The PR records auto-saved Playwright downloads in page state, drains pending saves after `/act`, and returns optional `downloads` metadata from browser `/act` responses.\n\nPR surface: Source +94. Total +94 across 3 files.\n\nReproducibility: yes. at source level: current main and v2026.6.10 auto-save unmanaged downloads but non-evaluate `/act` responses return no download payload. I did not establish a live Chromium/Gateway reproduction in this read-only review.",
+      "review_followup": "- [P1] Human review remains because external real browser proof is missing and the remaining API/action-scoping decision should not be automated from this PR branch.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "57eb9907b31dce25b9a1bd29b4450f6253f1326c",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(browser): notify agent when click triggers download",
+        "body": "## What Problem This Solves\n\nWhen a browser `click` triggers a file download, the auto-save handler saves the file to disk but the agent gets only `{ok: true}` back — no download path, no confirmation. The agent keeps retrying different strategies because it has no way to know the download succeeded.\n\nFixes #93250\n\n## Why This Change Was Made\n\nI tracked downloads in `PageState.recentDownloads[]` and threaded them through `/act` responses. Two correctness issues needed fixing:\n\n1. **Race after click**: `saveAs` is async but the code sampled `recentDownloads` immediately after the action returned. Added `drainPendingDownloadSaves()` to await in-flight saves before sampling.\n2. **Bounded-list cursor**: using `state.recentDownloads.length` as a cursor breaks when the buffer is full (push + shift keep length at 20, so `slice(20)` returns empty). Switched to a monotonic `downloadSeq` counter — `filter(d.seq > seqBefore)` catches downloads regardless of buffer state.\n\n| File | Change |\n|------|--------|\n| `extensions/browser/src/browser/pw-session.ts` | `RecentPageDownload` type + `downloadSeq` cursor + `downloadSavePromises` tracking |\n| `extensions/browser/src/browser/pw-tools-core.interactions.ts` | `drainPendingDownloadSaves()` + `pickNewDownloads()` in `executeActViaPlaywright` |\n| `extensions/browser/src/browser/routes/agent.act.ts` | Conditionally spread `downloads` into `jsonOk` responses |\n\n## User Impact\n\n`POST /act` responses for click/clickCoords/batch/evaluate may now include an optional `downloads` field with saved path and filename. Clients that don't expect it ignore it — backward compatible.\n\n## Real behavior proof\n\n**Behavior addressed**: After a click triggers a browser download, `/act` response now includes the saved download path — proved with standalone logic verification covering race and buffer-full edge cases.\n\n**Real setup tested**: Node.js v24.13.1 on Linux x86_64 (kernel 4.19.112-2.el8)\n\n**Exact steps or command run after fix**:\n\n```bash\nnode verify-download-fix.mjs\n```\n\n**After-fix evidence**:\n\n```\n=== Test 1: Single download after click ===\n  downloadSeqBefore: 0 | downloadSeq after fire: 1\n  recentDownloads before drain: 0 (save still in-flight)\n  After drain + pickNewDownloads: {\"count\":1,\"recent\":[{\"suggestedFilename\":\"report.pdf\",\"savedPath\":\"/tmp/openclaw-downloads/report-1718900000123.pdf\"}]}\n\n=== Test 2: Click without download (no false positive) ===\n  Result: undefined (correct)\n\n=== Test 3: Buffer near-full + new download (monotonic cursor) ===\n  Pre-filled buffer: 20 entries\n  newDownloads: {\"count\":1,\"recent\":[{\"suggestedFilename\":\"new-report.xlsx\",\"savedPath\":\"/tmp/dl/new-report.xlsx\"}]}\n\n=== Test 4: Buffer FULL (20 entries) — monotonic cursor saves the day ===\n  Buffer size: 20 (full, capped at 20)\n  downloadSeq: 41 (monotonic, never wraps)\n  newDownloads: {\"count\":1,\"recent\":[{\"suggestedFilename\":\"proof-of-fix.pdf\",\"savedPath\":\"/tmp/dl/proof-of-fix.pdf\"}]}\n\n=== Test 5: saveAs race condition (drain-before-sample) ===\n  Before drain: 0 (save in-flight, not in buffer)\n  After drain: 1 (save completed, now in buffer)\n  pickNewDownloads: {\"count\":1,\"recent\":[{\"suggestedFilename\":\"slow-download.zip\",\"savedPath\":\"/tmp/dl/slow.zip\"}]}\n\nAll 5 tests passed\n```\n\n**Observed result after the fix**: Downloads reliably captured in `/act` responses. No test regressions.\n\n**What was not tested**: Live Chromium click-to-download with gateway (unit tests + logic verification cover all state-tracking paths; the `cdp-proxy-bypass` failure is pre-existing)\n\n## Tests and validation\n\n- Logic verification: `node verify-download-fix.mjs` — 5/5 passed\n- Browser extension suite: 1388/1389 passed, 0 regressions (1 pre-existing `cdp-proxy-bypass` env failure, also fails on clean `main`)\n\n*AI-assisted: built with Codex/Claude Code*",
+        "branch": "fix/issue-93250-Bug---No-notification-when-br",
+        "head_sha": "57eb9907b31dce25b9a1bd29b4450f6253f1326c",
+        "author": "sunlit-deng",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/browser/src/browser/pw-session.ts",
+            "additions": 48,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/browser/pw-tools-core.interactions.ts",
+            "additions": 42,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/browser/routes/agent.act.ts",
+            "additions": 12,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 102,
+        "deletions": 8,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93307",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93307.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 85,
+          "gatingTotal": 80,
+          "counts": {
+            "SUCCESS": 60,
+            "SKIPPED": 25
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:93307:4787288056:2026-06-24T08:21:33Z:re_review",
+      "comment_id": "4787288056",
+      "comment_version_key": "4787288056:2026-06-24T08:21:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93307#issuecomment-4787288056",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93307,
+      "author": "sunlit-deng",
+      "author_id": 253064511,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T08:21:33Z",
+      "comment_updated_at": "2026-06-24T08:21:33Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(browser): notify agent when click triggers download",
+        "body": "## What Problem This Solves\n\nWhen a browser `click` triggers a file download, the auto-save handler saves the file to disk but the agent gets only `{ok: true}` back — no download path, no confirmation. The agent keeps retrying different strategies because it has no way to know the download succeeded.\n\nFixes #93250\n\n## Why This Change Was Made\n\nI tracked downloads in `PageState.recentDownloads[]` and threaded them through `/act` responses. Two correctness issues needed fixing:\n\n1. **Race after click**: `saveAs` is async but the code sampled `recentDownloads` immediately after the action returned. Added `drainPendingDownloadSaves()` to await in-flight saves before sampling.\n2. **Bounded-list cursor**: using `state.recentDownloads.length` as a cursor breaks when the buffer is full (push + shift keep length at 20, so `slice(20)` returns empty). Switched to a monotonic `downloadSeq` counter — `filter(d.seq > seqBefore)` catches downloads regardless of buffer state.\n\n| File | Change |\n|------|--------|\n| `extensions/browser/src/browser/pw-session.ts` | `RecentPageDownload` type + `downloadSeq` cursor + `downloadSavePromises` tracking |\n| `extensions/browser/src/browser/pw-tools-core.interactions.ts` | `drainPendingDownloadSaves()` + `pickNewDownloads()` in `executeActViaPlaywright` |\n| `extensions/browser/src/browser/routes/agent.act.ts` | Conditionally spread `downloads` into `jsonOk` responses |\n\n## User Impact\n\n`POST /act` responses for click/clickCoords/batch/evaluate may now include an optional `downloads` field with saved path and filename. Clients that don't expect it ignore it — backward compatible.\n\n## Real behavior proof\n\n**Behavior addressed**: After a click triggers a browser download, `/act` response now includes the saved download path — proved with standalone logic verification covering race and buffer-full edge cases.\n\n**Real setup tested**: Node.js v24.13.1 on Linux x86_64 (kernel 4.19.112-2.el8)\n\n**Exact steps or command run after fix**:\n\n```bash\nnode verify-download-fix.mjs\n```\n\n**After-fix evidence**:\n\n```\n=== Test 1: Single download after click ===\n  downloadSeqBefore: 0 | downloadSeq after fire: 1\n  recentDownloads before drain: 0 (save still in-flight)\n  After drain + pickNewDownloads: {\"count\":1,\"recent\":[{\"suggestedFilename\":\"report.pdf\",\"savedPath\":\"/tmp/openclaw-downloads/report-1718900000123.pdf\"}]}\n\n=== Test 2: Click without download (no false positive) ===\n  Result: undefined (correct)\n\n=== Test 3: Buffer near-full + new download (monotonic cursor) ===\n  Pre-filled buffer: 20 entries\n  newDownloads: {\"count\":1,\"recent\":[{\"suggestedFilename\":\"new-report.xlsx\",\"savedPath\":\"/tmp/dl/new-report.xlsx\"}]}\n\n=== Test 4: Buffer FULL (20 entries) — monotonic cursor saves the day ===\n  Buffer size: 20 (full, capped at 20)\n  downloadSeq: 41 (monotonic, never wraps)\n  newDownloads: {\"count\":1,\"recent\":[{\"suggestedFilename\":\"proof-of-fix.pdf\",\"savedPath\":\"/tmp/dl/proof-of-fix.pdf\"}]}\n\n=== Test 5: saveAs race condition (drain-before-sample) ===\n  Before drain: 0 (save in-flight, not in buffer)\n  After drain: 1 (save completed, now in buffer)\n  pickNewDownloads: {\"count\":1,\"recent\":[{\"suggestedFilename\":\"slow-download.zip\",\"savedPath\":\"/tmp/dl/slow.zip\"}]}\n\nAll 5 tests passed\n```\n\n**Observed result after the fix**: Downloads reliably captured in `/act` responses. No test regressions.\n\n**What was not tested**: Live Chromium click-to-download with gateway (unit tests + logic verification cover all state-tracking paths; the `cdp-proxy-bypass` failure is pre-existing)\n\n## Tests and validation\n\n- Logic verification: `node verify-download-fix.mjs` — 5/5 passed\n- Browser extension suite: 1388/1389 passed, 0 regressions (1 pre-existing `cdp-proxy-bypass` env failure, also fails on clean `main`)\n\n*AI-assisted: built with Codex/Claude Code*",
+        "branch": "fix/issue-93250-Bug---No-notification-when-br",
+        "head_sha": "57eb9907b31dce25b9a1bd29b4450f6253f1326c",
+        "author": "sunlit-deng",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/browser/src/browser/pw-session.ts",
+            "additions": 48,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/browser/pw-tools-core.interactions.ts",
+            "additions": 42,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/browser/routes/agent.act.ts",
+            "additions": 12,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 102,
+        "deletions": 8,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93307",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93307.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 85,
+          "gatingTotal": 80,
+          "counts": {
+            "SUCCESS": 60,
+            "SKIPPED": 25
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:93307:4786249482:2026-06-24T05:42:16Z:re_review",
+      "comment_id": "4786249482",
+      "comment_version_key": "4786249482:2026-06-24T05:42:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93307#issuecomment-4786249482",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93307,
+      "author": "sunlit-deng",
+      "author_id": 253064511,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T05:42:16Z",
+      "comment_updated_at": "2026-06-24T05:42:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:93307:4785490045:2026-06-24T03:00:44Z:re_review",
+      "comment_id": "4785490045",
+      "comment_version_key": "4785490045:2026-06-24T03:00:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93307#issuecomment-4785490045",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93307,
+      "author": "sunlit-deng",
+      "author_id": 253064511,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T03:00:44Z",
+      "comment_updated_at": "2026-06-24T03:00:44Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:93307:4785312899:2026-06-24T02:18:42Z:re_review",
+      "comment_id": "4785312899",
+      "comment_version_key": "4785312899:2026-06-24T02:18:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93307#issuecomment-4785312899",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93307,
+      "author": "sunlit-deng",
+      "author_id": 253064511,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T02:18:42Z",
+      "comment_updated_at": "2026-06-24T02:18:42Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 592,
+    "total_ms": 5588,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 315
+        "ms": 454
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1660
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -56,11 +356,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 265
+        "ms": 3447
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
