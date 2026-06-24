@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T06:47:17.651Z",
+  "generated_at": "2026-06-24T06:48:03.240Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T03:47:17.038Z",
+  "since": "2026-06-24T03:48:00.431Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    95430
+    95943
   ],
-  "comment_ids": [
-    4786616939
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 5,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,22 +29,204 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:95943:4782322344:2026-06-24T06:47:56Z:clawsweeper_auto_repair",
+      "comment_id": "4782322344",
+      "comment_version_key": "4782322344:2026-06-24T06:47:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95943#issuecomment-4782322344",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95943,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-23T18:37:13Z",
+      "comment_updated_at": "2026-06-24T06:47:56Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=680a15a8f09d079caa18aa69a1f4661088378d86)",
+      "review_summary": "The PR preserves provider/model/session metadata on isolated cron timeout and cancellation outcomes and adds regression coverage for timed and timeout-disabled branches.\n\nPR surface: Source +46, Tests +153. Total +199 across 4 files.\n\nReproducibility: yes. Source inspection shows current main can build timer-owned timeout/cancel outcomes without attribution, and the run-log writer persists attribution only from that returned core result.",
+      "review_followup": "- [P2] A narrow automated repair can remove the unused test parameter that is currently failing the required lint job.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "680a15a8f09d079caa18aa69a1f4661088378d86",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): preserve provider/model on isolated-run timeout row",
+        "body": "## What Problem This Solves\n\nWhen an isolated cron agent run fails on a timeout/cancel, the persisted `cron_run_logs` row drops the already-resolved `provider`, `model`, and `session_id`. Operators see an un-attributed `error  ...  error=cron: job execution timed out (last phase: tool-execution-started)` row next to successful `openai gpt-5.4 <session>` rows, which makes a concrete model/tool failure look like a generic pre-session cron timeout and forces transcript/live-log spelunking to recover the model path.\n\nCloses #95873\n\n## Why This Change Was Made\n\nThe reporter's exact row text — `cron: job execution timed out (last phase: ...)` — is produced only by `timeoutErrorMessage()` (`src/cron/service/execution-errors.ts:15`), fired by the cron agent watchdog (`src/cron/service/agent-watchdog.ts:85`) and returned by the **timer-built** timeout outcome in `executeJobCoreWithTimeout` (`src/cron/service/timer.ts`). The persisted run-log row is mapped from that returned `coreResult` (`src/cron/service/ops.ts:945-972` → `src/gateway/server-cron.ts:632`).\n\n`executeJobCoreWithTimeout` builds **three** error outcomes that bypass the inner run result (the inner result loses the `Promise.race` and is discarded), and each one is what reaches the row:\n\n1. **Timed wall-clock timeout** (`jobTimeoutMs` set) — the watchdog accumulates the resolved run identity into `activeExecution` via the existing `onExecutionStarted`/`onExecutionPhase` wiring (`run.ts:1407`/`1421`, sourced from `prepared.context.liveSelection`), and the timeout outcome now spreads it in.\n2. **Timed operator-cancel** (`jobTimeoutMs` set) — same watchdog snapshot, carried into `createOperatorCancellationOutcome(watchdog.activeExecution())`.\n3. **Timeout-disabled operator-cancel** (`timeoutSeconds: 0`, no watchdog) — there is no watchdog to snapshot the identity, and the branch did not even wire the execution callbacks, so the cancel outcome returned blank. This path now wires the same `onExecutionStarted`/`onExecutionPhase` callbacks, accumulates the resolved identity locally, and carries it into the cancel outcome.\n\nPre-runner setup timeouts and the gateway-restart abort (no resolved model yet) intentionally stay blank.\n\nThe first commit's `run.ts` catch change is kept: it covers the sibling path where the inner result *does* reach the row (cron-nested lane backstop / unexpected throw, when the core promise wins the race). Together these surfaces cover timeout, lane-backstop, and both post-runner cancel branches.\n\n## User Impact\n\nTimed-out and post-runner-cancelled isolated cron runs — including `timeoutSeconds: 0` (no-timeout) runs cancelled by an operator — now record their resolved `provider`, `model`, and `session_id` in `cron_run_logs`, so the failure row reads as an attributed model failure instead of a blank cron timeout. Observability-only: no change to run success/failure outcomes, delivery, or session lifecycle. Distinct from the underlying `missing_tool_result` failure that caused the report's timeout.\n\n## Evidence\n\n**Unit (real `executeJobCoreWithTimeout` boundary + negative control, both cancel branches).** Two timer-regression tests drive the real boundary: one fires a watchdog timeout against a runner that reports the resolved identity then hangs; the other fires an operator cancel against a `timeoutSeconds: 0` runner that reports identity then hangs. Both assert the returned outcome carries provider/model/session. Removing each path's spread reproduces the bug exactly:\n\n```text\nAssertionError: expected undefined to be 'deepseek'\n src/cron/service/timer.regression.test.ts  keeps resolved provider/model/session on timeout-disabled cancel rows (#95873)\n```\n\nWith the fix restored: `node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts` -> `Test Files 1 passed (1) / Tests 66 passed (66)`.\n\n**Live before/after (real gateway + real cron + persisted `cron_run_logs` SQLite row).** Real `openclaw gateway` from a clean `pnpm build`; a stub provider whose model resolves from the static catalog but whose `/chat/completions` hangs, so the run resolves `provider`/`model`, enters the runner, then stalls until the cron watchdog fires — reproducing the reporter's `(last phase: ...)` timeout row. Read straight from `state/openclaw.sqlite` `cron_run_logs`:\n\n```text\nBEFORE (fix stashed + rebuilt):\n  error       = cron: job execution timed out (last phase: model-call-started)\n  provider    = null\n  model       = null\n  session_id  = null\n\nAFTER (fix):\n  error       = cron: job execution timed out (last phase: attempt-dispatch)\n  provider    = stub\n  model       = good\n  session_id  = 7d9f8938-0da7-4324-9f8d-4c72730b626c\n```\n\n`stub`/`good` is the deterministic hang-provider used to force a reliable post-runner watchdog timeout; the point is that the attribution fields survive on the persisted timeout row.\n\n## Tests and validation\n\n- `node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts` (66 passed; includes the new #95873 timed-timeout and timeout-disabled-cancel cases, each with a negative control)\n- `node scripts/run-vitest.mjs src/cron/service/ops.regression.test.ts src/cron/service/ops.test.ts src/cron/service/agent-watchdog.test.ts` (30 passed)\n- `node scripts/run-vitest.mjs src/cron/isolated-agent/run.meta-error-status.test.ts` (5 passed)\n- `pnpm tsgo:core` and `pnpm tsgo:test:src` (clean); `pnpm exec oxfmt --check` (clean)\n- Live: real gateway + cron run-log SQLite before/after as above\n\n## Risk checklist\n\nLow risk, observability-only. `timer.ts` +15/-2: a pure attribution helper plus spreading already-resolved `provider`/`model`/`session` from watchdog-visible (timed branch) and locally-accumulated (timeout-disabled branch) execution state into the timeout and post-runner cancel outcomes. No change to run status, error text, delivery, or session lifecycle; pre-runner setup timeouts and the gateway-restart abort remain blank by design.\n\nAI-assisted: drafted and verified with AI assistance; all evidence was run locally.\n",
+        "branch": "fix/95873-cron-runlog-error-metadata",
+        "head_sha": "680a15a8f09d079caa18aa69a1f4661088378d86",
+        "author": "zengwen-dt",
+        "labels": [
+          "size: M",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/cron/isolated-agent/run.meta-error-status.test.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.regression.test.ts",
+            "additions": 148,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 44,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 203,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95943",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95943.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "gatingTotal": 91,
+          "counts": {
+            "SUCCESS": 61,
+            "SKIPPED": 32,
+            "FAILURE": 1,
+            "QUEUED": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "check-lint:FAILURE",
+            "Opengrep OSS:QUEUED"
+          ],
+          "pending": [
+            "Opengrep OSS:QUEUED"
+          ],
+          "terminalBlockers": [
+            "check-lint:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95943:4786530644:2026-06-24T06:33:53Z:re_review",
+      "comment_id": "4786530644",
+      "comment_version_key": "4786530644:2026-06-24T06:33:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95943#issuecomment-4786530644",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95943,
+      "author": "ZengWen-DT",
+      "author_id": 290981215,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T06:33:53Z",
+      "comment_updated_at": "2026-06-24T06:33:53Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:95943:4785358487:2026-06-24T02:28:34Z:re_review",
+      "comment_id": "4785358487",
+      "comment_version_key": "4785358487:2026-06-24T02:28:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95943#issuecomment-4785358487",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 95943,
+      "author": "ZengWen-DT",
+      "author_id": 290981215,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T02:28:34Z",
+      "comment_updated_at": "2026-06-24T02:28:34Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 849,
+    "total_ms": 5654,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 603
+        "ms": 449
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2347
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -58,11 +238,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 234
+        "ms": 2836
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
