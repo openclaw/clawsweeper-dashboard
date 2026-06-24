@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T06:17:41.721Z",
+  "generated_at": "2026-06-24T06:17:54.755Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T03:17:39.443Z",
+  "since": "2026-06-24T03:17:52.137Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    95091
+    96018
   ],
-  "comment_ids": [
-    4786426443
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 8,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,22 +29,134 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96018:4783184732:2026-06-24T06:17:48Z:clawsweeper_needs_human",
+      "comment_id": "4783184732",
+      "comment_version_key": "4783184732:2026-06-24T06:17:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96018#issuecomment-4783184732",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96018,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-23T20:28:53Z",
+      "comment_updated_at": "2026-06-24T06:17:48Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Human follow-up is needed for after-fix real behavior proof or an explicit proof waiver; there is no narrow code defect left for automated repair.; Cleared: The diff only changes TypeScript media task guard code and tests, with no dependency, workflow, permission, secret, download, or package-resolution changes. (sha=5534de346309c0532c7f184969c06b89fd7844ba)",
+      "review_summary": "The PR adds a shared delivery-completion progress marker, skips delivery-phase media tasks in active prompt context, passes prompts into video/music duplicate guards, and adds focused media task tests.\n\nPR surface: Source +16, Tests +126. Total +142 across 5 files.\n\nReproducibility: yes. The production report plus current main source show media completion delivery leaves the task running until wakeTaskCompletion returns, and the active prompt guard can still see that running session task; I did not run a live BytePlus repro.",
+      "review_followup": "- [P1] Human follow-up is needed for after-fix real behavior proof or an explicit proof waiver; there is no narrow code defect left for automated repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "5534de346309c0532c7f184969c06b89fd7844ba",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(video): skip delivering tasks in active-task prompt guard",
+        "body": "Fixes #95701.\n\n## What Problem This Solves\nSequential `video_generate` workflows blocked the next segment for ~4-5 min after each clip's video was ready. The active-task prompt guard treated the still-`running` task as blocking until the completion wake finished (self-deadlock), so crews producing clips 01, 02, 03 back-to-back paid a ~3.5-4 min \"release tax\" per segment on top of actual generation (~60-90s). The task only flipped `running -> succeeded` after the woken agent turn gave up and yielded.\n\n## Evidence\n- **Reporter production data** (issue #95701): `state/openclaw.sqlite` `task_runs` for one session - task `c6043e3f` ran 12:54:07 -> 12:59:25 (5m18s) with provider `byteplus/doubao-seedance`, where actual generation+download is ~60-90s. The requester trajectory shows the woken turn (12:54:35 -> 12:59:23, 4m48s) reporting \"stale state machine, 5 retries intercepted\", and the task flips to `succeeded` only at 12:59:25 - after the woken turn ended, not when the video was ready.\n- **Root cause verified against current main** (`a182811070`): `scheduleMediaGenerationTaskCompletion` (`src/agents/tools/media-generate-background-shared.ts:382`) gates `completeTaskRun` (:487) behind `wakeTaskCompletion(expectFinal:true)` (:431); the label-less prompt guard (`buildActiveMediaGenerationTaskPromptContextForSession` at `media-generation-task-status-shared.ts:447`) suppresses the next segment's `video_generate` while the task is still `running`.\n- **Unit tests** (new + existing, 52 green): `listActive` excludes delivering tasks when the flag is set; `buildActive` returns no prompt when the only active task is delivering, still warns when mid-generation; existing video/image generation suites unchanged.\n\n## Fix\n- Extract the existing \"Generated media; delivering completion\" progress marker (set at `media-generate-background-shared.ts:418` since the wake gates `completeTaskRun`) into a shared constant `MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS`.\n- `listActiveMediaGenerationTasksForSession` / `findActiveMediaGenerationTaskForSession` gain an optional `excludeDeliveringCompletion` flag; the prompt guard `buildActiveMediaGenerationTaskPromptContextForSession` passes `true`, so a distinct next segment is no longer suppressed once media is ready.\n- Duplicate guard (`findDuplicateGuardMediaGenerationTaskForSession`, already label-aware) and the `completeTaskRun` delivery-confirmation gate are **unchanged**.\n\n## Scope / non-goals\n- No change to the task status machine (no new `delivering` state), `TaskRecord` schema, duplicate guard, or the `completeTaskRun` safety contract (\"generated result without confirmed delivery is terminally unsafe for closeout\").\n\n## Test plan\n- [x] New unit tests (`media-generation-task-status-shared.test.ts`)\n- [x] Existing suites green (52 tests)\n- [ ] CI: `pnpm tsgo` + `pnpm check` (oxlint/oxfmt)\n- [ ] Live regression (maintainer env, needs byteplus/LM Studio key): sequential `video_generate` of 2 distinct prompts - confirm 2nd isn't suppressed, task A flips to `succeeded` after the wake.\n",
+        "branch": "fix/95701-video-generate-deadlock",
+        "head_sha": "5534de346309c0532c7f184969c06b89fd7844ba",
+        "author": "palomyates516-alt",
+        "labels": [
+          "agents",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/media-generation-task-status-shared.test.ts",
+            "additions": 126,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/media-generation-task-status-shared.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/media-generate-background-shared.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/music-generate-tool.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/video-generate-tool.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 145,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96018",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96018.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "gatingTotal": 91,
+          "counts": {
+            "SUCCESS": 63,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2516,
+    "total_ms": 2933,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2264
+        "ms": 455
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2150
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -58,11 +168,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 239
+        "ms": 306
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
