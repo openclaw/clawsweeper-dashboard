@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T11:59:47.434Z",
+  "generated_at": "2026-06-24T11:59:47.444Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T08:59:45.235Z",
+  "since": "2026-06-24T08:59:44.324Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    95221
+    94785
   ],
   "comment_ids": [
-    4789030092
+    4789030795
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:95221:4789030092:2026-06-24T11:57:25Z:re_review",
-      "comment_id": "4789030092",
-      "comment_version_key": "4789030092:2026-06-24T11:57:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95221#issuecomment-4789030092",
+      "idempotency_key": "comment-router:openclaw/openclaw:94785:4789030795:2026-06-24T11:57:31Z:re_review",
+      "comment_id": "4789030795",
+      "comment_version_key": "4789030795:2026-06-24T11:57:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94785#issuecomment-4789030795",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95221,
+      "issue_number": 94785,
       "author": "lzyyzznl",
       "author_id": 41978486,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T11:57:25Z",
-      "comment_updated_at": "2026-06-24T11:57:25Z",
+      "comment_created_at": "2026-06-24T11:57:31Z",
+      "comment_updated_at": "2026-06-24T11:57:31Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -67,64 +67,54 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(telegram): detect EADDRNOTAVAIL and skip misleading IP-rotation fallback",
-        "body": "## Summary\n\n**Problem**: When Telegram's Bot API returns EADDRNOTAVAIL during getUpdates — typically caused by ephemeral port exhaustion, local firewall rules limiting source address binding, or network interface instability — OpenClaw's Telegram transport used to trigger the IP-rotation fallback path, logging a misleading \"DNS-resolved IP unreachable\" message. This message strongly suggests a remote issue requiring a configuration change (switching bot tokens, data centers, or proxies), when in reality the error is a local socket allocation failure that no amount of remote IP rotation can fix.\n\nEADDRNOTAVAIL is a Linux kernel error that occurs when the system cannot assign a requested source address or ephemeral port. In the context of outbound HTTP connections to the Telegram Bot API, this typically means one of three things: the ephemeral port range (defined by `/proc/sys/net/ipv4/ip_local_port_range`) is exhausted, a network namespace or cgroup has exhausted its port allocation, or a socket option (like `IP_FREEBIND`) is conflicting with the local routing table. All of these are conditions on the machine running OpenClaw itself, not on Telegram's servers. Distinguishing EADDRNOTAVAIL from transient network errors like ECONNREFUSED or EAI_AGAIN, which may legitimately benefit from retrying with a different remote IP address, is critical for correct fallback behavior.\n\nThe existing fallback mechanism in `shouldUseTelegramTransportFallback` evaluated every fetch error through the same three-or-more condition checks: `TelegramTransportAttemptUnhealthyError`, known network error codes matching `FALLBACK_RETRY_ERROR_CODES`, and fetch failed envelopes with no known codes. There was no path that distinguished local socket allocation failures from remote network errors. Additionally, the `forceFallback` path used by `probeTelegram` during transport initialization bypassed `shouldUseTelegramTransportFallback` entirely, calling `promoteStickyAttempt` directly. This meant that even if the URL fetch path was properly gated, the probe/forced path would still promote the sticky attempt for EADDRNOTAVAIL, causing users to see the misleading \"IP rotation detected\" log message on startup.\n\n**Solution**: Add `isLocalSocketAllocationError()` that detects EADDRNOTAVAIL in the error code graph extracted by `collectErrorCodes`. When this error is detected at the entry of `shouldUseTelegramTransportFallback`, log a clear diagnostic message explaining the actual problem (\"local socket allocation failure — check ephemeral port range or network extensions; remote IP rotation will not help\") and return `false` to skip the misleading IP-rotation fallback entirely. The three existing fallback trigger conditions (TelegramTransportAttemptUnhealthyError, known network error codes matching FALLBACK_RETRY_ERROR_CODES, and fetch failed envelopes with no known codes) remain completely unchanged for all other error types.\n\nThe diagnostic message is key to user experience. Instead of directing users toward changing bot tokens or data center regions (which the old \"DNS-resolved IP unreachable\" message implied), the new message explicitly identifies the root cause as local socket exhaustion. It also formats the full error code graph using `formatErrorCodes(err)`, giving users and support staff the complete picture of what error codes were collected. The diagnostic fires at the `warn` log level, ensuring it appears in production logs and monitoring dashboards without being mistaken for a critical system failure.\n\nA critical second component extends the guard into the `forceFallback` path used by `probeTelegram`. While `shouldUseTelegramTransportFallback` gates the URL fetch path (called from `recordAttemptFailure`), the probe path called `promoteStickyAttempt` unconditionally — it never considered whether the error was a local socket allocation. The `forceFallback` signature was changed from `(reason: string) => boolean` to `(reason: string, err?: unknown) => boolean`, and the implementation now runs `isLocalSocketAllocationError` on the error passed from `probeTelegram`. When the error is EADDRNOTAVAIL, `forceFallback` returns `false` and skips the promotion entirely, matching the behavior of the URL fetch path. All other error types (probe timeouts, UND_ERR_CONNECT_TIMEOUT, generic connect errors) continue to promote to IPv4 fallback as before.\n\n**What changed**: Four files with targeted, minimal changes across the Telegram transport layer.\n\n`fetch.ts:465-467` — New `isLocalSocketAllocationError(codes: Set<string>): boolean` function. This function checks whether the set of error codes collected from a fetch error contains `\"EADDRNOTAVAIL\"`. The function is deliberately narrow: it checks exactly one error code. This is by design — if future local socket errors are identified (e.g., `EADDRINUSE` for specific port binding, or `EACCES` for permissions on privileged ports), they can be added here without changing any callers. The function operates on the already-extracted Set<string> from `collectErrorCodes`, so error code graph traversal happens only once per error.\n\n`fetch.ts:471-487` — Early return in `shouldUseTelegramTransportFallback`. Before any of the existing conditions are evaluated, the function now calls `collectErrorCodes(err)` once and stores it in a local `codes` variable. The `isLocalSocketAllocationError(codes)` check runs first. If it returns `true`, a diagnostic warning is logged and the function returns `false` immediately, short-circuiting all further evaluation. This is placed before the existing `TelegramTransportAttemptUnhealthyError` check, ensuring local socket errors are caught before any transport-unhealthy classification. The `collectErrorCodes` call is now done once and reused for the `FALLBACK_RETRY_ERROR_CODES` check later, saving a redundant extraction pass.\n\n`fetch.ts:508` — `forceFallback` type signature change from `(reason: string) => boolean` to `(reason: string, err?: unknown) => boolean`. The return type change to `boolean` signals that the caller can now determine whether fallback was actually promoted. This is used by `probeTelegram` to decide whether to retry or abort.\n\n`fetch.ts:885-894` — `forceFallback` implementation change. Previously the function body was a single expression calling `promoteStickyAttempt` unconditionally. Now it checks `isLocalSocketAllocationError(codes)` when `err` is provided. If the error is a local socket allocation failure, it returns `false` without calling `promoteStickyAttempt`. For all other cases (or when `err` is undefined for backward compatibility), it calls `promoteStickyAttempt` and returns `true`.\n\n`probe.ts:165` — `transport.forceFallback?.(\"probe timeout/network error\", err)` now passes the fetch error to `forceFallback`. Previously the error was not forwarded, making it impossible for `forceFallback` to inspect the error codes. This one-line change enables the guard to work on the probe path.\n\n`probe.test.ts:365-368` — Updated test assertion to expect the new two-argument call signature including `expect.any(Error)`. This ensures the probe-`forceFallback` contract is tested.\n\n`fetch.test.ts:1196-1218` — New test case \"does not retry fallback on EADDRNOTAVAIL and logs diagnostic\". This test builds a fetch error with EADDRNOTAVAIL using `buildFetchFallbackError`, calls `resolveTelegramFetchOrThrow`, and verifies: the fetch is attempted exactly once, a warning containing \"EADDRNOTAVAIL\" is logged, a warning containing \"local socket allocation failure\" is logged, and the misleading \"DNS-resolved IP unreachable\" message is NOT logged. Three separate assertions on the logging behavior ensure the diagnostic is present and the false alarm is absent.\n\n**What did NOT change**: No package.json dependencies were added or modified. No configuration file (openclaw-config.yaml, environment variables, or runtime options) was changed. No protocol-level behavior was altered — the HTTP fetch, retry, and dispatcher lifecycle are identical. The three existing fallback trigger conditions (`TelegramTransportAttemptUnhealthyError`, known network error codes matching `FALLBACK_RETRY_ERROR_CODES`, and fetch failed envelopes with no known codes) remain completely untouched for all non-EADDRNOTAVAIL errors. The `shouldUseTelegramTransportFallback` function continues to work identically for the URL fetch path (`recordAttemptFailure` uses the full classifier). The `shouldRetryTelegramTransportFallback` public wrapper is unchanged. The overall transport lifecycle — probe, fetch, promote, close — follows the same sequence. Existing tests (42 passing) were not modified, confirming zero regression on all existing fallback scenarios.\n\nFixes #95221\n\n## Real behavior proof\n\n**Behavior addressed**: EADDRNOTAVAIL detection in Telegram transport fallback — suppress misleading IP-rotation fallback for local socket allocation errors while preserving timeout and network error fallback for all other error types.\n\n**Real environment tested**: Linux 6.8 / OpenClaw Gateway / Telegram Bot API (bot API simulation via undici mock)\n\n**Exact steps or command run after this patch**:\n\nRun the unit tests to verify error classification through both the URL fetch path and the probe force-fallback path:\n\n```bash\ncd openclaw\npnpm test extensions/telegram/src/fetch.test.ts 2>&1\npnpm test extensions/telegram/src/probe.test.ts 2>&1\n```\n\n**After-fix evidence**:\n\nAll 7 error classification scenarios verified through unit tests. EADDRNOTAVAIL correctly classified as local socket error:\n\n```\nTest 1: EADDRNOTAVAIL -> false (local socket, no IP rotation fallback)\nTest 2: ECONNREFUSED -> true (known network code, falls back to IPv4)\nTest 3: ENOTFOUND -> true (known network code, falls back to IPv4)\nTest 4: connect timeout -> promoted to IPv4 fallback\nTest 5: generic network error -> promoted to IPv4 fallback\nTest 6: UND_ERR_CONNECT_TIMEOUT -> promoted to IPv4 fallback\nTest 7: fetch failed with no codes -> promoted to IPv4 fallback\n```\n\nProbe path forceFallback integration verified:\n\n```\nProbe timeout/network error, EADDRNOTAVAIL -> forceFallback returns false, no promote\nProbe timeout/network error, connect timeout -> forceFallback returns true, promote to IPv4\nProbe timeout/network error, generic network error -> forceFallback returns true, promote to IPv4\nProbe timeout/network error, no error argument (backward compat) -> forceFallback returns true, promote to IPv4\n```\n\nDiagnostic logging verified:\n\n```\nEADDRNOTAVAIL -> logger.warn called with \"telegram transport error: local socket allocation failure\"\nEADDRNOTAVAIL -> logger.warn called with \"EADDRNOTAVAIL\" \nEADDRNOTAVAIL -> logger.warn NOT called with \"DNS-resolved IP unreachable\" (no false alarm)\nECONNREFUSED -> no EADDRNOTAVAIL diagnostic logged\n```\n\n**Observed result after the fix**: EADDRNOTAVAIL correctly returns false from `shouldUseTelegramTransportFallback` and `forceFallback`, suppressing the misleading IP-rotation fallback on both the URL fetch path and the probe path. All other error types continue to promote to IPv4 fallback as before, preserving the existing retry behavior for transient network conditions. All 7 new unit tests pass. The `isLocalSocketAllocationError` function is narrowly scoped to exactly EADDRNOTAVAIL — no false positives for ECONNREFUSED, ENOTFOUND, EAI_AGAIN, or any other error code. All 42 existing tests pass, confirming zero regression on all existing fallback scenarios including: transport unhealthy errors, network timeout retries, DNS resolution failures, sticky fallback promotion, probe retry logic, and force-fallback backward compatibility.\n\n**What was not tested**: Live Telegram API connectivity under ephemeral port exhaustion (not reproducible on demand in CI); the fix relies on unit tests for error code classification. End-to-end verification with actual Telegram bot tokens was not performed — the fix is focused on the error classification layer which is fully covered by unit tests. Performance under sustained port exhaustion (thousands of concurrent connections) was not tested, as the fix does not change connection lifecycle or pooling behavior.\n\n## Risk checklist\n\n- [x] **merge-risk**: Very low. The change adds a single error code check at the entry point of `shouldUseTelegramTransportFallback` and a matching check in `forceFallback`. Both functions return early with `false` only when EADDRNOTAVAIL is detected; all other code paths are completely untouched. The `forceFallback` signature change is backward-compatible: existing callers that pass only a `reason` string continue to work (the `err` parameter is optional). The `forceFallback` return type changes from `void` to `boolean` — callers that ignore the return value (all current callers) see no behavioral change. No new dependencies, no config changes, no protocol changes, no async behavior changes. The diagnostic log message is at `warn` level, which is appropriate for actionable operational guidance without being alarming. In the unlikely event of a regression, the worst case is that EADDRNOTAVAIL errors are not suppressed on the probe path (if the new `err` parameter is not forwarded by a future code change), which reverts to the previous misleading behavior — not a crash, data loss, or connectivity failure.\n- [x] **This change is backwards compatible**: The `forceFallback` optional `err` parameter maintains backward compatibility. Existing wrapped transports or test mocks that call `forceFallback(reason)` continue to work without modification. The `boolean` return type is additive — existing callers that discard the return value are unaffected.\n- [x] **This change has been tested with existing configurations**: All 42 pre-existing unit tests pass without modification. The test suite covers: stick fallback promotion, transport unhealthy errors, network timeout retries, DNS resolution failures, probe retry logic with real timers, force-fallback variations, and logging assertions. No existing configuration files or runtime options were changed.\n- [x] **I have updated relevant documentation**: Inline code comments describe `isLocalSocketAllocationError` with the rationale \"Rotating the remote IP cannot fix this, so any fallback would be wasted work and produce misleading diagnostics.\" The `forceFallback` JSDoc was updated to document the optional `err` parameter and the `boolean` return value. Existing comments on fallback conditions were not modified — the new early-return guard is self-documenting.\n- [ ] **Breaking changes** (if any) are documented in Summary: No breaking changes in this PR.",
-        "branch": "fix/issue-94620-misleading-telegram-fallback-log",
-        "head_sha": "e9063f3a1f908c584a8dbc856a38aef55e19063e",
+        "title": "fix(qqbot): persist group inbound delivery route for announce target resolution",
+        "body": "## Summary\n\n**Problem**: When QQ Bot dispatches announce messages, the dispatchOutbound function creates outbound messages but does not persist the resolved delivery route. Subsequent announce messages from the same group session cannot consistently resolve the correct target group because the route information is not stored. This causes announce messages to be delivered to the wrong group or dropped entirely in multi-group scenarios.\n\n**Solution**: Add updateLastRoute call in dispatchOutbound after successful message dispatch to persist the resolved group inbound delivery route. Add preferSessionLookupForAnnounceTarget: true to the qqbot meta config to enable session-lookup-based target resolution for announce messages. Gate updateLastRoute to non-C2C turns only (event.type !== \"c2c\") to protect C2C DMs from route overwrite.\n\n**What changed**: outbound-dispatch.ts:444 — updateLastRoute now uses spread conditional `event.type !== \"c2c\"`, only persists group/guild route metadata. QQ bot metadata updated with preferSessionLookupForAnnounceTarget: true.\n\n**What did NOT change**: No changes to existing announce message creation logic, no changes to other dispatch paths, no new dependencies.\n\nFixes #94785\n\n## Real behavior proof\n\n**Behavior addressed**: QQ Bot group inbound delivery route persistence for announce target resolution. Fix adds preferSessionLookupForAnnounceTarget in qqbot metadata and updateLastRoute in outbound dispatch, with event.type !== \"c2c\" guard to protect C2C DMs.\n\n**Real environment tested**: Linux / OpenClaw Gateway / QQ Bot API (WebSocket, appId=1903562876)\n\n**Exact steps or command run after this patch**:\n\nStart Gateway with qqbot channel:\n\n```bash\nsleep 5\necho \"waiting for bot to process group and DM messages\"\n```\n\n**After-fix evidence**:\n\nLive Gateway logs showing both C2C and group message handling:\n\n```\n17:51:57.738 [qqbot] Starting gateway, appId=1903562876, enabled=true\n17:51:57.752 [qqbot] Restored session: sessionId=315cbba8-130f-4f99-9b77-12a8d4e13416\n17:51:58.151 [qqbot] Access token obtained successfully\n17:52:38.613 [qqbot] WebSocket connected\n17:52:38.958 [qqbot] Gateway resumed\n\n19:19:18.464 [qqbot] Processing message from sender (DM)\n19:19:40.997 [qqbot] onMessageSent called\n19:19:41.004 [qqbot] Sent markdown chunk (99/99 chars) with 0 HTTP images (c2c)\n\n19:24:59.696 [qqbot] Processing message from sender (group)\n19:25:14.499 [qqbot] API Status: 200 OK\n19:25:14.505 [qqbot] onMessageSent called\n19:25:14.508 [qqbot] Sent markdown chunk (43/43 chars) with 0 HTTP images (group)\n```\n\n**Observed result after the fix**: QQ Bot group messages correctly have route persisted via updateLastRoute. C2C DM messages correctly skip route persistence due to event.type !== \"c2c\" guard. Both message types processed successfully with 200 OK API responses.\n\n**What was not tested**: Multiple concurrent group conversations; route persistence across Gateway restart cycles (session restore handles reconnection).\n\n## Risk checklist\n\n- [x] **merge-risk**: Low. Single guard condition in outbound dispatch, no effect on existing dispatch logic.\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [x] I have updated relevant documentation\n- [ ] Breaking changes (if any) are documented in Summary\n",
+        "branch": "fix/issue-86387-qqbot-group-route-persistence",
+        "head_sha": "48110c8edc9bcbb3de3cd2a64cc0c6a8a97040fb",
         "author": "lzyyzznl",
         "labels": [
-          "channel: telegram",
-          "size: S",
+          "size: XS",
+          "channel: qqbot",
+          "proof: supplied",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/telegram/src/fetch.test.ts",
-            "additions": 21,
+            "path": "extensions/qqbot/src/bridge/config-shared.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/fetch.ts",
-            "additions": 30,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/probe.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/probe.ts",
-            "additions": 1,
-            "deletions": 1,
+            "path": "extensions/qqbot/src/engine/gateway/outbound-dispatch.ts",
+            "additions": 10,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 56,
-        "deletions": 6,
+        "changedFiles": 2,
+        "additions": 11,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95221",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95221.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94785",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94785.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 92,
-          "gatingTotal": 87,
+          "total": 90,
+          "gatingTotal": 85,
           "counts": {
-            "SUCCESS": 60,
+            "SUCCESS": 58,
             "SKIPPED": 31,
             "NEUTRAL": 1
           },
@@ -141,15 +131,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2439,
+    "total_ms": 3449,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 518
+        "ms": 672
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1665
+        "ms": 2435
       },
       {
         "name": "classify_comment_commands",
@@ -165,7 +155,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 239
+        "ms": 329
       },
       {
         "name": "append_ledger",
