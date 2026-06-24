@@ -564,6 +564,62 @@ pnpm run audit -- --target-repo openclaw/openclaw --max-pages 250 --sample-limit
 pnpm run reconcile -- --target-repo openclaw/openclaw --dry-run
 ```
 
+Advisory exact local issue/PR review:
+
+For Codex users, the repo-local skill `$local-clawsweeper-review` wraps this
+workflow with setup checks, target checkout hygiene, and artifact readout. Skill
+usage is documented in
+[`docs/local-clawsweeper-skill.md`](docs/local-clawsweeper-skill.md).
+
+```bash
+codex login --device-auth -c 'service_tier="fast"'
+pnpm run codex:local:check
+pnpm run review -- --local-only --target-repo owner/name --item-number 123
+```
+
+`review` is the single issue/PR review command. `--local-only` makes it an
+advisory local run: it skips the review-start placeholder comment, defaults the
+Codex service tier to `fast` for local CLI compatibility, preserves local Codex
+auth, and leaves generated output under the selected artifact directory. With a
+single `--item-number` and no `--target-dir`, it creates a managed PR checkout
+under `artifacts/local-review-<number>/target`. To use an already-cloned
+checkout, or to review an issue, pass `--target-dir <path>`:
+
+```bash
+pnpm run review -- --local-only \
+  --target-repo owner/name \
+  --item-number 123 \
+  --target-dir ../target-checkout
+```
+
+Read the report at `artifacts/local-review-<number>/<number>.md`. Key fields are
+`review_status`, `main_sha`, `pull_head_sha`, `decision`, `confidence`, and
+`Review Findings`. Do not run `apply-artifacts` or `apply-decisions` unless you
+intentionally want to move reports into durable state or sync GitHub comments.
+Add `--verbose` when you need the underlying `[review]` diagnostic logs.
+
+If you prefer API-key auth, keep the key out of the repository and shell
+history. For POSIX shells:
+
+```sh
+printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key -c 'service_tier="fast"'
+unset OPENAI_API_KEY
+```
+
+For PowerShell:
+
+```powershell
+$env:OPENAI_API_KEY = Read-Host "OpenAI API key"
+$env:OPENAI_API_KEY | codex login --with-api-key -c 'service_tier="fast"'
+Remove-Item Env:OPENAI_API_KEY
+```
+
+`--local-only` preserves local Codex auth environment variables only for that
+advisory local run. Normal production review workers still strip Codex, OpenAI,
+and GitHub write credentials before invoking the model. Set `CODEX_BIN` to an
+absolute executable path if the desired Codex CLI is not the first spawnable
+binary on `PATH`.
+
 Apply unchanged proposals later:
 
 ```bash
@@ -638,8 +694,8 @@ workers. Imported gitcrawl cluster repair allows 2 live workers by default.
 Exact-item review, repair, and issue implementation are priority work; normal
 review, hot intake, and commit review are background work and automatically
 yield when priority work is active. Exact-item runs use a durable Worker queue
-that coalesces item deliveries, leases at most 12 concurrent reviews, and admits
-up to 8 active exact reviews per target repository. Other lanes retain the
+that coalesces item deliveries, leases at most 14 concurrent reviews, and admits
+up to 10 active exact reviews per target repository. Other lanes retain the
 checked-in 32-worker scheduling model.
 Use `workers.max` first when turning total Codex usage up or down; use
 `lanes.repair.cluster_max_live_runs` to tune the imported legacy cluster-repair
