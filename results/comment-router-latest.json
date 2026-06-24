@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T09:13:12.599Z",
+  "generated_at": "2026-06-24T09:13:22.503Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T06:13:12.320Z",
+  "since": "2026-06-24T06:13:18.116Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    96346
+    96100
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4787675926
+  ],
+  "status_comment_id": 4787676325,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,18 +31,135 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96100:4787675926:2026-06-24T09:12:11Z:re_review",
+      "comment_id": "4787675926",
+      "comment_version_key": "4787675926:2026-06-24T09:12:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96100#issuecomment-4787675926",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 96100,
+      "author": "xialonglee",
+      "author_id": 22994703,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T09:12:11Z",
+      "comment_updated_at": "2026-06-24T09:12:11Z",
+      "status_comment_id": 4787676325,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-24T09:13:23.217Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 96100
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-24T09:13:24.339Z",
+          "response_comment_id": "4787676325",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agent): replace self-wait with deferred release in retained-lock abort cleanup",
+        "body": "## Root Cause\n\nWhen embedded run abort fires during an active retained session write, `releaseHeldLockWithFence()` bails out because `waitForRetainedLockIdle()` returns `false` when the current active write-lock scope is still alive. The held lock is left unreleased, and `acquireCleanupLock()` then tries `acquireLock()` which fails with EEXIST (the file lock is still held), returning a noopLock that never releases the underlying file lock. The session write lock leaks until the `maxHoldMs` watchdog timer fires (90–350s).\n\nThe initial fix (commit `3213604`) added a wait on `retainedLockIdleWaiters` inside `takeHeldLockAfterRetainedIdle()` and `disposeHeldLockAfterRetainedIdle()`, but this introduced a self-deadlock: the waiter resolves when `releaseRetainedUse()` releases the retained count to zero, which only happens when the active scope unwinds — but the await is inside that same active scope, so unwinding can never complete.\n\n## Summary\n\n- Removed the self-wait on `retainedLockIdleWaiters` from `takeHeldLockAfterRetainedIdle()` and `disposeHeldLockAfterRetainedIdle()`. When called from inside the active write scope, these now return early (`undefined` / `void`) instead of deadlocking.\n- Added a `releaseHeldLockDeferred` flag that `releaseHeldLockWithFence()` sets when it bails out because the active write scope is still alive.\n- In `runWithPhysicalWriteLockScope`, after the scope is deactivated and the retained-use count is released, check `releaseHeldLockDeferred` and re-attempt `releaseHeldLockWithFence()`. At this point `waitForRetainedLockIdle()` can safely wait (the current scope is no longer the active one).\n- Added 3 regression tests: deferred release after active scope, full lifecycle (abort→reacquire→release), and no-self-deadlock when `acquireForCleanup` is called from inside the active scope.\n- Fixes #95915\n\n## Verification\n\n- `pnpm test src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts` — **108 passed** (3 new + 105 existing, 0 regressions)\n- `pnpm check:test-types` — passed\n- `pnpm build` — succeeded\n- Autoreview: revised per ClawSweeper review — replaced self-wait with deferred release approach\n\n## Real behavior proof\n\nBehavior addressed: Session write-lock abort cleanup — `releaseHeldLockWithFence` bails out when scope is active, deferred release re-attempted after scope deactivation\n\nReal environment tested: Linux x86_64, Node v24.13.1, branch `fix/issue-95915-session-lock-abort`, commit `c96d5a8870`\n\nExact steps or command run after this patch:\n```\npnpm build\npnpm openclaw --version\npnpm openclaw doctor\n```\n\nEvidence after fix:\n- `pnpm openclaw --version` → `OpenClaw 2026.6.9 (3213604)` — binary starts successfully (version reads build stamp embedded during build; the next build step confirmed binary matches current HEAD)\n- `pnpm openclaw doctor` — completed successfully, all expected environment diagnostics emitted (stale config, agent orphan detection, security warnings), no crash or lock-related errors\n- Unit tests demonstrating the deferred release mechanism:\n  - `releaseHeldLockWithFence sets deferred flag when bailed out during active scope; re-attempted after scope deactivation (#95915)` — asserts `releaseHeldLockDeferred` is set and re-attempted, lock released at scope completion\n  - `controls the held lock lifecycle across deferred abort release, reacquisition, and prompt release` — asserts clean lock state after deferred release→reacquire→prompt release cycle\n  - `takeHeldLockAfterRetainedIdle does not self-deadlock when called from inside active write scope (#95915)` — asserts no deadlock when `acquireForCleanup` is called from inside the active scope\n- All 108 session-lock tests pass (0 regressions)\n\nObserved result after fix: Deferred release flag is set when `releaseHeldLockWithFence` bails out during active scope. After scope deactivation, `runWithPhysicalWriteLockScope` re-attempts the release and the held lock is released before the maxHoldMs watchdog fires. No self-deadlock when cleanup functions are called from inside the active scope.\n\nWhat was not tested: Full embedded run with real abort signal during retained session write (requires live agent run infrastructure not available in this environment). The defer-then-re-attempt mechanism is validated at the session-lock controller level via unit tests.\n",
+        "branch": "fix/issue-95915-session-lock-abort",
+        "head_sha": "c96d5a8870b583c8892e532c37a5b74c04da5051",
+        "author": "xialonglee",
+        "labels": [
+          "agents",
+          "size: S",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
+            "additions": 135,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 174,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96100",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96100.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "SUCCESS": 65,
+            "SKIPPED": 30,
+            "IN_PROGRESS": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-compact-large-whole-1:IN_PROGRESS"
+          ],
+          "pending": [
+            "checks-node-compact-large-whole-1:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 482,
+    "total_ms": 6821,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 267
+        "ms": 2242
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2132
       },
       {
         "name": "classify_comment_commands",
@@ -56,11 +175,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 204
+        "ms": 2422
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
