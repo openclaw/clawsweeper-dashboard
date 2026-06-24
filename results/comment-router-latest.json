@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T08:25:53.270Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-24T08:26:40.633Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T05:25:50.734Z",
+  "since": "2026-06-24T05:26:40.422Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96307
+    1735
   ],
-  "comment_ids": [
-    4787310790
-  ],
-  "status_comment_id": 4787311126,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,209 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96307:4787310790:2026-06-24T08:24:43Z:re_review",
-      "comment_id": "4787310790",
-      "comment_version_key": "4787310790:2026-06-24T08:24:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96307#issuecomment-4787310790",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 96307,
-      "author": "zhangqueping",
-      "author_id": 3436352,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T08:24:43Z",
-      "comment_updated_at": "2026-06-24T08:24:43Z",
-      "status_comment_id": 4787311126,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-24T08:25:54.440Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96307
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-24T08:25:55.793Z",
-          "response_comment_id": "4787311126",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): add cross-boot retry budget to restart recovery",
-        "body": "## Summary\n\n**Problem**: When a main-session turn wedges,  flags the entry and  retries it on every boot. There's no persistent retry counter or quarantine—a wedged session death-loops the gateway across restarts until systemd exhausts StartLimitBurst. See #95750 for the full production incident report (6 cycles before operator intervention).\n\n**Solution**: Add `abortedLastRunAttempts` (persistent counter) with a `> MAX_RECOVERY_RETRIES` ceiling. When exceeded, quarantine the session instead of resuming it. On successful resume, reset the counter and clear quarantine. The quarantine check runs AFTER all existing skip/routing/owner/dedupe guards to avoid suppressing owning recovery paths in configured or duplicate stores.\n\n**What changed** (4 files, +140/−22):\n- `src/config/sessions/types.ts`: +10 — `abortedLastRunAttempts`, `quarantinedAt`, `quarantineReason`\n- `src/plugins/session-entry-slot-keys.ts`: +3 — register new fields in compile guard\n- `src/agents/main-session-restart-recovery.ts`: +61/−7 — increment at 4 mark sites, quarantine AFTER guards with `> MAX_RECOVERY_RETRIES`, reset on success\n- `src/agents/main-session-restart-recovery.test.ts`: +88/−15 — quarantine + counter increment + successful-resume reset tests\n\n**What did NOT change**: In-process retry orchestration, subagent-orphan-recovery (already bounded with SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS), channel dispatch, model routing, auth.\n\nFixes #95750. Supersedes #86239.\n\n## Behavioral contract\n\n| Condition | Before | After |\n|---|---|---|\n| 1st restart | Re-marked, resumed | attempts=1, resumed |\n| 2nd restart | Re-marked, resumed | attempts=2, resumed |\n| 3rd restart | Re-marked, resumed | attempts=3, resumed (last valid retry) |\n| **4th restart** | Re-marked, resumed (loop!) | **Quarantined**: abortedLastRun=false, quarantinedAt set, WARN logged |\n| Successful auto-resume | abortedLastRun=false | **+** attempts=0, quarantine cleared |\n| Existing sessions (no field) | resumed | attempts starts at 0, backward-compatible |\n\n`MAX_RECOVERY_RETRIES = 3` is reused from the existing in-process budget. The gate is `> MAX_RECOVERY_RETRIES`, so the 3rd restart is the last valid retry (attempts=3), and the 4th triggers quarantine (attempts=4).\n\n## Real behavior proof\n\n**Runtime**: Node 24.13, Linux x86_64 — **Branch**: `fix/issue-95750-recovery-retry-budget` @ `242d856dc7` — **Vitest**: 4.1.8\n\n### Proof A — Real sessions.json state transitions\n\nScript exercises the exact recovery functions against a temp directory (full source at `proof-recovery-budget.ts` on the branch):\n\n```\n=== Phase 1: Quarantine (4th restart, attempts=4 > MAX=3) ===\n\n-- Before --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 4 }\n\nrecoverRestartAbortedMainSessions result: {\"recovered\":0,\"failed\":0,\"skipped\":0,\"quarantined\":1}\n\n[main-session-restart-recovery] quarantined agent:main:telegram:dm after 4\n  aborted-restart attempts (>= 3); the session will not be auto-resumed\n\n-- After --\n{ \"status\": \"running\", \"abortedLastRun\": false, \"abortedLastRunAttempts\": 4,\n  \"quarantinedAt\": 1782288650123, \"quarantineReason\": \"exceeded_restart_retry_budget\" }\n\n=== Phase 2: Counter increment (3→4, crosses ceiling) ===\n\n-- Before --\n{ \"status\": \"running\", \"abortedLastRun\": false, \"abortedLastRunAttempts\": 3 }\n\nmarkRestartAbortedMainSessions → \"marked 1 interrupted main session(s)\"\n\n-- After --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 4 }\n\n=== Phase 3: Backward-compatible defaults ===\n\n-- Before (no abortedLastRunAttempts field) --\n{ \"status\": \"running\", \"abortedLastRun\": false }\n\n-- After mark (undefined → 1 via ?? 0) --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 1 }\n```\n\n### Proof B — Full test suite (36/36 passed)\n\n```\n$ node scripts/run-vitest.mjs run src/agents/main-session-restart-recovery.test.ts --reporter=verbose\n[test] starting test/vitest/vitest.agents.config.ts\n RUN  v4.1.8\n ✓ marks only matching running main sessions by active session key\n … (33 existing tests pass unchanged)\n ✓ quarantines sessions that exceed the cross-boot retry budget (regression #95750)\n ✓ increments abortedLastRunAttempts at each mark phase (regression #95750)\n Test Files  1 passed (1)\n      Tests  36 passed (36)\n[test] passed 1 Vitest shard in 19.25s\n```\n\n### Proof C — Custom-store recovery resets counter on success\n\n```\n$ node scripts/run-vitest.mjs run src/agents/main-session-restart-recovery.test.ts   -t \"marks active sessions in a configured custom session store\" --reporter=verbose\n\n ✓ marks active sessions in a configured custom session store\n   └─ asserts: abortedLastRunAttempts === 0, quarantinedAt === undefined\n```\n\n**Observed result**: The fourth restart quarantines instead of resuming. The counter correctly increments through all four mark sites. Successful auto-resume clears the counter and quarantine. Existing sessions without the field start at 0.\n\n**What was not tested**: Live gateway restart with systemd supervision (not reproducible here). Proof covers every lifecycle boundary via real filesystem operations and 36 dedicated tests.\n\n## Risk checklist\n\n**Highest-risk area**: Counter increment at mark sites and quarantine gate ordering.\n\n**Risk level**: Medium — 3 new persistent SessionEntry fields. Existing entries default safely. Quarantine check runs AFTER guards. Operator intervention for quarantined sessions is better than a death-loop.\n\n**Mitigation**: All 4 mark sites instrumented. Reset on success. 36 tests cover all boundaries. `session-entry-slot-keys.ts` compile guard prevents drift.\n\n**Merge risk**:\n- `session-state` — 3 new SessionEntry fields, backward-compatible defaults (counter=0)\n- `availability` — quarantine skips auto-recovery, intentional (death-loop is worse)\n- `compatibility` — existing sessions without the field default to 0, upgrade-safe\n\n## All ClawSweeper P1 findings resolved\n\n1. ✅ **Move quarantine after guards** — check now runs after skip/routing/owner/dedupe guards\n2. ✅ **Honor retry budget boundary** — changed `>= MAX_RECOVERY_RETRIES` to `> MAX_RECOVERY_RETRIES`; 3rd restart is last valid retry, 4th triggers quarantine\n3. ✅ **Reset on progress** — successful `resumeMainSession` clears `abortedLastRunAttempts`, `quarantinedAt`, `quarantineReason`\n\n`@clawsweeper re-review`",
-        "branch": "fix/issue-95750-recovery-retry-budget",
-        "head_sha": "242d856dc75ae205e5001159a5fca635a287a49b",
-        "author": "zhangqueping",
-        "labels": [
-          "agents",
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "src/agents/main-session-restart-recovery.test.ts",
-            "additions": 74,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/main-session-restart-recovery.ts",
-            "additions": 53,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/types.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/session-entry-slot-keys.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 140,
-        "deletions": 22,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96307",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96307.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 89,
-          "gatingTotal": 84,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 35,
-            "SKIPPED": 25,
-            "IN_PROGRESS": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5917,
+    "total_ms": 356,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 623
+        "ms": 199
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1896
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 4
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -245,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3371
+        "ms": 145
       },
       {
         "name": "append_ledger",
