@@ -1,23 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T02:31:18.694Z",
+  "generated_at": "2026-06-24T02:31:23.146Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-23T23:31:16.820Z",
+  "since": "2026-06-23T23:31:22.721Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96159
+    96190
   ],
   "comment_ids": [
     4785365742
   ],
   "status_comment_id": 4785365953,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,155 +31,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96159:4785365742:2026-06-24T02:30:17Z:re_review",
-      "comment_id": "4785365742",
-      "comment_version_key": "4785365742:2026-06-24T02:30:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96159#issuecomment-4785365742",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 96159,
-      "author": "yetval",
-      "author_id": 102706514,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T02:30:17Z",
-      "comment_updated_at": "2026-06-24T02:30:17Z",
-      "status_comment_id": 4785365953,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=abbc85745a6ec4c87b0feaa0a6d492a03153b275)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "abbc85745a6ec4c87b0feaa0a6d492a03153b275",
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-24T02:31:19.303Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96159
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-24T02:31:20.166Z",
-          "response_comment_id": "4785365953",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): keep a due recurring run when an edit re-saves the same schedule",
-        "body": "## What Problem This Solves\n\nEditing a recurring cron job (`every` or `cron`) while one of its slots is already due silently drops that pending run. The control UI and `cron edit` resubmit the job's schedule on save, and any update that carries `schedule` (or `enabled`) advances `state.nextRunAtMs` to the next future slot without executing the slot that was already due. For an hourly job edited a few seconds after its slot came due, that hour's run never fires; for a daily job, that day's run is lost. For `every` jobs the same edit also re-phases the cadence anchor to \"now\", shifting every future fire time.\n\nRoot cause: `add()` and `remove()` were fixed (#94323) to recompute through `recomputeNextRunsForMaintenance`, which preserves a past-due `nextRunAtMs` so the pending run still fires. `update()` was never converted; it advances unconditionally whenever the patch carries a schedule or enabled field, even when the schedule is unchanged.\n\n`src/cron/service/ops.ts` (before):\n\n```ts\nconst scheduleChanged = patch.schedule !== undefined;\nconst enabledChanged = patch.enabled !== undefined;\n...\nif (scheduleChanged || enabledChanged) {\n  if (isJobEnabled(nextJob)) {\n    nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);\n  }\n  ...\n}\n```\n\n`computeJobNextRunAtMs` returns the strictly-future next slot, so a still-due `nextRunAtMs <= now` is overwritten. The `every` anchor backfill compounds it: when a re-save omits the internal `anchorMs`, the backfill mints `anchorMs = now`, re-phasing the cadence.\n\n## Why This Change Was Made\n\nOnly advance the next run when the scheduling inputs actually changed, using the existing `cronSchedulingInputsEqual` helper (the same helper `service/store.ts` already uses to decide whether stored timer state is still valid).\n\nFor the `every` anchor backfill, inherit the previous cadence anchor only when the interval is unchanged (an idempotent re-save), so the job keeps its existing phase and a due slot survives. A genuine interval change (a different `everyMs`, which UIs also submit without `anchorMs`) still anchors to the edit time, exactly as before, so the new cadence starts now; that edit already counts as a scheduling change and recomputes the next run as it always did.\n\n`src/cron/service/ops.ts` (after):\n\n```ts\nconst previousAnchorMs =\n  job.schedule.kind === \"every\" &&\n  job.schedule.everyMs === nextJob.schedule.everyMs &&\n  typeof job.schedule.anchorMs === \"number\" &&\n  Number.isFinite(job.schedule.anchorMs)\n    ? job.schedule.anchorMs\n    : undefined;\n...\nconst schedulingInputsChanged =\n  (patch.schedule !== undefined || patch.enabled !== undefined) &&\n  !cronSchedulingInputsEqual(job, nextJob);\n...\nif (schedulingInputsChanged) {\n  if (isJobEnabled(nextJob)) {\n    nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);\n  }\n  ...\n}\n```\n\nA genuine schedule change (different `everyMs`, `expr`, `tz`, or an enable transition) still recomputes exactly as before, and an `every` interval change still re-anchors to the edit time; only the unchanged re-save now preserves a due slot and its phase. This is the right boundary: the defect is in the cron service `update()` op that owns next-run state for CRUD edits, the sibling load-time path (`service/store.ts invalidateStaleNextRunOnScheduleChange`) already gates on the same identity, and `add()`/`remove()` already preserve due slots via maintenance recompute. The fix brings `update()` to parity and preserves #15905 (genuine edits still recompute).\n\n## User Impact\n\nRecurring cron jobs no longer skip a fire when the user edits them during an already-due slot, and `every` jobs keep their cadence phase across an unchanged re-save instead of drifting to the edit time. A real interval edit still starts the new cadence from the edit time, unchanged from today's behavior. Without this, any save that resubmits the schedule (the normal control-UI behavior) can silently swallow a scheduled run.\n\n## Evidence\n\nDrove the real `CronService.update()` against a real on-disk cron store with an injected clock, on the prior PR head and on the patched tree with identical inputs. The only stub is the isolated-agent job runner (the external execution boundary); the store, schedule math, anchor backfill, and update op are all real.\n\nTwo cases, `base = 2025-12-13T00:00:00Z`:\n- Case A, genuine interval change: add an `every: 10s` job (anchored at `base`), then at `base+3000` call `update(jobId, { schedule: { kind: \"every\", everyMs: 3_600_000 } })` (UI omits `anchorMs`).\n- Case B, idempotent re-save: add an `every: 10s` job, fire it once, advance the clock 50ms past the next due slot, then call `update(jobId, { schedule: { kind: \"every\", everyMs: 10000 } })`.\n\n```\n# BEFORE (prior PR head, anchor inherited unconditionally)\nA interval-change 10s->1h: anchorMs=base+0,    nextRunAtMs=base+3600000   <- keeps OLD phase, edit-time anchoring lost\nB idempotent 10s re-save:  anchorMs=base+0,    nextRunAtMs=base+1820005   dueSlotPreserved=true\n\n# AFTER (this patch, identical inputs)\nA interval-change 10s->1h: anchorMs=base+3000, nextRunAtMs=base+3603000   <- re-anchored to edit time (prior semantics restored)\nB idempotent 10s re-save:  anchorMs=base+0,    nextRunAtMs=base+1820005   dueSlotPreserved=true\n```\n\nCase A now re-anchors a real interval change to the edit time (`base+3000`) instead of keeping the old phase, matching the existing update semantics. Case B is unchanged: the due slot's `nextRunAtMs` is retained and the cadence anchor stays at its original phase, so the pending run still fires.\n\nThe idempotent-preserve before/after against pristine main is unchanged from the original PR (main advances the due slot `base+1820005 -> base+1830055`; this patch keeps `base+1820005`).\n\nAdditional checks: the colocated regression suite now has three cases (`every` idempotent, `every` interval-change re-anchor, `cron` idempotent); the new interval-change test fails on the prior PR head and passes here, and the two preserve-due tests still fail on pristine main and pass with the patch. The add/remove/ops/apply-patch/at-reschedule suites stay green (29 cases across the cron service suites run here). oxlint and oxfmt are clean on the changed files. Not covered: no live gateway or real isolated-agent execution; full project typecheck not run on this box (the one new call mirrors the existing un-cast `cronSchedulingInputsEqual(CronJob, CronJob)` call in `service/store.ts`).\n",
-        "branch": "fix/cron-update-drops-due-run",
-        "head_sha": "f6d4ecc12b8235bdb555cc9557ed2e0beb02ddeb",
-        "author": "yetval",
-        "labels": [
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/cron/service.update-recompute-drops-due-every.test.ts",
-            "additions": 164,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 25,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/shell-utils.ts",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 189,
-        "deletions": 5,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96159",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96159.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 89,
-          "gatingTotal": 84,
-          "counts": {
-            "SUCCESS": 56,
-            "SKIPPED": 26,
-            "IN_PROGRESS": 6,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "target is not open"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3802,
+    "total_ms": 732,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 580
+        "ms": 413
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1276
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -191,7 +58,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1916
+        "ms": 307
       },
       {
         "name": "append_ledger",
