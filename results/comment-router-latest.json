@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T11:15:37.903Z",
+  "generated_at": "2026-06-24T11:15:50.806Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T08:15:34.961Z",
+  "since": "2026-06-24T08:15:48.732Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96196
+    96100
   ],
-  "comment_ids": [
-    4788631802
-  ],
-  "status_comment_id": 4788632145,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 6,
+  "commands_seen": 4,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +31,113 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96196:4788631802:2026-06-24T11:14:27Z:re_review",
-      "comment_id": "4788631802",
-      "comment_version_key": "4788631802:2026-06-24T11:14:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96196#issuecomment-4788631802",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96100:4784042035:2026-06-24T11:15:45Z:clawsweeper_needs_human",
+      "comment_id": "4784042035",
+      "comment_version_key": "4784042035:2026-06-24T11:15:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96100#issuecomment-4784042035",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 96196,
-      "author": "markoub",
-      "author_id": 2418548,
+      "target_branch": null,
+      "issue_number": 96100,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T11:14:27Z",
-      "comment_updated_at": "2026-06-24T11:14:27Z",
-      "status_comment_id": 4788632145,
+      "comment_created_at": "2026-06-23T22:31:04Z",
+      "comment_updated_at": "2026-06-24T11:15:45Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The remaining action is maintainer proof acceptance and session-lock owner review for a session-state-sensitive ordering change, not a narrow automated code repair.; Cleared: The diff only changes internal TypeScript session-lock cleanup and colocated tests, with no dependency, workflow, secret, package, or supply-chain surface changes. (sha=cc37edaac682005e1551b77d87970ce315b66201)",
+      "review_summary": "The PR defers retained held-lock release when abort cleanup runs inside an active embedded session write scope, then retries release after scope deactivation, with focused controller regression tests.\n\nPR surface: Source +39, Tests +144. Total +183 across 2 files.\n\nReproducibility: yes. at source level: current main can return early from retained-lock abort cleanup inside an active write scope, and the linked production issue shows the corresponding lock-timeout symptom. I did not run a live retained-write abort reproduction in this read-only review.",
+      "review_followup": "- [P1] The remaining action is maintainer proof acceptance and session-lock owner review for a session-state-sensitive ordering change, not a narrow automated code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "cc37edaac682005e1551b77d87970ce315b66201",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agent): replace self-wait with deferred release in retained-lock abort cleanup",
+        "body": "## Root Cause\n\nWhen embedded run abort fires during an active retained session write, `releaseHeldLockWithFence()` bails out because `waitForRetainedLockIdle()` returns `false` when the current active write-lock scope is still alive. The held lock is left unreleased, and `acquireCleanupLock()` then tries `acquireLock()` which fails with EEXIST (the file lock is still held), returning a noopLock that never releases the underlying file lock. The session write lock leaks until the `maxHoldMs` watchdog timer fires (90–350s).\n\nThe initial fix (commit `3213604`) added a wait on `retainedLockIdleWaiters` inside `takeHeldLockAfterRetainedIdle()` and `disposeHeldLockAfterRetainedIdle()`, but this introduced a self-deadlock: the waiter resolves when `releaseRetainedUse()` releases the retained count to zero, which only happens when the active scope unwinds — but the await is inside that same active scope, so unwinding can never complete.\n\n## Summary\n\n- Removed the self-wait on `retainedLockIdleWaiters` from `takeHeldLockAfterRetainedIdle()` and `disposeHeldLockAfterRetainedIdle()`. When called from inside the active write scope, these now return early (`undefined` / `void`) instead of deadlocking.\n- Added a `releaseHeldLockDeferred` flag that `releaseHeldLockWithFence()` sets when it bails out because the active write scope is still alive.\n- In `runWithPhysicalWriteLockScope`, after the scope is deactivated and the retained-use count is released, check `releaseHeldLockDeferred` and re-attempt `releaseHeldLockWithFence()`. At this point `waitForRetainedLockIdle()` can safely wait (the current scope is no longer the active one).\n- Added 3 regression tests: deferred release after active scope, full lifecycle (abort→reacquire→release), and no-self-deadlock when `acquireForCleanup` is called from inside the active scope.\n- Revised per ClawSweeper review (`cc37eda`): tightened the `takeHeldLockAfterRetainedIdle` active-scope cleanup test so the fallback `acquireLock` rejects with `SessionWriteLockTimeoutError` (same-pid lock-timeout branch), and the test asserts `EmbeddedAttemptSessionTakeoverError` from scope completion.\n- Fixes #95915\n\n## Verification\n\n- `pnpm test src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts` — **108 passed** (0 regressions)\n- `pnpm check:test-types` — passed\n- `pnpm build` — succeeded, binary matches HEAD (`cc37eda`)\n- Autoreview: revised per ClawSweeper review\n\n## Real behavior proof\n\nBehavior addressed: Session write-lock abort cleanup — `releaseHeldLockWithFence` bails out when scope is active, deferred release re-attempted after scope deactivation, preventing lock leaks until the 300s watchdog.\n\nReal environment tested: Linux x86_64 (kernel 4.19.112-2.el8), Node v24.13.1, branch `fix/issue-95915-session-lock-abort`, commit `cc37edaac6`, binary `OpenClaw 2026.6.9 (cc37eda)`\n\nExact steps or command run after this patch:\n\n```\npnpm build\npnpm openclaw --version\npnpm openclaw agent --local --agent test_agent --model deepseek/deepseek-v4-pro --message \"say hello\" --timeout 60\n```\n\nEvidence after fix:\n\n**Real embedded agent turn** (full runtime — NOT a unit test or isolated lock smoke):\n\n```\n$ pnpm openclaw agent --local --agent test_agent \\\n    --model deepseek/deepseek-v4-pro --message \"say hello\" --timeout 60\n\n[agent/embedded] [trace:embedded-run] startup stages:\n  runId=821accce-d676-4526-be80-896a88be4b6d\n  sessionId=bb8b8b71-c9b3-4622-86a8-766bab01fc72\n  phase=attempt-dispatch totalMs=18200\n  stages=workspace:1ms@1ms,runtime-plugins:17550ms@17551ms,\n         hooks:6ms@17557ms,model-resolution:463ms@18020ms,\n         auth:173ms@18193ms,context-engine:2ms@18195ms,\n         attempt-workspace:3ms@18198ms,attempt-prompt:0ms@18198ms,\n         attempt-runtime-plan:2ms@18200ms,attempt-dispatch:0ms@18200ms\n\n[provider-transport-fetch] [model-fetch] start\n  provider=deepseek api=openai-completions model=deepseek-v4-pro\n  method=POST url=https://api.deepseek.com/chat/completions\n\n[provider-transport-fetch] [model-fetch] response\n  provider=deepseek api=openai-completions model=deepseek-v4-pro\n  status=200 elapsedMs=674 contentType=text/event-stream; charset=utf-8\n\nHello! 👋\n\n[agent] run 821accce-d676-4526-be80-896a88be4b6d ended with stopReason=stop\n```\n\nRuntime log inspection confirms **zero lock-leak errors** during the full run lifecycle. The agent successfully:\n1. Initialized runtime plugins (17.5s)\n2. Resolved deepseek provider authentication\n3. Made a real API call → `status=200`\n4. Wrote the session transcript (retained write lock path exercised)\n5. Cleanly terminated: `stopReason=stop`\n\n**Binary verification**: `pnpm openclaw --version` → `OpenClaw 2026.6.9 (cc37eda)` — binary matches HEAD commit\n\n**Controller regression tests** (108 passed):\n- `releaseHeldLockWithFence sets deferred flag when bailed out during active scope; re-attempted after scope deactivation (#95915)`\n- `controls the held lock lifecycle across deferred abort release, reacquisition, and prompt release`\n- `takeHeldLockAfterRetainedIdle does not self-deadlock when called from inside active write scope (#95915)` — tightened with `SessionWriteLockTimeoutError` rejection per ClawSweeper review\n\nObserved result after fix: The compiled binary from this PR branch runs a real embedded agent turn end-to-end with a live model provider (DeepSeek v4 Pro). The session write lock is acquired and released during the normal run lifecycle without errors. No lock leak is present at clean termination (`stopReason=stop`). The deferred release mechanism is validated at the controller level via 3 focused regression tests covering the abort-during-active-scope path that a normal agent turn cannot deterministically trigger.\n\nWhat was not tested: Forced abort during a retained session write in a live agent run (requires controlled intervention mid-write that is not feasible to reproduce deterministically in the contributor's environment). The deferred release path triggered specifically by abort-during-write is covered by the 3 controller-level regression tests.\n",
+        "branch": "fix/issue-95915-session-lock-abort",
+        "head_sha": "cc37edaac682005e1551b77d87970ce315b66201",
+        "author": "xialonglee",
+        "labels": [
+          "agents",
+          "size: S",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
+            "additions": 144,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 183,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96100",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96100.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 92,
+          "gatingTotal": 87,
+          "counts": {
+            "SUCCESS": 64,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96100:4787675926:2026-06-24T09:12:11Z:re_review",
+      "comment_id": "4787675926",
+      "comment_version_key": "4787675926:2026-06-24T09:12:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96100#issuecomment-4787675926",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96100,
+      "author": "xialonglee",
+      "author_id": 22994703,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T09:12:11Z",
+      "comment_updated_at": "2026-06-24T09:12:11Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,114 +154,94 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-24T11:15:38.990Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96196
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-24T11:15:40.333Z",
-          "response_comment_id": "4788632145",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: run fallback models on upstream provider errors",
-        "body": "Fixes #95519.\n\n## What Problem This Solves\n\nFixes an issue where users with configured fallback models could still see a primary provider failure instead of trying the next model when the primary provider returned a transient upstream error payload such as `upstream_error` / `LLM request failed`.\n\n## Why This Change Was Made\n\nEmbedded agent result fallback already treats auth, billing, and rate-limit error payloads as safe fallback triggers when no user-visible output was delivered. This extends that same guarded path to transient provider failures (`overloaded`, `server_error`, and `timeout`) and teaches the shared matcher the canonical `upstream_error` token, while leaving schema/tool-payload rejections non-retryable.\n\n## User Impact\n\nUsers with model fallbacks configured should get an automatic fallback attempt for transient upstream provider failures instead of a failed turn from the first provider. Request-shape errors and already-delivered user-visible output remain unchanged.\n\n## Evidence\n\nReal behavior proof: A local OpenClaw production-classifier/runtime proof command imported the production `classifyEmbeddedAgentRunResultForModelFallback` and `runWithModelFallback` modules, fed the provider error payload shape from #95519, and verified the runtime advanced from the primary model to the configured fallback model. The proof used a temporary redacted `OPENCLAW_STATE_DIR`; no credentials or external provider calls were used.\n\nRedacted terminal output from the proof command:\n\n```text\n[model-fallback/decision] model fallback decision: decision=candidate_failed requested=openai/gpt-5.5 candidate=openai/gpt-5.5 reason=timeout providerErrorType=upstream_error next=anthropic/claude-sonnet-4-6 detail=Upstream request failed\n[model-fallback/decision] model fallback decision: decision=candidate_succeeded requested=openai/gpt-5.5 candidate=anthropic/claude-sonnet-4-6 reason=unknown next=none\n```\n\n```json\n{\n  \"proof\": \"OpenClaw #96196 production fallback classifier and fallback runtime\",\n  \"tempState\": \"<redacted temp OPENCLAW_STATE_DIR>\",\n  \"upstreamPayloadText\": \"{\\\"error\\\":{\\\"message\\\":\\\"Upstream request failed\\\",\\\"type\\\":\\\"upstream_error\\\",\\\"param\\\":\\\"\\\",\\\"code\\\":null}}\",\n  \"productionClassification\": {\n    \"message\": \"openai/gpt-5.5 ended with a provider error: {\\\"error\\\":{\\\"message\\\":\\\"Upstream request failed\\\",\\\"type\\\":\\\"upstream_error\\\",\\\"param\\\":\\\"\\\",\\\"code\\\":null}}\",\n    \"reason\": \"timeout\",\n    \"code\": \"embedded_error_payload\",\n    \"rawError\": \"{\\\"error\\\":{\\\"message\\\":\\\"Upstream request failed\\\",\\\"type\\\":\\\"upstream_error\\\",\\\"param\\\":\\\"\\\",\\\"code\\\":null}}\"\n  },\n  \"schemaRejectionClassification\": null,\n  \"runtime\": {\n    \"outcome\": \"completed\",\n    \"provider\": \"anthropic\",\n    \"model\": \"claude-sonnet-4-6\",\n    \"attempts\": [\n      {\n        \"provider\": \"openai\",\n        \"model\": \"gpt-5.5\",\n        \"error\": \"{\\\"error\\\":{\\\"message\\\":\\\"Upstream request failed\\\",\\\"type\\\":\\\"upstream_error\\\",\\\"param\\\":\\\"\\\",\\\"code\\\":null}}\",\n        \"reason\": \"timeout\",\n        \"code\": \"embedded_error_payload\"\n      }\n    ],\n    \"callSequence\": [\n      {\n        \"provider\": \"openai\",\n        \"model\": \"gpt-5.5\",\n        \"isFinalFallbackAttempt\": false\n      },\n      {\n        \"provider\": \"anthropic\",\n        \"model\": \"claude-sonnet-4-6\",\n        \"isFinalFallbackAttempt\": true\n      }\n    ],\n    \"fallbackPayloadText\": \"fallback model completed the turn\"\n  },\n  \"assertions\": {\n    \"upstreamErrorClassifiedAsFallback\": true,\n    \"schemaRejectionNotRetried\": true,\n    \"fallbackAttempted\": true,\n    \"completedWithFallback\": true\n  }\n}\n```\n\nFocused validation:\n\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/result-fallback-classifier.test.ts`\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/result-fallback-classifier.test.ts src/agents/outcome-fallback-runtime-contract.test.ts src/agents/model-fallback.test.ts src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts`\n- `pnpm exec oxfmt --check src/agents/embedded-agent-helpers/failover-matches.ts src/agents/embedded-agent-runner/result-fallback-classifier.ts src/agents/embedded-agent-runner/result-fallback-classifier.test.ts`\n- `node scripts/run-oxlint.mjs src/agents/embedded-agent-helpers/failover-matches.ts src/agents/embedded-agent-runner/result-fallback-classifier.ts src/agents/embedded-agent-runner/result-fallback-classifier.test.ts`\n- `pnpm tsgo:core:test`\n- `git diff --check`\n- `codex review --base origin/main` -> no discrete correctness regressions found\n\nAI-assisted contribution disclosure: I used Codex to inspect the fallback/classifier path, implement the patch, run focused validation, produce the production proof above, and prepare this PR. I reviewed the diff and validation output before submission.\n",
-        "branch": "markoub/provider-upstream-error-fallback",
-        "head_sha": "86c1cf9cfc68c71359b784f67906dc2bac70d82b",
-        "author": "markoub",
-        "labels": [
-          "agents",
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-helpers/failover-matches.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/result-fallback-classifier.test.ts",
-            "additions": 36,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/result-fallback-classifier.ts",
-            "additions": 12,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 49,
-        "deletions": 6,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96196",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96196.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "SUCCESS": 63,
-            "SKIPPED": 31,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-whole-2:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-whole-2:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96100:4785599457:2026-06-24T03:27:23Z:re_review",
+      "comment_id": "4785599457",
+      "comment_version_key": "4785599457:2026-06-24T03:27:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96100#issuecomment-4785599457",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96100,
+      "author": "xialonglee",
+      "author_id": 22994703,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T03:27:23Z",
+      "comment_updated_at": "2026-06-24T03:27:23Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96100:4780743016:2026-06-23T15:26:14Z:re_review",
+      "comment_id": "4780743016",
+      "comment_version_key": "4780743016:2026-06-23T15:26:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96100#issuecomment-4780743016",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96100,
+      "author": "xialonglee",
+      "author_id": 22994703,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-23T15:26:14Z",
+      "comment_updated_at": "2026-06-23T15:26:14Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 6118,
+    "total_ms": 4841,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 655
+        "ms": 254
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2273
+        "ms": 1804
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -181,11 +253,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3163
+        "ms": 2754
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
