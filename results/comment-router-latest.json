@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T18:34:22.899Z",
+  "generated_at": "2026-06-24T18:34:45.613Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T15:34:20.167Z",
+  "since": "2026-06-24T15:34:45.194Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96529
+    96525
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,135 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96529:4792440734:2026-06-24T18:34:16Z:clawsweeper_needs_human",
-      "comment_id": "4792440734",
-      "comment_version_key": "4792440734:2026-06-24T18:34:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96529#issuecomment-4792440734",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96529,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T18:29:23Z",
-      "comment_updated_at": "2026-06-24T18:34:16Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] The remaining actions are contributor real behavior proof, failing-check follow-up, and maintainer review rather than an automated code repair.; Cleared: The diff only changes TypeScript cron fallback wiring and a focused test; no concrete security or supply-chain concern was found. (sha=8d687a108b60c8e5435ae63590443b9bc776e9ac)",
-      "review_summary": "The PR wires embedded result-level fallback classification and exhausted-result merging into isolated cron agent turns, with a regression test for reasoning-only incomplete results reaching a fallback model.\n\nPR surface: Source +29, Tests +162. Total +191 across 2 files.\n\nReproducibility: yes. from source inspection: current main cron calls the fallback loop without a result classifier, so returned fallback-safe failures are accepted as primary success instead of advancing to fallback. The paired issue also contains a concrete red repro test, but I did not run tests during this read-only review.",
-      "review_followup": "- [P1] The remaining actions are contributor real behavior proof, failing-check follow-up, and maintainer review rather than an automated code repair.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "8d687a108b60c8e5435ae63590443b9bc776e9ac",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): engage model fallback on embedded result-level failures (reasoning-only / empty / incomplete_turn)",
-        "body": "## What Problem This Solves\n\nIsolated cron / scheduled `agentTurn` jobs on embedded (non-CLI) providers with a configured model fallback chain silently drop the answer when the primary model returns a *result-level* terminal failure (reasoning-only, empty-visible, or `incomplete_turn`). The configured fallback model is never called, the run is recorded as `status: \"error\"`, and the operator receives the generic \"Agent couldn't generate a response.\" payload — even though a healthy fallback model was configured and would have produced the real answer.\n\nThis contradicts the documented contract (`docs/automation/cron-jobs.md`) that configured fallback chains still apply when the job primary fails. Thrown `FailoverError`s (auth, rate-limit, overload) already engage the chain via the catch path; only the returned result-level failure class was missed. Because reasoning-only / empty output is a routine outcome for reasoning models and cron fires repeatedly, the failure recurs every run until a human notices.\n\n## Why This Change Was Made\n\nThe cron embedded-run path (`src/cron/isolated-agent/run-executor.ts`) called `runWithModelFallback` without a `classifyResult` or `mergeExhaustedResult`. Every other answer-bearing caller passes both (`src/agents/agent-command.ts`, `src/auto-reply/reply/agent-runner-execution.ts`).\n\n`runEmbeddedAgent` does not *throw* for a fallback-safe incomplete turn — it returns a result carrying `meta.error.kind = \"incomplete_turn\"`, `fallbackSafe: true`, and `meta.agentHarnessResultClassification` (e.g. `\"reasoning-only\"`). With `classifyResult` undefined, `runWithModelFallback` resolves no classification, returns the first candidate as a success, and never advances to candidate 2+. Cron then turns the returned `meta.error` into a fatal error payload and records `status: \"error\"`.\n\nThis change wires `classifyEmbeddedAgentRunResultForModelFallback` and `mergeEmbeddedAgentRunResultForModelFallbackExhaustion` into the cron call, exactly as the interactive and auto-reply paths do. Classification is scoped to the embedded branch (a shared `resolveCronExecutionProvider` helper reused by the run path and the classifier), so the CLI runner keeps owning its own terminal classification and CLI fallback semantics are unchanged.\n\n## User Impact\n\nScheduled/cron `agentTurn` jobs on embedded providers with a configured fallback chain (`model.fallbacks` or per-job payload `fallbacks`) now advance to the healthy fallback model when the primary returns a reasoning-only / empty-visible / `incomplete_turn` result, delivering the real answer instead of recurring \"Agent couldn't generate a response.\" errors. CLI-provider cron jobs are unaffected.\n\n## Evidence\n\nNew regression test `src/cron/isolated-agent/run.result-fallback-gap.test.ts` drives the real `run-executor` wiring:\n\n- **Engages the fallback**: a faithful minimal fallback loop exercises the real `classifyResult`/`mergeExhaustedResult` the cron path now passes; the primary embedded run returns a reasoning-only `incomplete_turn` result and the fallback returns a healthy answer. The embedded runner is reached twice (second call = the configured fallback model) and the cron status is `ok`.\n- **Scoped to embedded**: the captured request's `classifyResult` returns a classification for an embedded reasoning-only result but returns `null` for a CLI provider; `mergeExhaustedResult` is the embedded merge helper.\n\nBoth assertions are RED on `main` (`classifyResult` is `undefined`; the loop stops on the first reasoning-only result) and GREEN with this change. Verified locally:\n\n```\nnode scripts/run-vitest.mjs src/cron/isolated-agent/run.result-fallback-gap.test.ts\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n```\n\nAdjacent cron suites stay green (`run.payload-fallbacks`, `run.meta-error-status`, `run-fallback-policy`, `run.cron-model-override`, `run.live-session-model-switch`, `run.interim-retry` — 45 tests). Changed files formatted with `oxfmt`.\n\nAI-assisted.\n",
-        "branch": "fix/96525-cron-result-fallback-classifier",
-        "head_sha": "8d687a108b60c8e5435ae63590443b9bc776e9ac",
-        "author": "zengwen-dt",
-        "labels": [
-          "size: M",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cron/isolated-agent/run-executor.ts",
-            "additions": 37,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.result-fallback-gap.test.ts",
-            "additions": 162,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 199,
-        "deletions": 8,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96529",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96529.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 33,
-            "SUCCESS": 56,
-            "IN_PROGRESS": 3,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-lint:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "check-lint:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3052,
+    "total_ms": 755,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 497
+        "ms": 408
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2221
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -165,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 308
+        "ms": 336
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
