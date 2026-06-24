@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T16:27:45.772Z",
+  "generated_at": "2026-06-24T16:28:37.283Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T13:27:42.760Z",
+  "since": "2026-06-24T13:28:36.767Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4791463626
   ],
-  "status_comment_id": 4791464096,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4791463626:2026-06-24T16:26:24Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/96480#issuecomment-4791463626",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 96480,
       "author": "hugenshen",
       "author_id": 16300669,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-24T16:26:24Z",
       "comment_updated_at": "2026-06-24T16:26:24Z",
-      "status_comment_id": 4791464096,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,113 +62,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-24T16:27:46.872Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96480
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-24T16:27:48.156Z",
-          "response_comment_id": "4791464096",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): bound model catalog JSON response reads for bedrock-mantle and huggingface",
-        "body": "## What Problem This Solves\r\n\r\nAmazon Bedrock Mantle and HuggingFace model catalog discovery both read their\r\nHTTP success responses via an unbounded `await response.json()`. `response.json()`\r\nreads the **entire** body into memory before parsing, with no byte ceiling and\r\nregardless of (or in the absence of) a `Content-Length` header. The Mantle\r\nendpoint is a user-configured AWS URL and the HuggingFace endpoint is an external\r\nrouter — either can be replaced by a self-hosted or hostile endpoint that streams\r\nan arbitrarily large catalog payload, causing memory pressure or a hang on the\r\nmodel discovery path.\r\n\r\nThe same gap was already closed for OpenRouter model catalog (`#95418`, `#95420`)\r\nand Ollama model discovery (`#96027`). This PR applies the identical fix to the\r\ntwo remaining bundled providers with the same issue.\r\n\r\n## Changes\r\n\r\n* `discoverMantleModels` now reads its catalog response through the shared\r\n  bounded reader `readProviderJsonResponse` (from\r\n  `openclaw/plugin-sdk/provider-http`, which wraps `readResponseWithLimit` at a\r\n  **16 MiB cap**), replacing `await response.json()`.\r\n* `fetchHuggingfaceModels` receives the same treatment.\r\n* On overflow the helper cancels the underlying stream and throws a bounded\r\n  error (`<label>: JSON response exceeds <N> bytes`); the existing fail-soft\r\n  handlers in each caller return empty/fallback model lists, so a capped\r\n  endpoint degrades gracefully.\r\n* Existing unit tests updated to use real `Response` objects (replacing plain\r\n  `{ ok: true, json: async () => ... }` mocks) so they exercise the same\r\n  streaming code path as production.\r\n* No new abstraction — reuses the existing `media-core` bounded reader already\r\n  used across the codebase.\r\n\r\n## Real behavior proof\r\n\r\n* **Behavior addressed**: An untrusted model catalog success response with no\r\n  `Content-Length` and an oversized/never-ending body must not be buffered\r\n  whole; the read must stop at the cap, cancel the stream, and throw a bounded\r\n  error — while valid small catalog responses still parse unchanged.\r\n* **Real environment tested**: A real `node:http` server (`createServer`) bound\r\n  to `127.0.0.1`, streaming a JSON body in 64 KiB chunks with **no**\r\n  **Content-Length** header, driving the **real exported**\r\n  `readResponseWithLimit` helper (the same helper `readProviderJsonResponse`\r\n  wraps internally) on Node v22.22.0.\r\n* **Exact steps**:\r\n  1. Boot the server; `GET /huge` streams an unbounded JSON object (~24 MiB) with\r\n     no `Content-Length`; `GET /small` returns one valid model catalog entry.\r\n  2. Drive `readResponseWithLimit(response, 1 MiB, { onOverflow: ... })` against\r\n     `/huge` and assert it rejects + the server socket is closed early.\r\n  3. **Negative control**: run the OLD path `await response.json()` against the\r\n     same `/huge` body and measure how many bytes the server pushed.\r\n  4. Drive `readResponseWithLimit(response, 1 MiB)` against `/small` and assert\r\n     the catalog is parsed intact.\r\n* **Evidence after fix**:\r\n  * Bounded case: threw\r\n    `bedrock-mantle.model-discovery: JSON response exceeds 1048576 bytes`;\r\n    server socket closed early (stream cancelled); only **1,064,178 bytes**\r\n    reached the wire — near the 1 MiB cap, not the 24 MiB body.\r\n  * Negative control: the unbounded `response.json()` read pulled the **full**\r\n    **25,165,824 bytes** (>23x the bounded read), proving the cap is\r\n    load-bearing.\r\n  * Small case: parsed into exactly one model with `id` intact, no truncation.\r\n* **Observed result**: `ALL PROOF ASSERTIONS PASSED`. Plus the in-repo Vitest\r\n  suite passes **5/5 files, 48/48 tests** including 8 discovery tests that now\r\n  exercise real `Response` streaming bodies. `oxlint` is clean on changed files.\r\n* **What was not tested**: Live Mantle/HuggingFace API calls with an oversized\r\n  response (no hostile test endpoint available locally). The 64-bit\r\n  memory-exhaustion end state was not driven to OOM — the proof instead measures\r\n  bytes-on-wire and early socket close, which is the load-bearing signal.\r\n\r\n## Evidence\r\n\r\n```\r\n[case 1] oversized catalog JSON, cap=1024 KiB, NO content-length\r\n  ok: readResponseWithLimit rejected on oversized body — true\r\n  ok: bounded error message present (got: bedrock-mantle.model-discovery: JSON response exceeds 1048576 bytes) — true\r\n  ok: bytes on wire stayed near the cap, not the full body (sent 1064178) — true\r\n\r\n[negative control] OLD unbounded `await response.json()` buffers whole body\r\n  ok: unbounded read pulled the FULL ~24 MiB body (sent 25165824), proving the cap is load-bearing — true\r\n\r\n[case 3] normal small catalog JSON still parses unchanged\r\n  ok: small catalog body parsed into 1 model — true\r\n  ok: model id intact (valid small body not truncated) — true\r\n\r\nALL PROOF ASSERTIONS PASSED\r\n```\r\n\r\n```\r\n Test Files  5 passed (5)\r\n      Tests  48 passed (48)\r\n   Duration  ~8s\r\n```\r\n\r\n**Label**: security\r\n\r\nAI-assisted.\r\n",
-        "branch": "fix/bound-model-catalog-json-responses",
-        "head_sha": "5500d1543508a6e83a6addb035fc6d916a1c6968",
-        "author": "hugenshen",
-        "labels": [
-          "commands",
-          "maintainer",
-          "size: S",
-          "extensions: huggingface",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/amazon-bedrock-mantle/discovery.test.ts",
-            "additions": 71,
-            "deletions": 59,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/amazon-bedrock-mantle/discovery.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/huggingface/models.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 81,
-        "deletions": 61,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96480",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96480.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 89,
-          "gatingTotal": 84,
-          "counts": {
-            "SUCCESS": 57,
-            "SKIPPED": 32
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6141,
+    "total_ms": 1837,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 652
+        "ms": 504
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2346
-      },
-      {
-        "name": "classify_comment_commands",
         "ms": 0
       },
       {
-        "name": "prehydrate_repair_loop_sweeps",
+        "name": "classify_comment_commands",
         "ms": 1
+      },
+      {
+        "name": "prehydrate_repair_loop_sweeps",
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -176,7 +93,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3117
+        "ms": 1321
       },
       {
         "name": "append_ledger",
