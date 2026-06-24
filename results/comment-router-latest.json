@@ -1,18 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T06:45:09.338Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-24T06:44:55.507Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T03:45:07.127Z",
+  "since": "2026-06-24T03:44:53.599Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96307
+    346
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4786603715
+  ],
+  "status_comment_id": 4786604059,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96307:4786579716:2026-06-24T06:45:03Z:clawsweeper_auto_repair",
-      "comment_id": "4786579716",
-      "comment_version_key": "4786579716:2026-06-24T06:45:03Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96307#issuecomment-4786579716",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96307,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T06:40:17Z",
-      "comment_updated_at": "2026-06-24T06:45:03Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "idempotency_key": "comment-router:openclaw/crabbox:346:4786603715:2026-06-24T06:43:56Z:re_review",
+      "comment_id": "4786603715",
+      "comment_version_key": "4786603715:2026-06-24T06:43:56Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/346#issuecomment-4786603715",
+      "repo": "openclaw/crabbox",
+      "target_branch": "main",
+      "issue_number": 346,
+      "author": "vincentkoc",
+      "author_id": 25068,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-06-24T06:43:56Z",
+      "comment_updated_at": "2026-06-24T06:43:56Z",
+      "status_comment_id": 4786604059,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -60,73 +62,109 @@
       "visual_lens": null,
       "expected_head_sha": "39d24fb160a0b4cc77e64448f4d0ffe57efe9fe8",
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-24T06:44:56.559Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 346
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-24T06:44:59.131Z",
+          "response_comment_id": "4786152557",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "admin",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): add cross-boot retry budget to restart recovery",
-        "body": "## Summary\n\n**Problem**: When a channel main-session turn wedges and the gateway is restarted, the recovery pass unconditionally re-retries every restart-aborted session on every boot. There is no persistent per-session retry counter, no quarantine, no backoff across boots — a wedged session death-loops the gateway until systemd exhausts `StartLimitBurst`. See #95750 for the full production incident report (6 recovery cycles before operator intervention).\n\n**Solution**: Add `abortedLastRunAttempts` as a persistent counter on session entries, bounded by `MAX_RECOVERY_RETRIES` (3, reused from the existing in-process budget). When exhausted, quarantine the session (clear abortedLastRun, set quarantinedAt + quarantineReason, log WARN).\n\n**What changed**:\n- `src/config/sessions/types.ts`: +9 — `abortedLastRunAttempts`, `quarantinedAt`, `quarantineReason` fields on SessionEntry\n- `src/agents/main-session-restart-recovery.ts`: +73/−7 — quarantine helpers + increment at 4 mark sites + resume gate budget check\n- `src/agents/main-session-restart-recovery.test.ts`: +52/−15 — quarantine test + attempts increment test; all existing assertions now use toMatchObject\n\n**What did NOT change**:\n- In-process retry orchestration (MAX_RECOVERY_RETRIES, RETRY_BACKOFF_MULTIPLIER) — unchanged\n- Subagent-orphan-recovery path — already bounded by `SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS` + `wedgedAt`\n- Channel dispatch, model routing, auth — untouched\n\nFixes #95750\n\n## Behavioral contract\n\n| Condition | Before | After |\n|---|---|---|\n| Wedged entry, 1st restart | Re-marked, resumed | Re-marked, resumed, `attempts=1` |\n| Wedged entry, 2nd restart | Re-marked, resumed | Re-marked, resumed, `attempts=2` |\n| Wedged entry, 3rd restart | Re-marked, resumed | Re-marked, resumed, `attempts=3` |\n| Wedged entry, **4th restart** | Re-marked, resumed (death loop!) | **Quarantined**: `abortedLastRun=false`, `quarantinedAt` set, `quarantineReason=\"exceeded_restart_retry_budget\"`, WARN logged |\n| Quarantined entry, new inbound | n/a | Quarantine cleared; `attempts` reset to 0 |\n\n## Real behavior proof\n\n**Behavior addressed**: Wedged channel main-session turns caused the gateway to death-loop across restarts because each boot was a fresh retry budget.\n\n**Real setup tested**:\n- **Runtime**: Node 24.13, Linux x86_64\n- **Branch**: `fix/issue-95750-recovery-retry-budget` based on `upstream/main`\n- **Test runner**: `scripts/run-vitest.mjs` (project-standard wrapper)\n- **Vitest**: 4.1.8\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs run src/agents/main-session-restart-recovery.test.ts`\n\n**After-fix evidence**:\n```\n[test] starting test/vitest/vitest.agents.config.ts\n RUN  v4.1.8\n Test Files  1 passed (1)\n      Tests  35 passed (35)\n[test] passed 1 Vitest shard in 17.48s\n```\n\nTwo new tests:\n- **\"quarantines sessions that exceed the cross-boot retry budget\"**: Session with `abortedLastRunAttempts=3` (at MAX_RECOVERY_RETRIES) is quarantined instead of resumed — verifies `abortedLastRun=false`, `quarantinedAt > 0`, `quarantineReason=\"exceeded_restart_retry_budget\"`, and that `callGateway` is NOT called\n- **\"increments abortedLastRunAttempts at each mark phase\"**: Session with 2 prior attempts → `markRestartAbortedMainSessions` → counter increments to 3\n\n**Observed result**: The resume gate now rejects sessions when `abortedLastRunAttempts >= MAX_RECOVERY_RETRIES`. The quarantine is persisted to the session store, blocking future automatic recovery. The WARN log line gives operators a searchable identifier for the quarantined session.\n\n**What was not tested**: Live gateway restart with wedged session loop (requires a real gateway process, systemd supervision, and a hung model turn). The fix is architecture-level — it adds a persistent guard at every aborted-mark site and in the resume gate — validated by unit tests that exercise the exact quarantine decision.\n\n## Tests and validation\n| Test Type | Result | Details |\n|-----------|--------|---------|\n| Unit Tests | ✅ 35/35 | All existing + 2 new quarantine tests |\n\n## Risk checklist\n\n**What is the highest-risk area?** The `abortedLastRunAttempts` counter is incremented at 4 independent mark sites. If any site is missing the increment, the counter could be stale and never reach the ceiling for some recovery paths.\n\n**Risk level**: Low risk — all 4 mark sites have been instrumented and verified via test. The default initializer (`?? 0`) ensures backward compatibility with existing session entries that lack the field. The `MAX_RECOVERY_RETRIES` constant (3) is moderate — enough retries to survive transient issues, not so many that a wedged session delays operator intervention.\n\n**Mitigation**: Existing 33 tests cover all mark and resume paths. The 2 new tests verify the quarantine decision. The quarantine is only applied when the counter equals or exceeds the ceiling — existing entries without the field start at 0 and get 3 retries.\n\n**Merge risk declaration**:\n- `merge-risk: 🚨 session-state` — Adds 3 new persistent fields to session entries. Existing entries without these fields default to 0 (attempts) and undefined (quarantine), preserving current behavior.\n- `merge-risk: 🚨 availability` — Quarantined sessions skip auto-recovery, which means a genuinely-recoverable session that hit the retry ceiling through bad luck needs operator intervention. This is intentional: a death-loop is worse than a stuck session.\n\n## Current review state\n**What is the next action?** Maintainer review requested.\n\nCloses #86239 (same root mechanism, closed `cant_reproduce`).\nComplementary to #95630 (dispatcher wall-clock deadline — trigger-layer fix).",
-        "branch": "fix/issue-95750-recovery-retry-budget",
-        "head_sha": "39d24fb160a0b4cc77e64448f4d0ffe57efe9fe8",
-        "author": "zhangqueping",
+        "title": "docs: add Station profiles security roadmap",
+        "body": "## Summary\n\n- Documents the planned Station profile primitive, agent profile boundary, and phase gates from https://github.com/openclaw/crabbox/issues/193.\n- Adds the initial unwired `internal/station` package for parsing Station profiles, agent profile phase gates, and modelAccess policy checks.\n- Keeps `modelAccess` explicitly security-gated and separate from ordinary `env.allow` forwarding.\n- Links the roadmap from feature docs and the security secrets section.\n\n## Scope / merge note\n\nThis is a roadmap and internal skeleton PR. It does not wire Station profiles into the runtime path yet and should not be treated as closing the full Station/modelAccess product roadmap.\n\nBecause this introduces new security-boundary code under `internal/station`, it still needs maintainer/security signoff even though current CI and local validation are green.\n\n## Verification\n\nMaintainer validation on current head `d690067fec2e752a53da0bea03eb5e4b8739cccd`:\n\n```text\ngo test ./internal/station\ngo test ./internal/station ./internal/cli ./cmd/crabbox\ngo vet ./...\nnode scripts/check-command-docs.mjs\nnode scripts/check-docs-links.mjs\ngo build -trimpath -o bin/crabbox ./cmd/crabbox\ngo test ./...\ngit diff --check\n```\n\nGitHub checks are green on the same head: Go, Apple VZ, Worker, Scripts, Docs, Release Check, and Socket checks.\n\nRefs https://github.com/openclaw/crabbox/issues/193.",
+        "branch": "docs/station-profiles-security-roadmap",
+        "head_sha": "d690067fec2e752a53da0bea03eb5e4b8739cccd",
+        "author": "zozo123",
         "labels": [
-          "agents",
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "P2",
+          "merge-risk: 🚨 security-boundary",
+          "proof: sufficient",
+          "rating: 🦐 gold shrimp",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/agents/main-session-restart-recovery.test.ts",
-            "additions": 65,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/main-session-restart-recovery.ts",
-            "additions": 47,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/types.ts",
-            "additions": 10,
+            "path": "docs/features/README.md",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/session-entry-slot-keys.ts",
+            "path": "docs/features/station-profiles.md",
+            "additions": 137,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/security.md",
             "additions": 3,
             "deletions": 0,
             "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/station/config.go",
+            "additions": 204,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/station/gate.go",
+            "additions": 162,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/station/gate_test.go",
+            "additions": 129,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/station/station.go",
+            "additions": 122,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/station/station_test.go",
+            "additions": 226,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 125,
-        "deletions": 22,
+        "changedFiles": 8,
+        "additions": 984,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96307",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96307.md",
+        "automerge_cluster_id": "automerge-openclaw-crabbox-346",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-346.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 96,
-          "gatingTotal": 91,
+          "total": 8,
+          "gatingTotal": 8,
           "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 61,
-            "SKIPPED": 32,
-            "FAILURE": 1,
-            "NEUTRAL": 1
+            "SUCCESS": 8
           },
           "blockers": [
             "check-test-types:FAILURE"
@@ -138,22 +176,21 @@
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2424,
+    "total_ms": 6361,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 386
+        "ms": 569
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1812
+        "ms": 1328
       },
       {
         "name": "classify_comment_commands",
@@ -169,7 +206,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 203
+        "ms": 4432
       },
       {
         "name": "append_ledger",
