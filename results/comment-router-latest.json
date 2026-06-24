@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T08:10:24.017Z",
+  "generated_at": "2026-06-24T08:10:26.765Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T05:10:23.568Z",
+  "since": "2026-06-24T05:10:24.678Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96327
+    91889
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
+  "scanned_comments": 7,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,380 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91889:4689007975:2026-06-23T08:48:24Z:clawsweeper_auto_repair",
+      "comment_id": "4689007975",
+      "comment_version_key": "4689007975:2026-06-23T08:48:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91889#issuecomment-4689007975",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 91889,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-12T08:10:58Z",
+      "comment_updated_at": "2026-06-23T08:48:24Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=abbeaf3333f6b974d66f5ca051fb93d6d74bf829)",
+      "review_summary": "The PR adds optional `accountId` to plugin agent hook context, threads it through agent hook builders and exec/before-reply paths, and updates docs and tests.\n\nPR surface: Source +18, Tests +42, Docs +3. Total +63 across 10 files.\n\nReproducibility: not applicable. as a bug reproduction: this is a public SDK feature PR. Source inspection confirms current main and v2026.6.9 lack `ctx.accountId` on `PluginHookAgentContext` and the shared context builder.",
+      "review_followup": "- [P2] The remaining blocker is public plugin SDK direction and alias compatibility, so this needs maintainer review rather than an automated repair lane.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "abbeaf3333f6b974d66f5ca051fb93d6d74bf829",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(plugin-sdk): surface accountId on agent hook context",
+        "body": "## TL;DR\n\nAdds an optional `accountId` to the plugin **agent hook context** so account-aware plugins can read which channel account a turn belongs to, instead of reverse-engineering it from `sessionKey` (which doesn't carry it for group or cron runs). Fully additive.\n\n**Maintainer decision requested:** `accountId` becomes part of the public plugin SDK hook context. The name mirrors the `accountId` already on the hook *event* types (e.g. `before_agent_run`) — this just brings the *context* in line. OK to lock in `accountId` as the canonical field?\n\n## Why\n\nMulti-account deployments (several Feishu apps / Slack workspaces on one instance) already track an `accountId` internally for routing and auth, but plugins receiving agent hooks have no reliable way to recover it:\n\n- `sessionKey` only encodes the account on some surfaces — **absent** in group conversations (`agent:<id>:<provider>:group:<chatId>`) and cron runs (`agent:main:cron:<job>:run:<id>`).\n- Indexing a store by `sessionKey` races when multiple bots are @-ed in one group at the same time.\n\nSurfacing the turn-bound `accountId` at the runtime seam lets a plugin stay **stateless** across DM / group-multi-bot / cron / subagent with a single hook — no sessionKey parsing, no shared-store workaround.\n\n## What changed\n\n- **`PluginHookAgentContext`** — new optional `accountId?: string` (public SDK surface).\n- **`buildAgentHookContextChannelFields`** — surfaces `accountId`, following the exact pattern the shared builder already uses for `channel` / `chatId` / `senderId`. Accepts the existing internal `agentAccountId` as an alias so all current spread call sites forward it for free (no rename churn); `accountId` wins. Alias is commented with a follow-up to unify the internal name.\n- **Harness path** (`buildAgentHookContext`) — threads `accountId` through, so `agent_end` / compaction / `before_agent_run` hooks get it instead of having it dropped by the context rebuild.\n- **Dispatch sites** — `resolve_exec_env` (`bash-tools.exec.ts`) and `before_agent_reply` (`get-reply.ts`) source `accountId` from real adjacent fields, mirroring the sibling `sessionKey` / `channelId` reads.\n- **`docs/plugins/hooks.md`** — documents `ctx.accountId`.\n\n10 files, +61/-3.\n\n## Compatibility\n\nFully additive. Plugins that don't read `accountId` are unaffected; every internal caller keeps working unchanged via the `agentAccountId` alias. `tsgo` core/extensions/test-src all green — no caller type-breaks.\n\n## Real behavior proof\n\n- **Behavior addressed:** `accountId` was unreachable by plugin agent hooks for group/cron turns (their `sessionKey` carries no account segment); this surfaces it on the hook context.\n- **Real environment tested:** Local OpenClaw gateway (`openclaw gateway`) on macOS with an isolated state dir, plus the compiled `dist` plugin SDK barrel driven directly via `node`.\n- **Exact steps or command run after this patch:**\n  - `openclaw gateway --allow-unconfigured --auth none` with a local probe plugin registered.\n  - `openclaw cron add --session isolated --account <acct> ...` then `openclaw cron run <jobId>` — a real agent turn whose delivery names a channel account.\n  - `node` against the compiled SDK with the cron param shape (imports `buildAgentHookContextChannelFields` from `openclaw/plugin-sdk/agent-harness-runtime`).\n- **Evidence after fix:** copied console output.\n\n  ```\n  $ node ./runtime-proof.mjs   # compiled dist SDK, cron isolated-runner param shape\n  cron fields: {\"channelId\":\"telegram\",\"accountId\":\"feishu-proof-account-a\"}   # cron sessionKey carries no account, accountId still resolved\n  precedence : {\"accountId\":\"acct-canonical\"}                                   # canonical accountId wins over legacy agentAccountId alias\n  absent     : {\"channelId\":\"discord\"}                                          # omitted when the run carries no account\n  PROOF OK\n  ```\n\n  ```\n  $ openclaw cron runs --id <jobId>   # real gateway cron agent turn, persisted record\n  \"status\": \"ok\", \"provider\": \"...\", \"sessionKey\": \"agent:main:cron:<job>:run:<id>\",\n  \"delivery\": { \"resolved\": { \"accountId\": \"feishu-proof-account-a\" } }   # account resolved end-to-end through the run\n  ```\n\n- **Observed result after fix:** the compiled hook-context builder returns the channel account for the cron shape, prefers the canonical `accountId` over the legacy alias, and omits it when no account is present; the real cron turn resolves the same account end-to-end.\n- **What was not tested:** a live print of `ctx.accountId` from inside a third-party plugin hook during the turn — that's chicken-and-egg pre-merge (needs this change shipped in a gateway with a consuming plugin). It exercises the same builder the live dispatch uses; happy to add that capture as a follow-up once it lands.\n\n## Verification\n\n- `tsgo` core / extensions / test-src lanes: green.\n- New unit coverage: `hook-agent-context.test.ts` (accountId surfacing / `agentAccountId` alias / canonical precedence) and `hook-context.test.ts` (harness ctx carries vs. omits accountId — guards the `agent_end` rebuild path).\n- Adjacent hook callsite suites green: `get-reply.before-agent-reply`, `bash-tools.exec.resolve-env-hook`, `cli-runner.before-agent-reply-cron`, `harness/agent-end-side-effects`, `harness/lifecycle-hook-helpers`.\n- `oxfmt --check`, `oxlint`, docs format check clean. Rebased on latest `main`; CI green.\n\nRefs #87668\n",
+        "branch": "feat/hook-ctx-account-id",
+        "head_sha": "6af7312126aca5ad344ec8a277189a5099a86845",
+        "author": "yukunlabs",
+        "labels": [
+          "docs",
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "docs/plugins/hooks.md",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.before-tool-call.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/hook-context.test.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/harness/hook-context.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-tools.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-agent-context.test.ts",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-agent-context.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 10,
+        "additions": 65,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91889",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91889.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 90,
+          "gatingTotal": 85,
+          "counts": {
+            "SUCCESS": 65,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:91889:4688988409:2026-06-12T08:08:21Z:re_review",
+      "comment_id": "4688988409",
+      "comment_version_key": "4688988409:2026-06-12T08:08:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91889#issuecomment-4688988409",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 91889,
+      "author": "yukunlabs",
+      "author_id": 53114662,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-12T08:08:21Z",
+      "comment_updated_at": "2026-06-12T08:08:21Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(plugin-sdk): surface accountId on agent hook context",
+        "body": "## TL;DR\n\nAdds an optional `accountId` to the plugin **agent hook context** so account-aware plugins can read which channel account a turn belongs to, instead of reverse-engineering it from `sessionKey` (which doesn't carry it for group or cron runs). Fully additive.\n\n**Maintainer decision requested:** `accountId` becomes part of the public plugin SDK hook context. The name mirrors the `accountId` already on the hook *event* types (e.g. `before_agent_run`) — this just brings the *context* in line. OK to lock in `accountId` as the canonical field?\n\n## Why\n\nMulti-account deployments (several Feishu apps / Slack workspaces on one instance) already track an `accountId` internally for routing and auth, but plugins receiving agent hooks have no reliable way to recover it:\n\n- `sessionKey` only encodes the account on some surfaces — **absent** in group conversations (`agent:<id>:<provider>:group:<chatId>`) and cron runs (`agent:main:cron:<job>:run:<id>`).\n- Indexing a store by `sessionKey` races when multiple bots are @-ed in one group at the same time.\n\nSurfacing the turn-bound `accountId` at the runtime seam lets a plugin stay **stateless** across DM / group-multi-bot / cron / subagent with a single hook — no sessionKey parsing, no shared-store workaround.\n\n## What changed\n\n- **`PluginHookAgentContext`** — new optional `accountId?: string` (public SDK surface).\n- **`buildAgentHookContextChannelFields`** — surfaces `accountId`, following the exact pattern the shared builder already uses for `channel` / `chatId` / `senderId`. Accepts the existing internal `agentAccountId` as an alias so all current spread call sites forward it for free (no rename churn); `accountId` wins. Alias is commented with a follow-up to unify the internal name.\n- **Harness path** (`buildAgentHookContext`) — threads `accountId` through, so `agent_end` / compaction / `before_agent_run` hooks get it instead of having it dropped by the context rebuild.\n- **Dispatch sites** — `resolve_exec_env` (`bash-tools.exec.ts`) and `before_agent_reply` (`get-reply.ts`) source `accountId` from real adjacent fields, mirroring the sibling `sessionKey` / `channelId` reads.\n- **`docs/plugins/hooks.md`** — documents `ctx.accountId`.\n\n10 files, +61/-3.\n\n## Compatibility\n\nFully additive. Plugins that don't read `accountId` are unaffected; every internal caller keeps working unchanged via the `agentAccountId` alias. `tsgo` core/extensions/test-src all green — no caller type-breaks.\n\n## Real behavior proof\n\n- **Behavior addressed:** `accountId` was unreachable by plugin agent hooks for group/cron turns (their `sessionKey` carries no account segment); this surfaces it on the hook context.\n- **Real environment tested:** Local OpenClaw gateway (`openclaw gateway`) on macOS with an isolated state dir, plus the compiled `dist` plugin SDK barrel driven directly via `node`.\n- **Exact steps or command run after this patch:**\n  - `openclaw gateway --allow-unconfigured --auth none` with a local probe plugin registered.\n  - `openclaw cron add --session isolated --account <acct> ...` then `openclaw cron run <jobId>` — a real agent turn whose delivery names a channel account.\n  - `node` against the compiled SDK with the cron param shape (imports `buildAgentHookContextChannelFields` from `openclaw/plugin-sdk/agent-harness-runtime`).\n- **Evidence after fix:** copied console output.\n\n  ```\n  $ node ./runtime-proof.mjs   # compiled dist SDK, cron isolated-runner param shape\n  cron fields: {\"channelId\":\"telegram\",\"accountId\":\"feishu-proof-account-a\"}   # cron sessionKey carries no account, accountId still resolved\n  precedence : {\"accountId\":\"acct-canonical\"}                                   # canonical accountId wins over legacy agentAccountId alias\n  absent     : {\"channelId\":\"discord\"}                                          # omitted when the run carries no account\n  PROOF OK\n  ```\n\n  ```\n  $ openclaw cron runs --id <jobId>   # real gateway cron agent turn, persisted record\n  \"status\": \"ok\", \"provider\": \"...\", \"sessionKey\": \"agent:main:cron:<job>:run:<id>\",\n  \"delivery\": { \"resolved\": { \"accountId\": \"feishu-proof-account-a\" } }   # account resolved end-to-end through the run\n  ```\n\n- **Observed result after fix:** the compiled hook-context builder returns the channel account for the cron shape, prefers the canonical `accountId` over the legacy alias, and omits it when no account is present; the real cron turn resolves the same account end-to-end.\n- **What was not tested:** a live print of `ctx.accountId` from inside a third-party plugin hook during the turn — that's chicken-and-egg pre-merge (needs this change shipped in a gateway with a consuming plugin). It exercises the same builder the live dispatch uses; happy to add that capture as a follow-up once it lands.\n\n## Verification\n\n- `tsgo` core / extensions / test-src lanes: green.\n- New unit coverage: `hook-agent-context.test.ts` (accountId surfacing / `agentAccountId` alias / canonical precedence) and `hook-context.test.ts` (harness ctx carries vs. omits accountId — guards the `agent_end` rebuild path).\n- Adjacent hook callsite suites green: `get-reply.before-agent-reply`, `bash-tools.exec.resolve-env-hook`, `cli-runner.before-agent-reply-cron`, `harness/agent-end-side-effects`, `harness/lifecycle-hook-helpers`.\n- `oxfmt --check`, `oxlint`, docs format check clean. Rebased on latest `main`; CI green.\n\nRefs #87668\n",
+        "branch": "feat/hook-ctx-account-id",
+        "head_sha": "6af7312126aca5ad344ec8a277189a5099a86845",
+        "author": "yukunlabs",
+        "labels": [
+          "docs",
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "docs/plugins/hooks.md",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.before-tool-call.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/hook-context.test.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/harness/hook-context.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-tools.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-agent-context.test.ts",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-agent-context.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 10,
+        "additions": 65,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91889",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91889.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 90,
+          "gatingTotal": 85,
+          "counts": {
+            "SUCCESS": 65,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:91889:4687138102:2026-06-12T03:40:21Z:re_review",
+      "comment_id": "4687138102",
+      "comment_version_key": "4687138102:2026-06-12T03:40:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91889#issuecomment-4687138102",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 91889,
+      "author": "yukunlabs",
+      "author_id": 53114662,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-12T03:40:21Z",
+      "comment_updated_at": "2026-06-12T03:40:21Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:91889:4668385541:2026-06-10T09:00:06Z:re_review",
+      "comment_id": "4668385541",
+      "comment_version_key": "4668385541:2026-06-10T09:00:06Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91889#issuecomment-4668385541",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 91889,
+      "author": "yukunlabs",
+      "author_id": 53114662,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-10T09:00:06Z",
+      "comment_updated_at": "2026-06-10T09:00:06Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 787,
+    "total_ms": 3174,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 439
+        "ms": 430
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1642
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +414,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 338
+        "ms": 1075
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
