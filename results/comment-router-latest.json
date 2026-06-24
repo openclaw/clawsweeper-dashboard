@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T11:32:01.489Z",
+  "generated_at": "2026-06-24T11:32:03.218Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T08:31:59.980Z",
+  "since": "2026-06-24T08:32:02.741Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96383
+    96387
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,167 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96383:4788647833:2026-06-24T11:31:56Z:clawsweeper_auto_repair",
-      "comment_id": "4788647833",
-      "comment_version_key": "4788647833:2026-06-24T11:31:56Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96383#issuecomment-4788647833",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96383,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T11:16:19Z",
-      "comment_updated_at": "2026-06-24T11:31:56Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=1150a48e5e22ccd288cd6d8a83bbba11c7738ef2)",
-      "review_summary": "The PR adds native OpenAI to cache-TTL pruning eligibility, clamps OpenAI pruning TTLs to at least 30 minutes, adds focused tests, and adds a source-level repro script.\n\nPR surface: Source +10, Tests +28, Other +114. Total +152 across 5 files.\n\nReproducibility: yes. for the source path: current main excludes native OpenAI in `isCacheTtlEligibleProvider`, and both extension setup and cache-TTL marker writes depend on that gate. I did not establish a live OpenAI idle-gap reproduction in this read-only review.",
-      "review_followup": "- [P1] Manual maintainer review is needed for the OpenAI TTL compatibility policy and contributor real-run proof; this is not a safe automated repair lane as submitted.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "1150a48e5e22ccd288cd6d8a83bbba11c7738ef2",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): enable cache-TTL context pruning for OpenAI with 30 min …",
-        "body": "**AI-assisted**: This PR was developed with Claude Code (Anthropic) assistance.\r\n\r\n## What Problem This Solves\r\n\r\nIssue [#95840](https://github.com/openclaw/openclaw/issues/95840) reports that `contextPruning` with `mode: \"cache-ttl\"` never fires on OpenAI providers, even when explicitly configured. The `isCacheTtlEligibleProvider()` function returned `false` for all OpenAI-native providers, which prevented the context pruning extension from being installed at all.\r\n\r\n**Impact**: Users who configure `contextPruning: { mode: \"cache-ttl\" }` with OpenAI providers (gpt-5.5, gpt-5.5-codex) get no pruning — the setting is silently ignored. This wastes context window on long-running OpenAI sessions.\r\n\r\n## Root Cause\r\n\r\nTwo mechanisms were involved:\r\n\r\n1. **`isCacheTtlEligibleProvider()` eligibility gate** (`src/agents/embedded-agent-runner/cache-ttl.ts:49-57`) — OpenAI was not listed as a cache-TTL eligible provider. The return statement only covered Anthropic, kilocode+Anthropic, and Google. This caused `buildContextPruningFactory()` to return `undefined` for any OpenAI provider, skipping the extension entirely.\r\n\r\n2. **No provider-aware TTL floor** — Even with OpenAI made eligible, the default 5-minute TTL was inappropriate. OpenAI's prompt cache retention is up to 24h; a 5-minute TTL would prune content while the provider cache was still warm, negating cache benefits.\r\n\r\n## Summary of Changes\r\n\r\n### 1. `src/agents/embedded-agent-runner/cache-ttl.ts`\r\n\r\nAdded `normalizedProvider === \"openai\"` to the eligibility return statement so OpenAI-native providers pass the cache-TTL eligibility check:\r\n\r\n```typescript\r\nreturn (\r\n  isAnthropicFamilyCacheTtlEligible({...}) ||\r\n  (normalizedProvider === \"kilocode\" && isAnthropicModelRef(normalizedModelId)) ||\r\n  isGooglePromptCacheEligible({...}) ||\r\n  normalizedProvider === \"openai\"  // ← added\r\n);\r\n```\r\n\r\n**Intentional gate**: Only `provider === \"openai\"` is eligible — OpenRouter OpenAI gateway (`openrouter/openai/gpt-4o`) remains ineligible, as OpenRouter's model-family routing already handles eligibility through `resolveProviderCacheTtlEligibility`.\r\n\r\n### 2. `src/agents/embedded-agent-runner/extensions.ts`\r\n\r\nAdded provider-aware TTL floor in `buildContextPruningFactory()`. After `computeEffectiveSettings()` returns, OpenAI sessions get a minimum 30-minute TTL floor:\r\n\r\n```typescript\r\nconst normalizedProvider = (params.provider ?? \"\").toLowerCase().trim();\r\nconst minTtlMs = normalizedProvider === \"openai\" ? 30 * 60 * 1000 : 0;\r\nconst effectiveSettings =\r\n  minTtlMs > 0 && settings.ttlMs < minTtlMs ? { ...settings, ttlMs: minTtlMs } : settings;\r\n```\r\n\r\nThis ensures:\r\n\r\n- Short/unspecified TTLs are clamped to 30 min for OpenAI (protecting prompt cache)\r\n- User-configured longer TTLs (e.g., `\"60m\"`) are preserved\r\n- Other providers are unaffected\r\n\r\n**Not modified**: `attempt.thread-helpers.ts` (cache-TTL marker writes already flow through the same eligibility check), `attempt.spawn-workspace.cache-ttl.test.ts` (existing cache-ttl integration tests for Anthropic/Google).\r\n\r\n## Evidence\r\n\r\n### Real Behavior Proof\r\n\r\n#### Proof script output (live run on the fix — Linux x64, node v24)\r\n\r\n```\r\n$ npx tsx scripts/repro/issue-95840-context-pruning-proof.mts\r\n\r\n── Test 1: isCacheTtlEligibleProvider allows OpenAI ──\r\n  ✅ openai/gpt-5.5 is cache-TTL eligible\r\n  ✅ openai/gpt-5.5-codex is cache-TTL eligible\r\n  ✅ case-insensitive OpenAI/GPT-5.5 is cache-TTL eligible\r\n\r\n── Test 2: Non-OpenAI providers still eligible (no regression) ──\r\n  ✅ anthropic/claude-sonnet-4 remains eligible\r\n  ✅ google/gemini-2.5-flash remains eligible\r\n\r\n── Test 3: OpenRouter OpenAI gateway remains ineligible ──\r\n  ✅ openrouter/openai/gpt-4o remains ineligible\r\n\r\n── Test 4: Factory wires context pruning extension for OpenAI ──\r\n  ✅ factories include contextPruningExtension\r\n\r\n── Test 5: TTL floor applied for OpenAI ──\r\n  ✅ runtime is set for OpenAI session\r\n  ✅ TTL is 30 min (1800000 ms)\r\n\r\n── Test 6: User longer TTL preserved for OpenAI ──\r\n  ✅ factories include contextPruningExtension (long TTL)\r\n  ✅ user TTL of 60m preserved (greater than 30m floor)\r\n\r\n── Result: 11 passed, 0 failed ──\r\n```\r\n\r\n#### Full test suite (live run — Linux x64)\r\n\r\n```\r\n$ pnpm test src/agents/embedded-agent-runner/cache-ttl.test.ts src/agents/embedded-agent-runner/extensions.test.ts\r\n[test] starting test/vitest/vitest.agents.config.ts\r\n\r\n RUN  v4.1.8 /home/0668000787/project/open-claw-github/openclaw\r\n\r\n\r\n Test Files  2 passed (2)\r\n      Tests  18 passed (18)\r\n   Start at  18:42:53\r\n   Duration  4.64s\r\n\r\n[test] passed 1 Vitest shard in 12.88s\r\n\r\n$ pnpm test src/agents/agent-hooks/context-pruning.test.ts src/agents/agent-hooks/context-pruning/ src/agents/embedded-agent-runner/run/attempt.spawn-workspace.cache-ttl.test.ts\r\n[test] starting test/vitest/vitest.unit-fast.config.ts\r\n RUN  v4.1.8\r\n\r\n Test Files  1 passed (1)\r\n      Tests  12 passed (12)\r\n   Duration  935ms\r\n\r\n[test] starting test/vitest/vitest.agents.config.ts\r\n RUN  v4.1.8\r\n\r\n Test Files  1 passed (1)\r\n      Tests  2 passed (2)\r\n   Duration  1.15s\r\n\r\n[test] passed 2 Vitest shards in 15.07s\r\n```\r\n\r\n#### Build\r\n\r\n```\r\n$ pnpm build\r\n→ No type errors, build successful\r\n```\r\n\r\n#### oxlint clean\r\n\r\n```\r\n$ node scripts/run-oxlint.mjs src/agents/embedded-agent-runner/extensions.ts src/agents/embedded-agent-runner/cache-ttl.ts\r\n(no output — 0 errors, 0 warnings)\r\n```\r\n\r\n#### Behavior comparison\r\n\r\n| Scenario                                            | Before fix                                 | After fix                             |\r\n| --------------------------------------------------- | ------------------------------------------ | ------------------------------------- |\r\n| `contextPruning: { mode: \"cache-ttl\" }` with OpenAI | Silently ignored (extension not installed) | Extension installed, 30 min TTL floor |\r\n| OpenAI session with default 5 min TTL               | N/A (extension not installed)              | TTL clamped to 30 min                 |\r\n| OpenAI session with explicit `ttl: \"60m\"`           | N/A (extension not installed)              | TTL preserved at 60 min               |\r\n| Anthropic/Google cache-ttl pruning                  | Works with 5 min default                   | Unchanged (no regression)             |\r\n| OpenRouter OpenAI gateway pruning                   | Ineligible                                 | Unchanged (intentional gate)          |\r\n\r\n## Merge Risk\r\n\r\n**Risk category**: Low — config behavior change, but only affects opt-in `contextPruning: { mode: \"cache-ttl\" }` path.\r\n\r\n**What could go wrong**: OpenAI cache-TTL markers will be written more frequently (every model call instead of never). This is 1 small entry per marker — negligible overhead.\r\n\r\n**Why it's safe**:\r\n\r\n- Affects only `mode: \"cache-ttl\"` opt-in config — default behavior is unchanged.\r\n- All 28 context-pruning + cache-ttl related tests pass.\r\n- Anthropic, Google, Kilocode providers are completely unaffected.\r\n- `0` new configuration surface / `0` changed / `2` files modified.\r\n\r\n**Recommended sequencing**: Complementary to but independent of any `prompt_cache_retention` / `cacheRetention` work for OpenAI — this fix only gates _pruning_, not cache writing.\r\n\r\n## Pre-submit checklist\r\n\r\n- [x] `pnpm build` — no type errors\r\n- [x] `pnpm check` — oxlint clean\r\n- [x] `pnpm test` — 28 + 18 tests passed\r\n- [x] Single logical change (make OpenAI cache-TTL eligible + provider-aware TTL floor)\r\n- [x] Root cause at mechanism layer (eligibility gate prevented extension install entirely)\r\n- [x] Real behavior proof: proof script + test suite + code evidence\r\n- [x] Proof script at `scripts/repro/issue-95840-context-pruning-proof.mts`\r\n- [x] Merge risk declared with mitigation\r\n- [x] AI-assisted (Claude Code)\r\n",
-        "branch": "fix/openai-context-pruning-95840",
-        "head_sha": "7664ee18c378f1a19e2879211c5bfe90555fe446",
-        "author": "maweibin",
-        "labels": [
-          "scripts",
-          "agents",
-          "size: M",
-          "rating: 🧂 unranked krab",
-          "status: 🛠️ actively grinding"
-        ],
-        "files": [
-          {
-            "path": "scripts/repro/issue-95840-context-pruning-proof.mts",
-            "additions": 136,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/cache-ttl.test.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/cache-ttl.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/extensions.test.ts",
-            "additions": 49,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/extensions.ts",
-            "additions": 11,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 203,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96383",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96383.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 43,
-          "gatingTotal": 38,
-          "counts": {
-            "CANCELLED": 2,
-            "QUEUED": 2,
-            "IN_PROGRESS": 13,
-            "SKIPPED": 23,
-            "SUCCESS": 3
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "dependency-guard-detect:IN_PROGRESS",
-            "security-sensitive-guard-detect:IN_PROGRESS",
-            "no-tabs:IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "preflight:IN_PROGRESS",
-            "actionlint:IN_PROGRESS",
-            "security-fast:QUEUED",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "dependency-guard-detect:IN_PROGRESS",
-            "security-sensitive-guard-detect:IN_PROGRESS",
-            "no-tabs:IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "preflight:IN_PROGRESS",
-            "actionlint:IN_PROGRESS",
-            "security-fast:QUEUED",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1729,
+    "total_ms": 814,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 259
+        "ms": 467
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1237
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -201,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 208
+        "ms": 337
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
