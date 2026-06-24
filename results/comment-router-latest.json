@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-24T10:14:47.106Z",
+  "generated_at": "2026-06-24T10:14:48.985Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T07:14:46.476Z",
+  "since": "2026-06-24T07:14:45.203Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    96033
+    96043
   ],
   "comment_ids": [
-    4788159633
+    4788160303
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96033:4788159633:2026-06-24T10:12:21Z:re_review",
-      "comment_id": "4788159633",
-      "comment_version_key": "4788159633:2026-06-24T10:12:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96033#issuecomment-4788159633",
+      "idempotency_key": "comment-router:openclaw/openclaw:96043:4788160303:2026-06-24T10:12:24Z:re_review",
+      "comment_id": "4788160303",
+      "comment_version_key": "4788160303:2026-06-24T10:12:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96043#issuecomment-4788160303",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96031,
+      "issue_number": 96043,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T10:12:26Z",
-      "comment_updated_at": "2026-06-24T10:12:26Z",
+      "comment_created_at": "2026-06-24T10:12:24Z",
+      "comment_updated_at": "2026-06-24T10:12:24Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -64,24 +64,83 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(firecrawl): bound successful JSON response reads",
+        "body": "## What Problem This Solves\n\nThe Firecrawl plugin treats its endpoint as an untrusted external source: a user\ncan point it at a self-hosted or custom Firecrawl instance (`baseUrl`), and even\nthe official API is a third party. The **success path** buffered the entire\nresponse via `await response.json()`.\n\nA self-hosted/custom Firecrawl endpoint (or a compromised/misbehaving upstream)\ncan return a success status with an oversized JSON body and **no\n`Content-Length`** — a chunked/streamed response. With `response.json()` the\nwhole payload is buffered into memory before parsing, so a malicious or buggy\nendpoint can drive the plugin/provider path into unbounded memory growth on a\nbody that keeps streaming past any sane size. This is the same class of issue\nthe response-limit campaign closed for the provider JSON paths.\n\n## Changes\n\n- `extensions/firecrawl/src/firecrawl-client.ts`: `readFirecrawlJsonResponse`\n  now reads the success body through `readResponseWithLimit` (from\n  `openclaw/plugin-sdk/response-limit-runtime`, the same helper used by the\n  bounded provider JSON reads), capped at **16 MiB** and cancelling the stream\n  on overflow, then `JSON.parse`s the bounded buffer. Malformed-JSON and normal\n  small-response behavior (parse + cache) are unchanged.\n- Reuses the existing helper — no new abstraction. This adds the missing\n  success-path size cap; it is a byte-size bound only and does **not** pass\n  `chunkTimeoutMs`, so it does not add a per-chunk stall timeout (see Scope).\n- Added regression tests in `firecrawl-tools.test.ts`: a well-formed body under\n  the cap still parses, and an oversized streamed body throws a bounded error\n  while cancelling the stream before buffering everything.\n\n## Scope / What This PR Does and Does Not Bound\n\n- **In scope (this PR):** the **success-path** JSON read is now bounded by a\n  16 MiB byte cap. An oversized or continuously streaming success body that\n  crosses 16 MiB is bounded/cancelled before the whole payload is buffered.\n- **Not changed by this PR — stall before the cap:** because no\n  `chunkTimeoutMs` is passed, a success body that streams *slowly but never\n  exceeds 16 MiB* is **not** cancelled by this cap; that stall case remains\n  governed by the existing request timeout, exactly as before.\n- **Not changed by this PR — error path:** the error-detail path\n  (`response.status` not ok) first attempts to parse a JSON error body via\n  `jsonResponse.json()` on a cloned response (line ~228), which is still an\n  **unbounded** read; only its non-JSON fallback uses the bounded\n  `readResponseText(..., { maxBytes: 64_000 })`. Bounding that error-JSON\n  pre-read is out of scope here — this PR is intentionally the success-JSON\n  complement only and does not claim the entire error path is bounded.\n\n## Verification (covered by committed tests)\n\nThe behavior is exercised by the two regression tests added in\n`firecrawl-tools.test.ts`, which run against the **real exported**\n`testing.readFirecrawlJsonResponse`:\n\n- **Well-formed under cap parses:** a small `{ success: true, data: [{ url:\n  \"x\" }] }` body resolves to the parsed object unchanged.\n- **Oversized streamed body is capped, not buffered:** a `ReadableStream`\n  fixture of 512 × 64 KiB chunks (32 MiB total, over the 16 MiB cap) makes\n  `readFirecrawlJsonResponse` reject with `JSON response exceeds <bytes>`,\n  and the test asserts the stream stopped early (`pulls < chunkCount`) and was\n  cancelled (`cancel()` observed) — i.e. the reader did not pull the whole body\n  before failing. This is the load-bearing check that the cap cancels the\n  underlying stream rather than buffering everything.\n\nWhat the committed tests deliberately do **not** cover: a live production\n`api.firecrawl.dev` call (no API key in this environment); a per-chunk stall\ntimeout (not implemented — see Scope); and the SSRF/private-network validation\nand caching layers (unchanged by this PR).\n\n## Real behavior proof\n\n- **Behavior addressed:** Firecrawl success JSON responses from an untrusted/self-hosted endpoint are no longer read with unbounded `response.json()`; an oversized no-`Content-Length` stream is cancelled at the 16 MiB cap, while small JSON still parses normally.\n- **Real environment tested:** Local OpenClaw checkout on Linux, running a standalone `node --import tsx --input-type=module` harness from the repository root. The harness imports the real exported `testing.readFirecrawlJsonResponse` from `extensions/firecrawl/src/firecrawl-client.ts` and feeds real WHATWG `Response`/`ReadableStream` bodies with no `Content-Length`.\n- **Exact steps or command run after this patch:** The harness ran three paths: small JSON through the patched helper, a 64 MiB streaming body through the patched helper, and a negative control using the old unbounded `response.json()` shape against a 32 MiB streamed body.\n- **Evidence after fix:**\n\n  ```text\n  PASS small-json-intact {\"success\":true,\"data\":[{\"url\":\"https://example.com\"}]}\n  PASS oversized-json-bounded Firecrawl Search API: JSON response exceeds 16777216 bytes; {\"pulls\":17,\"canceled\":true,\"bytesPulled\":17825792}\n  PASS negative-control-unbounded-json-drains Unexpected token 'a', \"aaaaaaaaaa\"... is not valid JSON; {\"pulls\":32,\"canceled\":false,\"bytesPulled\":33554432}\n  SUMMARY pass=3 fail=0\n  ```\n\n- **Observed result after fix:** The patched Firecrawl reader throws the bounded `JSON response exceeds 16777216 bytes` error after 17 MiB of 1 MiB chunks and cancels the stream (`canceled=true`) instead of draining the full fixture. The old `response.json()` negative control consumes all 32 MiB before failing, proving the cap is load-bearing.\n- **What was not tested:** A live `api.firecrawl.dev` call, because no API key is available and the public API cannot deterministically stream an oversized success body on demand. The standalone harness reproduces the relevant external-response condition with a real stream and the real exported parser.\n\n**Label**: security\n\n---\n\nAI-assisted: implemented and verified with AI assistance (Claude). This is the\nsymmetric success-path complement to the #95103/#95108 response-limit campaign\n(this adds the missing success-JSON byte cap, same helper and 16 MiB cap as\n#95218; the error-JSON pre-read remains unbounded and is out of scope here).\n\n",
+        "branch": "fix/bound-firecrawl-success-json",
+        "head_sha": "10c8184ac62588e693fc7d489515ccb6bc6c80a8",
+        "author": "alix-007",
+        "labels": [
+          "size: S",
+          "extensions: firecrawl",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/firecrawl/src/firecrawl-client.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/firecrawl/src/firecrawl-tools.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 59,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96043",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96043.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 88,
+          "gatingTotal": 83,
+          "counts": {
+            "SUCCESS": 57,
+            "SKIPPED": 31
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2415,
+    "total_ms": 4065,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 617
+        "ms": 1838
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1931
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -93,7 +152,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1786
+        "ms": 284
       },
       {
         "name": "append_ledger",
