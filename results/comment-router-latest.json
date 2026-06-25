@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T13:44:51.911Z",
+  "generated_at": "2026-06-25T13:45:37.019Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T10:44:51.508Z",
+  "since": "2026-06-25T10:45:33.751Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96797
+    96788
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
-  "commands_seen": 0,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,161 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96788:4799553366:2026-06-25T13:45:30Z:clawsweeper_needs_human",
+      "comment_id": "4799553366",
+      "comment_version_key": "4799553366:2026-06-25T13:45:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96788#issuecomment-4799553366",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96788,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T13:05:53Z",
+      "comment_updated_at": "2026-06-25T13:45:30Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Contributor-owned real behavior proof and maintainer choice between the two open candidate PRs remain; there is no narrow automated code repair to queue.; Cleared: The diff changes Gateway TypeScript diagnostic accounting and focused tests only, with no dependency, workflow, secret, package-resolution, or artifact-execution surface. (sha=8b515df79b96d21d8b8f7c62958ff21bc9aa19a7)",
+      "review_summary": "The PR removes final-budget placeholder counting, adds identity-based omitted-message diagnostic accounting across the chat-history budget pipeline, updates the Gateway caller, and adds focused omission-logging tests.\n\nPR surface: Source +35, Tests +121. Total +156 across 3 files.\n\nReproducibility: yes. Source inspection on current main shows the helper drops older messages while returning zero, and the Gateway caller logs truncation only when the combined count is positive.",
+      "review_followup": "- [P1] Contributor-owned real behavior proof and maintainer choice between the two open candidate PRs remain; there is no narrow automated code repair to queue.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "8b515df79b96d21d8b8f7c62958ff21bc9aa19a7",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): report omitted chat-history messages in truncation log",
+        "body": "## What Problem This Solves\n\n`enforceChatHistoryFinalBudget` (the final byte-budget step of the `chat.history` Gateway response) returned `placeholderCount: 0` in the branch that keeps **only the last message** while silently dropping every earlier one:\n\n```ts\nconst last = messages.at(-1);\nif (last && jsonUtf8Bytes([last]) <= maxBytes) {\n  return { messages: [last], placeholderCount: 0 }; // dropped N-1 messages, reported 0\n}\n```\n\nThe caller logs truncation only when that count is positive:\n\n```ts\nif (placeholderCount > 0) {\n  logLargePayload({ surface: \"gateway.chat.history\", action: \"truncated\", ... });\n}\n```\n\nSo whenever history was trimmed down to its last message, the count was `0`, the gate never fired, and the truncation was invisible to operators. The front byte cap (`capArrayByJsonBytes`) also drops the oldest messages without reporting a count, so that omission went unlogged too. Closes #96783.\n\n## Why This Change Was Made\n\nThe count was being assembled from per-step partial counts that did not compose: a step's \"placeholders inserted\" is not the same as \"history omitted\", and summing `replacedCount + front-cap drops + final-budget count` double-counts a message that is first replaced with a placeholder and then trimmed by the byte cap.\n\nThe fix gives the omission count a single owner that sees the whole pipeline. `enforceChatHistoryFinalBudget` now returns only its surviving messages (its message behavior is unchanged). A new `reportOmittedChatHistory` helper counts, by message identity, how many of the original messages lost their verbatim representation anywhere in the replace → cap → final-budget pipeline, and emits the diagnostic. Identity membership counts each omitted original exactly once.\n\n## User Impact\n\nOperators now get the `payload.large` / `truncated` diagnostic (and the debug line) whenever `chat.history` discards older history for any reason — drop-to-last, placeholder replacement, or front byte-cap trimming — with an accurate, non-inflated count. No API/response shape change for clients; this is purely diagnostic accounting. The internal field rename touched only the helper, its single Gateway caller, and the focused test (the TUI / embedded-stub callers read only `messages`).\n\n## Evidence\n\n**Before (current `main`)** — the keep-last branch returns `placeholderCount: 0` despite dropping `N-1` messages, so `if (placeholderCount > 0)` never logs.\n\n**After** — `reportOmittedChatHistory` computes the omitted count by identity and emits the diagnostic.\n\n**Real-behavior proof** — running the production helpers (`replaceOversizedChatHistoryMessages` → `capArrayByJsonBytes` → `enforceChatHistoryFinalBudget` → `reportOmittedChatHistory`) over an over-budget 3-message history and capturing the real diagnostic event bus output (`onDiagnosticEvent`):\n\n```\nreturned omittedCount = 2\ngateway debug log     = \"chat.history omitted oversized payloads count=2 total=2\"\npayload.large event   = {\"type\":\"payload.large\",\"surface\":\"gateway.chat.history\",\"action\":\"truncated\",\"reason\":\"chat_history_budget\",\"count\":2,\"limitBytes\":2000}\n```\n\n**Focused tests** exercise the real exported functions:\n\n```\nnode scripts/run-vitest.mjs \\\n  src/gateway/server-methods/chat-history-omission-logging.test.ts \\\n  src/gateway/server-methods/chat-history-budget.test.ts\n Test Files  4 passed (4)\n      Tests  16 passed (16)\n```\n\n- `chat-history-budget.test.ts`: `enforceChatHistoryFinalBudget` returns the right surviving messages (pass-through, keep-last preserving the original reference, oversized placeholder, never-empty sentinel).\n- `chat-history-omission-logging.test.ts`: a real `payload.large`/`truncated` event fires with the right count when history is trimmed; **no** event fires when nothing is omitted; and a message that is replaced and then front-capped is counted **once** (the emitted count is strictly less than the old additive `replacedCount + frontCapDropped` sum).\n\nFormatting verified with `oxfmt`.\n\nAI-assisted.\n",
+        "branch": "fix/96783-chat-history-budget-omitted-count",
+        "head_sha": "8b515df79b96d21d8b8f7c62958ff21bc9aa19a7",
+        "author": "zengwen-dt",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "size: M",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-methods/chat-history-budget.test.ts",
+            "additions": 5,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat-history-omission-logging.test.ts",
+            "additions": 121,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 57,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 183,
+        "deletions": 27,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96788",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96788.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 32,
+            "SUCCESS": 62,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96788:4799801516:2026-06-25T13:27:48Z:re_review",
+      "comment_id": "4799801516",
+      "comment_version_key": "4799801516:2026-06-25T13:27:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96788#issuecomment-4799801516",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96788,
+      "author": "ZengWen-DT",
+      "author_id": 290981215,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T13:27:48Z",
+      "comment_updated_at": "2026-06-25T13:27:48Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 704,
+    "total_ms": 5007,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 392
+        "ms": 459
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2794
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +195,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 302
+        "ms": 1728
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
