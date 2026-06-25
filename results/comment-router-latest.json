@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T07:03:49.077Z",
+  "generated_at": "2026-06-25T07:04:58.269Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T04:03:46.913Z",
+  "since": "2026-06-25T04:04:57.666Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4796703933
   ],
-  "status_comment_id": 4796704319,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4796703933:2026-06-25T07:02:43Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/95296#issuecomment-4796703933",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 95296,
       "author": "Pick-cat",
       "author_id": 266665499,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-25T07:02:43Z",
       "comment_updated_at": "2026-06-25T07:02:43Z",
-      "status_comment_id": 4796704319,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,221 +62,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-25T07:03:49.826Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 95296
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-25T07:03:50.850Z",
-          "response_comment_id": "4796704319",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(anthropic): send current claude-cli user-agent on OAuth path",
-        "body": "Fixes #94716\n\n## What Problem This Solves\nFixes an issue where Anthropic OAuth/subscription requests (`sk-ant-oat...`) could fail with `authentication_error: Invalid bearer token` even when the token itself was valid. OpenClaw sent those OAuth requests through two independent Anthropic request paths with the stale `claude-cli/2.1.75` user-agent, and Anthropic validates that `claude-cli/<version>` identity against a recency window.\n\n## Root Cause\nSymptom: Anthropic OAuth bearer-auth runs fail as `Invalid bearer token`, while the same subscription token can still work in the standalone Claude CLI.\nLayer 1: OpenClaw's OAuth request headers advertise `claude-cli/2.1.75`.\nLayer 2: The legacy Anthropic SDK provider and the managed Anthropic transport each carried their own hardcoded `2.1.75` constant.\nLayer 3: Anthropic accepts OAuth bearer tokens only when the request looks like a sufficiently current Claude Code CLI.\nRoot cause: Two auth-provider paths drifted behind Anthropic's accepted Claude Code recency window, so valid OAuth tokens were sent with a rejected client identity.\n\n## Why This Change Was Made\nThis change replaces the two independently drifting constants with one `buildClaudeCliUserAgent()` helper and refreshes the advertised version to `2.1.191`, which is the current npm `latest` for `@anthropic-ai/claude-code` at verification time.\n\nDeliberate scope / non-goals:\n- No runtime version resolution or subprocess. `@anthropic-ai/claude-code` is not an OpenClaw dependency, the standalone CLI may be absent, and spawning from the auth-provider path would add avoidable auth risk.\n- No new environment/config surface. Future Anthropic recency-window bumps remain a one-line source update plus release.\n- API-key auth, Copilot bearer auth, Foundry bearer auth, Cloudflare gateway auth, model selection, and beta-header selection are unchanged.\n\n## User Impact\nAnthropic OAuth/subscription users get requests that identify as a current Claude Code CLI instead of the stale `2.1.75` client identity. API-key users should see no behavior change.\n\n## Evidence\nVerified on PR head `28bd96aee013` with Node `v22.22.0` on Linux.\n\nProduction-path negative control and after-fix proof:\n\n```bash\ncd /tmp/openclaw-95296\nnode --experimental-strip-types <<'NODE'\nconst fs = await import('node:fs/promises');\nconst helper = await import('./src/llm/providers/claude-code-user-agent.ts');\nconst legacyProvider = await fs.readFile('./src/llm/providers/anthropic.ts', 'utf8');\nconst managedTransport = await fs.readFile('./src/agents/anthropic-transport-stream.ts', 'utf8');\nconsole.log(JSON.stringify({\n  head: (await import('node:child_process')).execFileSync('git', ['rev-parse', '--short=12', 'HEAD'], { encoding: 'utf8' }).trim(),\n  node: process.version,\n  npmLatestClaudeCode: (await import('node:child_process')).execFileSync('npm', ['view', '@anthropic-ai/claude-code', 'version'], { encoding: 'utf8' }).trim(),\n  before: {\n    source: 'origin/main negative control',\n    legacyProviderUserAgent: 'claude-cli/2.1.75',\n    managedTransportUserAgent: 'claude-cli/2.1.75',\n    staleVersion: true\n  },\n  after: {\n    source: 'PR head production helper',\n    helperUserAgent: helper.buildClaudeCliUserAgent(),\n    staleVersion: helper.buildClaudeCliUserAgent().includes('2.1.75'),\n    legacyProviderUsesHelper: legacyProvider.includes('\"user-agent\": buildClaudeCliUserAgent()'),\n    managedTransportUsesHelper: managedTransport.includes('\"user-agent\": buildClaudeCliUserAgent()'),\n    staleConstantsRemainingInChangedProdFiles: [legacyProvider, managedTransport, await fs.readFile('./src/llm/providers/claude-code-user-agent.ts', 'utf8')].some((text) => text.includes('2.1.75'))\n  }\n}, null, 2));\nNODE\n```\n\nOutput:\n\n```text\n{\n  \"head\": \"28bd96aee013\",\n  \"node\": \"v22.22.0\",\n  \"npmLatestClaudeCode\": \"2.1.191\",\n  \"before\": {\n    \"source\": \"origin/main negative control\",\n    \"legacyProviderUserAgent\": \"claude-cli/2.1.75\",\n    \"managedTransportUserAgent\": \"claude-cli/2.1.75\",\n    \"staleVersion\": true\n  },\n  \"after\": {\n    \"source\": \"PR head production helper\",\n    \"helperUserAgent\": \"claude-cli/2.1.191\",\n    \"staleVersion\": false,\n    \"legacyProviderUsesHelper\": true,\n    \"managedTransportUsesHelper\": true,\n    \"staleConstantsRemainingInChangedProdFiles\": false\n  }\n}\n```\n\nTargeted regression tests:\n\n```bash\ncd /tmp/openclaw-95296\nnode scripts/run-vitest.mjs src/llm/providers/claude-code-user-agent.test.ts src/llm/providers/anthropic.test.ts src/agents/anthropic-transport-stream.test.ts\n```\n\nOutput:\n\n```text\nTest Files  2 passed (2)\nTests  40 passed (40)\n\nTest Files  1 passed (1)\nTests  77 passed (77)\n\n[test] passed 2 Vitest shards in 21.51s\n```\n\nAdditional checks:\n\n```text\nnpm view @anthropic-ai/claude-code version -> 2.1.191\ngit diff --check -> clean\nSecurity review -> no token leakage, no new dependency, no new config/env surface\n```\n\nNot tested: I did not run a live Anthropic OAuth/subscription request against `api.anthropic.com`. This machine does not have a usable OpenClaw Anthropic OAuth auth-profile; historical/example/browser-cache hits were not used, and no token was printed or extracted. A maintainer with a live Claude subscription OAuth token can privately confirm server acceptance, but this PR's local proof exercises the production user-agent helper and both patched OAuth header call sites without exposing credentials.\n",
-        "branch": "fix/anthropic-oauth-user-agent-version",
-        "head_sha": "28bd96aee0134e9a49197bfb8d065beb933eb91f",
-        "author": "pick-cat",
-        "labels": [
-          "docs",
-          "agents",
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/providers/anthropic.md",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/anthropic-transport-stream.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/anthropic-transport-stream.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/anthropic.test.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/anthropic.ts",
-            "additions": 2,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/claude-code-user-agent.test.ts",
-            "additions": 18,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/llm/providers/claude-code-user-agent.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 7,
-        "additions": 68,
-        "deletions": 7,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95296",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95296.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 90,
-          "gatingTotal": 85,
-          "counts": {
-            "SUCCESS": 25,
-            "IN_PROGRESS": 39,
-            "SKIPPED": 24,
-            "QUEUED": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:QUEUED",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:QUEUED",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4439,
+    "total_ms": 2497,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 632
+        "ms": 590
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1519
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 4
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -284,7 +93,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2261
+        "ms": 1894
       },
       {
         "name": "append_ledger",
