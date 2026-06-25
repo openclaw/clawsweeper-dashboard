@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T14:26:17.878Z",
+  "generated_at": "2026-06-25T14:27:10.722Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T11:26:17.324Z",
+  "since": "2026-06-25T11:27:08.361Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    95787
+    93234
   ],
-  "comment_ids": [
-    4800359281
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,18 +31,125 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:95787:4800359281:2026-06-25T14:23:42Z:re_review",
-      "comment_id": "4800359281",
-      "comment_version_key": "4800359281:2026-06-25T14:23:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95787#issuecomment-4800359281",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93234:4706521256:2026-06-25T14:27:02Z:clawsweeper_needs_human",
+      "comment_id": "4706521256",
+      "comment_version_key": "4706521256:2026-06-25T14:27:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93234#issuecomment-4706521256",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95787,
-      "author": "Jhacarreiro",
-      "author_id": 19389037,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-25T14:23:42Z",
-      "comment_updated_at": "2026-06-25T14:23:42Z",
+      "issue_number": 93234,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-15T09:34:57Z",
+      "comment_updated_at": "2026-06-25T14:27:02Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=025dcb172f1dfbdac29eefe39e6fe1c6e35549ae)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "025dcb172f1dfbdac29eefe39e6fe1c6e35549ae",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(mattermost): backfill thread history only on first-sighting recovery",
+        "body": "## Summary\n\n- Backfill a Mattermost thread from the server **only on first-sighting recovery** (gateway restart / session clear), not on every empty pending-history window.\n- Fixes the regression flagged in review: ordinary active-thread follow-ups no longer rehydrate the whole server thread or add an awaited REST call to the inbound path.\n\n## Motivation\n\nCloses #93204.\n\nWhen the bot is re-mentioned inside an existing Mattermost thread after a gateway restart or session clear, the in-memory pending-history window is empty, so it replied without thread context. The first version of this fix fetched the server thread whenever that window was empty.\n\nAs [@clawsweeper correctly caught](https://github.com/openclaw/openclaw/pull/93234#issuecomment), the shared turn kernel clears the pending-history window after **every** successful dispatch (`src/channels/turn/kernel.ts` → `clearPendingHistoryAfterTurn`). So an empty window is also the **normal steady state** for an active thread — backfilling on a bare empty window therefore:\n\n1. rehydrated the full server thread on ordinary follow-up mentions, and\n2. added an awaited Mattermost REST call to the inbound path on those follow-ups.\n\n## The fix\n\nNew pure gate `shouldBackfillThreadFromServer` (in `thread-backfill.ts`) distinguishes recovery from steady state by **process lifetime**:\n\n- It tracks thread roots already serviced this process in a caller-owned `Set`.\n- The **first** empty-window sighting of a never-serviced root = genuine restart/session-clear recovery → backfill.\n- Any later empty window for an already-serviced root = the kernel's normal post-turn clear → **do not** backfill.\n- A root is marked serviced even when its window already had context, so a later kernel-cleared window can never re-trigger recovery.\n\n`monitor.ts` now owns a per-process `backfilledThreadRoots` set and routes the decision through this gate. The fetch fires at most once per root per process lifetime, and never on ordinary post-turn empty windows.\n\n## Real behavior proof\n\n- **Behavior addressed:** an active Mattermost thread, after the turn kernel clears its pending-history window post-turn, must NOT re-fetch and inject the full server thread on the next mention (the review's P1 regression). Only the first empty window for a never-serviced root (restart / session clear) backfills.\n- **Real environment tested:** the shipped `thread-backfill.ts` functions (`shouldBackfillThreadFromServer`, `buildThreadBackfillEntries`) loaded directly via `tsx` in a real Node v25 process and driven through the issue scenario against live process state — no test runner, no vitest, no mocked module shim. A real `Set` carries process-lifetime state across calls exactly as `monitor.ts` uses it.\n- **Exact steps or command run after this patch:**\n  ```\n  npx tsx .proof-mattermost-backfill.mjs\n  ```\n  (harness imports the shipped functions and replays: restart → first empty window; same active thread after the kernel clears the window; a different active thread that still has context; then maps a real server-thread payload.)\n- **Evidence after fix:** copied live stdout from the command above —\n  ```\n  === PR #93204 live runtime proof (process-state, no test runner) ===\n  1) restart, first empty window  -> backfill: true\n  2) post-turn kernel-cleared window (same root) -> backfill: false\n  3) active thread, window has context -> backfill: false\n  4) buildThreadBackfillEntries (current post skipped):\n  [\n    {\n      \"sender\": \"alice\",\n      \"body\": \"kickoff question\",\n      \"messageId\": \"p1\"\n    },\n    {\n      \"sender\": \"bob\",\n      \"body\": \"an answer\",\n      \"messageId\": \"p2\"\n    }\n  ]\n  PROOF_RESULT: PASS\n  ```\n- **Observed result after fix:** the restart's first empty window backfills (`true`); the **same active thread's** next empty window — left behind by the kernel's post-turn clear — returns `false`, so it does NOT re-fetch or re-inject the server thread (the P1 regression is gone); an active thread that still has in-memory context returns `false`; and `buildThreadBackfillEntries` returns the two prior posts in order with resolved sender labels, correctly skipping the current mention (`p3`). The harness asserts all four and prints `PROOF_RESULT: PASS`.\n- **What was not tested:** a fully live Mattermost server HTTP round-trip + the monitor's inbound integration end-to-end. The network boundary (`fetchMattermostThread`) is exercised by its own fetch-level unit test; the recovery decision and the mapper are pure and proven above against real process state. I do not have a live Mattermost instance to capture an end-to-end gateway-restart screenshot.\n\n## Addressing the review P1s\n\n- **Gate backfill on recovery, not empty window** — done; first-sighting-per-process gate replaces the bare empty-window condition.\n- **Regression coverage for active thread + cleared window not rehydrating** — added (unit test `does NOT rehydrate an active thread whose window the kernel cleared post-turn`, 12/12 passing) and proven live above.\n- **Awaited-REST-on-ordinary-replies risk** — eliminated; the fetch can fire at most once per root per process lifetime, never on normal follow-ups.\n",
+        "branch": "fix/93204-mattermost-thread-backfill",
+        "head_sha": "025dcb172f1dfbdac29eefe39e6fe1c6e35549ae",
+        "author": "bartok9",
+        "labels": [
+          "channel: mattermost",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/mattermost/src/mattermost/client.ts",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/mattermost/src/mattermost/monitor.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/mattermost/src/mattermost/thread-backfill.test.ts",
+            "additions": 204,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/mattermost/src/mattermost/thread-backfill.ts",
+            "additions": 98,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 390,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93234",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93234.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 85,
+          "gatingTotal": 80,
+          "counts": {
+            "SUCCESS": 59,
+            "SKIPPED": 25,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:93234:4716760487:2026-06-16T09:01:54Z:re_review",
+      "comment_id": "4716760487",
+      "comment_version_key": "4716760487:2026-06-16T09:01:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93234#issuecomment-4716760487",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93234,
+      "author": "Bartok9",
+      "author_id": 259807879,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-16T09:01:54Z",
+      "comment_updated_at": "2026-06-16T09:01:54Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -64,24 +169,98 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(mattermost): backfill thread history only on first-sighting recovery",
+        "body": "## Summary\n\n- Backfill a Mattermost thread from the server **only on first-sighting recovery** (gateway restart / session clear), not on every empty pending-history window.\n- Fixes the regression flagged in review: ordinary active-thread follow-ups no longer rehydrate the whole server thread or add an awaited REST call to the inbound path.\n\n## Motivation\n\nCloses #93204.\n\nWhen the bot is re-mentioned inside an existing Mattermost thread after a gateway restart or session clear, the in-memory pending-history window is empty, so it replied without thread context. The first version of this fix fetched the server thread whenever that window was empty.\n\nAs [@clawsweeper correctly caught](https://github.com/openclaw/openclaw/pull/93234#issuecomment), the shared turn kernel clears the pending-history window after **every** successful dispatch (`src/channels/turn/kernel.ts` → `clearPendingHistoryAfterTurn`). So an empty window is also the **normal steady state** for an active thread — backfilling on a bare empty window therefore:\n\n1. rehydrated the full server thread on ordinary follow-up mentions, and\n2. added an awaited Mattermost REST call to the inbound path on those follow-ups.\n\n## The fix\n\nNew pure gate `shouldBackfillThreadFromServer` (in `thread-backfill.ts`) distinguishes recovery from steady state by **process lifetime**:\n\n- It tracks thread roots already serviced this process in a caller-owned `Set`.\n- The **first** empty-window sighting of a never-serviced root = genuine restart/session-clear recovery → backfill.\n- Any later empty window for an already-serviced root = the kernel's normal post-turn clear → **do not** backfill.\n- A root is marked serviced even when its window already had context, so a later kernel-cleared window can never re-trigger recovery.\n\n`monitor.ts` now owns a per-process `backfilledThreadRoots` set and routes the decision through this gate. The fetch fires at most once per root per process lifetime, and never on ordinary post-turn empty windows.\n\n## Real behavior proof\n\n- **Behavior addressed:** an active Mattermost thread, after the turn kernel clears its pending-history window post-turn, must NOT re-fetch and inject the full server thread on the next mention (the review's P1 regression). Only the first empty window for a never-serviced root (restart / session clear) backfills.\n- **Real environment tested:** the shipped `thread-backfill.ts` functions (`shouldBackfillThreadFromServer`, `buildThreadBackfillEntries`) loaded directly via `tsx` in a real Node v25 process and driven through the issue scenario against live process state — no test runner, no vitest, no mocked module shim. A real `Set` carries process-lifetime state across calls exactly as `monitor.ts` uses it.\n- **Exact steps or command run after this patch:**\n  ```\n  npx tsx .proof-mattermost-backfill.mjs\n  ```\n  (harness imports the shipped functions and replays: restart → first empty window; same active thread after the kernel clears the window; a different active thread that still has context; then maps a real server-thread payload.)\n- **Evidence after fix:** copied live stdout from the command above —\n  ```\n  === PR #93204 live runtime proof (process-state, no test runner) ===\n  1) restart, first empty window  -> backfill: true\n  2) post-turn kernel-cleared window (same root) -> backfill: false\n  3) active thread, window has context -> backfill: false\n  4) buildThreadBackfillEntries (current post skipped):\n  [\n    {\n      \"sender\": \"alice\",\n      \"body\": \"kickoff question\",\n      \"messageId\": \"p1\"\n    },\n    {\n      \"sender\": \"bob\",\n      \"body\": \"an answer\",\n      \"messageId\": \"p2\"\n    }\n  ]\n  PROOF_RESULT: PASS\n  ```\n- **Observed result after fix:** the restart's first empty window backfills (`true`); the **same active thread's** next empty window — left behind by the kernel's post-turn clear — returns `false`, so it does NOT re-fetch or re-inject the server thread (the P1 regression is gone); an active thread that still has in-memory context returns `false`; and `buildThreadBackfillEntries` returns the two prior posts in order with resolved sender labels, correctly skipping the current mention (`p3`). The harness asserts all four and prints `PROOF_RESULT: PASS`.\n- **What was not tested:** a fully live Mattermost server HTTP round-trip + the monitor's inbound integration end-to-end. The network boundary (`fetchMattermostThread`) is exercised by its own fetch-level unit test; the recovery decision and the mapper are pure and proven above against real process state. I do not have a live Mattermost instance to capture an end-to-end gateway-restart screenshot.\n\n## Addressing the review P1s\n\n- **Gate backfill on recovery, not empty window** — done; first-sighting-per-process gate replaces the bare empty-window condition.\n- **Regression coverage for active thread + cleared window not rehydrating** — added (unit test `does NOT rehydrate an active thread whose window the kernel cleared post-turn`, 12/12 passing) and proven live above.\n- **Awaited-REST-on-ordinary-replies risk** — eliminated; the fetch can fire at most once per root per process lifetime, never on normal follow-ups.\n",
+        "branch": "fix/93204-mattermost-thread-backfill",
+        "head_sha": "025dcb172f1dfbdac29eefe39e6fe1c6e35549ae",
+        "author": "bartok9",
+        "labels": [
+          "channel: mattermost",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/mattermost/src/mattermost/client.ts",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/mattermost/src/mattermost/monitor.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/mattermost/src/mattermost/thread-backfill.test.ts",
+            "additions": 204,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/mattermost/src/mattermost/thread-backfill.ts",
+            "additions": 98,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 390,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93234",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93234.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 85,
+          "gatingTotal": 80,
+          "counts": {
+            "SUCCESS": 59,
+            "SKIPPED": 25,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1971,
+    "total_ms": 2705,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 540
+        "ms": 428
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1918
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -93,11 +272,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1418
+        "ms": 333
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
