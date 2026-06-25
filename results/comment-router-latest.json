@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T06:36:01.423Z",
+  "generated_at": "2026-06-25T06:36:34.519Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T03:36:00.772Z",
+  "since": "2026-06-25T03:36:32.627Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    96683
+    96681
   ],
   "comment_ids": [
-    4796515309
+    4796526459
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4796526718,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96683:4796515309:2026-06-25T06:33:36Z:re_review",
-      "comment_id": "4796515309",
-      "comment_version_key": "4796515309:2026-06-25T06:33:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96683#issuecomment-4796515309",
+      "idempotency_key": "comment-router:openclaw/openclaw:96681:4796526459:2026-06-25T06:35:31Z:re_review",
+      "comment_id": "4796526459",
+      "comment_version_key": "4796526459:2026-06-25T06:35:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/issues/96681#issuecomment-4796526459",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96683,
-      "author": "zhangqueping",
-      "author_id": 3436352,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T06:33:36Z",
-      "comment_updated_at": "2026-06-25T06:33:36Z",
-      "status_comment_id": null,
+      "target_branch": "main",
+      "issue_number": 96681,
+      "author": "Hansen1018",
+      "author_id": 61605071,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-25T06:35:31Z",
+      "comment_updated_at": "2026-06-25T06:35:31Z",
+      "status_comment_id": 4796526718,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,26 +62,62 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-25T06:36:35.130Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 96681
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-25T06:36:35.953Z",
+          "response_comment_id": "4796526718",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "issue",
+        "state": "open",
+        "locked": false,
+        "title": "Duplicate reply: message-tool sends followed by short trailing acks (\"已发 #xxx\", \"Sent above\", \"核心回答如下\", \"OK\")",
+        "body": "## Summary\n\nWhen an agent uses the `message` tool (`action=send`) to deliver its main reply in a turn, models sometimes append a short trailing acknowledgement to their final reply — patterns like:\n\n- `已发`\n- `已发 #22141`\n- `已发, 不再追加`\n- `主回复已发 (#xxx)`\n- `核心回答如下`\n- `总结如下`\n- `Sent above`\n- `Sent #xxx`\n- `Sent. Replied in thread.`\n- `Done.`\n- `OK`\n- `Okay`\n- `Roger`\n- `Got it`\n- `OK, that's the fix.`\n\nThese acks carry no information beyond the message-tool send that already went out, but OpenClaw currently delivers them as a **second** visible message in the channel — a duplicate-reply failure mode.\n\n## Repro\n\n1. Send an inbound message that requires a non-trivial reply.\n2. Configure the agent to deliver the main reply via `message` tool (`action=send`).\n3. After the agent delivers, its final reply text contains a short meta-ack (varies by model + locale).\n4. The channel sees two messages: the main reply + the trailing ack.\n\nReproduced reliably with:\n- Telegram, Discord, Signal (any provider routed through `deliverOutboundPayloads`).\n- GPT-4o, Claude Sonnet, DeepSeek, MiniMax-M3 (no model-specific pattern — the behaviour is model-agnostic).\n- English and Chinese locales.\n\n## Root cause\n\nThe existing `filterMessagingToolDuplicates` only catches full-content duplicates via substring match with a 10-char minimum:\n\n```ts\nconst MIN_DUPLICATE_TEXT_LENGTH = 10;\n```\n\nShort meta-acks (e.g. `已发 #22141`, 9 chars) fall under this floor and pass through, ending up as a second visible message. The current dedupe is correct for \"is this a rephrasing of something I already sent\" but does not handle \"is this an agent ack of its own tool call\".\n\n## Proposed fix\n\nAdd a complementary filter `filterMessagingToolMetaCommentary` that recognises post-tool-send meta commentary by pattern (Chinese + English), with conservative bounds:\n\n- **Only fires when a message-tool send has already happened this turn** (`sentTexts.length > 0`). Agents without message-tool sends are unaffected.\n- Length-capped at 200 chars.\n- Anchored ack patterns + ≤ 20 chars trailing content.\n- Media payloads always preserved.\n\nThis preserves the existing dedup logic (which is correct for content duplicates) and adds a separate axis for \"agent ack of own tool call\" without overlap.\n\nPR: #96680\n\n## Impact\n\nAnyone running an agent that uses `message` tool to deliver replies sees duplicate messages in the channel after each non-trivial reply. The current workaround is per-agent prompting (\"respond with only NO_REPLY after message tool sends\"), which is fragile and model-dependent. Native dedupe fixes it once for all agents.",
+        "author": "Hansen1018",
+        "labels": [],
+        "cluster_id": null,
+        "job_path": null,
+        "open_prs": [
+          "#96680"
+        ],
+        "issue_implementation_cluster_id": "issue-openclaw-openclaw-96681",
+        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-96681.md",
+        "mode": "autonomous"
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2695,
+    "total_ms": 3726,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 639
+        "ms": 530
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 316
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 1036
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -93,11 +129,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2044
+        "ms": 1820
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
