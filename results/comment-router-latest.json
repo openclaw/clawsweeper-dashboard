@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T12:19:27.570Z",
+  "generated_at": "2026-06-25T12:19:31.193Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T09:19:27.299Z",
+  "since": "2026-06-25T09:19:29.437Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    96766
+    96684
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4799117973
+  ],
+  "status_comment_id": 4799118387,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,22 +31,226 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96684:4799117973:2026-06-25T12:18:27Z:re_review",
+      "comment_id": "4799117973",
+      "comment_version_key": "4799117973:2026-06-25T12:18:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96684#issuecomment-4799117973",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 96684,
+      "author": "wendy-chsy",
+      "author_id": 31603741,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-25T12:18:27Z",
+      "comment_updated_at": "2026-06-25T12:18:27Z",
+      "status_comment_id": 4799118387,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-25T12:19:31.857Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 96684
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-25T12:19:32.889Z",
+          "response_comment_id": "4799118387",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(heartbeat): remove static iteration cap in seekNextActivePhaseDueMs",
+        "body": "## What Problem This Solves\n\nFixes an issue where agents with sub-minute heartbeat intervals and active\nhours would permanently stop running heartbeats when the current time fell\noutside the active window — the static 10,080 iteration cap was calibrated\nfor 1-minute intervals and exhausted too early for shorter intervals.\n\n## Why This Change Was Made\n\n**Unified batched seek at >= 30 s step** with backward walk on\ninactive->active transitions:\n\n\\`\\`\\`ts\nconst MIN_SEEK_STEP_MS = 30_000;\nconst multiplier = Math.max(1, Math.ceil(MIN_SEEK_STEP_MS / intervalMs));\nconst batchStepMs = intervalMs * multiplier;\n// … backward walk on prevWasActive===false -> active transition\n\\`\\`\\`\n\n| intervalMs | multiplier | batchStepMs | max iterations | narrow windows |\n|---|---|---|---|---|\n| 60 s+ | 1 | ≤ 60 s | ≤ 10,080 | ✅ per-candidate |\n| 30 s | 1 | 30 s | 20,160 | ✅ per-candidate |\n| 59 s | 1 | 59 s | 10,251 | ✅ per-candidate |\n| 1 s | 30 | 30 s | 20,160 | ✅ 30 s < min window |\n| 500 ms | 60 | 30 s | 20,160 | ✅ backward walk |\n| 1 ms | 30,000 | 30 s | 20,160 | ✅ backward walk |\n\nMax **20,160** production \\`isWithinActiveHours\\` predicate calls\nregardless of intervalMs (~20–200 ms for Intl.DateTimeFormat per call).\n\n## User Impact\n\nUsers with sub-minute heartbeat intervals and active hours can correctly\nseek into the next active window. No impact on minute-or-larger intervals\n(multiplier = 1).\n\n## Evidence\n\n**Unit tests (19/19 pass):** 14 existing + 5 new\n- 30s / 09:00-17:00: finds 09:00 next day, phase-aligned\n- **59s / 1min narrow window (09:00-09:01)**: finds 09:00:43 (977 steps)\n- 500ms, startMs active: returns directly (no backward walk)\n- 500ms, inactive->active transition: backward walk finds 09:00:00\n- 1ms / never-active: bounded at 20,160 iter, sub-50ms\n\n**Real behavior proof (\\`node --import tsx\\`, 6 scenarios):**\n\\`\\`\\`\n=== seekNextActivePhaseDueMs v6 (30s unified batch, <= 20,160 calls) ===\n\n1. 30s, 09:00-17:00, start 17:00 -> 09:00:00 next day (active: true)\n2. 59s, 09:00-09:01 window, start 17:00 -> 09:00:43 (steps: 977)\n3. 7s, always-active, start 12:00 -> 12:00 (=startMs)\n4. 1s, never-active, start 12:00 -> 12:00 (elapsed: 0.6ms)\n5. computeNextHeartbeatPhaseDueMs (30s), now 10:00 -> 10:00:30\n6. Full-path: 30s, 20:00->09-17 active -> 09:00:15 next day (active: true)\n\\`\\`\\`\n",
+        "branch": "fix/heartbeat-remove-static-iteration-cap",
+        "head_sha": "a061f14933f8b0ff16bb0bdca112723ce3ae8fe7",
+        "author": "wendy-chsy",
+        "labels": [
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/infra/heartbeat-schedule.test.ts",
+            "additions": 121,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/heartbeat-schedule.ts",
+            "additions": 33,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 154,
+        "deletions": 10,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96684",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96684.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 90,
+          "gatingTotal": 85,
+          "counts": {
+            "IN_PROGRESS": 43,
+            "SUCCESS": 19,
+            "SKIPPED": 26,
+            "QUEUED": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:QUEUED",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:QUEUED",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 444,
+    "total_ms": 3991,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 259
+        "ms": 449
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1292
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +262,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 173
+        "ms": 2224
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
