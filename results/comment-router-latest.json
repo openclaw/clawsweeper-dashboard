@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T15:32:28.021Z",
+  "generated_at": "2026-06-25T15:32:54.738Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T12:32:27.645Z",
+  "since": "2026-06-25T12:32:53.107Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96820
+    93814
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 9,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,252 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93814:4724770542:2026-06-21T22:30:40Z:clawsweeper_needs_human",
+      "comment_id": "4724770542",
+      "comment_version_key": "4724770542:2026-06-21T22:30:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93814#issuecomment-4724770542",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93814,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-17T00:19:47Z",
+      "comment_updated_at": "2026-06-21T22:30:40Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] Human review is the next action because the remaining blocker is maintainer acceptance of the diagnostic export content/privacy change, not a mechanical code repair.; Cleared: The diff routes more legacy entries through the existing redacted, owner-approved trajectory export path and does not alter auth, dependencies, workflows, or secret handling. (sha=050fe83b9a71373c5e978ed51d689d3ffdb55e15)",
+      "review_summary": "The PR removes the timestamp requirement from trajectory session branch filtering and adds a regression test for timestamp-less legacy v1 session exports.\n\nPR surface: Source -2, Tests +35. Total +33 across 2 files.\n\nReproducibility: yes. Source inspection shows current main and v2026.6.9 synthesize ids for version < 2 entries and then filter out timestamp-less canonical entries before timestamp normalization can run; the PR body also supplies before/after exporter output for the same shape.",
+      "review_followup": "- [P2] Human review is the next action because the remaining blocker is maintainer acceptance of the diagnostic export content/privacy change, not a mechanical code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "050fe83b9a71373c5e978ed51d689d3ffdb55e15",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(trajectory): export legacy v1 sessions without entry timestamps",
+        "body": "## Summary\n\nExporting a trajectory bundle for an old (version 1) session produces an empty transcript. The CLI reports `Trajectory exported!` and writes a bundle whose `manifest.transcriptEventCount` is `0`, silently dropping every message in the session. This hits real users: `openclaw export-trajectory` / `/export-trajectory` run against any session file written before entry timestamps existed.\n\n## Root cause\n\n`readSessionBranch` filters session entries down to canonical transcript entries, but the filter also requires a present `timestamp`:\n\n```ts\n// before - src/trajectory/export.ts\nconst entries = fileEntries.filter(\n  (entry): entry is SessionEntry =>\n    entry.type !== \"session\" &&\n    isCanonicalSessionTranscriptEntry(entry) &&\n    typeof (entry as { id?: unknown }).id === \"string\" &&\n    (typeof (entry as { timestamp?: unknown }).timestamp === \"string\" ||\n      typeof (entry as { timestamp?: unknown }).timestamp === \"number\"),\n);\n```\n\nThe legacy migration `migrateLegacySessionEntries` synthesizes an `id` and `parentId` for every entry of a `version < 2` session, but it never synthesizes a `timestamp` (those logs predate entry timestamps). The downstream event builder already tolerates a missing timestamp: `buildTranscriptEvents` calls `normalizeTimestamp(entry.timestamp)`, which defaults an absent value to the epoch. That tolerance is dead code, because the filter strips the timestamp-less entries before they ever reach it. Result: every entry of a timestamp-less v1 session is filtered out and the bundle is empty.\n\n## Fix\n\nDrop the timestamp clause from the filter. Entry identity (`id`) plus `isCanonicalSessionTranscriptEntry` is what the branch walk needs; the timestamp is normalized later.\n\n```ts\n// after - src/trajectory/export.ts\nconst entries = fileEntries.filter(\n  (entry): entry is SessionEntry =>\n    entry.type !== \"session\" &&\n    isCanonicalSessionTranscriptEntry(entry) &&\n    typeof (entry as { id?: unknown }).id === \"string\",\n);\n```\n\n`normalizeTimestamp` (already in the event path) defaults a missing or non-finite timestamp to `new Date(0).toISOString()`, so v3 sessions with real timestamps are unaffected and v1 sessions now export with epoch-defaulted timestamps instead of vanishing.\n\n## Why this is the right boundary\n\n`readSessionBranch` is the single owner of which persisted entries enter the exported branch. The timestamp requirement contradicted the migration contract (v1 entries legitimately have no entry timestamp) and the normalization contract (the builder already defaults missing timestamps). Removing the clause makes those two contracts reachable instead of adding a second compensating path. No sibling surface re-derives this filter; runtime event ingestion is separate and uses its own `isRuntimeTrajectoryEvent` guard, which is unchanged.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/trajectory/export.test.ts` - full 24-test export suite green with the fix (23 existing + 1 new regression).\n- New test `exports the transcript for a legacy v1 session without entry timestamps` fails on pristine `main` (`transcriptEventCount` is `0`) and passes with the patch.\n- `node scripts/run-oxlint.mjs src/trajectory/export.ts src/trajectory/export.test.ts` clean.\n- `oxfmt --check` clean on both files.\n- `tsgo -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json` clean.\n\n## Real behavior proof\n\nBehavior addressed: trajectory export of a legacy v1 session (no entry timestamps) drops the entire transcript and reports `transcriptEventCount: 0`.\nReal environment tested: the real `exportTrajectoryBundle` runtime driven end to end over a v1 session JSONL (header `version: 1`, two timestamp-less message entries), on pristine `main` and on the patched tree with identical input.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/trajectory/export.test.ts -t \"legacy v1 session\"`.\nEvidence after fix:\n```\n# BEFORE (pristine main f94a2506d2)\nFAIL  exports the transcript for a legacy v1 session without entry timestamps\nexpected 0 to be 2 // manifest.transcriptEventCount\n\n# AFTER (this patch, identical input)\nPASS  exports the transcript for a legacy v1 session without entry timestamps\nmanifest.transcriptEventCount === 2; eventTypes === [\"user.message\",\"assistant.message\"]\n```\nObserved result after fix: the v1 session exports both messages; the bundle is no longer empty.\nWhat was not tested: did not run the full `pnpm check` / `pnpm build` (no dynamic-import or packaging surface touched); proof is the real `exportTrajectoryBundle` runtime over a synthesized v1 session file rather than a CLI invocation against an on-disk historical session.\n",
+        "branch": "fix/trajectory-export-legacy-v1-timestamp",
+        "head_sha": "5d619f9c81f3577da6406a756fd86cdbb9639de8",
+        "author": "yetval",
+        "labels": [
+          "size: XS",
+          "clawsweeper:automerge",
+          "clawsweeper:human-review",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 🚀 automerge armed",
+          "merge-risk: 🚨 other",
+          "clownfish:automerge"
+        ],
+        "files": [
+          {
+            "path": "src/trajectory/export.test.ts",
+            "additions": 35,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/trajectory/export.ts",
+            "additions": 1,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 36,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93814",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93814.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 90,
+          "gatingTotal": 85,
+          "counts": {
+            "SUCCESS": 56,
+            "SKIPPED": 26,
+            "IN_PROGRESS": 7,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:93814:4752363827:2026-06-19T14:23:00Z:re_review",
+      "comment_id": "4752363827",
+      "comment_version_key": "4752363827:2026-06-19T14:23:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93814#issuecomment-4752363827",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93814,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-19T14:23:00Z",
+      "comment_updated_at": "2026-06-19T14:23:00Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-run",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(trajectory): export legacy v1 sessions without entry timestamps",
+        "body": "## Summary\n\nExporting a trajectory bundle for an old (version 1) session produces an empty transcript. The CLI reports `Trajectory exported!` and writes a bundle whose `manifest.transcriptEventCount` is `0`, silently dropping every message in the session. This hits real users: `openclaw export-trajectory` / `/export-trajectory` run against any session file written before entry timestamps existed.\n\n## Root cause\n\n`readSessionBranch` filters session entries down to canonical transcript entries, but the filter also requires a present `timestamp`:\n\n```ts\n// before - src/trajectory/export.ts\nconst entries = fileEntries.filter(\n  (entry): entry is SessionEntry =>\n    entry.type !== \"session\" &&\n    isCanonicalSessionTranscriptEntry(entry) &&\n    typeof (entry as { id?: unknown }).id === \"string\" &&\n    (typeof (entry as { timestamp?: unknown }).timestamp === \"string\" ||\n      typeof (entry as { timestamp?: unknown }).timestamp === \"number\"),\n);\n```\n\nThe legacy migration `migrateLegacySessionEntries` synthesizes an `id` and `parentId` for every entry of a `version < 2` session, but it never synthesizes a `timestamp` (those logs predate entry timestamps). The downstream event builder already tolerates a missing timestamp: `buildTranscriptEvents` calls `normalizeTimestamp(entry.timestamp)`, which defaults an absent value to the epoch. That tolerance is dead code, because the filter strips the timestamp-less entries before they ever reach it. Result: every entry of a timestamp-less v1 session is filtered out and the bundle is empty.\n\n## Fix\n\nDrop the timestamp clause from the filter. Entry identity (`id`) plus `isCanonicalSessionTranscriptEntry` is what the branch walk needs; the timestamp is normalized later.\n\n```ts\n// after - src/trajectory/export.ts\nconst entries = fileEntries.filter(\n  (entry): entry is SessionEntry =>\n    entry.type !== \"session\" &&\n    isCanonicalSessionTranscriptEntry(entry) &&\n    typeof (entry as { id?: unknown }).id === \"string\",\n);\n```\n\n`normalizeTimestamp` (already in the event path) defaults a missing or non-finite timestamp to `new Date(0).toISOString()`, so v3 sessions with real timestamps are unaffected and v1 sessions now export with epoch-defaulted timestamps instead of vanishing.\n\n## Why this is the right boundary\n\n`readSessionBranch` is the single owner of which persisted entries enter the exported branch. The timestamp requirement contradicted the migration contract (v1 entries legitimately have no entry timestamp) and the normalization contract (the builder already defaults missing timestamps). Removing the clause makes those two contracts reachable instead of adding a second compensating path. No sibling surface re-derives this filter; runtime event ingestion is separate and uses its own `isRuntimeTrajectoryEvent` guard, which is unchanged.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/trajectory/export.test.ts` - full 24-test export suite green with the fix (23 existing + 1 new regression).\n- New test `exports the transcript for a legacy v1 session without entry timestamps` fails on pristine `main` (`transcriptEventCount` is `0`) and passes with the patch.\n- `node scripts/run-oxlint.mjs src/trajectory/export.ts src/trajectory/export.test.ts` clean.\n- `oxfmt --check` clean on both files.\n- `tsgo -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json` clean.\n\n## Real behavior proof\n\nBehavior addressed: trajectory export of a legacy v1 session (no entry timestamps) drops the entire transcript and reports `transcriptEventCount: 0`.\nReal environment tested: the real `exportTrajectoryBundle` runtime driven end to end over a v1 session JSONL (header `version: 1`, two timestamp-less message entries), on pristine `main` and on the patched tree with identical input.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/trajectory/export.test.ts -t \"legacy v1 session\"`.\nEvidence after fix:\n```\n# BEFORE (pristine main f94a2506d2)\nFAIL  exports the transcript for a legacy v1 session without entry timestamps\nexpected 0 to be 2 // manifest.transcriptEventCount\n\n# AFTER (this patch, identical input)\nPASS  exports the transcript for a legacy v1 session without entry timestamps\nmanifest.transcriptEventCount === 2; eventTypes === [\"user.message\",\"assistant.message\"]\n```\nObserved result after fix: the v1 session exports both messages; the bundle is no longer empty.\nWhat was not tested: did not run the full `pnpm check` / `pnpm build` (no dynamic-import or packaging surface touched); proof is the real `exportTrajectoryBundle` runtime over a synthesized v1 session file rather than a CLI invocation against an on-disk historical session.\n",
+        "branch": "fix/trajectory-export-legacy-v1-timestamp",
+        "head_sha": "5d619f9c81f3577da6406a756fd86cdbb9639de8",
+        "author": "yetval",
+        "labels": [
+          "size: XS",
+          "clawsweeper:automerge",
+          "clawsweeper:human-review",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 🚀 automerge armed",
+          "merge-risk: 🚨 other",
+          "clownfish:automerge"
+        ],
+        "files": [
+          {
+            "path": "src/trajectory/export.test.ts",
+            "additions": 35,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/trajectory/export.ts",
+            "additions": 1,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 36,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93814",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93814.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 90,
+          "gatingTotal": 85,
+          "counts": {
+            "SUCCESS": 56,
+            "SKIPPED": 26,
+            "IN_PROGRESS": 7,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 669,
+    "total_ms": 1865,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 365
+        "ms": 377
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1239
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +286,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 293
+        "ms": 234
       },
       {
         "name": "append_ledger",
