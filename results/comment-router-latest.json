@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T12:21:37.348Z",
+  "generated_at": "2026-06-25T12:21:46.573Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T09:21:34.361Z",
+  "since": "2026-06-25T09:21:43.557Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96768
+    96756
+  ],
+  "comment_ids": [
+    4799123156
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96768:4799039001:2026-06-25T12:21:29Z:clawsweeper_needs_human",
-      "comment_id": "4799039001",
-      "comment_version_key": "4799039001:2026-06-25T12:21:29Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96768#issuecomment-4799039001",
+      "idempotency_key": "comment-router:openclaw/openclaw:96756:4799123156:2026-06-25T12:19:08Z:re_review",
+      "comment_id": "4799123156",
+      "comment_version_key": "4799123156:2026-06-25T12:19:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96756#issuecomment-4799123156",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96768,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 96756,
+      "author": "jincheng-xydt",
+      "author_id": 267882353,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T12:08:46Z",
-      "comment_updated_at": "2026-06-25T12:21:29Z",
+      "comment_created_at": "2026-06-25T12:19:08Z",
+      "comment_updated_at": "2026-06-25T12:19:08Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -62,62 +65,57 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(runtime/proxy): bound streaming success-body SSE reads at 16 MiB",
-        "body": "## What Problem This Solves\n\n`src/agents/runtime/proxy.ts` (`streamProxy`, the internal proxy SSE parser) accumulates an unbounded SSE byte stream into a string buffer while waiting for `\\n` line delimiters. A hostile or malfunctioning proxy endpoint (including a MITM-able proxy or a hijacked self-hosted proxy server) can return a `Content-Length`-less SSE body that streams forever, exhausting process memory on a code path that runs for every proxied LLM streaming call.\n\nThis is the streaming-body analogue of the bounded-read sweep Alix-007 finished for non-streaming `response.json()`. Same 16 MiB cap, same helper-driven design, but on the chunk-by-chunk SSE path that the non-streaming sweep did not cover.\n\n## Changes\n\n- `src/agents/streaming-byte-guard.ts` (NEW, 87 lines, same file from #96701) — `createSseByteGuard` helper reused from the anthropic-transport-stream PR. Same minimal core-internal helper.\n- `src/agents/runtime/proxy.ts:200-207` — `streamProxy` wraps `response.body!.getReader()` in `createSseByteGuard` with `PROXY_STREAM_BODY_MAX_BYTES = 16 * 1024 * 1024`. The abort handler and finally block use `guard.cancel()` with `reader.cancel()` as a fallback for the code path before the guard is created.\n- `src/agents/runtime/proxy.test.ts` — inline test: hostile 1 MiB pull stream through `streamProxy`, asserts `errorMessage` matches overflow pattern, `cancel(reason)` was an `Error` instance, `pullCount` bounded to 17-20.\n\n## Real behavior proof\n\n- **Behavior addressed**: unbounded buffering of the runtime proxy `streamProxy` SSE read; after the fix the read is capped at 16 MiB and the stream is cancelled on overflow.\n- **Real environment tested**: a real `node:http` server bound to `127.0.0.1` returning a `Content-Length`-less 64 MiB body (4× the cap) chunk-by-chunk, plus a negative-control 1 MiB body, plus a happy-path body (2 events + terminal). Drives the production `streamProxy` over a real TCP socket. Node v22.22.0.\n- **Exact steps**: `node --import tsx _proof_proxy_stream.mts` (proof script kept local-only, not committed).\n- **Evidence after fix**:\n  ```\n  === runtime/proxy streamProxy success-body bounded read (cap=16777216, would-stream=67108864) ===\n\n  PASS  Proxy stream body bounded: rejected with \"Proxy stream body exceeded 16777216 bytes (received 16834186)\"; bytesSent=19923323 (< 67108864); server.aborted=true\n  PASS  negative control: small body fully drained (1 events); cap did not trigger\n  PASS  happy path: small valid proxy SSE response drained end-to-end (1 events); terminal=stop\n\n  === All runtime/proxy streamProxy bounded-read assertions passed ===\n  ```\n- **Observed result after fix**: `createSseByteGuard` cancelled the upstream `ReadableStreamDefaultReader` at ~16 MiB (well under 64 MiB). Server-side `socket.bytesWritten` observed at 19,923,323 — bounded, not drained. `cancel(reason)` received an `Error` instance.\n- **What was not tested**: live proxy server call (the proof exercises the same production helper against the same shape of attack the live endpoint could carry); cross-platform Node differences (Node 22 only, matches CI).\n\n## Out of scope (separate follow-ups)\n\n- `extensions/google/transport-stream.ts` and `extensions/ollama/src/{setup,stream}.ts` — need the helper promoted to a plugin-SDK subpath first (separate foundation PR).\n\n## Risk\n\n- **Low**: same 16 MiB cap already used by `readProviderJsonResponse` for non-streaming success bodies. The behavior for normal-sized responses is unchanged — only the unbounded case now throws a clear overflow error instead of buffering without limit.\n- **Cancel propagation**: `createSseByteGuard.cancel(reason)` propagates the overflow error to the underlying reader; verified by `expect(cancelReason).toBeInstanceOf(Error)` in the test.\n- **No SDK surface change**: helper is core-internal (`src/agents/streaming-byte-guard.ts`); no `package.json` export, no `scripts/lib/plugin-sdk-entrypoints.json` entry, no API-baseline regen needed.\n- **Reuses the helper from #96701**: same `createSseByteGuard` signature, same 16 MiB cap, same overflow-error shape. No new abstraction introduced.\n\n## Diff stats\n\n```\n3 files changed, 146 insertions(+), 2 deletions(-)\ncreate mode 100644 src/agents/streaming-byte-guard.ts\n```\n\nCode change (excluding the inline test file): **107 LoC** (87 helper + 20 source). Test additions: 44 LoC inline in existing describe block.\n",
-        "branch": "fix/runtime-proxy-stream-bound",
-        "head_sha": "7701903c8bf78c6fc98131b795f1468427f455d1",
-        "author": "wangmiao0668000666",
+        "title": "fix #72504: Feishu bot strips own <at> mention causing NO_REPLY in multi-bot groups",
+        "body": "## Summary\n\n- Problem: `normalizeMentions()` replaced the bot's own `<at>` tag with an empty string. In multi-bot groups where several bots are @mentioned together, each bot stripped its own mention, saw only other bots' tags, concluded it wasn't mentioned, and returned NO_REPLY (#72504).\n- Solution: when `botStripId` matches, replace with `@mentionName` instead of empty string. The bot still sees it was mentioned (as `@BotName`) without the self-referencing `<at>` tag.\n- What changed: `bot-content.ts` — one-line change: `\"\"` → `` `@${escapeName(mention.name)}` ``. Tests updated to verify mention preservation.\n- What did NOT change: normal user mentions still receive `<at>` tags. Fallback `@name` for mentions without `open_id` unchanged. No API/config/schema changes.\n\n## Maintainer checklist\n- Fix classification: Root-cause bug fix in Feishu bot content parsing\n- Maintainer-ready confidence: High — 11/11 tests pass\n\n## Real behavior proof\n\n**Behavior or issue addressed:**\nFeishu bot strips its own <at> mention from message content, causing NO_REPLY when multiple bots are @mentioned together.\n\n**Real environment tested:**\n- Platform: Linux x86_64\n- Node.js: v22.22.0\n- Runtime: Vitest v4.1.8\n- Branch: fix/feishu-at-mention-72504 (c9a366a30)\n\n**Exact steps or command run after the patch:**\n```\nnode scripts/run-vitest.mjs extensions/feishu/src/bot.stripBotMention.test.ts --reporter=verbose\n```\n\n**After-fix evidence:**\n```\n ✓ |extension-feishu| extensions/feishu/src/bot.stripBotMention.test.ts > normalizeMentions > preserves bot mention as @name in p2p so multi-bot groups see mention (#72504) 1ms\n ✓ |extension-feishu| extensions/feishu/src/bot.stripBotMention.test.ts > normalizeMentions > preserves bot mention as @name in group (#72504) 1ms\n ✓ |extension-feishu| extensions/feishu/src/bot.stripBotMention.test.ts > normalizeMentions > preserves bot mention as @name before slash commands in group (#72504) 1ms\n ✓ |extension-feishu| extensions/feishu/src/bot.stripBotMention.test.ts > normalizeMentions > preserves bot mention as @name while normalizing other mentions (#72504) 1ms\n ... (11/11 passed)\n```\n\n**Observed result after fix:**\n- Bot now sees `@Bot hello` instead of `hello` when @mentioned ✓\n- Other users still get `<at>` tags (no regression) ✓\n- Slash commands still work: `@Bot /model` → `@Bot /model` ✓\n- All 11 existing tests pass ✓\n\n**What was not tested:**\n- Live multi-bot Feishu group (requires real Feishu bot credentials)",
+        "branch": "fix/feishu-at-mention-72504",
+        "head_sha": "c9a366a304c500f0356b9506eea3218712e2c0b8",
+        "author": "jincheng-xydt",
         "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
+          "channel: feishu",
+          "size: XS",
           "P2",
-          "rating: 🐚 platinum hermit",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/runtime/proxy.test.ts",
-            "additions": 43,
-            "deletions": 0,
+            "path": "extensions/feishu/src/bot-content.ts",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/runtime/proxy.ts",
-            "additions": 16,
-            "deletions": 2,
+            "path": "extensions/feishu/src/bot.stripBotMention.test.ts",
+            "additions": 8,
+            "deletions": 8,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/streaming-byte-guard.ts",
-            "additions": 87,
-            "deletions": 0,
-            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 146,
-        "deletions": 2,
+        "changedFiles": 2,
+        "additions": 9,
+        "deletions": 9,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96768",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96768.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96756",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96756.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 93,
+          "gatingTotal": 88,
           "counts": {
-            "SUCCESS": 63,
-            "SKIPPED": 33,
+            "SUCCESS": 60,
+            "SKIPPED": 32,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -127,25 +125,25 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3356,
+    "total_ms": 3326,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 465
+        "ms": 662
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2503
+        "ms": 2340
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -157,7 +155,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 357
+        "ms": 310
       },
       {
         "name": "append_ledger",
