@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T15:21:31.912Z",
+  "generated_at": "2026-06-25T15:21:52.966Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T12:21:29.800Z",
+  "since": "2026-06-25T12:21:50.854Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96106
+    96247
   ],
-  "comment_ids": [
-    4800982817
-  ],
-  "status_comment_id": 4800983399,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 7,
+  "commands_seen": 4,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +31,145 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96106:4800982817:2026-06-25T15:20:10Z:re_review",
-      "comment_id": "4800982817",
-      "comment_version_key": "4800982817:2026-06-25T15:20:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96106#issuecomment-4800982817",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96247:4785834411:2026-06-25T02:02:43Z:clawsweeper_auto_repair",
+      "comment_id": "4785834411",
+      "comment_version_key": "4785834411:2026-06-25T02:02:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96247#issuecomment-4785834411",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 96106,
-      "author": "Marvinthebored",
-      "author_id": 262704729,
+      "target_branch": null,
+      "issue_number": 96247,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T15:20:10Z",
-      "comment_updated_at": "2026-06-25T15:20:10Z",
-      "status_comment_id": 4800983399,
+      "comment_created_at": "2026-06-24T04:19:56Z",
+      "comment_updated_at": "2026-06-25T02:02:43Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=79164513022a8b3e3ca7d11a712d413d12932c4d)",
+      "review_summary": "The PR changes outbound queue cleanup to mark mid-batch required sends with prior send evidence as `unknown_after_send` and adds unit plus SQLite queue integration coverage.\n\nPR surface: Source +34, Tests +197. Total +231 across 3 files.\n\nReproducibility: yes. at source level. Current `main` can leave a partial mid-batch send in queued recovery and still replays `unknown_after_send` after a `not_sent` reconciliation verdict; no live Telegram reproduction was run in this read-only review.",
+      "review_followup": "- [P2] Maintainer review is needed because the remaining blocker is the desired partial-batch recovery semantics, not a safe mechanical repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "79164513022a8b3e3ca7d11a712d413d12932c4d",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(outbound): advance queue entry to unknown_after_send on mid-batch failure with send evidence",
+        "body": "## What Problem This Solves\n\nWhen `deliverOutboundPayloadsWithQueueCleanup` catches a mid-batch error after an earlier payload already reached the channel, it calls `failDelivery`, leaving the queue entry in `recovery_state = send_attempt_started`. On the next Telegram reconnect, the drain replays this entry and the user receives a duplicate message.\n\n## Summary\n\nFixes the reconnect-drain duplicate-message path documented in #96242 (Path 2).\n\nWhen `deliverOutboundPayloadsWithQueueCleanup` catches a mid-batch error and `platformResultsReturned === false`, it currently calls `failDelivery`. This leaves the queue entry in `recovery_state = send_attempt_started`. On the next Telegram reconnect, `drainQueuedEntry` sees `send_attempt_started`, calls `reconcileUnknownQueuedDelivery`, and if the adapter misreports `not_sent` — the entry is replayed and the user receives a second copy.\n\nWhen an earlier payload in the batch already succeeded (`OutboundDeliveryError.sentBeforeError === true` and `platformSendStarted === true`), the correct state is `unknown_after_send`, not `send_attempt_started`. This PR advances the entry to `unknown_after_send` in that case, so drain routes it through `reconcileUnknownQueuedDelivery` with the correct semantics.\n\nWhen there is no send evidence (`sentBeforeError === false`), `failDelivery` remains correct — nothing reached the channel.\n\nAlso hoists `let platformSendStarted = false` from inside the `try` block to before it so it is visible in the catch scope.\n\n## Changes\n\n- `src/infra/outbound/deliver.ts`: catch block calls `markQueuedPlatformOutcomeUnknown` instead of `failDelivery` when send evidence exists; hoist `platformSendStarted` declaration\n- `src/infra/outbound/deliver.queue-integration.test.ts` (new): real-SQLite-queue integration tests for both the fix path and the no-send-evidence guard\n\n## Tests\n\n- Unit tests: 98/98 pass, including 2 new tests:\n  - `marks queued delivery as unknown-after-send (not failed) when a later payload fails after an earlier one succeeded` — regression test\n  - `still calls failDelivery when a payload fails before any send succeeded` — guard test (no send evidence → failDelivery unchanged)\n  - Negative control: reverting the patch makes the regression test fail\n- Integration tests (real SQLite queue, `deliver.queue-integration.test.ts`): 2/2\n  - Mid-batch failure with send evidence → `recovery_state=unknown_after_send`, `retryCount=0`\n  - No send evidence → `failDelivery`, `recovery_state=send_attempt_started`\n  - Negative control: reverting `deliver.ts` to pre-patch makes the mid-batch test fail with `recovery_state=send_attempt_started`\n\n## Evidence\n\nDeployed to a production gateway (macOS, launchd, Telegram channel). No new `send_attempt_started` strandings in 28h of observation. SQLite `delivery_queue_entries` showed 11 historical rows with `status=failed, recovery_state=send_attempt_started` accumulated before the patch; IDs match logged drain events one-to-one.\n\nLog evidence (2026-06-19, the drain that actually replayed):\n```\n16:43:50  Telegram reconnect drain: 1 pending message(s) matched\n16:43:50  telegram outbound send ok  messageId=1286\n16:43:51  telegram outbound send ok  messageId=1287\n16:43:52  telegram outbound send ok  messageId=1288\n16:43:53  telegram outbound send ok  messageId=1289\n16:43:53  [WARN] failed to mirror outbound delivery; session file changed ...\n```\n4 messages replayed from a single stranded entry.\n\n## Scope\n\nThis PR covers **Path 2 only** (queued mid-batch failure → drain replay). The other paths documented in #96242 are independent:\n- Path 1 (announce retry): tracked in #92274\n- Paths 3–4 (suppression gate misses yield-time and directive delivery): require changes to `hasCommittedMessagingToolDeliveryEvidence` — separate fix\n\n## References\n\n- Full investigation: https://github.com/rosenlo/openclaw-audit/blob/main/docs/openclaw-duplicate-message-investigation.md\n\nRefs #96242 — does not close; Path 2 only. Paths 1, 3, and 4 are independent and remain tracked under #96242 (see Scope above).\n\n",
+        "branch": "fix/delivery-ack-on-send-evidence-v2",
+        "head_sha": "6c65aa5eb52a6e17a2d08d9f0fac2c1a5bf8e135",
+        "author": "rosenlo",
+        "labels": [
+          "size: M",
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/infra/outbound/deliver.queue-integration.test.ts",
+            "additions": 109,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/outbound/deliver.test.ts",
+            "additions": 45,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/deliver.ts",
+            "additions": 24,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/delivery-queue-recovery.ts",
+            "additions": 9,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/delivery-queue.recovery.test.ts",
+            "additions": 8,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 195,
+        "deletions": 24,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96247",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96247.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 89,
+          "gatingTotal": 84,
+          "counts": {
+            "IN_PROGRESS": 6,
+            "SUCCESS": 58,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require an open issue or PR"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96247:4795123590:2026-06-25T01:49:52Z:re_review",
+      "comment_id": "4795123590",
+      "comment_version_key": "4795123590:2026-06-25T01:49:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96247#issuecomment-4795123590",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96247,
+      "author": "rosenlo",
+      "author_id": 18186886,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T01:49:52Z",
+      "comment_updated_at": "2026-06-25T01:49:52Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,260 +186,276 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-25T15:21:33.138Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96106
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-25T15:21:34.634Z",
-          "response_comment_id": "4800983399",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(anthropic): surface reasoning and pre-tool commentary on Discord",
-        "body": "> **Current revision (head `b078781489`) — review-responded & Discord-scoped.** Addresses the ClawSweeper findings without changing any other channel:\n> - Commentary **and** thinking progress now default **off** (explicit opt-in); `progress.thinking` is contract-wired into the type, zod schema, **and** the generated channel-config metadata (validates at config-load).\n> - Message-tool-only reasoning-privacy invariant **restored** (trailing reasoning suppressed uniformly); opaque tool-call id keying restored.\n> - The `🧠`/`💬` lane markers and the thinking gate are now **Discord-scoped opt-in compositor params** — Telegram, Mattermost and every other progress-mode channel render exactly as on `main`. This PR touches no other channel.\n> - Verified live on Discord (`anthropic/claude-sonnet-4-6`), plain (`_p_`) + verbose/reasoning (`_rv_`). See the [review-response comment](https://github.com/openclaw/openclaw/pull/96106#issuecomment-4797749572) for the per-finding walkthrough.\n\n---\n\n## What Problem This Solves\n\nOn Discord, Anthropic models' **reasoning** (🧠) and **pre-tool commentary** (💬) don't surface correctly alongside tool calls:\n\n- In **plain mode** (reasoning off + verbose off) they were dropped entirely — the model *generates* them, but they never reached the streaming progress draft or the collapse-summary counters (the bar showed `💬 0 · 🧠 0` even though the content existed in the session transcript).\n- They didn't **interleave** with tool calls in arrival order — a multi-step turn collapsed multiple notes/thoughts onto a single line (edit-in-place) instead of showing `🧠 → 💬 → 🛠️ → 💬 → 🛠️` as the turn actually unfolded.\n\n## Why This Change Was Made\n\n`main` already renders reasoning/commentary lanes via the shared progress-draft compositor, but the Anthropic embedded path had three gaps, plus two delivery/counting gates that suppressed the lanes outside the narrow `stream`/`verbose` cases:\n\n1. Anthropic tool-turn narration isn't tagged as commentary, so it's never recognized/routed.\n2. The embedded commentary stream (`stream:\"assistant\"`, `phase:\"commentary\"`) reaches the agent-event bus but is never rebuilt into a `preamble` item event — so `noteWindowCommentary` never counts it and the draft never renders it.\n3. Window thinking was gated on `reasoningMode === \"stream\"`, so plain mode (reasoning *off*) dropped reasoning from the window draft and counters. Window thinking is *presentation* — it should stream for any mode except `\"on\"` (which uses durable 🧠 persistence instead).\n\nThis wires the Anthropic embedded path through `main`'s existing lane rendering — no new render surface.\n\n## User Impact\n\nAcross **plain / verbose / reasoning** modes on Discord, Anthropic turns now surface their reasoning and pre-tool commentary, **interleaved with tool calls in arrival order**, and the collapse-summary bar counts all three lanes (`🧠 N thoughts · 💬 N notes · 🛠️ N tool calls`). No config changes; no new render surface.\n\n## Evidence\n\nLive, on a build carrying these commits (Discord, `anthropic/claude-sonnet-4-6`), verified by reading the bot's actual channel messages:\n\n**Plain mode (reasoning off + verbose off):**\n- Streaming draft: `🧠 _…reasoning…_ → 💬 _First, the time:_ → 🛠️ date → 💬 _Next, the two largest files — sorting by size:_ → 🛠️ list files` — reasoning + commentary **interleaved with tools in arrival order**.\n- Collapse bar: `🧠 1 thought · 💬 3 notes · 🛠️ 4 tool calls · ⏱️ 32s` — all three lanes counted (was `💬 0 · 🧠 0` before the fix).\n\n**Verbose + reasoning mode:** commentary renders as durable messages interleaved with tools: `💬 → 🛠️ → 💬 → 🛠️ → 💬 → 🛠️`. No regression.\n\n**After-fix evidence (plain mode, reasoning off + verbose off):**\n\nStreaming draft — reasoning + commentary interleaved with the tool in arrival order:\n\n![plain streaming interleave](https://raw.githubusercontent.com/Marvinthebored/openclaw/f7aaac7bbff42c90878a626828ce2b004f90b50e/pr-proof/96106/96106-plain-streaming-interleave.png)\n\nCollapse summary — all three lanes counted:\n\n![plain collapse counts](https://raw.githubusercontent.com/Marvinthebored/openclaw/f7aaac7bbff42c90878a626828ce2b004f90b50e/pr-proof/96106/96106-plain-collapse-counts.png)\n\n\n**Persistent (verbose `_rv_`) mode (reasoning on + verbose on):** reasoning + commentary render as durable messages interleaved with tools in arrival order — the first thought surfaces as a 🧠 blockquote before the tool:\n\n![rv persistent interleave](https://raw.githubusercontent.com/Marvinthebored/openclaw/22439bc71b08fd485de9ec0bac89cbb916275831/pr-proof/96106/96106-rv-persistent-interleave.png)\n\nValidation: `tsgo` (core + test-types) pass; lane suites green (`message-handler.process.test.ts`, `embedded-agent-subscribe.handlers.messages.test.ts`, `progress-draft-compositor.test.ts` including the `\"interleaves reasoning bursts with tool calls in arrival order\"` assertion); `build-all` exit 0.\n\n## Linked context\n\n- **Fixes #96079.**\n- **Related #89473** (per-channel reasoning classification umbrella — the Discord/Anthropic sibling).\n\n\n",
-        "branch": "pr/anthropic-min",
-        "head_sha": "b9bb04e715b536baf8ba504f093becbcd98db7c1",
-        "author": "marvinthebored",
+        "title": "fix(outbound): advance queue entry to unknown_after_send on mid-batch failure with send evidence",
+        "body": "## What Problem This Solves\n\nWhen `deliverOutboundPayloadsWithQueueCleanup` catches a mid-batch error after an earlier payload already reached the channel, it calls `failDelivery`, leaving the queue entry in `recovery_state = send_attempt_started`. On the next Telegram reconnect, the drain replays this entry and the user receives a duplicate message.\n\n## Summary\n\nFixes the reconnect-drain duplicate-message path documented in #96242 (Path 2).\n\nWhen `deliverOutboundPayloadsWithQueueCleanup` catches a mid-batch error and `platformResultsReturned === false`, it currently calls `failDelivery`. This leaves the queue entry in `recovery_state = send_attempt_started`. On the next Telegram reconnect, `drainQueuedEntry` sees `send_attempt_started`, calls `reconcileUnknownQueuedDelivery`, and if the adapter misreports `not_sent` — the entry is replayed and the user receives a second copy.\n\nWhen an earlier payload in the batch already succeeded (`OutboundDeliveryError.sentBeforeError === true` and `platformSendStarted === true`), the correct state is `unknown_after_send`, not `send_attempt_started`. This PR advances the entry to `unknown_after_send` in that case, so drain routes it through `reconcileUnknownQueuedDelivery` with the correct semantics.\n\nWhen there is no send evidence (`sentBeforeError === false`), `failDelivery` remains correct — nothing reached the channel.\n\nAlso hoists `let platformSendStarted = false` from inside the `try` block to before it so it is visible in the catch scope.\n\n## Changes\n\n- `src/infra/outbound/deliver.ts`: catch block calls `markQueuedPlatformOutcomeUnknown` instead of `failDelivery` when send evidence exists; hoist `platformSendStarted` declaration\n- `src/infra/outbound/deliver.queue-integration.test.ts` (new): real-SQLite-queue integration tests for both the fix path and the no-send-evidence guard\n\n## Tests\n\n- Unit tests: 98/98 pass, including 2 new tests:\n  - `marks queued delivery as unknown-after-send (not failed) when a later payload fails after an earlier one succeeded` — regression test\n  - `still calls failDelivery when a payload fails before any send succeeded` — guard test (no send evidence → failDelivery unchanged)\n  - Negative control: reverting the patch makes the regression test fail\n- Integration tests (real SQLite queue, `deliver.queue-integration.test.ts`): 2/2\n  - Mid-batch failure with send evidence → `recovery_state=unknown_after_send`, `retryCount=0`\n  - No send evidence → `failDelivery`, `recovery_state=send_attempt_started`\n  - Negative control: reverting `deliver.ts` to pre-patch makes the mid-batch test fail with `recovery_state=send_attempt_started`\n\n## Evidence\n\nDeployed to a production gateway (macOS, launchd, Telegram channel). No new `send_attempt_started` strandings in 28h of observation. SQLite `delivery_queue_entries` showed 11 historical rows with `status=failed, recovery_state=send_attempt_started` accumulated before the patch; IDs match logged drain events one-to-one.\n\nLog evidence (2026-06-19, the drain that actually replayed):\n```\n16:43:50  Telegram reconnect drain: 1 pending message(s) matched\n16:43:50  telegram outbound send ok  messageId=1286\n16:43:51  telegram outbound send ok  messageId=1287\n16:43:52  telegram outbound send ok  messageId=1288\n16:43:53  telegram outbound send ok  messageId=1289\n16:43:53  [WARN] failed to mirror outbound delivery; session file changed ...\n```\n4 messages replayed from a single stranded entry.\n\n## Scope\n\nThis PR covers **Path 2 only** (queued mid-batch failure → drain replay). The other paths documented in #96242 are independent:\n- Path 1 (announce retry): tracked in #92274\n- Paths 3–4 (suppression gate misses yield-time and directive delivery): require changes to `hasCommittedMessagingToolDeliveryEvidence` — separate fix\n\n## References\n\n- Full investigation: https://github.com/rosenlo/openclaw-audit/blob/main/docs/openclaw-duplicate-message-investigation.md\n\nRefs #96242 — does not close; Path 2 only. Paths 1, 3, and 4 are independent and remain tracked under #96242 (see Scope above).\n\n",
+        "branch": "fix/delivery-ack-on-send-evidence-v2",
+        "head_sha": "6c65aa5eb52a6e17a2d08d9f0fac2c1a5bf8e135",
+        "author": "rosenlo",
         "labels": [
-          "docs",
-          "channel: discord",
-          "scripts",
-          "agents",
-          "size: XL",
+          "size: M",
           "proof: sufficient",
           "P1",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 security-boundary",
-          "status: ⏳ waiting on author",
-          "proof: 📸 screenshot"
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "docs/.generated/config-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/concepts/streaming.md",
-            "additions": 19,
+            "path": "src/infra/outbound/deliver.queue-integration.test.ts",
+            "additions": 109,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "extensions/discord/src/monitor/message-handler.draft-preview.ts",
-            "additions": 20,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-handler.process.test.ts",
-            "additions": 206,
-            "deletions": 149,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-handler.process.ts",
-            "additions": 213,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/plugin-sdk-surface-report.mjs",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/anthropic-transport-stream.ts",
-            "additions": 22,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 1,
+            "path": "src/infra/outbound/deliver.test.ts",
+            "additions": 45,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 1,
-            "deletions": 0,
+            "path": "src/infra/outbound/deliver.ts",
+            "additions": 24,
+            "deletions": 6,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/params.ts",
-            "additions": 1,
-            "deletions": 0,
+            "path": "src/infra/outbound/delivery-queue-recovery.ts",
+            "additions": 9,
+            "deletions": 5,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-subscribe.handlers.messages.test.ts",
-            "additions": 103,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.handlers.messages.ts",
-            "additions": 88,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.subscribeembeddedagentsession.test.ts",
-            "additions": 61,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.ts",
-            "additions": 20,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.types.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-utils.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/transport-stream-shared.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/get-reply-options.types.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 42,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 16,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-delivery.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/progress-draft-compositor.test.ts",
-            "additions": 88,
-            "deletions": 131,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/progress-draft-compositor.ts",
-            "additions": 57,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/streaming.test.ts",
-            "additions": 44,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/streaming.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/bundled-channel-config-metadata.generated.ts",
-            "additions": 18,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.discord.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.providers-core.ts",
-            "additions": 16,
-            "deletions": 1,
+            "path": "src/infra/outbound/delivery-queue.recovery.test.ts",
+            "additions": 8,
+            "deletions": 13,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 28,
-        "additions": 1098,
-        "deletions": 383,
+        "changedFiles": 5,
+        "additions": 195,
+        "deletions": 24,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96106",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96106.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96247",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96247.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 11,
-          "gatingTotal": 6,
+          "total": 89,
+          "gatingTotal": 84,
           "counts": {
-            "SUCCESS": 8,
-            "SKIPPED": 3
+            "IN_PROGRESS": 6,
+            "SUCCESS": 58,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96247:4785562606:2026-06-24T03:18:15Z:re_review",
+      "comment_id": "4785562606",
+      "comment_version_key": "4785562606:2026-06-24T03:18:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96247#issuecomment-4785562606",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96247,
+      "author": "rosenlo",
+      "author_id": 18186886,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T03:18:15Z",
+      "comment_updated_at": "2026-06-24T03:18:15Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96247:4785487532:2026-06-24T03:00:06Z:freeform_assist",
+      "comment_id": "4785487532",
+      "comment_version_key": "4785487532:2026-06-24T03:00:06Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96247#issuecomment-4785487532",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96247,
+      "author": "rosenlo",
+      "author_id": 18186886,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T03:00:06Z",
+      "comment_updated_at": "2026-06-24T03:00:06Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "please review",
+      "intent": "freeform_assist",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "please review",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(outbound): advance queue entry to unknown_after_send on mid-batch failure with send evidence",
+        "body": "## What Problem This Solves\n\nWhen `deliverOutboundPayloadsWithQueueCleanup` catches a mid-batch error after an earlier payload already reached the channel, it calls `failDelivery`, leaving the queue entry in `recovery_state = send_attempt_started`. On the next Telegram reconnect, the drain replays this entry and the user receives a duplicate message.\n\n## Summary\n\nFixes the reconnect-drain duplicate-message path documented in #96242 (Path 2).\n\nWhen `deliverOutboundPayloadsWithQueueCleanup` catches a mid-batch error and `platformResultsReturned === false`, it currently calls `failDelivery`. This leaves the queue entry in `recovery_state = send_attempt_started`. On the next Telegram reconnect, `drainQueuedEntry` sees `send_attempt_started`, calls `reconcileUnknownQueuedDelivery`, and if the adapter misreports `not_sent` — the entry is replayed and the user receives a second copy.\n\nWhen an earlier payload in the batch already succeeded (`OutboundDeliveryError.sentBeforeError === true` and `platformSendStarted === true`), the correct state is `unknown_after_send`, not `send_attempt_started`. This PR advances the entry to `unknown_after_send` in that case, so drain routes it through `reconcileUnknownQueuedDelivery` with the correct semantics.\n\nWhen there is no send evidence (`sentBeforeError === false`), `failDelivery` remains correct — nothing reached the channel.\n\nAlso hoists `let platformSendStarted = false` from inside the `try` block to before it so it is visible in the catch scope.\n\n## Changes\n\n- `src/infra/outbound/deliver.ts`: catch block calls `markQueuedPlatformOutcomeUnknown` instead of `failDelivery` when send evidence exists; hoist `platformSendStarted` declaration\n- `src/infra/outbound/deliver.queue-integration.test.ts` (new): real-SQLite-queue integration tests for both the fix path and the no-send-evidence guard\n\n## Tests\n\n- Unit tests: 98/98 pass, including 2 new tests:\n  - `marks queued delivery as unknown-after-send (not failed) when a later payload fails after an earlier one succeeded` — regression test\n  - `still calls failDelivery when a payload fails before any send succeeded` — guard test (no send evidence → failDelivery unchanged)\n  - Negative control: reverting the patch makes the regression test fail\n- Integration tests (real SQLite queue, `deliver.queue-integration.test.ts`): 2/2\n  - Mid-batch failure with send evidence → `recovery_state=unknown_after_send`, `retryCount=0`\n  - No send evidence → `failDelivery`, `recovery_state=send_attempt_started`\n  - Negative control: reverting `deliver.ts` to pre-patch makes the mid-batch test fail with `recovery_state=send_attempt_started`\n\n## Evidence\n\nDeployed to a production gateway (macOS, launchd, Telegram channel). No new `send_attempt_started` strandings in 28h of observation. SQLite `delivery_queue_entries` showed 11 historical rows with `status=failed, recovery_state=send_attempt_started` accumulated before the patch; IDs match logged drain events one-to-one.\n\nLog evidence (2026-06-19, the drain that actually replayed):\n```\n16:43:50  Telegram reconnect drain: 1 pending message(s) matched\n16:43:50  telegram outbound send ok  messageId=1286\n16:43:51  telegram outbound send ok  messageId=1287\n16:43:52  telegram outbound send ok  messageId=1288\n16:43:53  telegram outbound send ok  messageId=1289\n16:43:53  [WARN] failed to mirror outbound delivery; session file changed ...\n```\n4 messages replayed from a single stranded entry.\n\n## Scope\n\nThis PR covers **Path 2 only** (queued mid-batch failure → drain replay). The other paths documented in #96242 are independent:\n- Path 1 (announce retry): tracked in #92274\n- Paths 3–4 (suppression gate misses yield-time and directive delivery): require changes to `hasCommittedMessagingToolDeliveryEvidence` — separate fix\n\n## References\n\n- Full investigation: https://github.com/rosenlo/openclaw-audit/blob/main/docs/openclaw-duplicate-message-investigation.md\n\nRefs #96242 — does not close; Path 2 only. Paths 1, 3, and 4 are independent and remain tracked under #96242 (see Scope above).\n\n",
+        "branch": "fix/delivery-ack-on-send-evidence-v2",
+        "head_sha": "6c65aa5eb52a6e17a2d08d9f0fac2c1a5bf8e135",
+        "author": "rosenlo",
+        "labels": [
+          "size: M",
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/infra/outbound/deliver.queue-integration.test.ts",
+            "additions": 109,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/outbound/deliver.test.ts",
+            "additions": 45,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/deliver.ts",
+            "additions": 24,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/delivery-queue-recovery.ts",
+            "additions": 9,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/delivery-queue.recovery.test.ts",
+            "additions": 8,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 195,
+        "deletions": 24,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96247",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96247.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 89,
+          "gatingTotal": 84,
+          "counts": {
+            "IN_PROGRESS": 6,
+            "SUCCESS": 58,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5698,
+    "total_ms": 2855,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 720
+        "ms": 499
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1377
+        "ms": 1596
       },
       {
         "name": "classify_comment_commands",
@@ -331,11 +471,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3575
+        "ms": 732
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
