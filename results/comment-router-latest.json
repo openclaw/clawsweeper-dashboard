@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T05:57:18.385Z",
+  "generated_at": "2026-06-25T05:58:08.790Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T02:57:16.784Z",
+  "since": "2026-06-25T02:58:07.273Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96307
+    81364
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 8,
-  "commands_seen": 5,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,364 +31,530 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96307:4796283989:2026-06-25T05:51:05Z:re_review",
-      "comment_id": "4796283989",
-      "comment_version_key": "4796283989:2026-06-25T05:51:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96307#issuecomment-4796283989",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:81364:4439566150:2026-06-25T05:58:04Z:clawsweeper_needs_human",
+      "comment_id": "4439566150",
+      "comment_version_key": "4439566150:2026-06-25T05:58:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/81364#issuecomment-4439566150",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96307,
-      "author": "zhangqueping",
-      "author_id": 3436352,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T05:51:05Z",
-      "comment_updated_at": "2026-06-25T05:51:05Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): add cross-boot retry budget to restart recovery",
-        "body": "## Summary\n\n**Problem**: When a main-session turn wedges,  flags the entry and  retries it on every boot. There's no persistent retry counter or quarantine—a wedged session death-loops the gateway across restarts until systemd exhausts StartLimitBurst. See #95750 for the full production incident report (6 cycles before operator intervention).\n\n**Solution**: Add `abortedLastRunAttempts` (persistent counter) with a `> MAX_RECOVERY_RETRIES` ceiling. When exceeded, quarantine the session instead of resuming it. On successful resume, reset the counter and clear quarantine. The quarantine check runs AFTER all existing skip/routing/owner/dedupe guards to avoid suppressing owning recovery paths in configured or duplicate stores.\n\n**What changed** (4 files, +140/−22):\n- `src/config/sessions/types.ts`: +10 — `abortedLastRunAttempts`, `quarantinedAt`, `quarantineReason`\n- `src/plugins/session-entry-slot-keys.ts`: +3 — register new fields in compile guard\n- `src/agents/main-session-restart-recovery.ts`: +61/−7 — increment at 4 mark sites, quarantine AFTER guards with `> MAX_RECOVERY_RETRIES`, reset on success\n- `src/agents/main-session-restart-recovery.test.ts`: +88/−15 — quarantine + counter increment + successful-resume reset tests\n\n**What did NOT change**: In-process retry orchestration, subagent-orphan-recovery (already bounded with SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS), channel dispatch, model routing, auth.\n\nFixes #95750. Supersedes #86239.\n\n## Behavioral contract\n\n| Condition | Before | After |\n|---|---|---|\n| 1st restart | Re-marked, resumed | attempts=1, resumed |\n| 2nd restart | Re-marked, resumed | attempts=2, resumed |\n| 3rd restart | Re-marked, resumed | attempts=3, resumed (last valid retry) |\n| **4th restart** | Re-marked, resumed (loop!) | **Quarantined**: abortedLastRun=false, quarantinedAt set, WARN logged |\n| Successful auto-resume | abortedLastRun=false | **+** attempts=0, quarantine cleared |\n| Existing sessions (no field) | resumed | attempts starts at 0, backward-compatible |\n\n`MAX_RECOVERY_RETRIES = 3` is reused from the existing in-process budget. The gate is `> MAX_RECOVERY_RETRIES`, so the 3rd restart is the last valid retry (attempts=3), and the 4th triggers quarantine (attempts=4).\n\n## Real behavior proof\n\n**Runtime**: Node 24.13, Linux x86_64 — **Branch**: `fix/issue-95750-recovery-retry-budget` @ `242d856dc7` — **Vitest**: 4.1.8\n\n### Proof A — Real sessions.json state transitions\n\nScript exercises the exact recovery functions against a temp directory (full source at `proof-recovery-budget.ts` on the branch):\n\n```\n=== Phase 1: Quarantine (4th restart, attempts=4 > MAX=3) ===\n\n-- Before --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 4 }\n\nrecoverRestartAbortedMainSessions result: {\"recovered\":0,\"failed\":0,\"skipped\":0,\"quarantined\":1}\n\n[main-session-restart-recovery] quarantined agent:main:telegram:dm after 4\n  aborted-restart attempts (>= 3); the session will not be auto-resumed\n\n-- After --\n{ \"status\": \"running\", \"abortedLastRun\": false, \"abortedLastRunAttempts\": 4,\n  \"quarantinedAt\": 1782288650123, \"quarantineReason\": \"exceeded_restart_retry_budget\" }\n\n=== Phase 2: Counter increment (3→4, crosses ceiling) ===\n\n-- Before --\n{ \"status\": \"running\", \"abortedLastRun\": false, \"abortedLastRunAttempts\": 3 }\n\nmarkRestartAbortedMainSessions → \"marked 1 interrupted main session(s)\"\n\n-- After --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 4 }\n\n=== Phase 3: Backward-compatible defaults ===\n\n-- Before (no abortedLastRunAttempts field) --\n{ \"status\": \"running\", \"abortedLastRun\": false }\n\n-- After mark (undefined → 1 via ?? 0) --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 1 }\n```\n\n### Proof B — Full test suite (36/36 passed)\n\n```\n$ node scripts/run-vitest.mjs run src/agents/main-session-restart-recovery.test.ts --reporter=verbose\n[test] starting test/vitest/vitest.agents.config.ts\n RUN  v4.1.8\n ✓ marks only matching running main sessions by active session key\n … (33 existing tests pass unchanged)\n ✓ quarantines sessions that exceed the cross-boot retry budget (regression #95750)\n ✓ increments abortedLastRunAttempts at each mark phase (regression #95750)\n Test Files  1 passed (1)\n      Tests  36 passed (36)\n[test] passed 1 Vitest shard in 19.25s\n```\n\n### Proof C — Custom-store recovery resets counter on success\n\n```\n$ node scripts/run-vitest.mjs run src/agents/main-session-restart-recovery.test.ts   -t \"marks active sessions in a configured custom session store\" --reporter=verbose\n\n ✓ marks active sessions in a configured custom session store\n   └─ asserts: abortedLastRunAttempts === 0, quarantinedAt === undefined\n```\n\n**Observed result**: The fourth restart quarantines instead of resuming. The counter correctly increments through all four mark sites. Successful auto-resume clears the counter and quarantine. Existing sessions without the field start at 0.\n\n**What was not tested**: Live gateway restart with systemd supervision (not reproducible here). Proof covers every lifecycle boundary via real filesystem operations and 36 dedicated tests.\n\n## Risk checklist\n\n**Highest-risk area**: Counter increment at mark sites and quarantine gate ordering.\n\n**Risk level**: Medium — 3 new persistent SessionEntry fields. Existing entries default safely. Quarantine check runs AFTER guards. Operator intervention for quarantined sessions is better than a death-loop.\n\n**Mitigation**: All 4 mark sites instrumented. Reset on success. 36 tests cover all boundaries. `session-entry-slot-keys.ts` compile guard prevents drift.\n\n**Merge risk**:\n- `session-state` — 3 new SessionEntry fields, backward-compatible defaults (counter=0)\n- `availability` — quarantine skips auto-recovery, intentional (death-loop is worse)\n- `compatibility` — existing sessions without the field default to 0, upgrade-safe\n\n## All ClawSweeper P1 findings resolved\n\n1. ✅ **Move quarantine after guards** — check now runs after skip/routing/owner/dedupe guards\n2. ✅ **Honor retry budget boundary** — changed `>= MAX_RECOVERY_RETRIES` to `> MAX_RECOVERY_RETRIES`; 3rd restart is last valid retry, 4th triggers quarantine\n3. ✅ **Reset on progress** — successful `resumeMainSession` clears `abortedLastRunAttempts`, `quarantinedAt`, `quarantineReason`\n\n`@clawsweeper re-review`",
-        "branch": "fix/issue-95750-recovery-retry-budget",
-        "head_sha": "5c226e3ae9973074bc780e19e4d6c8972fcd852d",
-        "author": "zhangqueping",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "src/agents/main-session-restart-recovery.test.ts",
-            "additions": 74,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/main-session-restart-recovery.ts",
-            "additions": 53,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/body.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/types.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/session-entry-slot-keys.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 146,
-        "deletions": 22,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96307",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96307.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 13,
-          "gatingTotal": 8,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 8,
-            "SKIPPED": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96307:4786579716:2026-06-24T08:38:01Z:clawsweeper_auto_repair",
-      "comment_id": "4786579716",
-      "comment_version_key": "4786579716:2026-06-24T08:38:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96307#issuecomment-4786579716",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96307,
+      "issue_number": 81364,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T06:40:17Z",
-      "comment_updated_at": "2026-06-24T08:38:01Z",
+      "comment_created_at": "2026-05-13T09:43:10Z",
+      "comment_updated_at": "2026-06-25T05:58:04Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=242d856dc75ae205e5001159a5fca635a287a49b)",
-      "review_summary": "The PR adds persistent main-session restart-recovery attempt/quarantine fields, uses them to quarantine over-budget recovery rows, reserves the new session keys for plugin slots, and adds focused recovery tests.\n\nPR surface: Source +59, Tests +59. Total +118 across 4 files.\n\nReproducibility: yes. at source level: a quarantined row has `abortedLastRun=false` with attempts still over budget, and current lifecycle/admission code does not clear those new fields on a normal user-driven turn. I did not run the full Telegram/systemd loop.",
-      "review_followup": "- [P2] The remaining blocker is a narrow session-state cleanup bug that an automated repair can attempt on the PR branch.",
+      "repair_reason": "- [P1] Human maintainer review is required because the PR is maintainer-labeled, merge-conflicting, and changes fail-closed install security plus upgrade behavior; automation can address the scoped warning only after di...; Needs attention: The hardening direction is security-positive, but the PR makes ClawHub trust endpoint data an install-time security boundary that needs maintainer acceptance.; Review finding: [P... (sha=b08ced424daa970c466e2fd80aca944ba5f4ac54)",
+      "review_summary": "The PR adds ClawHub exact-release trust checks, acknowledgement UX, persisted trust metadata, Gateway/UI error details, docs, and tests across plugin and skill install/update/repair paths.\n\nPR surface: Source +2530, Tests +4336, Docs +38, Other +21. Total +6925 across 70 files.\n\nReproducibility: yes. for the review finding: PR-head source shows every non-ClawHub plugin install logs the new future-blocking warning. For the central hardening, current-main source shows the missing pre-download trust gate rather than a failing runtime repro.",
+      "review_followup": "- [P1] Human maintainer review is required because the PR is maintainer-labeled, merge-conflicting, and changes fail-closed install security plus upgrade behavior; automation can address the scoped warning only after direction is accepted.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "242d856dc75ae205e5001159a5fca635a287a49b",
+      "expected_head_sha": "b08ced424daa970c466e2fd80aca944ba5f4ac54",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): add cross-boot retry budget to restart recovery",
-        "body": "## Summary\n\n**Problem**: When a main-session turn wedges,  flags the entry and  retries it on every boot. There's no persistent retry counter or quarantine—a wedged session death-loops the gateway across restarts until systemd exhausts StartLimitBurst. See #95750 for the full production incident report (6 cycles before operator intervention).\n\n**Solution**: Add `abortedLastRunAttempts` (persistent counter) with a `> MAX_RECOVERY_RETRIES` ceiling. When exceeded, quarantine the session instead of resuming it. On successful resume, reset the counter and clear quarantine. The quarantine check runs AFTER all existing skip/routing/owner/dedupe guards to avoid suppressing owning recovery paths in configured or duplicate stores.\n\n**What changed** (4 files, +140/−22):\n- `src/config/sessions/types.ts`: +10 — `abortedLastRunAttempts`, `quarantinedAt`, `quarantineReason`\n- `src/plugins/session-entry-slot-keys.ts`: +3 — register new fields in compile guard\n- `src/agents/main-session-restart-recovery.ts`: +61/−7 — increment at 4 mark sites, quarantine AFTER guards with `> MAX_RECOVERY_RETRIES`, reset on success\n- `src/agents/main-session-restart-recovery.test.ts`: +88/−15 — quarantine + counter increment + successful-resume reset tests\n\n**What did NOT change**: In-process retry orchestration, subagent-orphan-recovery (already bounded with SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS), channel dispatch, model routing, auth.\n\nFixes #95750. Supersedes #86239.\n\n## Behavioral contract\n\n| Condition | Before | After |\n|---|---|---|\n| 1st restart | Re-marked, resumed | attempts=1, resumed |\n| 2nd restart | Re-marked, resumed | attempts=2, resumed |\n| 3rd restart | Re-marked, resumed | attempts=3, resumed (last valid retry) |\n| **4th restart** | Re-marked, resumed (loop!) | **Quarantined**: abortedLastRun=false, quarantinedAt set, WARN logged |\n| Successful auto-resume | abortedLastRun=false | **+** attempts=0, quarantine cleared |\n| Existing sessions (no field) | resumed | attempts starts at 0, backward-compatible |\n\n`MAX_RECOVERY_RETRIES = 3` is reused from the existing in-process budget. The gate is `> MAX_RECOVERY_RETRIES`, so the 3rd restart is the last valid retry (attempts=3), and the 4th triggers quarantine (attempts=4).\n\n## Real behavior proof\n\n**Runtime**: Node 24.13, Linux x86_64 — **Branch**: `fix/issue-95750-recovery-retry-budget` @ `242d856dc7` — **Vitest**: 4.1.8\n\n### Proof A — Real sessions.json state transitions\n\nScript exercises the exact recovery functions against a temp directory (full source at `proof-recovery-budget.ts` on the branch):\n\n```\n=== Phase 1: Quarantine (4th restart, attempts=4 > MAX=3) ===\n\n-- Before --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 4 }\n\nrecoverRestartAbortedMainSessions result: {\"recovered\":0,\"failed\":0,\"skipped\":0,\"quarantined\":1}\n\n[main-session-restart-recovery] quarantined agent:main:telegram:dm after 4\n  aborted-restart attempts (>= 3); the session will not be auto-resumed\n\n-- After --\n{ \"status\": \"running\", \"abortedLastRun\": false, \"abortedLastRunAttempts\": 4,\n  \"quarantinedAt\": 1782288650123, \"quarantineReason\": \"exceeded_restart_retry_budget\" }\n\n=== Phase 2: Counter increment (3→4, crosses ceiling) ===\n\n-- Before --\n{ \"status\": \"running\", \"abortedLastRun\": false, \"abortedLastRunAttempts\": 3 }\n\nmarkRestartAbortedMainSessions → \"marked 1 interrupted main session(s)\"\n\n-- After --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 4 }\n\n=== Phase 3: Backward-compatible defaults ===\n\n-- Before (no abortedLastRunAttempts field) --\n{ \"status\": \"running\", \"abortedLastRun\": false }\n\n-- After mark (undefined → 1 via ?? 0) --\n{ \"status\": \"running\", \"abortedLastRun\": true, \"abortedLastRunAttempts\": 1 }\n```\n\n### Proof B — Full test suite (36/36 passed)\n\n```\n$ node scripts/run-vitest.mjs run src/agents/main-session-restart-recovery.test.ts --reporter=verbose\n[test] starting test/vitest/vitest.agents.config.ts\n RUN  v4.1.8\n ✓ marks only matching running main sessions by active session key\n … (33 existing tests pass unchanged)\n ✓ quarantines sessions that exceed the cross-boot retry budget (regression #95750)\n ✓ increments abortedLastRunAttempts at each mark phase (regression #95750)\n Test Files  1 passed (1)\n      Tests  36 passed (36)\n[test] passed 1 Vitest shard in 19.25s\n```\n\n### Proof C — Custom-store recovery resets counter on success\n\n```\n$ node scripts/run-vitest.mjs run src/agents/main-session-restart-recovery.test.ts   -t \"marks active sessions in a configured custom session store\" --reporter=verbose\n\n ✓ marks active sessions in a configured custom session store\n   └─ asserts: abortedLastRunAttempts === 0, quarantinedAt === undefined\n```\n\n**Observed result**: The fourth restart quarantines instead of resuming. The counter correctly increments through all four mark sites. Successful auto-resume clears the counter and quarantine. Existing sessions without the field start at 0.\n\n**What was not tested**: Live gateway restart with systemd supervision (not reproducible here). Proof covers every lifecycle boundary via real filesystem operations and 36 dedicated tests.\n\n## Risk checklist\n\n**Highest-risk area**: Counter increment at mark sites and quarantine gate ordering.\n\n**Risk level**: Medium — 3 new persistent SessionEntry fields. Existing entries default safely. Quarantine check runs AFTER guards. Operator intervention for quarantined sessions is better than a death-loop.\n\n**Mitigation**: All 4 mark sites instrumented. Reset on success. 36 tests cover all boundaries. `session-entry-slot-keys.ts` compile guard prevents drift.\n\n**Merge risk**:\n- `session-state` — 3 new SessionEntry fields, backward-compatible defaults (counter=0)\n- `availability` — quarantine skips auto-recovery, intentional (death-loop is worse)\n- `compatibility` — existing sessions without the field default to 0, upgrade-safe\n\n## All ClawSweeper P1 findings resolved\n\n1. ✅ **Move quarantine after guards** — check now runs after skip/routing/owner/dedupe guards\n2. ✅ **Honor retry budget boundary** — changed `>= MAX_RECOVERY_RETRIES` to `> MAX_RECOVERY_RETRIES`; 3rd restart is last valid retry, 4th triggers quarantine\n3. ✅ **Reset on progress** — successful `resumeMainSession` clears `abortedLastRunAttempts`, `quarantinedAt`, `quarantineReason`\n\n`@clawsweeper re-review`",
-        "branch": "fix/issue-95750-recovery-retry-budget",
-        "head_sha": "5c226e3ae9973074bc780e19e4d6c8972fcd852d",
-        "author": "zhangqueping",
+        "title": "Check ClawHub trust before plugin and skill installs",
+        "body": "## Summary\n\nOpenClaw now checks ClawHub exact-release trust before downloading ClawHub plugin releases and archive-backed ClawHub skill releases. Malicious or ClawHub-blocked releases fail closed before download, suspicious/review-required releases require acknowledgement, and pending or stale non-risk trust states warn without blocking.\n\n> [!IMPORTANT]\n> Official/source-linked ClawHub metadata is a trust signal, not a security bypass. `@openclaw/kitchen-sink` can be official/source-linked and still follows the exact release trust verdict before install or update proceeds.\n\n## What Changed\n\n| Surface | New behavior |\n| --- | --- |\n| Plugin installs | Check ClawHub release trust before archive download; blocked/malicious releases do not download. |\n| Skill installs | Apply the same release trust gate to archive-backed ClawHub skills, including owner-qualified `@owner/slug` refs. |\n| Plugin and skill updates | Leave the installed item unchanged when the latest release is malicious, blocked, risky without acknowledgement, or security-unavailable. |\n| Acknowledgement UX | Suspicious/review-required releases require either an interactive acknowledgement or `--acknowledge-clawhub-risk`. |\n| Official metadata | Persist and display source-linked/official metadata, but do not let it bypass release security. |\n| Fallbacks | Preserve availability-only artifact fallback, but do not fall back for trust, integrity, malicious, or blocked failures. |\n| Docs | Update ClawHub, plugin, skill, and update CLI docs for the new trust gate and acknowledgement flag. |\n\n## Proof\n\nBehavioral proof is tied to PR head `b08ced424daa970c466e2fd80aca944ba5f4ac54`.\n\nPlugin install:\n\n- Malicious or ClawHub-blocked release: `openclaw plugins install clawhub:<package>` exits `1`, prints `BLOCKED`, and does not install.\n- Suspicious release: without acknowledgement exits `1`; with `--acknowledge-clawhub-risk` exits `0` and keeps the warning visible.\n- Clean release: community and official/source-linked plugin releases install successfully. Official metadata does not bypass the exact release trust check.\n\nSkill install:\n\n- Malicious or ClawHub-blocked release: `openclaw skills install @owner/<slug> --global` exits `1`, prints `BLOCKED`, and does not install.\n- Suspicious release: without acknowledgement exits `1`; with `--acknowledge-clawhub-risk` exits `0` and keeps the warning visible.\n- Clean release: community and official/source-linked skill releases install successfully. Owner-qualified skills use `@owner/slug` in warnings and acknowledgements.\n\nUpdate and repair paths:\n\n- Malicious latest plugin or skill version: the update does not download the latest release and tells the user to uninstall the installed item unless independently reviewed.\n- Security unavailable or trust failure: installs fail closed; update, doctor repair, onboarding repair, and post-core sync leave the installed item unchanged and report the trust/security failure.\n- Dry-run updates: do not create an interactive ClawHub risk prompt.\n\nChat and Control UI:\n\n- Chat `/plugins install ...`: risky ClawHub plugin installs cannot be acknowledged from chat and tell the user to use a trusted local shell command.\n- Chat skills: there is no `/skills install` chat command path in this PR; chat `/skill <name> [input]` only invokes existing skills.\n- Control UI skill install: malicious/suspicious skill releases fail before download; suspicious releases surface as structured errors with acknowledgement retry support.\n\n<details>\n<summary><strong>End-to-end install transcript matrix</strong></summary>\n\n| Scenario | Command surface | Result |\n| --- | --- | --- |\n| malicious / blocked plugin release | `openclaw plugins install clawhub:<package>` | exits `1`, prints `BLOCKED`, does not install |\n| suspicious plugin release without acknowledgement | `openclaw plugins install clawhub:<package>` | exits `1`, prints `WARNING`, does not install |\n| suspicious plugin release with acknowledgement | `openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk` | exits `0`, warning remains visible |\n| clean community plugin release | `openclaw plugins install clawhub:<package>` | exits `0` |\n| clean official/source-linked plugin release | `openclaw plugins install clawhub:<package>` | exits `0`; official metadata does not bypass release trust |\n| malicious / blocked skill release | `openclaw skills install @owner/<slug> --global` | exits `1`, prints `BLOCKED`, does not install |\n| suspicious skill release without acknowledgement | `openclaw skills install @owner/<slug> --global` | exits `1`, prints `WARNING`, does not install |\n| suspicious skill release with acknowledgement | `openclaw skills install @owner/<slug> --global --acknowledge-clawhub-risk` | exits `0`, warning remains visible |\n| clean community skill release | `openclaw skills install @owner/<slug> --global` | exits `0` |\n| clean official/source-linked skill release | `openclaw skills install @owner/<slug> --global` | exits `0`; official metadata does not bypass release trust |\n\n</details>\n\n<details>\n<summary><strong>Warning examples</strong></summary>\n\nSuspicious plugin warning:\n\n```text\nWARNING - ClawHub found security risks in this release\n- Security scan: suspicious\n- Finding: suspicious payload strings\n\nThis plugin is not marked malicious, but ClawHub found security findings or a large local system blast radius.\nReview the ClawHub security details before installing.\n```\n\nSuspicious skill warning:\n\n```text\nWARNING - ClawHub found security risks in this release\n- Security scan: suspicious\n- Finding: security status is not clean\n\nThis skill is not marked malicious, but ClawHub found security findings or a large instruction/tool-use blast radius.\nReview the ClawHub security details before installing.\n```\n\nBlocked release warning:\n\n```text\nBLOCKED - ClawHub flagged this release as malicious\n- Security scan: malicious\n- Moderation: quarantined\n- Finding: manual_moderation\n- Scanner: malicious behavior detected\n- Finding: Download disabled by ClawHub for this release\n```\n\nMalicious latest update warning:\n\n```text\nLatest plugin version is marked malicious; OpenClaw will not download it.\nUninstall the installed plugin unless you have independently reviewed it.\n\nLatest skill version is marked malicious; OpenClaw will not download it.\nUninstall the installed skill unless you have independently reviewed it.\n```\n\nRaw static-analysis and VirusTotal links are intentionally not printed.\n\n</details>\n\n<details>\n<summary><strong>Additional edge cases covered</strong></summary>\n\n- Review-required or failed verdict: plugin install/update and skill install/update require typing the target package or skill label before continuing.\n- Review-recommended release: plugin install/update and skill install/update use yes/no confirmation before continuing.\n- Pending or stale non-risk trust: plugin install/update warnings and JSON update output warn without requiring acknowledgement.\n- ClawHub security unavailable: plugin install, skill install, plugin update, skill update, doctor, onboarding, and update repair leave the user with a clear failure instead of a silent install.\n- Owner-qualified skills: skill install/update, warnings, retry payloads, and links validate publisher identity and use `@owner/slug`.\n- Trust failure fallback: plugin install/update and doctor repair do not fall back to npm/default fallback for malicious, blocked, integrity, or trust failures.\n- Availability fallback: official ClawHub artifact misses can still fall back to trusted npm packages where the existing availability-only fallback already allowed it.\n- Dry-run updates: plugin update and `openclaw update` post-core work avoid interactive ClawHub risk prompts.\n- Onboarding and doctor repair: acknowledgement guidance is forwarded and risky ClawHub releases are not silently installed.\n\n</details>\n\n## Screenshots\n\nThese are rendered transcript excerpts from `node .artifacts/clawhub-install-trust/run-proof.cjs` at PR head `b08ced424daa970c466e2fd80aca944ba5f4ac54`. They are included because the changed CLI output is the human-visible behavior reviewers need to inspect.\n\n| Screenshot | Claim proved | Source / state | Viewport | Crop choice |\n| --- | --- | --- | --- | --- |\n| Plugin blocked release | Malicious/quarantined plugin releases are blocked before download and show aligned trust fields without raw static-analysis or VirusTotal links. | Refreshed command transcript, malicious plugin scenario. | 2448x1434 | Element crop of terminal output. |\n| Plugin suspicious release | Suspicious plugin releases warn, require acknowledgement, and keep the warning visible on the acknowledged success path. | Refreshed command transcript, suspicious plugin scenarios. | 2448x1336 | Element crop of terminal output. |\n| Skill suspicious release | Skill installs use the same suspicious warning and acknowledgement policy as plugin installs. | Refreshed command transcript, suspicious skill scenarios. | 2448x1096 | Element crop of terminal output. |\n\n### Plugin blocked release\n\n<img width=\"2448\" height=\"1434\" alt=\"plugin-blocked\" src=\"https://github.com/user-attachments/assets/be848ff4-ecb2-43b2-979f-25bb01439cf3\" />\n\n### Plugin suspicious release\n\n<img width=\"2448\" height=\"1336\" alt=\"plugin-suspicious\" src=\"https://github.com/user-attachments/assets/554952c5-492c-4677-b6e2-9eb8fe167b27\" />\n\n### Skill suspicious release\n\n<img width=\"2448\" height=\"1096\" alt=\"skill-suspicious\" src=\"https://github.com/user-attachments/assets/aa65c397-4ead-4cbe-b173-c5d715c05e24\" />\n\n## Verification\n\nReviewer-checkable behavior:\n\n- `node .artifacts/clawhub-install-trust/run-proof.cjs` passed and regenerated the 10-scenario plugin/skill trust command transcript at PR head `b08ced424daa970c466e2fd80aca944ba5f4ac54`.\n- The proof-pack net-diff script passed and confirmed there is no branch-only churn with no net diff.\n- Live GitHub currently reports the PR open but merge-conflicting against `main`; it needs a branch refresh before final landing.\n\nAutomated and static checks:\n\n- `git diff --check 106961b51351e3f6cbb10839cb357b130e1a477b...HEAD` passed.\n- `pnpm docs:list` passed.\n- `node scripts/run-vitest.mjs src/infra/clawhub.test.ts src/plugins/clawhub.test.ts src/plugins/update.test.ts src/skills/lifecycle/clawhub.test.ts src/gateway/server-methods/skills.clawhub.test.ts ui/src/ui/controllers/skills.test.ts ui/src/ui/views/skills.test.ts` passed: 360 tests.\n- `node scripts/run-vitest.mjs src/cli/clawhub-risk-acknowledgement.test.ts src/cli/plugins-cli.install.test.ts src/cli/plugins-cli.update.test.ts src/cli/skills-cli.commands.test.ts src/cli/update-cli.test.ts src/cli/update-cli/post-core-plugin-convergence.test.ts src/commands/doctor/shared/missing-configured-plugin-install.test.ts src/commands/onboarding-plugin-install.test.ts src/auto-reply/reply/commands-plugins.install.test.ts` passed: 546 tests.\n\nNot run locally: full `pnpm check`, full build, Crabbox/Testbox, live ClawHub install scenarios, or browser screenshot audit. CI should cover broader gates after the branch is refreshed.\n",
+        "branch": "jesse/clawhub-install-trust-remake",
+        "head_sha": "b08ced424daa970c466e2fd80aca944ba5f4ac54",
+        "author": "jesse-merhi",
         "labels": [
-          "agents",
-          "size: S",
+          "docs",
+          "app: web-ui",
+          "gateway",
+          "cli",
+          "scripts",
+          "commands",
+          "maintainer",
+          "size: XL",
           "proof: sufficient",
           "P1",
-          "rating: 🧂 unranked krab",
+          "rating: 🦐 gold shrimp",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
+          "merge-risk: 🚨 security-boundary",
           "status: ⏳ waiting on author",
-          "triage: needs-pr-context"
+          "proof: 📸 screenshot"
         ],
         "files": [
           {
-            "path": "src/agents/main-session-restart-recovery.test.ts",
-            "additions": 74,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/main-session-restart-recovery.ts",
-            "additions": 53,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/body.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/types.ts",
+            "path": "docs/clawhub/cli.md",
             "additions": 10,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/session-entry-slot-keys.ts",
+            "path": "docs/cli/plugins.md",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/skills.md",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/update.md",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/clawhub-trust-error-details.ts",
+            "additions": 66,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/index.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/agents-models-skills.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/e2e/lib/clawhub-fixture-server.cjs",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-plugins.install.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-plugins.test.ts",
             "additions": 3,
             "deletions": 0,
             "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-plugins.ts",
+            "additions": 31,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/clawhub-risk-acknowledgement.test.ts",
+            "additions": 211,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/clawhub-risk-acknowledgement.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/plugins-cli-test-helpers.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/plugins-cli.install.test.ts",
+            "additions": 105,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/plugins-cli.runtime.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/plugins-cli.ts",
+            "additions": 31,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/plugins-cli.update.test.ts",
+            "additions": 196,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/plugins-command-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/plugins-install-command.ts",
+            "additions": 21,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/plugins-install-persist.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/plugins-update-command.ts",
+            "additions": 13,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/plugins-update-outcomes.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/prompt.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/skills-cli.commands.test.ts",
+            "additions": 110,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/skills-cli.ts",
+            "additions": 65,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/update-cli.option-collisions.test.ts",
+            "additions": 24,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/update-cli.test.ts",
+            "additions": 724,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/update-cli.ts",
+            "additions": 42,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/update-cli/post-core-plugin-convergence.test.ts",
+            "additions": 56,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/update-cli/post-core-plugin-convergence.ts",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/update-cli/shared.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/update-cli/update-command.ts",
+            "additions": 156,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/codex-runtime-plugin-install.test.ts",
+            "additions": 62,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/doctor/repair-sequencing.test.ts",
+            "additions": 63,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/repair-sequencing.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/missing-configured-plugin-install.test.ts",
+            "additions": 479,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/missing-configured-plugin-install.ts",
+            "additions": 119,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/release-configured-plugin-installs.test.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/release-configured-plugin-installs.ts",
+            "additions": 4,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/onboarding-plugin-install.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/onboarding-plugin-install.ts",
+            "additions": 66,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/runtime-plugin-install.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.installs.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.installs.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/skills.clawhub.test.ts",
+            "additions": 144,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/skills.ts",
+            "additions": 27,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/clawhub-install-trust.ts",
+            "additions": 1072,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/clawhub.test.ts",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/clawhub.ts",
+            "additions": 193,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/clawhub-error-codes.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/clawhub-install-records.ts",
+            "additions": 38,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/clawhub.test.ts",
+            "additions": 789,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/clawhub.ts",
+            "additions": 139,
+            "deletions": 32,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installed-plugin-index-install-records.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installed-plugin-index-records.test.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installed-plugin-index-types.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installs.test.ts",
+            "additions": 46,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installs.ts",
+            "additions": 24,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/update.test.ts",
+            "additions": 429,
+            "deletions": 60,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/update.ts",
+            "additions": 159,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/skills/lifecycle/clawhub.test.ts",
+            "additions": 514,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/skills/lifecycle/clawhub.ts",
+            "additions": 107,
+            "deletions": 44,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-render.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-view-state.ts",
+            "additions": 8,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app.ts",
+            "additions": 10,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/skills.test.ts",
+            "additions": 97,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/skills.ts",
+            "additions": 75,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/views/skills.test.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/views/skills.ts",
+            "additions": 31,
+            "deletions": 3,
+            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 146,
-        "deletions": 22,
+        "changedFiles": 70,
+        "additions": 7171,
+        "deletions": 246,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96307",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96307.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-81364",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81364.md",
         "mode": "autonomous",
         "mergeable": "CONFLICTING",
         "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 13,
-          "gatingTotal": 8,
+          "total": 18,
+          "gatingTotal": 13,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 8,
-            "SKIPPED": 3,
-            "NEUTRAL": 1
+            "SUCCESS": 7,
+            "SKIPPED": 11
           },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96307:4787310790:2026-06-24T08:24:43Z:re_review",
-      "comment_id": "4787310790",
-      "comment_version_key": "4787310790:2026-06-24T08:24:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96307#issuecomment-4787310790",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96307,
-      "author": "zhangqueping",
-      "author_id": 3436352,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T08:24:43Z",
-      "comment_updated_at": "2026-06-24T08:24:43Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96307:4787064616:2026-06-24T07:52:30Z:re_review",
-      "comment_id": "4787064616",
-      "comment_version_key": "4787064616:2026-06-24T07:52:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96307#issuecomment-4787064616",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96307,
-      "author": "zhangqueping",
-      "author_id": 3436352,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T07:52:30Z",
-      "comment_updated_at": "2026-06-24T07:52:30Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96307:4786955060:2026-06-24T07:37:39Z:re_review",
-      "comment_id": "4786955060",
-      "comment_version_key": "4786955060:2026-06-24T07:37:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96307#issuecomment-4786955060",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96307,
-      "author": "zhangqueping",
-      "author_id": 3436352,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T07:37:39Z",
-      "comment_updated_at": "2026-06-24T07:37:39Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2956,
+    "total_ms": 1788,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 452
+        "ms": 314
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1132
+        "ms": 1189
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -400,11 +566,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1341
+        "ms": 260
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
