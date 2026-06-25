@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T17:28:25.190Z",
+  "generated_at": "2026-06-25T17:28:31.737Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T14:28:20.661Z",
+  "since": "2026-06-25T14:28:29.592Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    96777
+    96723
   ],
   "comment_ids": [
-    4802372887
+    4802373453
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96777:4802372887:2026-06-25T17:25:58Z:re_review",
-      "comment_id": "4802372887",
-      "comment_version_key": "4802372887:2026-06-25T17:25:58Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96777#issuecomment-4802372887",
+      "idempotency_key": "comment-router:openclaw/openclaw:96723:4802373453:2026-06-25T17:26:02Z:re_review",
+      "comment_id": "4802373453",
+      "comment_version_key": "4802373453:2026-06-25T17:26:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96723#issuecomment-4802373453",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96777,
+      "issue_number": 96723,
       "author": "wangmiao0668000666",
       "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T17:25:58Z",
-      "comment_updated_at": "2026-06-25T17:25:58Z",
+      "comment_created_at": "2026-06-25T17:26:02Z",
+      "comment_updated_at": "2026-06-25T17:26:02Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -67,49 +67,60 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(chutes-oauth): bound core helper JSON response reads at 16 MiB",
-        "body": "## What Problem This Solves\n\n`src/agents/chutes-oauth.ts` had 3 unbounded `await response.json()` calls (userinfo fetch, token exchange, token refresh). A hostile Chutes endpoint, proxy, or CDN can return an oversized HTTP 200 JSON body with no `Content-Length` and stream an arbitrarily large payload — `response.json()` buffers everything into memory before parsing, making this an **OOM vector** on a path that runs with user-attached OAuth credentials.\n\nThis is the JSON bounded-read analogue for the deprecated core Chutes helper (the active plugin path at `extensions/chutes/oauth.ts` is covered by sibling PR #96249).\n\n## Changes\n\n- `src/agents/chutes-oauth.ts:119,159,230` — replace 3 `(await response.json()) as Type` calls with `readProviderJsonResponse<Type>(response, \"<label>\")`. Labels: `\"Chutes userinfo\"`, `\"Chutes token exchange\"`, `\"Chutes token refresh\"`. (+6/-5)\n\n## Real behavior proof\n\nDrives production `readProviderJsonResponse` over a real `node:http` server (127.0.0.1, chunked transfer, no Content-Length). Covers AFTER (capped), BEFORE (unbounded OOM vector), and negative control. Node v22.22.0, Linux x86_64.\n\n```\n=== AFTER (16 MiB cap via readProviderJsonResponse) ===\n\n  PASS  hostile oversized body: overflow error thrown\n  PASS  valid token exchange response: parsed correctly\n  PASS  valid userinfo response: parsed correctly\n\n=== BEFORE (unbounded response.json() — OOM vector) ===\n\n  unbounded read consumed 32.0 MiB — OOM vector confirmed\n  PASS  (negative control) unbounded read exceeded 16 MiB cap\n\n=== All chutes-oauth bounded-read assertions: 4/4 passed ===\n```\n\n- **Evidence after fix**: 4/4 assertions pass. AFTER: hostile 32 MiB body triggers bounded overflow error, valid token/userinfo responses parse correctly. BEFORE: unbounded read consumes 32.0 MiB (OOM vector confirmed).\n- **Behavior addressed**: 3 unbounded `response.json()` calls → capped at 16 MiB via shared SDK helper.\n- **Real environment tested**: real `node:http` server (127.0.0.1, chunked transfer, no Content-Length) driving production `readProviderJsonResponse`. Node v22.22.0.\n- **Negative control**: unbounded read consumed 32.0 MiB — proves the cap is load-bearing.\n- **What was not tested**: live Chutes API call (the proof exercises the same production SDK helper against the same attack shape); cross-platform Node differences.\n\n## Out of scope\n\n- `extensions/chutes/oauth.ts` (active plugin path) — covered by sibling PR #96249.\n- Other unbounded `response.json()` call sites in core — covered by bounded-read campaign PRs (#96776, #96772, #96782, etc.).\n\n## Risk\n\n- **Low**: swap to `readProviderJsonResponse` — same error propagation shape, 16 MiB default cap invisible to normal responses (OAuth token responses < 1 KiB). Existing tests: 6/6 pass unchanged.\n\nSibling PR: #96723 bounds anthropic provider SSE streaming read. #96249 bounds the Chutes OAuth plugin path. Together these close the bounded-read gap for the Anthropic + Chutes OAuth surfaces.\n\nAI-assisted: implemented and proof-tested with AI assistance; reviewed by a human before submission.",
-        "branch": "fix/chutes-oauth-core-bounded-read",
-        "head_sha": "f6c85df3a5ec868a4d09db88975d7cab75cf01ad",
+        "title": "fix(anthropic): bound streaming 200 success-body SSE reads at 16 MiB (provider path)",
+        "body": "## What Problem This Solves\n\n`src/llm/providers/anthropic.ts` (`iterateSseMessages`, the legacy provider SSE parser) accumulates an unbounded SSE byte stream into a string buffer while waiting for line delimiters. A hostile or malfunctioning Anthropic-compatible endpoint (including an MITM-able proxy or a hijacked self-hosted provider) can return a `Content-Length`-less SSE body that streams forever, exhausting process memory on a code path that runs for every legacy-provider Anthropic streaming call.\n\nThis is the streaming-body analogue of the bounded-read sweep Alix-007 finished for non-streaming `response.json()`. Same 16 MiB cap, same helper-driven design (`createSseByteGuard`), but on the chunk-by-chunk SSE path that the non-streaming sweep did not cover.\n\n## Changes\n\n- `src/agents/streaming-byte-guard.ts` (NEW, 87 lines) — `createSseByteGuard` helper wrapping a `ReadableStreamDefaultReader` with a byte-level cap. Cancel-on-overflow with `onOverflow` callback producing the error. Core-internal (no SDK surface change).\n- `src/llm/providers/anthropic.ts:347-362` — `iterateSseMessages` wraps `body.getReader()` in `createSseByteGuard` with `ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024`. Function re-exported as `iterateSseMessagesForTest` for direct test access.\n- `src/llm/providers/anthropic.test.ts` — 1 regression test for the capped read.\n\n## Real behavior proof\n\nDrives production `createSseByteGuard` over a real `node:http` server (127.0.0.1, chunked transfer-encoding, no Content-Length). Covers AFTER (capped), happy path, and BEFORE (unbounded OOM vector). Node v22.22.0, Linux x86_64.\n\n```\n=== AFTER (16 MiB cap via createSseByteGuard) ===\n\n  PASS  hostile 64 MiB SSE body: overflow thrown at 16 MiB cap\n  PASS  happy path: small 2 KiB SSE body drained without overflow\n\n=== BEFORE (unbounded SSE read — OOM vector) ===\n\n  unbounded read consumed 64.0 MiB — OOM vector confirmed\n  PASS  (negative control) unbounded read exceeded 16 MiB cap\n\n=== All anthropic provider bounded-read assertions: 3/3 passed ===\n```\n\n- **Evidence after fix**: 3/3 assertions pass. AFTER: 64 MiB hostile SSE body triggers overflow at 16 MiB cap, 2 KiB happy path drains cleanly. BEFORE: unbounded read consumes full 64.0 MiB (OOM vector confirmed — 4× the cap).\n- **Behavior addressed**: unbounded SSE buffering in `iterateSseMessages`; after the fix the provider-path streaming read is capped at 16 MiB via `createSseByteGuard`.\n- **Real environment tested**: real `node:http` server (127.0.0.1, no Content-Length, chunked SSE) driving production `createSseByteGuard`. Node v22.22.0.\n- **Negative control**: unbounded read consumed 64.0 MiB vs capped read stopped at ~16 MiB — cap is load-bearing.\n- **What was not tested**: live Anthropic API call (same production helper against same attack shape); cross-platform Node differences.\n\n## Out of scope (separate PRs, sequenced)\n\n- `src/llm/providers/openai-chatgpt-responses.ts` (`parseSSE`, ChatGPT Responses SSE parser) — covered by sibling PR #96772.\n- `src/agents/runtime/proxy.ts` (`streamProxy`, internal proxy SSE parser) — covered by sibling PR #96782.\n- `extensions/google/transport-stream.ts` and `extensions/ollama/src/{setup,stream}.ts` — need `createSseByteGuard` promoted to plugin-SDK first (separate PR).\n\n## Risk\n\n- **Low**: same 16 MiB cap used by `readProviderJsonResponse` for non-streaming Anthropic success bodies. Normal-sized responses unchanged — only the unbounded case throws a clear overflow error instead of OOM.\n- **Helper**: core-internal (`src/agents/streaming-byte-guard.ts`); no SDK surface change, no API-baseline regen needed.\n- **Cancel propagation**: `createSseByteGuard.cancel(reason)` propagates overflow error to the underlying reader.\n\nSibling PRs: #96772 (openai-chatgpt SSE), #96782 (proxy SSE), #96777 (chutes-oauth JSON). Together these close the bounded-read gap for the Anthropic + OpenAI + proxy + Chutes surfaces.\n\nAI-assisted: implemented and proof-tested with AI assistance; reviewed by a human before submission.\n\n## Diff stats\n\n```\n3 files changed, 146 insertions(+), 2 deletions(-)\n```",
+        "branch": "fix/anthropic-provider-stream-bound",
+        "head_sha": "3407ee1021556bcf509c30de98dfd04dd6135c23",
         "author": "wangmiao0668000666",
         "labels": [
           "agents",
-          "size: XS",
+          "size: S",
           "proof: sufficient",
           "P2",
           "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 compatibility",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/agents/chutes-oauth.ts",
-            "additions": 6,
-            "deletions": 5,
+            "path": "src/agents/streaming-byte-guard.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/llm/providers/anthropic.test.ts",
+            "additions": 38,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/anthropic.ts",
+            "additions": 21,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 1,
-        "additions": 6,
-        "deletions": 5,
+        "changedFiles": 3,
+        "additions": 146,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96777",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96777.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96723",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96723.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 91,
-          "gatingTotal": 86,
+          "total": 11,
+          "gatingTotal": 6,
           "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
+            "SUCCESS": 8,
+            "SKIPPED": 3
           },
           "blockers": [],
           "pending": [],
@@ -124,15 +135,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4852,
+    "total_ms": 2382,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2808
+        "ms": 590
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1708
+        "ms": 1540
       },
       {
         "name": "classify_comment_commands",
@@ -148,7 +159,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 323
+        "ms": 238
       },
       {
         "name": "append_ledger",
