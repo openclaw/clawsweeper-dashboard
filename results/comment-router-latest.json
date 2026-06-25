@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T06:24:32.130Z",
-  "repo": "steipete/CodexBar",
+  "generated_at": "2026-06-25T06:25:03.109Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T03:24:30.450Z",
+  "since": "2026-06-25T03:25:00.945Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    1748
+    96324
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:1748:4796437432:2026-06-25T06:24:28Z:clawsweeper_auto_repair",
-      "comment_id": "4796437432",
-      "comment_version_key": "4796437432:2026-06-25T06:24:28Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1748#issuecomment-4796437432",
-      "repo": "steipete/CodexBar",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96324:4787083378:2026-06-25T06:24:56Z:clawsweeper_auto_repair",
+      "comment_id": "4787083378",
+      "comment_version_key": "4787083378:2026-06-25T06:24:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96324#issuecomment-4787083378",
+      "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 1748,
+      "issue_number": 96324,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-25T06:19:30Z",
-      "comment_updated_at": "2026-06-25T06:24:28Z",
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-24T07:55:13Z",
+      "comment_updated_at": "2026-06-25T06:24:56Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -53,85 +53,108 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=52c2585b532cf533fac4ffcec7692d3ea960846a)",
-      "review_summary": "The PR changes `codexbar serve` `/usage` to collect selected providers concurrently with a per-provider timeout, adds focused CLI serve tests, and updates the changelog.\n\nReproducibility: yes. from source: current `serveUsage` loops providers sequentially under only the outer request deadline, and the proposed helper test models a hung provider without live credentials. I did not run tests because this review is read-only.",
-      "review_followup": "- [P2] The PR needs contributor proof and a code/test update for the keyed last-good fallback; ClawSweeper should not queue a repair marker while real behavior proof is missing.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=01e7df5b7b44ab2c34afa69ddccd5d7746b9a854)",
+      "review_summary": "The PR replaces Google plugin JSON response reads with `readResponseWithLimit` plus `JSON.parse` under 1 MiB caps across embedding batch, image generation, media understanding, OAuth, and speech paths.\n\nPR surface: Source +101. Total +101 across 6 files.\n\nReproducibility: yes. at source level: current main has unbounded `response.json()` success-body reads on the targeted Google plugin paths, and the current PR head plainly drops OAuth parse results before reading `data` and `errorPayload`. I did not run a live oversized Google endpoint repro in this read-only review.",
+      "review_followup": "- [P1] The current head has narrow code defects, but the missing contributor real behavior proof and cap-policy compatibility risk make this a human/contributor follow-up rather than a safe ClawSweeper repair marker right now.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "52c2585b532cf533fac4ffcec7692d3ea960846a",
+      "expected_head_sha": "01e7df5b7b44ab2c34afa69ddccd5d7746b9a854",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "serve: bound /usage per provider so one slow provider can't stall the response",
-        "body": "## Problem\n\n`codexbar serve`'s `/usage` handler (`serveUsage`) collected providers in a **sequential loop with no per-provider timeout**. A single slow or hung provider (e.g. a CLI/web fetch that never returns) blocked the entire handler.\n\nThe only backstop was the outer request deadline (`serveResponseWithDeadline`, default 30s), which returns a **504 with an empty body and discards every provider already collected**. Worse, the last-known-good merge (`CLIServeResponseCache.mergeLastGoodUsageItems`) only runs when `response.status == .ok` (and `staleResponse` refuses `usage:` keys), so the 504 path produces **zero data** — no fresh providers, no cached fallback.\n\nNet effect: one stuck provider makes the whole endpoint return nothing, which pushes shell/Zellij consumers (e.g. showy-quota) onto degraded CLI fallback. Observed live: a wedged serve held port 8080 with `/health` returning `ok` while `/usage` timed out for the full 30s.\n\n## Fix\n\n- Collect providers **concurrently**, bounding each with `BoundedTaskJoin` at a budget **strictly below** the outer request deadline (`serveProviderTimeout(requestTimeout:)` = `requestTimeout * 0.8`, or 25s when the deadline is disabled/non-finite).\n- A provider that exceeds its budget now contributes a **provider error row** instead of blocking the others. The response stays `.ok`, so the existing last-known-good merge can restore that row, and every healthy provider still renders.\n- Each provider's timeout clock starts **when its task is spawned**, so a hung provider can't serialize the others' deadlines.\n- Results merge in **caller-provided provider order** regardless of completion order.\n- The serve usage context's `webTimeout` is aligned to the per-provider budget (was a fixed 60s that exceeded the 30s request deadline).\n- The outer request deadline is retained as a last-resort safety net.\n\n## Tests\n\nAdds `CLIServeRouterTests` coverage:\n- `serveProviderTimeout` budget mapping, including the strict-below-deadline invariant for sub-second timeouts and the disabled-deadline case.\n- A hung provider degrading to an error row **without blocking siblings**: with a 30s simulated hang and a 0.1s budget, collection returns in ~0.1s, healthy providers render in order, and the hung one yields a single provider error row.\n\nVerified locally: `swift build` clean (StrictConcurrency), `swift test --filter CLIServeRouterTests` green, `make check` (SwiftFormat + SwiftLint) 0 violations.",
-        "branch": "fix/serve-usage-per-provider-timeout",
-        "head_sha": "52c2585b532cf533fac4ffcec7692d3ea960846a",
-        "author": "enieuwy",
+        "title": "fix(google): bound JSON response reads to prevent OOM",
+        "body": "## What Problem This Solves\n\nReplace unbounded `await response.json()` with `readResponseWithLimit` (1 MiB cap)\nacross Google embedding-batch, image-generation, media-understanding, oauth.token,\noauth.project, and speech providers (11 call sites in 6 files) — the symmetric\nGoogle-endpoint counterpart to bound-stream work already merged for Google prompt\ncache (#95417) and other providers (#95420, #95218).\n\nA malicious or faulty Google API endpoint returning an oversized JSON response body\nwould previously buffer the entire body in memory before parsing.  The Google\nvideo-generation module already uses `readResponseWithLimit` for downloads (#95417\nhandles the prompt-cache path), but these 6 modules were still unbounded.\n\n## Evidence\n\n- **Static checks**: `npx oxlint` exits 0 on changed files; `git diff --check` clean\n- **Prior art**: follows the same bounded-read pattern established by #95417 (Google\n  prompt cache), #95420, #95418, #95218 — 1 MiB cap is safe for batch status,\n  OAuth tokens, speech metadata, and image generation responses\n- **Negative control**: reverting any JSON read back to `await response.json()` would\n  allow an oversized streamed body to buffer without bound\n\n## Summary\n\nBound 11 unbounded JSON response reads in Google providers with 1 MiB cap.\n\n## Changes\n\n- **`extensions/google/embedding-batch.ts`** — bound file upload, batch status, and\n  result reads (3 call sites)\n- **`extensions/google/image-generation-provider.ts`** — bound image generation\n  response read\n- **`extensions/google/media-understanding-provider.ts`** — bound media description\n  response read\n- **`extensions/google/oauth.token.ts`** — bound token exchange JSON response read\n- **`extensions/google/oauth.project.ts`** — bound 5 JSON response reads (userinfo,\n  project list, error payload, token refresh, onboarding LRO)\n- **`extensions/google/speech-provider.ts`** — bound speech synthesis response read",
+        "branch": "fix/google-bounded-json-response",
+        "head_sha": "01e7df5b7b44ab2c34afa69ddccd5d7746b9a854",
+        "author": "lsr911",
         "labels": [
+          "size: S",
+          "extensions: google",
+          "P2",
           "rating: 🧂 unranked krab",
-          "status: 📣 needs proof",
-          "P2"
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
+            "path": "extensions/google/embedding-batch.ts",
+            "additions": 27,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "Sources/CodexBarCLI/CLIServeCommand.swift",
-            "additions": 92,
-            "deletions": 7,
+            "path": "extensions/google/image-generation-provider.ts",
+            "additions": 10,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "Tests/CodexBarTests/CLIServeRouterTests.swift",
-            "additions": 41,
-            "deletions": 0,
+            "path": "extensions/google/media-understanding-provider.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/oauth.project.ts",
+            "additions": 43,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/oauth.token.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/speech-provider.ts",
+            "additions": 12,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 134,
-        "deletions": 7,
+        "changedFiles": 6,
+        "additions": 113,
+        "deletions": 12,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1748",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1748.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96324",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96324.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 9,
-          "gatingTotal": 9,
+          "total": 88,
+          "gatingTotal": 83,
           "counts": {
-            "SUCCESS": 3,
-            "IN_PROGRESS": 6
+            "SUCCESS": 52,
+            "SKIPPED": 31,
+            "IN_PROGRESS": 2,
+            "FAILURE": 3
           },
           "blockers": [
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS",
-            "swift-test-macos (0, 4):IN_PROGRESS",
-            "swift-test-macos (1, 4):IN_PROGRESS",
-            "swift-test-macos (2, 4):IN_PROGRESS",
-            "swift-test-macos (3, 4):IN_PROGRESS"
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
           ],
           "pending": [
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS",
-            "swift-test-macos (0, 4):IN_PROGRESS",
-            "swift-test-macos (1, 4):IN_PROGRESS",
-            "swift-test-macos (2, 4):IN_PROGRESS",
-            "swift-test-macos (3, 4):IN_PROGRESS"
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
           ],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
@@ -142,19 +165,19 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1937,
+    "total_ms": 2514,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 777
+        "ms": 444
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 891
+        "ms": 1706
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -166,7 +189,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 245
+        "ms": 339
       },
       {
         "name": "append_ledger",
