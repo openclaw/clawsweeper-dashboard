@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T20:10:36.003Z",
+  "generated_at": "2026-06-25T20:10:58.264Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T17:10:33.601Z",
+  "since": "2026-06-25T17:10:56.152Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96788
+    96550
   ],
-  "comment_ids": [
-    4803735690
-  ],
-  "status_comment_id": 4803736188,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 5,
+  "commands_seen": 2,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,22 +31,165 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96788:4803735690:2026-06-25T20:09:31Z:automerge",
-      "comment_id": "4803735690",
-      "comment_version_key": "4803735690:2026-06-25T20:09:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96788#issuecomment-4803735690",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96550:4793370027:2026-06-25T20:10:52Z:clawsweeper_needs_human",
+      "comment_id": "4793370027",
+      "comment_version_key": "4793370027:2026-06-25T20:10:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96550#issuecomment-4793370027",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 96788,
-      "author": "Takhoffman",
-      "author_id": 781889,
+      "target_branch": null,
+      "issue_number": 96550,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T20:09:31Z",
-      "comment_updated_at": "2026-06-25T20:09:31Z",
-      "status_comment_id": 4803736188,
+      "comment_created_at": "2026-06-24T20:31:47Z",
+      "comment_updated_at": "2026-06-25T20:10:52Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Remaining action is Telegram real-behavior proof plus maintainer selection of the canonical overlapping fix path, not a narrow automated code repair.; Cleared: No concrete security or supply-chain concern was found; the diff touches runtime retry/session logic and tests without dependency, workflow, secret, permission, or package-resolution changes. (sha=27af2956613e6d68d8436326a87c5dc497f254e3)",
+      "review_summary": "The branch serializes reply-session initialization through the session-store writer lane, adds bounded stale-snapshot retries, and adds Telegram backoff/lane reservation for retryable reply-session initialization conflicts.\n\nPR surface: Source +123, Tests +235. Total +358 across 10 files.\n\nReproducibility: yes. at source level: current main reads the guarded reply-session initialization snapshot outside the writer lane, retries one stale snapshot, and Telegram releases retryable failures without conflict-specific delay. I did not run a live Telegram topic or DM reproduction in this read-only review.",
+      "review_followup": "- [P1] Remaining action is Telegram real-behavior proof plus maintainer selection of the canonical overlapping fix path, not a narrow automated code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "27af2956613e6d68d8436326a87c5dc497f254e3",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(telegram): topic replies stall after session conflicts",
+        "body": "## Summary\n\nRecover reply-session initialization when same-session Telegram/topic bursts stack optimistic-concurrency commits, and back off retryable Telegram spool replays that hit that same conflict so one update cannot hot-loop the lane.\n\nThis PR now intentionally combines two pieces:\n\n- the reply-session writer-lane/root fix from #96847; and\n- the Telegram spool retry/backoff and same-lane reservation needed for the live Telegram hot-loop observed after the first layer was fixed.\n\nIf maintainers prefer the split path, #96847 can remain the canonical writer-lane PR and this branch can be reduced to a Telegram backoff follow-up. As pushed, #96550 is the combined candidate.\n\n## What Problem This Solves\n\nFixes a Telegram-visible pause where a live forum-topic session could accept one reply and then reject later same-topic replies with a reply-session initialization conflict. The first layer was fresh/bursty same-session initialization colliding inside the guarded session-store commit. Live follow-up on another private topic then showed a second layer: once that failure is kept retryable, the same spooled update can be reclaimed every drain tick and repeatedly hit the busy session before the active run settles.\n\n## Root Cause\n\n`commitReplySessionInitialization` compares a whole-entry revision for the active session. That guard is correct because the commit writes the resolved session entry back into the store, but it also means any sibling initializer that commits metadata first invalidates older snapshots.\n\nOn `main`, `initSessionState` prepared the initialization snapshot outside the session-store writer lane and only retried one stale snapshot before throwing `reply session initialization conflicted for <redacted session route>`. Stacked same-session Telegram replies could therefore fail before an agent run even though rereading a fresh snapshot would be safe.\n\nThe follow-up live trace showed the transport retry side too: Telegram released that retryable failure immediately, so the same spooled update re-entered about every drain tick, failed session init again while the lane was still active/busy, and kept retrying the same private topic instead of waiting for the conflict window to clear.\n\nA full-diff review also showed that dead-lettering this conflict would be wrong: a reply-session init conflict is an optimistic-concurrency race, not proof that the Telegram update can never succeed. This revision keeps those conflicts retryable, fixes the race at the reply-session owner boundary, and adds targeted backoff for that retryable spool failure shape.\n\n## Why This Change Was Made\n\nReply-session initialization now runs inside the session-store writer lane and keeps bounded fresh-snapshot retries inside that serialized owner boundary. This preserves the existing compare-and-commit protection while absorbing normal burst contention from Telegram/webhook delivery.\n\nTelegram spool release now persists the retry error metadata that the queue already tracks. When the pending update's last error is a reply-session initialization conflict, the drain loop delays retry with capped exponential backoff and reserves that Telegram lane during the delay so later same-topic updates cannot overtake it. Other topic lanes can still drain.\n\nNo timeout or Telegram spool duration behavior changes here; the custom long spool timeout is not the cause of this failure.\n\n## Upgrade And Data Compatibility\n\nNo session-entry fields, schema, storage path, or migration contract changes. Existing persisted session entries keep the same shape.\n\nThe session-store writer reentrancy is process-local queue ownership only; it does not serialize new state and does not change the on-disk session-store format.\n\nThe Telegram queue metadata change uses existing ingress-queue `attempts`, `lastAttemptAt`, and `lastError` fields that were already written by the shared queue. This PR does not add a new persisted field or migration.\n\n## User Impact\n\nTelegram forum-topic sessions should continue through bursty replies instead of pausing on transient session metadata contention. If a retryable stale replay still conflicts while the same session is busy, it backs off instead of spinning, reducing gateway load and preserving same-topic ordering until the retry can succeed.\n\n## Real Behavior Proof\n\nBefore: redacted live Gateway logs from private Telegram topics showed same-topic turns failing quickly with `reply session initialization conflicted for <redacted session route>`. A later trace showed one spooled update repeating the same retryable failure roughly every drain tick while the same topic was active.\n\nAfter: regression coverage exercises both layers without private identifiers:\n\n- seeds an existing topic session, launches six concurrent same-session initializers, and verifies every initializer fulfills against the same session entry with topic metadata persisted;\n- verifies session-store writer reentrancy runs nested same-store writes without leaking active writer state;\n- forces a retryable Telegram `reply session initialization conflicted` replay, verifies it remains pending/undead-lettered, verifies it does not retry during the first backoff window, verifies a later same-topic update does not overtake it, and verifies another topic lane can still drain.\n\nAfter rebase/live overlay proof on current head `27af2956613e6d68d8436326a87c5dc497f254e3`:\n\n- `oc-update` reset the live checkout to `origin/main` at `1aa7cafc35a`, applied this PR overlay, rebuilt core/UI, reinstalled the daemon, and passed the second gateway health check.\n- The built runtime contains both guards: `REPLY_SESSION_INIT_STALE_SNAPSHOT_RETRIES = 8` in `dist/get-reply-*` and Telegram spool conflict backoff in `dist/monitor-polling.runtime-*`.\n- The gateway is active after the fresh daemon restart.\n- Post-restart logs for the private topic marker and session-init conflict/retry-loop patterns returned no entries.\n\nCurrent visible Telegram proof is still being collected through Mantis because the local Telegram Crabbox runner requires the shared Convex proof credential file that is not present on this machine.\n\n## Evidence\n\n```text\nnode scripts/run-vitest.mjs src/auto-reply/reply/session.test.ts -t \"(serializes concurrent initializers|retries stacked stale snapshots)\"\n\nTest Files  1 passed (1)\nTests       2 passed | 119 skipped (121)\n```\n\n```text\nnode scripts/run-vitest.mjs src/config/sessions/store-writer.test.ts -t \"(runs nested writes|does not leak active writer state)\"\n\nTest Files  1 passed (1)\nTests       2 passed | 2 skipped (4)\n```\n\n```text\nnode scripts/run-vitest.mjs extensions/telegram/src/polling-session.test.ts -t \"backs off retryable reply session init conflicts\"\n\nTest Files  1 passed (1)\nTests       1 passed | 62 skipped (63)\n```\n\n```text\npnpm exec oxfmt --check --threads=1 extensions/telegram/src/polling-session.ts extensions/telegram/src/polling-session.test.ts extensions/telegram/src/telegram-ingress-spool.ts src/auto-reply/reply/session.ts src/auto-reply/reply/session.test.ts src/config/sessions/session-accessor.ts src/config/sessions/store-writer.ts src/config/sessions/store-writer.test.ts src/config/sessions/store.ts src/shared/store-writer-queue.ts\n\nAll matched files use the correct format.\n```\n\n```text\ngit diff --check origin/main...HEAD\n\n(no output)\n```\n\n```text\nOPENCLAW_UPDATE_INCLUDE_PRS=96550 oc-update <live checkout>\n\n==> Resetting main to origin/main\nHEAD is now at 1aa7cafc35a fix(github-copilot): bound model discovery and embeddings JSON response (#96499)\n==> Applying open PR overlays\napplied: #96550 fix(telegram): topic replies stall after session conflicts\n[build-all] phase timings: total 119.9s\nUpdate finalization completed.\n==> Running health check (attempt 2/3)\nDiscord: configured\nSignal: configured\nTelegram: configured\nMatrix: configured\n```\n\n```text\nsystemctl --user show openclaw-gateway.service -p ActiveState -p SubState -p ActiveEnterTimestamp\n\nActiveState=active\nSubState=running\nActiveEnterTimestamp=Thu 2026-06-25 15:50:56 EDT\n```\n\n```text\njournalctl --user -u openclaw-gateway.service --since \"2026-06-25 15:50:56\" --no-pager -g \"<redacted private topic marker>|reply session initialization conflicted|spooled update .*failed; keeping for retry\"\n\n-- No entries --\n```\n\n## Verification\n\nFocused session initialization, session writer reentrancy, Telegram spool replay regression coverage, formatting, and diff whitespace checks passed after rebasing onto latest `origin/main`. `oc-update` then applied the current PR overlay to the live checkout, rebuilt, reinstalled the daemon, and the gateway is active after restart.\n\n## What Was Not Tested\n\nI did not run the full test suite. Public proof intentionally omits private Telegram links, chat IDs, message IDs, account identifiers, raw session routes, phone numbers, endpoint details, and endpoint paths.\n\nVisible Telegram proof is pending from Mantis; local runner startup was blocked by a missing shared Convex proof credential env file.",
+        "branch": "fix/telegram-spool-session-conflict",
+        "head_sha": "27af2956613e6d68d8436326a87c5dc497f254e3",
+        "author": "vacinc",
+        "labels": [
+          "channel: telegram",
+          "size: M",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/telegram/src/polling-session.test.ts",
+            "additions": 58,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/polling-session.ts",
+            "additions": 28,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/telegram-ingress-spool.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session.test.ts",
+            "additions": 107,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session.ts",
+            "additions": 59,
+            "deletions": 25,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/session-accessor.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/store-writer.test.ts",
+            "additions": 70,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/store-writer.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/store.ts",
+            "additions": 18,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/shared/store-writer-queue.ts",
+            "additions": 42,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 10,
+        "additions": 397,
+        "deletions": 39,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96550",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96550.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 69,
+            "SKIPPED": 29,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96550:4800269623:2026-06-25T14:14:00Z:re_review",
+      "comment_id": "4800269623",
+      "comment_version_key": "4800269623:2026-06-25T14:14:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96550#issuecomment-4800269623",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96550,
+      "author": "VACInc",
+      "author_id": 3279061,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T14:14:00Z",
+      "comment_updated_at": "2026-06-25T14:14:00Z",
+      "status_comment_id": null,
       "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -62,101 +203,108 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "ensure_automerge_job",
-          "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96788.md",
-          "status": "executed",
-          "mode": "autonomous",
-          "cluster_id": "automerge-openclaw-openclaw-96788",
-          "status_detail": "written"
-        },
-        {
-          "action": "label",
-          "label": "clawsweeper:automerge",
-          "status": "executed"
-        },
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-25T20:10:38.348Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96788
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-25T20:10:39.579Z",
-          "response_comment_id": "4803736188",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): report omitted chat-history messages in truncation log",
-        "body": "## What Problem This Solves\n\n`enforceChatHistoryFinalBudget` (the final byte-budget step of the `chat.history` Gateway response) returned `placeholderCount: 0` in the branch that keeps **only the last message** while silently dropping every earlier one:\n\n```ts\nconst last = messages.at(-1);\nif (last && jsonUtf8Bytes([last]) <= maxBytes) {\n  return { messages: [last], placeholderCount: 0 }; // dropped N-1 messages, reported 0\n}\n```\n\nThe caller logs truncation only when that count is positive:\n\n```ts\nif (placeholderCount > 0) {\n  logLargePayload({ surface: \"gateway.chat.history\", action: \"truncated\", ... });\n}\n```\n\nSo whenever history was trimmed down to its last message, the count was `0`, the gate never fired, and the truncation was invisible to operators. The front byte cap (`capArrayByJsonBytes`) also drops the oldest messages without reporting a count, so that omission went unlogged too. Closes #96783.\n\n## Why This Change Was Made\n\nThe count was being assembled from per-step partial counts that did not compose: a step's \"placeholders inserted\" is not the same as \"history omitted\", and summing `replacedCount + front-cap drops + final-budget count` double-counts a message that is first replaced with a placeholder and then trimmed by the byte cap.\n\nThe fix gives the omission count a single owner that sees the whole pipeline. `enforceChatHistoryFinalBudget` now returns only its surviving messages (its message behavior is unchanged). A new `reportOmittedChatHistory` helper counts, by message identity, how many of the original messages lost their verbatim representation anywhere in the replace → cap → final-budget pipeline, and emits the diagnostic. Identity membership counts each omitted original exactly once.\n\n## User Impact\n\nOperators now get the `payload.large` / `truncated` diagnostic (and the debug line) whenever `chat.history` discards older history for any reason — drop-to-last, placeholder replacement, or front byte-cap trimming — with an accurate, non-inflated count. No API/response shape change for clients; this is purely diagnostic accounting. The internal field rename touched only the helper, its single Gateway caller, and the focused test (the TUI / embedded-stub callers read only `messages`).\n\n## Evidence\n\n**Real Gateway request (after fix).** A full `chat.history` request issued over a **booted Gateway WebSocket server** against a **real on-disk transcript** now emits the truncation diagnostic. The new regression test `chat-history-omission-request.test.ts` boots the gateway via the standard server harness, seeds a session store + transcript on disk (12 messages, budget lowered to 8 KB through the existing `setMaxChatHistoryMessagesBytesForTest` seam), then drives `rpcReq(ws, \"chat.history\", …)` end-to-end through the real `handleChatHistoryRequest` (not the budget helpers in isolation) and captures the real diagnostic event bus output:\n\n```\nchat.history real-request diagnostic: returned=3 event={\n  \"type\":\"payload.large\",\"surface\":\"gateway.chat.history\",\"action\":\"truncated\",\n  \"bytes\":25167,\"limitBytes\":8000,\"count\":9,\"reason\":\"chat_history_budget\", ...\n}\n```\n\n12 messages in, 3 survive the byte budget, 9 older messages omitted → `count: 9`.\n\n**Before (negative control).** Checking out pre-fix `main`'s `chat.ts` and running the *same* real-WS test reproduces the bug: the request still omits 9 messages but emits **no** diagnostic, so the assertion fails. The test imports only the WebSocket harness and the diagnostic bus (no changed symbols), so it compiles and runs against both `main` and the PR head — the only difference is whether the diagnostic fires.\n\n```\n$ git checkout 2e6e17f7c5 -- src/gateway/server-methods/chat.ts   # pre-fix main\n$ node scripts/run-vitest.mjs run \\\n    src/gateway/server-methods/chat-history-omission-request.test.ts\n  AssertionError: expected [] to have a length of 1 but got +0\n     78|       expect(captured).toHaveLength(1);\n  Test Files  2 failed (2)\n$ git checkout HEAD -- src/gateway/server-methods/chat.ts          # restore fix → passes\n```\n\n**Premise.** On `main` the caller computed `placeholderCount = replaced.replacedCount + bounded.placeholderCount`. The front byte cap (`capArrayByJsonBytes`) and the keep-last branch of `enforceChatHistoryFinalBudget` both omit messages without contributing to either term, so the `if (placeholderCount > 0)` gate never fired for those paths. The fix routes all omission accounting through `reportOmittedChatHistory`, which counts originals missing from the final survivor set by identity (each omitted original once).\n\n**Focused tests** exercise the real exported functions and the real WS request path:\n\n```\nnode scripts/run-vitest.mjs \\\n  src/gateway/server-methods/chat-history-omission-request.test.ts \\\n  src/gateway/server-methods/chat-history-omission-logging.test.ts \\\n  src/gateway/server-methods/chat-history-budget.test.ts\n```\n\n- `chat-history-omission-request.test.ts`: a real Gateway WS `chat.history` request emits `payload.large` / `truncated` with the unique omitted count (output above); reproduces the missing diagnostic on pre-fix `main`.\n- `chat-history-omission-logging.test.ts`: the diagnostic fires when history is trimmed, does **not** fire when nothing is omitted, and a message that is replaced and then front-capped is counted **once** (strictly less than the old additive `replacedCount + frontCapDropped` sum).\n- `chat-history-budget.test.ts`: `enforceChatHistoryFinalBudget` returns the right surviving messages (pass-through, keep-last preserving the original reference, oversized placeholder, never-empty sentinel).\n\nFormatting verified with `oxfmt`.\n\nAI-assisted.\n",
-        "branch": "fix/96783-chat-history-budget-omitted-count",
-        "head_sha": "414f885880f061508d5149a859266d7095363081",
-        "author": "zengwen-dt",
+        "title": "fix(telegram): topic replies stall after session conflicts",
+        "body": "## Summary\n\nRecover reply-session initialization when same-session Telegram/topic bursts stack optimistic-concurrency commits, and back off retryable Telegram spool replays that hit that same conflict so one update cannot hot-loop the lane.\n\nThis PR now intentionally combines two pieces:\n\n- the reply-session writer-lane/root fix from #96847; and\n- the Telegram spool retry/backoff and same-lane reservation needed for the live Telegram hot-loop observed after the first layer was fixed.\n\nIf maintainers prefer the split path, #96847 can remain the canonical writer-lane PR and this branch can be reduced to a Telegram backoff follow-up. As pushed, #96550 is the combined candidate.\n\n## What Problem This Solves\n\nFixes a Telegram-visible pause where a live forum-topic session could accept one reply and then reject later same-topic replies with a reply-session initialization conflict. The first layer was fresh/bursty same-session initialization colliding inside the guarded session-store commit. Live follow-up on another private topic then showed a second layer: once that failure is kept retryable, the same spooled update can be reclaimed every drain tick and repeatedly hit the busy session before the active run settles.\n\n## Root Cause\n\n`commitReplySessionInitialization` compares a whole-entry revision for the active session. That guard is correct because the commit writes the resolved session entry back into the store, but it also means any sibling initializer that commits metadata first invalidates older snapshots.\n\nOn `main`, `initSessionState` prepared the initialization snapshot outside the session-store writer lane and only retried one stale snapshot before throwing `reply session initialization conflicted for <redacted session route>`. Stacked same-session Telegram replies could therefore fail before an agent run even though rereading a fresh snapshot would be safe.\n\nThe follow-up live trace showed the transport retry side too: Telegram released that retryable failure immediately, so the same spooled update re-entered about every drain tick, failed session init again while the lane was still active/busy, and kept retrying the same private topic instead of waiting for the conflict window to clear.\n\nA full-diff review also showed that dead-lettering this conflict would be wrong: a reply-session init conflict is an optimistic-concurrency race, not proof that the Telegram update can never succeed. This revision keeps those conflicts retryable, fixes the race at the reply-session owner boundary, and adds targeted backoff for that retryable spool failure shape.\n\n## Why This Change Was Made\n\nReply-session initialization now runs inside the session-store writer lane and keeps bounded fresh-snapshot retries inside that serialized owner boundary. This preserves the existing compare-and-commit protection while absorbing normal burst contention from Telegram/webhook delivery.\n\nTelegram spool release now persists the retry error metadata that the queue already tracks. When the pending update's last error is a reply-session initialization conflict, the drain loop delays retry with capped exponential backoff and reserves that Telegram lane during the delay so later same-topic updates cannot overtake it. Other topic lanes can still drain.\n\nNo timeout or Telegram spool duration behavior changes here; the custom long spool timeout is not the cause of this failure.\n\n## Upgrade And Data Compatibility\n\nNo session-entry fields, schema, storage path, or migration contract changes. Existing persisted session entries keep the same shape.\n\nThe session-store writer reentrancy is process-local queue ownership only; it does not serialize new state and does not change the on-disk session-store format.\n\nThe Telegram queue metadata change uses existing ingress-queue `attempts`, `lastAttemptAt`, and `lastError` fields that were already written by the shared queue. This PR does not add a new persisted field or migration.\n\n## User Impact\n\nTelegram forum-topic sessions should continue through bursty replies instead of pausing on transient session metadata contention. If a retryable stale replay still conflicts while the same session is busy, it backs off instead of spinning, reducing gateway load and preserving same-topic ordering until the retry can succeed.\n\n## Real Behavior Proof\n\nBefore: redacted live Gateway logs from private Telegram topics showed same-topic turns failing quickly with `reply session initialization conflicted for <redacted session route>`. A later trace showed one spooled update repeating the same retryable failure roughly every drain tick while the same topic was active.\n\nAfter: regression coverage exercises both layers without private identifiers:\n\n- seeds an existing topic session, launches six concurrent same-session initializers, and verifies every initializer fulfills against the same session entry with topic metadata persisted;\n- verifies session-store writer reentrancy runs nested same-store writes without leaking active writer state;\n- forces a retryable Telegram `reply session initialization conflicted` replay, verifies it remains pending/undead-lettered, verifies it does not retry during the first backoff window, verifies a later same-topic update does not overtake it, and verifies another topic lane can still drain.\n\nAfter rebase/live overlay proof on current head `27af2956613e6d68d8436326a87c5dc497f254e3`:\n\n- `oc-update` reset the live checkout to `origin/main` at `1aa7cafc35a`, applied this PR overlay, rebuilt core/UI, reinstalled the daemon, and passed the second gateway health check.\n- The built runtime contains both guards: `REPLY_SESSION_INIT_STALE_SNAPSHOT_RETRIES = 8` in `dist/get-reply-*` and Telegram spool conflict backoff in `dist/monitor-polling.runtime-*`.\n- The gateway is active after the fresh daemon restart.\n- Post-restart logs for the private topic marker and session-init conflict/retry-loop patterns returned no entries.\n\nCurrent visible Telegram proof is still being collected through Mantis because the local Telegram Crabbox runner requires the shared Convex proof credential file that is not present on this machine.\n\n## Evidence\n\n```text\nnode scripts/run-vitest.mjs src/auto-reply/reply/session.test.ts -t \"(serializes concurrent initializers|retries stacked stale snapshots)\"\n\nTest Files  1 passed (1)\nTests       2 passed | 119 skipped (121)\n```\n\n```text\nnode scripts/run-vitest.mjs src/config/sessions/store-writer.test.ts -t \"(runs nested writes|does not leak active writer state)\"\n\nTest Files  1 passed (1)\nTests       2 passed | 2 skipped (4)\n```\n\n```text\nnode scripts/run-vitest.mjs extensions/telegram/src/polling-session.test.ts -t \"backs off retryable reply session init conflicts\"\n\nTest Files  1 passed (1)\nTests       1 passed | 62 skipped (63)\n```\n\n```text\npnpm exec oxfmt --check --threads=1 extensions/telegram/src/polling-session.ts extensions/telegram/src/polling-session.test.ts extensions/telegram/src/telegram-ingress-spool.ts src/auto-reply/reply/session.ts src/auto-reply/reply/session.test.ts src/config/sessions/session-accessor.ts src/config/sessions/store-writer.ts src/config/sessions/store-writer.test.ts src/config/sessions/store.ts src/shared/store-writer-queue.ts\n\nAll matched files use the correct format.\n```\n\n```text\ngit diff --check origin/main...HEAD\n\n(no output)\n```\n\n```text\nOPENCLAW_UPDATE_INCLUDE_PRS=96550 oc-update <live checkout>\n\n==> Resetting main to origin/main\nHEAD is now at 1aa7cafc35a fix(github-copilot): bound model discovery and embeddings JSON response (#96499)\n==> Applying open PR overlays\napplied: #96550 fix(telegram): topic replies stall after session conflicts\n[build-all] phase timings: total 119.9s\nUpdate finalization completed.\n==> Running health check (attempt 2/3)\nDiscord: configured\nSignal: configured\nTelegram: configured\nMatrix: configured\n```\n\n```text\nsystemctl --user show openclaw-gateway.service -p ActiveState -p SubState -p ActiveEnterTimestamp\n\nActiveState=active\nSubState=running\nActiveEnterTimestamp=Thu 2026-06-25 15:50:56 EDT\n```\n\n```text\njournalctl --user -u openclaw-gateway.service --since \"2026-06-25 15:50:56\" --no-pager -g \"<redacted private topic marker>|reply session initialization conflicted|spooled update .*failed; keeping for retry\"\n\n-- No entries --\n```\n\n## Verification\n\nFocused session initialization, session writer reentrancy, Telegram spool replay regression coverage, formatting, and diff whitespace checks passed after rebasing onto latest `origin/main`. `oc-update` then applied the current PR overlay to the live checkout, rebuilt, reinstalled the daemon, and the gateway is active after restart.\n\n## What Was Not Tested\n\nI did not run the full test suite. Public proof intentionally omits private Telegram links, chat IDs, message IDs, account identifiers, raw session routes, phone numbers, endpoint details, and endpoint paths.\n\nVisible Telegram proof is pending from Mantis; local runner startup was blocked by a missing shared Convex proof credential env file.",
+        "branch": "fix/telegram-spool-session-conflict",
+        "head_sha": "27af2956613e6d68d8436326a87c5dc497f254e3",
+        "author": "vacinc",
         "labels": [
-          "app: web-ui",
-          "gateway",
+          "channel: telegram",
           "size: M",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/gateway/server-methods/chat-history-budget.test.ts",
-            "additions": 5,
-            "deletions": 5,
+            "path": "extensions/telegram/src/polling-session.test.ts",
+            "additions": 58,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/chat-history-omission-logging.test.ts",
-            "additions": 121,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "extensions/telegram/src/polling-session.ts",
+            "additions": 28,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/chat-history-omission-request.test.ts",
-            "additions": 98,
+            "path": "extensions/telegram/src/telegram-ingress-spool.ts",
+            "additions": 8,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/chat.ts",
-            "additions": 57,
-            "deletions": 22,
+            "path": "src/auto-reply/reply/session.test.ts",
+            "additions": 107,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session.ts",
+            "additions": 59,
+            "deletions": 25,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/session-accessor.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/store-writer.test.ts",
+            "additions": 70,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/store-writer.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/store.ts",
+            "additions": 18,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/shared/store-writer-queue.ts",
+            "additions": 42,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 281,
-        "deletions": 27,
+        "changedFiles": 10,
+        "additions": 397,
+        "deletions": 39,
         "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-96788",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96788.md",
+        "cluster_id": null,
+        "job_path": null,
         "source_job_path": null,
-        "has_automerge_job": true,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96788",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96788.md",
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96550",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96550.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 99,
+          "gatingTotal": 94,
           "counts": {
-            "SUCCESS": 64,
-            "SKIPPED": 32,
+            "SUCCESS": 69,
+            "SKIPPED": 29,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -165,25 +313,26 @@
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6536,
+    "total_ms": 2473,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 503
+        "ms": 447
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1883
+        "ms": 1652
       },
       {
         "name": "classify_comment_commands",
-        "ms": 5
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -195,7 +344,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 4124
+        "ms": 352
       },
       {
         "name": "append_ledger",
