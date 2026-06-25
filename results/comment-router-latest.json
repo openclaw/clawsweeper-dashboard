@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T10:33:49.291Z",
+  "generated_at": "2026-06-25T10:34:00.051Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T07:33:46.305Z",
+  "since": "2026-06-25T07:33:59.684Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96740
+    96739
   ],
-  "comment_ids": [
-    4798291172
-  ],
-  "status_comment_id": 4798291475,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,296 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96740:4798291172:2026-06-25T10:32:40Z:re_review",
-      "comment_id": "4798291172",
-      "comment_version_key": "4798291172:2026-06-25T10:32:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96740#issuecomment-4798291172",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 96740,
-      "author": "anagnorisis2peripeteia",
-      "author_id": 129746152,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T10:32:40Z",
-      "comment_updated_at": "2026-06-25T10:32:40Z",
-      "status_comment_id": 4798291475,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-25T10:33:50.395Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96740
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-25T10:33:51.739Z",
-          "response_comment_id": "4798291475",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(attach): record + resume the Claude cli session bound to an attach session",
-        "body": "## What Problem This Solves\n\nPR #96454 launches Claude Code bound to a gateway session, but the conversation is invisible to OpenClaw and lost on exit: the gateway never learns *which* Claude cli session the attach started, so it can't surface the transcript or let you continue the same conversation on the next attach.\n\n## Why This Change Was Made\n\nThis is the **resume + recording** piece of the `attach` surface (tracking: openclaw/openclaw#96205, PR4). `openclaw attach` now starts Claude with a **known** session id (`claude --session-id <uuid>`) and **adopts** it into the gateway session — persisting the `{sessionKey ↔ cliSessionId}` binding. That binding does double duty:\n- **Recording** — the gateway's existing history-import path (`resolveClaudeCliBindingSessionId` → `readClaudeCliSessionMessages` → `augmentChatHistoryWithCliSessionImports`) surfaces the attach conversation in `chat.history`. It was never wired to attach because nothing told the gateway the session id.\n- **Resume** — the next attach to the same gateway session **and same cwd** resumes it (`claude --resume <id>`). Claude scopes sessions per project, so the binding records a `cwdHash` (`hashCliSessionText`) and `attach.grant` returns `resumeSessionId` only on a cwd match — mirroring the cli-backend's existing cwd-invalidation (`cli-session.ts`). A different cwd starts fresh (a different project is a different conversation), so a stale/foreign session never fails `claude --resume`.\n\nIt reuses existing storage end-to-end — `setCliSessionBinding` (with `cwdHash`) + the atomic `patchSessionEntry` write (which preserves other providers' bindings + creates the row if missing). **No** new tables, no `session-sync`/`meta.json`, no `conversations_list`.\n\n## User Impact\n\n- `openclaw attach` starts Claude with a known `--session-id` and binds it; re-attaching to the same session **resumes** the same conversation (`--resume`).\n- The attach conversation is **recorded** (surfaced in gateway chat history) via the existing import path.\n- New gateway method **`attach.adopt({ token, cliSessionId })`** (`operator.admin`); **`attach.grant` now also returns `resumeSessionId`**. Both additive to the (unreleased) attach surface; no protocol bump.\n- **No change** to the cli-backend path or existing commands. Adopt is best-effort — a failed adopt never blocks the launch.\n\n## Evidence\n\n- **Gateway tests (16)**: grant/revoke/ttl + `resumeSessionId` returned **only on cwd match** + `attach.adopt` persists the `claude-cli` binding (with `cwdHash`) **preserving other providers' bindings** + `persisted` flag + adopt validation (missing field / unknown grant → `INVALID_REQUEST`).\n- **CLI tests (14)**: the `--session-id`+adopt path (cwd sent), the `--resume` path, malformed-grant/expiry handling, and the spawn/revoke + signal-detach lifecycle.\n- Build, oxlint, **import-cycles** all clean; the 276-test gateway suite + the advertised-method-list test pass with `attach.adopt` added.\n- **Stack** (each gated on exit code): PR4 delta is 6 files on top of PR2; full stack vs main is 13 files. Stacked on #96454 (PR2) / #96351 (PR1).\n- Mutation **68%**; autoreview clean (cwd-encoding + cwd-orphan findings fixed); real-behavior proof **not applicable** (CLI/gateway, no live surface — covered by unit tests + source inspection; gate4 `realBehaviorProof: not_applicable`).\n- `claude --resume <uuid>` parses the UUID **as the session id** (verified: `claude --resume <missing>` → \"No conversation found with session ID: …\"), so the `[\"--resume\", id]` arg form is correct.\n\n**Risks → mitigations:** adopt is best-effort (failed adopt never blocks launch); the binding is grant-scoped (`token → sessionKey`, never header-trusted); resume is cwd-scoped (`cwdHash` gate) so a foreign/stale session never fails the launch; the binding write is atomic (`patchSessionEntry`) so concurrent provider bindings aren't lost.\n",
-        "branch": "feat/attach-resume",
-        "head_sha": "dd6169271097b93c8648c621c804beaf684e1efb",
-        "author": "anagnorisis2peripeteia",
-        "labels": [
-          "gateway",
-          "cli",
-          "size: XL"
-        ],
-        "files": [
-          {
-            "path": "src/cli/attach-cli.action.test.ts",
-            "additions": 200,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cli/attach-cli.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cli/attach-cli.ts",
-            "additions": 215,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cli/program/register.subclis-core.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/program/subcli-descriptors.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/mcp-grant-store.test.ts",
-            "additions": 91,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/mcp-grant-store.ts",
-            "additions": 128,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/mcp-http.request.ts",
-            "additions": 38,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/mcp-http.test.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/methods/core-descriptors.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/attach.test.ts",
-            "additions": 195,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-methods/attach.ts",
-            "additions": 121,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 13,
-        "additions": 1088,
-        "deletions": 7,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96740",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96740.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 95,
-          "gatingTotal": 90,
-          "counts": {
-            "SUCCESS": 24,
-            "IN_PROGRESS": 36,
-            "SKIPPED": 32,
-            "QUEUED": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:QUEUED",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:QUEUED",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:QUEUED",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:QUEUED",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "live_worker_capacity_before_dispatch": {
-    "repo": "openclaw/clawsweeper",
-    "workflow": "repair-cluster-worker.yml",
-    "run_name_prefix": "automerge repair",
-    "active": 1,
-    "requested": 1,
-    "max_live_workers": 12,
-    "available": 11,
-    "active_runs": [
-      {
-        "databaseId": 28162923816,
-        "status": "in_progress",
-        "conclusion": null,
-        "createdAt": "2026-06-25T10:11:51Z",
-        "updatedAt": "2026-06-25T10:23:22Z",
-        "url": "https://github.com/openclaw/clawsweeper/actions/runs/28162923816",
-        "displayTitle": "automerge repair jobs/openclaw/inbox/automerge-openclaw-spogo-33.md"
-      }
-    ]
-  },
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6244,
+    "total_ms": 632,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 652
+        "ms": 357
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2321
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -332,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3248
+        "ms": 265
       },
       {
         "name": "append_ledger",
