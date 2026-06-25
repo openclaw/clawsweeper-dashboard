@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T18:13:34.431Z",
+  "generated_at": "2026-06-25T18:14:41.662Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T15:13:32.012Z",
+  "since": "2026-06-25T15:14:41.432Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96841
+    96821
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,195 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96841:4802672540:2026-06-25T18:13:28Z:clawsweeper_needs_human",
-      "comment_id": "4802672540",
-      "comment_version_key": "4802672540:2026-06-25T18:13:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96841#issuecomment-4802672540",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96841,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T18:00:14Z",
-      "comment_updated_at": "2026-06-25T18:13:28Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- No automated repair is needed from this review; maintainers need to review the session-state contract and wait for current-head CI/build proof.; Cleared: The diff only changes in-process claude-cli session-binding logic and tests; no dependency, workflow, secret, permission, or supply-chain surface changed. (sha=589942798d9203024468424f342e0c2d35b21e6f)",
-      "review_summary": "The branch preserves claude-cli warm-stdin bindings after failed native transcript probes and forwards missing-transcript candidates into prepare-time raw reseed, with regression tests.\n\nPR surface: Source +22, Tests +113. Total +135 across 4 files.\n\nReproducibility: yes. Source inspection gives a high-confidence reproduction path: current main clears the warm-stdin binding after a failed native transcript probe and drops the missing-transcript candidate before prepare can arm raw reseed; I did not run a live claude-cli session in this read-only review.",
-      "review_followup": "- No automated repair is needed from this review; maintainers need to review the session-state contract and wait for current-head CI/build proof.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "589942798d9203024468424f342e0c2d35b21e6f",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): recover claude-cli warm-stdin continuity when no native transcript is written (reseed candidate not dropped)",
-        "body": "## Summary\n\nFixes #96564. Persisting the claude-cli session binding across turns (what #96584 and #96579 did) is **necessary but not sufficient** — under the bug condition (a warm-stdin `claude-cli` turn where no native transcript is written) continuity still does not recover. The missing second half lives in `resolveReusableCliSessionBinding` (`src/agents/command/attempt-execution.ts`), which on a missing transcript clears the store **and returns `undefined`**, starving `prepare`'s already-correct reseed of the candidate session id. This PR adds both halves, with a regression test that fails on `main` and passes with the fix.\n\nEach half is a no-op alone; both are required.\n\n## Root cause\n\nThe reseed-from-OpenClaw-transcript path in `prepare` is fully built and armed — it is simply never fed a candidate under the bug condition:\n\n1. `resolveReusableCliSessionBinding` (`src/agents/command/attempt-execution.ts`): when the provider is claude-cli, a binding exists, but `claudeCliSessionTranscriptHasContent(...)` is `false` (no native transcript), it logs `cli session reset … reason=transcript-missing`, calls `clearCliSessionInStore(...)`, then **`return undefined;`**.\n2. That `undefined` is passed into `runCliAgent`/`prepare` as both `cliSessionId` and `cliSessionBinding`, so `reusableCliSessionCandidate` collapses to `{}` and the in-`prepare` missing-transcript detector never fires.\n3. So `rawTranscriptReseedReason` stays `undefined`, and `loadCliSessionReseedMessages`'s `loadRawTail()` bails at its allowed-reason guard (the allowed set *does* include `missing-transcript`).\n4. Net: `openClawHistoryPrompt` is empty → `historyPrompt=none` → cold start, even though the binding was perfectly persisted.\n\n## The fix (two parts)\n\n- **Part 1 — persist the binding on a warm-stdin post-turn flush-probe miss** (`src/agents/cli-runner.ts`, `buildCliRunResult` + an `isWarmStdin` check at the call site). This is the binding-persistence half pioneered in #96584 (credit @xydigit-zt) and #96579 (@liuhao1024). Needed so the next turn *has* a stored binding.\n- **Part 2 — `resolveReusableCliSessionBinding` returns the binding instead of `undefined`** when the transcript is missing. The store is already cleared (so no stale `--resume` can leak to a later turn), but the candidate id now flows to `prepare`, which re-detects `missing-transcript`, keeps `useResume=false` (no phantom resume — this avoids the failure mode flagged on #96584's later prepare-time probe-skip), and arms raw-transcript reseed.\n\n## Why a test didn't catch this\n\nThe existing cli test `does not pass --resume when the stored Claude CLI transcript is missing` **asserted the buggy behavior** — that `cliSessionId`/`cliSessionBinding` are `undefined` on a missing transcript. That codified the regression, which is why it shipped and the binding-persist-only PRs don't recover continuity. This PR updates that test to assert the corrected contract: the persisted **store** binding is still cleared (no stale `--resume`), but the candidate id rides along so reseed can recover.\n\n## Tests (auth-free — no claude OAuth, no live process, no bundle)\n\nRun with: `node scripts/run-vitest.mjs src/agents/command/attempt-execution.cli.test.ts src/agents/cli-runner/prepare.test.ts`\n\n- **Regression test** (`attempt-execution.cli.test.ts`): persisted binding + no native transcript on disk → asserts `runCliAgent` receives `cliSessionId = <bound id>` (not `undefined`). **Fails on `main`** (`expected undefined to be 'cli-sid-abc'`), passes with Part 2.\n- **Companion** (`prepare.test.ts`): `missing-transcript` reason + `reseedFromRawTranscriptWhenUncompacted: true` → `reusableCliSession === { invalidatedReason: \"missing-transcript\" }` and `openClawHistoryPrompt` contains the prior conversation (reseed actually delivers). Complements `main`'s existing `#77011` test, which only asserts the invalidation reason, not reseed delivery.\n- Both files green: **102 passed**.\n\n## Real behavior proof\n\n- **Behavior addressed:** warm-stdin `claude-cli` (Max-subscription) loses multi-turn continuity when no native transcript is written — the flush-probe miss wipes the binding and reseed is starved, so every turn cold-starts.\n- **Real environment tested:** live OpenClaw 2026.6.10 + this two-part fix; real Discord DM; Max-subscription claude-cli (`liveSession: \"claude-stdio\"`); `memory-core` enabled.\n- **Exact steps or command run after this patch:** restart the gateway with the fix; multi-turn DM using a randomly generated 3-word passphrase; inspect the `cli exec:` log fields and the agent workspace file mtimes.\n- **Evidence after fix:** the recall turns logged `useResume=false session=none reuse=invalidated:missing-transcript historyPrompt=present`, with `promptChars` growing 76 → 388 → 446 (the prior conversation injected as reseed history); the passphrase was recalled. The agent workspace had **zero file writes during the test** (mtime check) and the passphrase was random, so the recall could only come from reseed — not from the memory subsystem. Unit-level: the regression test fails on `main` and passes with the fix; 102 tests green across the two files.\n- **Observed result after fix:** multi-turn continuity restored via reseed under the no-native-transcript condition; the happy path (native transcript present) is unaffected (`useResume=true`).\n- **What was not tested:** *why* a warm-stdin claude-cli session sometimes writes no native transcript at all (the trigger that puts a session into the bug condition) is not root-caused here — candidates include the deterministic slug-path resolution from #81048 vs the warm-stdin invocation path. This fix makes continuity robust **regardless** of that trigger (reseed covers the gap); eliminating the trigger is a separate, complementary improvement. The full dist bundle was not built locally (the `tsdown` bundler OOMs on the dev box); CI builds it.\n\n## Relation to existing PRs\n\n#96584 (now closed) and #96579 implement Part 1 only, so reseed is never armed and continuity does not recover under the bug condition — which is why their real-behavior proof was missing. This PR supplies the missing half (Part 2), the regression coverage, and live proof. Credit to @xydigit-zt and @liuhao1024 for the binding-persistence work.\n\nFixes #96564\n\n---\n\n*Investigation, two-part fix, and live before/after/control verification by Claude Opus 4.8, working with the repo owner.*\n",
-        "branch": "fix/claude-cli-warmstdin-reseed-continuity",
-        "head_sha": "589942798d9203024468424f342e0c2d35b21e6f",
-        "author": "bradreaves",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/cli-runner.ts",
-            "additions": 20,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner/prepare.test.ts",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/attempt-execution.cli.test.ts",
-            "additions": 49,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/attempt-execution.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 142,
-        "deletions": 7,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96841",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96841.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "SUCCESS": 32,
-            "SKIPPED": 32,
-            "IN_PROGRESS": 29,
-            "QUEUED": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:QUEUED",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:QUEUED",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:QUEUED",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:QUEUED",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2692,
+    "total_ms": 455,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 328
+        "ms": 219
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2077
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -229,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 263
+        "ms": 226
       },
       {
         "name": "append_ledger",
