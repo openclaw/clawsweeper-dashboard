@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T14:27:10.722Z",
+  "generated_at": "2026-06-25T14:27:20.021Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T11:27:08.361Z",
+  "since": "2026-06-25T11:27:15.629Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    93234
+    96106
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4800381205
+  ],
+  "status_comment_id": 4800381760,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,126 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93234:4706521256:2026-06-25T14:27:02Z:clawsweeper_needs_human",
-      "comment_id": "4706521256",
-      "comment_version_key": "4706521256:2026-06-25T14:27:02Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93234#issuecomment-4706521256",
+      "idempotency_key": "comment-router:openclaw/openclaw:96106:4800381205:2026-06-25T14:25:57Z:re_review",
+      "comment_id": "4800381205",
+      "comment_version_key": "4800381205:2026-06-25T14:25:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96106#issuecomment-4800381205",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93234,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": "main",
+      "issue_number": 96106,
+      "author": "Marvinthebored",
+      "author_id": 262704729,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-15T09:34:57Z",
-      "comment_updated_at": "2026-06-25T14:27:02Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=025dcb172f1dfbdac29eefe39e6fe1c6e35549ae)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "025dcb172f1dfbdac29eefe39e6fe1c6e35549ae",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(mattermost): backfill thread history only on first-sighting recovery",
-        "body": "## Summary\n\n- Backfill a Mattermost thread from the server **only on first-sighting recovery** (gateway restart / session clear), not on every empty pending-history window.\n- Fixes the regression flagged in review: ordinary active-thread follow-ups no longer rehydrate the whole server thread or add an awaited REST call to the inbound path.\n\n## Motivation\n\nCloses #93204.\n\nWhen the bot is re-mentioned inside an existing Mattermost thread after a gateway restart or session clear, the in-memory pending-history window is empty, so it replied without thread context. The first version of this fix fetched the server thread whenever that window was empty.\n\nAs [@clawsweeper correctly caught](https://github.com/openclaw/openclaw/pull/93234#issuecomment), the shared turn kernel clears the pending-history window after **every** successful dispatch (`src/channels/turn/kernel.ts` → `clearPendingHistoryAfterTurn`). So an empty window is also the **normal steady state** for an active thread — backfilling on a bare empty window therefore:\n\n1. rehydrated the full server thread on ordinary follow-up mentions, and\n2. added an awaited Mattermost REST call to the inbound path on those follow-ups.\n\n## The fix\n\nNew pure gate `shouldBackfillThreadFromServer` (in `thread-backfill.ts`) distinguishes recovery from steady state by **process lifetime**:\n\n- It tracks thread roots already serviced this process in a caller-owned `Set`.\n- The **first** empty-window sighting of a never-serviced root = genuine restart/session-clear recovery → backfill.\n- Any later empty window for an already-serviced root = the kernel's normal post-turn clear → **do not** backfill.\n- A root is marked serviced even when its window already had context, so a later kernel-cleared window can never re-trigger recovery.\n\n`monitor.ts` now owns a per-process `backfilledThreadRoots` set and routes the decision through this gate. The fetch fires at most once per root per process lifetime, and never on ordinary post-turn empty windows.\n\n## Real behavior proof\n\n- **Behavior addressed:** an active Mattermost thread, after the turn kernel clears its pending-history window post-turn, must NOT re-fetch and inject the full server thread on the next mention (the review's P1 regression). Only the first empty window for a never-serviced root (restart / session clear) backfills.\n- **Real environment tested:** the shipped `thread-backfill.ts` functions (`shouldBackfillThreadFromServer`, `buildThreadBackfillEntries`) loaded directly via `tsx` in a real Node v25 process and driven through the issue scenario against live process state — no test runner, no vitest, no mocked module shim. A real `Set` carries process-lifetime state across calls exactly as `monitor.ts` uses it.\n- **Exact steps or command run after this patch:**\n  ```\n  npx tsx .proof-mattermost-backfill.mjs\n  ```\n  (harness imports the shipped functions and replays: restart → first empty window; same active thread after the kernel clears the window; a different active thread that still has context; then maps a real server-thread payload.)\n- **Evidence after fix:** copied live stdout from the command above —\n  ```\n  === PR #93204 live runtime proof (process-state, no test runner) ===\n  1) restart, first empty window  -> backfill: true\n  2) post-turn kernel-cleared window (same root) -> backfill: false\n  3) active thread, window has context -> backfill: false\n  4) buildThreadBackfillEntries (current post skipped):\n  [\n    {\n      \"sender\": \"alice\",\n      \"body\": \"kickoff question\",\n      \"messageId\": \"p1\"\n    },\n    {\n      \"sender\": \"bob\",\n      \"body\": \"an answer\",\n      \"messageId\": \"p2\"\n    }\n  ]\n  PROOF_RESULT: PASS\n  ```\n- **Observed result after fix:** the restart's first empty window backfills (`true`); the **same active thread's** next empty window — left behind by the kernel's post-turn clear — returns `false`, so it does NOT re-fetch or re-inject the server thread (the P1 regression is gone); an active thread that still has in-memory context returns `false`; and `buildThreadBackfillEntries` returns the two prior posts in order with resolved sender labels, correctly skipping the current mention (`p3`). The harness asserts all four and prints `PROOF_RESULT: PASS`.\n- **What was not tested:** a fully live Mattermost server HTTP round-trip + the monitor's inbound integration end-to-end. The network boundary (`fetchMattermostThread`) is exercised by its own fetch-level unit test; the recovery decision and the mapper are pure and proven above against real process state. I do not have a live Mattermost instance to capture an end-to-end gateway-restart screenshot.\n\n## Addressing the review P1s\n\n- **Gate backfill on recovery, not empty window** — done; first-sighting-per-process gate replaces the bare empty-window condition.\n- **Regression coverage for active thread + cleared window not rehydrating** — added (unit test `does NOT rehydrate an active thread whose window the kernel cleared post-turn`, 12/12 passing) and proven live above.\n- **Awaited-REST-on-ordinary-replies risk** — eliminated; the fetch can fire at most once per root per process lifetime, never on normal follow-ups.\n",
-        "branch": "fix/93204-mattermost-thread-backfill",
-        "head_sha": "025dcb172f1dfbdac29eefe39e6fe1c6e35549ae",
-        "author": "bartok9",
-        "labels": [
-          "channel: mattermost",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/mattermost/src/mattermost/client.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/monitor.ts",
-            "additions": 71,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/thread-backfill.test.ts",
-            "additions": 204,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/thread-backfill.ts",
-            "additions": 98,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 390,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93234",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93234.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 85,
-          "gatingTotal": 80,
-          "counts": {
-            "SUCCESS": 59,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:93234:4716760487:2026-06-16T09:01:54Z:re_review",
-      "comment_id": "4716760487",
-      "comment_version_key": "4716760487:2026-06-16T09:01:54Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93234#issuecomment-4716760487",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93234,
-      "author": "Bartok9",
-      "author_id": 259807879,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-16T09:01:54Z",
-      "comment_updated_at": "2026-06-16T09:01:54Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-25T14:25:57Z",
+      "comment_updated_at": "2026-06-25T14:25:57Z",
+      "status_comment_id": 4800381760,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -167,73 +62,232 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-25T14:27:21.234Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 96106
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-25T14:27:22.892Z",
+          "response_comment_id": "4800381760",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(mattermost): backfill thread history only on first-sighting recovery",
-        "body": "## Summary\n\n- Backfill a Mattermost thread from the server **only on first-sighting recovery** (gateway restart / session clear), not on every empty pending-history window.\n- Fixes the regression flagged in review: ordinary active-thread follow-ups no longer rehydrate the whole server thread or add an awaited REST call to the inbound path.\n\n## Motivation\n\nCloses #93204.\n\nWhen the bot is re-mentioned inside an existing Mattermost thread after a gateway restart or session clear, the in-memory pending-history window is empty, so it replied without thread context. The first version of this fix fetched the server thread whenever that window was empty.\n\nAs [@clawsweeper correctly caught](https://github.com/openclaw/openclaw/pull/93234#issuecomment), the shared turn kernel clears the pending-history window after **every** successful dispatch (`src/channels/turn/kernel.ts` → `clearPendingHistoryAfterTurn`). So an empty window is also the **normal steady state** for an active thread — backfilling on a bare empty window therefore:\n\n1. rehydrated the full server thread on ordinary follow-up mentions, and\n2. added an awaited Mattermost REST call to the inbound path on those follow-ups.\n\n## The fix\n\nNew pure gate `shouldBackfillThreadFromServer` (in `thread-backfill.ts`) distinguishes recovery from steady state by **process lifetime**:\n\n- It tracks thread roots already serviced this process in a caller-owned `Set`.\n- The **first** empty-window sighting of a never-serviced root = genuine restart/session-clear recovery → backfill.\n- Any later empty window for an already-serviced root = the kernel's normal post-turn clear → **do not** backfill.\n- A root is marked serviced even when its window already had context, so a later kernel-cleared window can never re-trigger recovery.\n\n`monitor.ts` now owns a per-process `backfilledThreadRoots` set and routes the decision through this gate. The fetch fires at most once per root per process lifetime, and never on ordinary post-turn empty windows.\n\n## Real behavior proof\n\n- **Behavior addressed:** an active Mattermost thread, after the turn kernel clears its pending-history window post-turn, must NOT re-fetch and inject the full server thread on the next mention (the review's P1 regression). Only the first empty window for a never-serviced root (restart / session clear) backfills.\n- **Real environment tested:** the shipped `thread-backfill.ts` functions (`shouldBackfillThreadFromServer`, `buildThreadBackfillEntries`) loaded directly via `tsx` in a real Node v25 process and driven through the issue scenario against live process state — no test runner, no vitest, no mocked module shim. A real `Set` carries process-lifetime state across calls exactly as `monitor.ts` uses it.\n- **Exact steps or command run after this patch:**\n  ```\n  npx tsx .proof-mattermost-backfill.mjs\n  ```\n  (harness imports the shipped functions and replays: restart → first empty window; same active thread after the kernel clears the window; a different active thread that still has context; then maps a real server-thread payload.)\n- **Evidence after fix:** copied live stdout from the command above —\n  ```\n  === PR #93204 live runtime proof (process-state, no test runner) ===\n  1) restart, first empty window  -> backfill: true\n  2) post-turn kernel-cleared window (same root) -> backfill: false\n  3) active thread, window has context -> backfill: false\n  4) buildThreadBackfillEntries (current post skipped):\n  [\n    {\n      \"sender\": \"alice\",\n      \"body\": \"kickoff question\",\n      \"messageId\": \"p1\"\n    },\n    {\n      \"sender\": \"bob\",\n      \"body\": \"an answer\",\n      \"messageId\": \"p2\"\n    }\n  ]\n  PROOF_RESULT: PASS\n  ```\n- **Observed result after fix:** the restart's first empty window backfills (`true`); the **same active thread's** next empty window — left behind by the kernel's post-turn clear — returns `false`, so it does NOT re-fetch or re-inject the server thread (the P1 regression is gone); an active thread that still has in-memory context returns `false`; and `buildThreadBackfillEntries` returns the two prior posts in order with resolved sender labels, correctly skipping the current mention (`p3`). The harness asserts all four and prints `PROOF_RESULT: PASS`.\n- **What was not tested:** a fully live Mattermost server HTTP round-trip + the monitor's inbound integration end-to-end. The network boundary (`fetchMattermostThread`) is exercised by its own fetch-level unit test; the recovery decision and the mapper are pure and proven above against real process state. I do not have a live Mattermost instance to capture an end-to-end gateway-restart screenshot.\n\n## Addressing the review P1s\n\n- **Gate backfill on recovery, not empty window** — done; first-sighting-per-process gate replaces the bare empty-window condition.\n- **Regression coverage for active thread + cleared window not rehydrating** — added (unit test `does NOT rehydrate an active thread whose window the kernel cleared post-turn`, 12/12 passing) and proven live above.\n- **Awaited-REST-on-ordinary-replies risk** — eliminated; the fetch can fire at most once per root per process lifetime, never on normal follow-ups.\n",
-        "branch": "fix/93204-mattermost-thread-backfill",
-        "head_sha": "025dcb172f1dfbdac29eefe39e6fe1c6e35549ae",
-        "author": "bartok9",
+        "title": "fix(anthropic): surface reasoning and pre-tool commentary on Discord",
+        "body": "> **Current revision (head `b078781489`) — review-responded & Discord-scoped.** Addresses the ClawSweeper findings without changing any other channel:\n> - Commentary **and** thinking progress now default **off** (explicit opt-in); `progress.thinking` is contract-wired into the type, zod schema, **and** the generated channel-config metadata (validates at config-load).\n> - Message-tool-only reasoning-privacy invariant **restored** (trailing reasoning suppressed uniformly); opaque tool-call id keying restored.\n> - The `🧠`/`💬` lane markers and the thinking gate are now **Discord-scoped opt-in compositor params** — Telegram, Mattermost and every other progress-mode channel render exactly as on `main`. This PR touches no other channel.\n> - Verified live on Discord (`anthropic/claude-sonnet-4-6`), plain (`_p_`) + verbose/reasoning (`_rv_`). See the [review-response comment](https://github.com/openclaw/openclaw/pull/96106#issuecomment-4797749572) for the per-finding walkthrough.\n\n---\n\n## What Problem This Solves\n\nOn Discord, Anthropic models' **reasoning** (🧠) and **pre-tool commentary** (💬) don't surface correctly alongside tool calls:\n\n- In **plain mode** (reasoning off + verbose off) they were dropped entirely — the model *generates* them, but they never reached the streaming progress draft or the collapse-summary counters (the bar showed `💬 0 · 🧠 0` even though the content existed in the session transcript).\n- They didn't **interleave** with tool calls in arrival order — a multi-step turn collapsed multiple notes/thoughts onto a single line (edit-in-place) instead of showing `🧠 → 💬 → 🛠️ → 💬 → 🛠️` as the turn actually unfolded.\n\n## Why This Change Was Made\n\n`main` already renders reasoning/commentary lanes via the shared progress-draft compositor, but the Anthropic embedded path had three gaps, plus two delivery/counting gates that suppressed the lanes outside the narrow `stream`/`verbose` cases:\n\n1. Anthropic tool-turn narration isn't tagged as commentary, so it's never recognized/routed.\n2. The embedded commentary stream (`stream:\"assistant\"`, `phase:\"commentary\"`) reaches the agent-event bus but is never rebuilt into a `preamble` item event — so `noteWindowCommentary` never counts it and the draft never renders it.\n3. Window thinking was gated on `reasoningMode === \"stream\"`, so plain mode (reasoning *off*) dropped reasoning from the window draft and counters. Window thinking is *presentation* — it should stream for any mode except `\"on\"` (which uses durable 🧠 persistence instead).\n\nThis wires the Anthropic embedded path through `main`'s existing lane rendering — no new render surface.\n\n## User Impact\n\nAcross **plain / verbose / reasoning** modes on Discord, Anthropic turns now surface their reasoning and pre-tool commentary, **interleaved with tool calls in arrival order**, and the collapse-summary bar counts all three lanes (`🧠 N thoughts · 💬 N notes · 🛠️ N tool calls`). No config changes; no new render surface.\n\n## Evidence\n\nLive, on a build carrying these commits (Discord, `anthropic/claude-sonnet-4-6`), verified by reading the bot's actual channel messages:\n\n**Plain mode (reasoning off + verbose off):**\n- Streaming draft: `🧠 _…reasoning…_ → 💬 _First, the time:_ → 🛠️ date → 💬 _Next, the two largest files — sorting by size:_ → 🛠️ list files` — reasoning + commentary **interleaved with tools in arrival order**.\n- Collapse bar: `🧠 1 thought · 💬 3 notes · 🛠️ 4 tool calls · ⏱️ 32s` — all three lanes counted (was `💬 0 · 🧠 0` before the fix).\n\n**Verbose + reasoning mode:** commentary renders as durable messages interleaved with tools: `💬 → 🛠️ → 💬 → 🛠️ → 💬 → 🛠️`. No regression.\n\n**After-fix evidence (plain mode, reasoning off + verbose off):**\n\nStreaming draft — reasoning + commentary interleaved with the tool in arrival order:\n\n![plain streaming interleave](https://raw.githubusercontent.com/Marvinthebored/openclaw/f7aaac7bbff42c90878a626828ce2b004f90b50e/pr-proof/96106/96106-plain-streaming-interleave.png)\n\nCollapse summary — all three lanes counted:\n\n![plain collapse counts](https://raw.githubusercontent.com/Marvinthebored/openclaw/f7aaac7bbff42c90878a626828ce2b004f90b50e/pr-proof/96106/96106-plain-collapse-counts.png)\n\n\n**Persistent (verbose `_rv_`) mode (reasoning on + verbose on):** reasoning + commentary render as durable messages interleaved with tools in arrival order — the first thought surfaces as a 🧠 blockquote before the tool:\n\n![rv persistent interleave](https://raw.githubusercontent.com/Marvinthebored/openclaw/22439bc71b08fd485de9ec0bac89cbb916275831/pr-proof/96106/96106-rv-persistent-interleave.png)\n\nValidation: `tsgo` (core + test-types) pass; lane suites green (`message-handler.process.test.ts`, `embedded-agent-subscribe.handlers.messages.test.ts`, `progress-draft-compositor.test.ts` including the `\"interleaves reasoning bursts with tool calls in arrival order\"` assertion); `build-all` exit 0.\n\n## Linked context\n\n- **Fixes #96079.**\n- **Related #89473** (per-channel reasoning classification umbrella — the Discord/Anthropic sibling).\n\n\n",
+        "branch": "pr/anthropic-min",
+        "head_sha": "3dfe81de04565159cf74efa6dedbce669bc41e00",
+        "author": "marvinthebored",
         "labels": [
-          "channel: mattermost",
-          "size: M",
-          "proof: supplied",
-          "P2",
+          "docs",
+          "channel: discord",
+          "scripts",
+          "agents",
+          "size: XL",
+          "proof: sufficient",
+          "P1",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author",
+          "proof: 📸 screenshot"
         ],
         "files": [
           {
-            "path": "extensions/mattermost/src/mattermost/client.ts",
-            "additions": 17,
+            "path": "docs/.generated/config-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/streaming.md",
+            "additions": 19,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/monitor.ts",
-            "additions": 71,
+            "path": "extensions/discord/src/monitor/message-handler.draft-preview.ts",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/message-handler.process.test.ts",
+            "additions": 206,
+            "deletions": 149,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/message-handler.process.ts",
+            "additions": 207,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/plugin-sdk-surface-report.mjs",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/anthropic-transport-stream.ts",
+            "additions": 22,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/thread-backfill.test.ts",
-            "additions": 204,
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 1,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/thread-backfill.ts",
-            "additions": 98,
+            "path": "src/agents/embedded-agent-runner/run/params.ts",
+            "additions": 1,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.handlers.messages.test.ts",
+            "additions": 103,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.handlers.messages.ts",
+            "additions": 88,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.subscribeembeddedagentsession.test.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.ts",
+            "additions": 20,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.types.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-utils.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/transport-stream-shared.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/get-reply-options.types.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 42,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-from-config.ts",
+            "additions": 16,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/reply-delivery.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/progress-draft-compositor.test.ts",
+            "additions": 88,
+            "deletions": 131,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/progress-draft-compositor.ts",
+            "additions": 57,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/streaming.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/bundled-channel-config-metadata.generated.ts",
+            "additions": 18,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.discord.ts",
+            "additions": 15,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.providers-core.ts",
+            "additions": 16,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 390,
-        "deletions": 0,
+        "changedFiles": 27,
+        "additions": 1042,
+        "deletions": 382,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93234",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93234.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96106",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96106.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 85,
-          "gatingTotal": 80,
+          "total": 11,
+          "gatingTotal": 6,
           "counts": {
-            "SUCCESS": 59,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
+            "SUCCESS": 8,
+            "SKIPPED": 3
           },
           "blockers": [],
           "pending": [],
@@ -242,25 +296,24 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2705,
+    "total_ms": 8179,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 428
+        "ms": 3084
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1918
+        "ms": 1296
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -272,7 +325,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 333
+        "ms": 3777
       },
       {
         "name": "append_ledger",
