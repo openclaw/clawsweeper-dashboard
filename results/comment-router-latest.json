@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T20:11:53.764Z",
+  "generated_at": "2026-06-25T20:12:14.454Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T17:11:47.309Z",
+  "since": "2026-06-25T17:12:11.985Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    96788
+    96738
   ],
   "comment_ids": [
-    4803735690
+    4803748814
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4803749257,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96788:4803735690:2026-06-25T20:09:31Z:automerge",
-      "comment_id": "4803735690",
-      "comment_version_key": "4803735690:2026-06-25T20:09:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96788#issuecomment-4803735690",
+      "idempotency_key": "comment-router:openclaw/openclaw:96738:4803748814:2026-06-25T20:11:08Z:re_review",
+      "comment_id": "4803748814",
+      "comment_version_key": "4803748814:2026-06-25T20:11:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96738#issuecomment-4803748814",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96788,
-      "author": "Takhoffman",
-      "author_id": 781889,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T20:09:31Z",
-      "comment_updated_at": "2026-06-25T20:09:31Z",
-      "status_comment_id": null,
+      "target_branch": "main",
+      "issue_number": 96738,
+      "author": "pdurlej",
+      "author_id": 1210027,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-25T20:11:08Z",
+      "comment_updated_at": "2026-06-25T20:11:08Z",
+      "status_comment_id": 4803749257,
       "trigger": "mention",
       "command": "automerge",
       "intent": "automerge",
@@ -62,72 +62,95 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "write",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-25T20:12:15.071Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 96738
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-25T20:12:16.086Z",
+          "response_comment_id": "4803749257",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): report omitted chat-history messages in truncation log",
-        "body": "## What Problem This Solves\n\n`enforceChatHistoryFinalBudget` (the final byte-budget step of the `chat.history` Gateway response) returned `placeholderCount: 0` in the branch that keeps **only the last message** while silently dropping every earlier one:\n\n```ts\nconst last = messages.at(-1);\nif (last && jsonUtf8Bytes([last]) <= maxBytes) {\n  return { messages: [last], placeholderCount: 0 }; // dropped N-1 messages, reported 0\n}\n```\n\nThe caller logs truncation only when that count is positive:\n\n```ts\nif (placeholderCount > 0) {\n  logLargePayload({ surface: \"gateway.chat.history\", action: \"truncated\", ... });\n}\n```\n\nSo whenever history was trimmed down to its last message, the count was `0`, the gate never fired, and the truncation was invisible to operators. The front byte cap (`capArrayByJsonBytes`) also drops the oldest messages without reporting a count, so that omission went unlogged too. Closes #96783.\n\n## Why This Change Was Made\n\nThe count was being assembled from per-step partial counts that did not compose: a step's \"placeholders inserted\" is not the same as \"history omitted\", and summing `replacedCount + front-cap drops + final-budget count` double-counts a message that is first replaced with a placeholder and then trimmed by the byte cap.\n\nThe fix gives the omission count a single owner that sees the whole pipeline. `enforceChatHistoryFinalBudget` now returns only its surviving messages (its message behavior is unchanged). A new `reportOmittedChatHistory` helper counts, by message identity, how many of the original messages lost their verbatim representation anywhere in the replace → cap → final-budget pipeline, and emits the diagnostic. Identity membership counts each omitted original exactly once.\n\n## User Impact\n\nOperators now get the `payload.large` / `truncated` diagnostic (and the debug line) whenever `chat.history` discards older history for any reason — drop-to-last, placeholder replacement, or front byte-cap trimming — with an accurate, non-inflated count. No API/response shape change for clients; this is purely diagnostic accounting. The internal field rename touched only the helper, its single Gateway caller, and the focused test (the TUI / embedded-stub callers read only `messages`).\n\n## Evidence\n\n**Real Gateway request (after fix).** A full `chat.history` request issued over a **booted Gateway WebSocket server** against a **real on-disk transcript** now emits the truncation diagnostic. The new regression test `chat-history-omission-request.test.ts` boots the gateway via the standard server harness, seeds a session store + transcript on disk (12 messages, budget lowered to 8 KB through the existing `setMaxChatHistoryMessagesBytesForTest` seam), then drives `rpcReq(ws, \"chat.history\", …)` end-to-end through the real `handleChatHistoryRequest` (not the budget helpers in isolation) and captures the real diagnostic event bus output:\n\n```\nchat.history real-request diagnostic: returned=3 event={\n  \"type\":\"payload.large\",\"surface\":\"gateway.chat.history\",\"action\":\"truncated\",\n  \"bytes\":25167,\"limitBytes\":8000,\"count\":9,\"reason\":\"chat_history_budget\", ...\n}\n```\n\n12 messages in, 3 survive the byte budget, 9 older messages omitted → `count: 9`.\n\n**Before (negative control).** Checking out pre-fix `main`'s `chat.ts` and running the *same* real-WS test reproduces the bug: the request still omits 9 messages but emits **no** diagnostic, so the assertion fails. The test imports only the WebSocket harness and the diagnostic bus (no changed symbols), so it compiles and runs against both `main` and the PR head — the only difference is whether the diagnostic fires.\n\n```\n$ git checkout 2e6e17f7c5 -- src/gateway/server-methods/chat.ts   # pre-fix main\n$ node scripts/run-vitest.mjs run \\\n    src/gateway/server-methods/chat-history-omission-request.test.ts\n  AssertionError: expected [] to have a length of 1 but got +0\n     78|       expect(captured).toHaveLength(1);\n  Test Files  2 failed (2)\n$ git checkout HEAD -- src/gateway/server-methods/chat.ts          # restore fix → passes\n```\n\n**Premise.** On `main` the caller computed `placeholderCount = replaced.replacedCount + bounded.placeholderCount`. The front byte cap (`capArrayByJsonBytes`) and the keep-last branch of `enforceChatHistoryFinalBudget` both omit messages without contributing to either term, so the `if (placeholderCount > 0)` gate never fired for those paths. The fix routes all omission accounting through `reportOmittedChatHistory`, which counts originals missing from the final survivor set by identity (each omitted original once).\n\n**Focused tests** exercise the real exported functions and the real WS request path:\n\n```\nnode scripts/run-vitest.mjs \\\n  src/gateway/server-methods/chat-history-omission-request.test.ts \\\n  src/gateway/server-methods/chat-history-omission-logging.test.ts \\\n  src/gateway/server-methods/chat-history-budget.test.ts\n```\n\n- `chat-history-omission-request.test.ts`: a real Gateway WS `chat.history` request emits `payload.large` / `truncated` with the unique omitted count (output above); reproduces the missing diagnostic on pre-fix `main`.\n- `chat-history-omission-logging.test.ts`: the diagnostic fires when history is trimmed, does **not** fire when nothing is omitted, and a message that is replaced and then front-capped is counted **once** (strictly less than the old additive `replacedCount + frontCapDropped` sum).\n- `chat-history-budget.test.ts`: `enforceChatHistoryFinalBudget` returns the right surviving messages (pass-through, keep-last preserving the original reference, oversized placeholder, never-empty sentinel).\n\nFormatting verified with `oxfmt`.\n\nAI-assisted.\n",
-        "branch": "fix/96783-chat-history-budget-omitted-count",
-        "head_sha": "414f885880f061508d5149a859266d7095363081",
-        "author": "zengwen-dt",
+        "title": "fix(signal): detect native bot mentions in group gating",
+        "body": "## What Problem This Solves\n\nSignal groups can be configured with `requireMention=true` so side chatter stays quiet until the bot is explicitly mentioned. Signal native mentions arrive as structured `dataMessage.mentions[]` metadata plus object-replacement characters in the message text. The current Signal handler renders those placeholders as `@<uuid>` or `@<phone>`, then relies on text mention regexes. That means selecting the bot from Signal's native mention UI can fail to wake the bot unless a matching text fallback happens to be configured.\n\nThis also leaves `canDetectMention` tied only to configured text regexes and passes `hasAnyMention=false` even when Signal supplied structured mention metadata.\n\n## Why This Change Was Made\n\nThis patch keeps the fix inside the Signal plugin and adds a small native mention fact resolver. It compares structured Signal mention metadata against the current bot account identity:\n\n- UUID via `channels.signal.accountUuid`\n- phone number via the existing E.164 normalizer and `channels.signal.account`\n\nThe event handler now combines text fallback and native metadata:\n\n- `wasMentioned` is true for text fallback or a native mention that targets the current bot account.\n- `canDetectMention` reflects text regexes or available bot account identity.\n- `hasAnyMention` reflects valid structured Signal mention metadata so the shared mention-decision contract can distinguish command bypass from messages mentioning someone else.\n\nMentions of other participants do not trigger the bot. Missing bot identity does not become a false mention. Existing text fallback, group access checks, pending history, attachment restraint, control-command handling, direct messages, and `requireMention=false` behavior stay unchanged.\n\nThis supersedes #69413, which was closed without merge, by adding the missing capability facts, event-handler coverage, and docs.\n\n## User Impact\n\nBefore:\n\n> A user could select the bot from Signal's native mention UI in a `requireMention` group and get no response because the rendered `@uuid`/`@phone` text did not match the configured agent-name regex.\n\nAfter:\n\n> Native Signal mentions targeting the current bot account pass mention gating. Mentions of other participants remain silent and are kept only as bounded pending context. A later bot mention can include recent skipped group context and reply in the same group.\n\nDocs now describe Signal native mention behavior, `accountUuid`, text mention fallback, and a mention-gated group configuration with bounded history.\n\n## Evidence\n\n- Base: `4ecb45b chore: update default check gate expectations`\n- Commit: `83ac15c fix(signal): detect native bot mentions in group gating`\n- Static whitespace check: `git diff --check HEAD~1..HEAD`\n\nAutomated test command attempted:\n\n```bash\nnode scripts/run-vitest.mjs extensions/signal/src/monitor/event-handler.mention-gating.test.ts\n```\n\nIt could not run locally because dependency installation could not complete. Earlier `pnpm install --frozen-lockfile` attempts in the scratch checkout reached npm registry `fetch failed` / `EHOSTUNREACH`. In a fresh full checkout, `pnpm docs:list` triggered the same lockfile bootstrap but stalled after repeated native tarball download errors; the install was interrupted and `vitest` remained absent from `node_modules`.\n\nThe added tests cover:\n\n- native bot UUID mention without text mention patterns;\n- native bot phone mention with E.164 normalization;\n- native mention of another participant stays silent and records pending context;\n- malformed matching metadata does not become a bot mention;\n- no-detector behavior remains explicit;\n- helper facts for bot mention, unrelated mention, malformed span, and missing bot identity.\n\nLive Signal verification was not run from this local scratch environment.\n",
+        "branch": "codex/signal-native-mention-gating",
+        "head_sha": "83ac15c979a40b7a60777eb8fe26b2c6611835bb",
+        "author": "pdurlej",
         "labels": [
-          "app: web-ui",
-          "gateway",
+          "docs",
+          "channel: signal",
           "size: M",
-          "clawsweeper:automerge",
-          "proof: sufficient",
           "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/gateway/server-methods/chat-history-budget.test.ts",
-            "additions": 5,
-            "deletions": 5,
+            "path": "docs/channels/groups.md",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/chat-history-omission-logging.test.ts",
-            "additions": 121,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "docs/channels/signal.md",
+            "additions": 29,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/chat-history-omission-request.test.ts",
-            "additions": 98,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "extensions/signal/src/monitor/event-handler.mention-gating.test.ts",
+            "additions": 159,
+            "deletions": 4,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/chat.ts",
-            "additions": 57,
-            "deletions": 22,
+            "path": "extensions/signal/src/monitor/event-handler.ts",
+            "additions": 11,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/signal/src/monitor/mentions.ts",
+            "additions": 52,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 281,
-        "deletions": 27,
+        "changedFiles": 5,
+        "additions": 252,
+        "deletions": 10,
         "is_clawsweeper_pr": false,
         "cluster_id": "automerge-openclaw-openclaw-96788",
         "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96788.md",
         "source_job_path": null,
-        "has_automerge_job": true,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96788",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96788.md",
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96738",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96738.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 93,
+          "gatingTotal": 88,
           "counts": {
-            "SUCCESS": 64,
-            "SKIPPED": 32,
+            "SUCCESS": 61,
+            "SKIPPED": 31,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -136,22 +159,21 @@
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false,
-      "reason": "matching ClawSweeper response comment already exists"
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 6786,
+    "total_ms": 4586,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 4050
+        "ms": 564
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2391
+        "ms": 1891
       },
       {
         "name": "classify_comment_commands",
@@ -167,7 +189,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 330
+        "ms": 2105
       },
       {
         "name": "append_ledger",
