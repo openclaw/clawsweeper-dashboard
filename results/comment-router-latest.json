@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T03:53:13.594Z",
+  "generated_at": "2026-06-25T03:53:18.359Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T00:53:13.195Z",
+  "since": "2026-06-25T00:53:15.538Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96658
+    96648
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,147 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96648:4795493116:2026-06-25T03:53:10Z:clawsweeper_auto_repair",
+      "comment_id": "4795493116",
+      "comment_version_key": "4795493116:2026-06-25T03:53:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96648#issuecomment-4795493116",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96648,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T03:15:12Z",
+      "comment_updated_at": "2026-06-25T03:53:10Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=427b3a9216896796a96fb3f46c669a85af2fb46b)",
+      "review_summary": "The PR adds a durable MSTeams non-poll card-action receive/replay path backed by the channel ingress queue and lifecycle tests.\n\nPR surface: Source +376, Tests +453. Total +829 across 6 files.\n\nReproducibility: yes. at source level: current main returns the Teams OK response immediately after fire-and-forget dispatch, so dispatch failure after ACK has no durable retry path; no live Teams repro was run.",
+      "review_followup": "- [P1] Contributor action is needed for real Teams proof, and the branch also needs lint cleanup before normal maintainer review can finish.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "427b3a9216896796a96fb3f46c669a85af2fb46b",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "Fix MSTeams card actions with durable receive before ACK",
+        "body": "[AI-assisted] Claude and Codex assisted with issue analysis, implementation, review, and validation.\n\n## What Problem This Solves\n\nMSTeams non-poll `card.action` invokes were acknowledged to Teams before the agent dispatch had any durable receive record. If dispatch failed after the fast `200 OK`, the failure was only logged and the inbound action had no durable retry/replay path.\n\nTeams still needs a fast invoke ACK, but the ACK should happen after durable accept, not before the inbound event is recoverable.\n\nRoot cause: the non-poll `card.action` path used fire-and-forget `handler.run(...)` and returned `OK` immediately, while existing durable inbound primitives already exist for accepted/pending/completed/failed inbound events.\n\nSibling precedent: WhatsApp (`extensions/whatsapp/src/inbound/durable-receive.ts`) and Telegram (`extensions/telegram/src/telegram-ingress-spool.ts`) already route inbound work through durable receive/spool paths backed by the shared durable receive and ingress queue primitives (`src/channels/message/durable-receive.ts` and `src/channels/message/ingress-queue.ts`). MSTeams card.action was the path bypassing that pattern.\n\n## Why This Change Was Made\n\nThis adds a MSTeams card.action durable receive path backed by the existing channel ingress queue.\n\nReturning a dispatch failure to Teams is not the right recovery mechanism here: invoke handlers need fast responses to avoid Teams UI timeouts, and platform redelivery is not a durable replay queue for process restarts or transient agent failures. Persist-before-ACK keeps the fast invoke response while giving OpenClaw its own retry, replay, and dedupe boundary.\n\nThe change:\n\n- accepts non-poll card.action invokes into durable ingress before returning `200 OK`;\n- dispatches accepted records asynchronously;\n- marks successful dispatch complete;\n- releases failed dispatches for retry/replay;\n- replays pending durable card actions on startup;\n- continues startup replay after one pending record fails;\n- suppresses duplicate dispatch for pending/completed/failed records;\n- marks poison records failed after the retry cap.\n\n## User Impact\n\nMSTeams card actions are no longer lost just because the plugin returned the fast Teams ACK before dispatch settled. Process restarts and transient dispatch failures can now recover pending card actions, while duplicate platform deliveries do not run the same action twice.\n\nThis PR intentionally covers MSTeams non-poll `card.action` only. MSTeams ordinary text messages, SMS, and Google Chat are sibling surfaces/follow-ups, not part of this fix.\n\nKnown limitations:\n\n- A poison card action can still produce the generic failure reply once per failed attempt until the retry cap is reached.\n- Startup replay is still sequential and bounded by the durable queue retention limits; paced/background replay for large backlogs is follow-up work.\n- This does not claim MSTeams inbound is fully durable across all message types.\n\n## Evidence\n\n- `pnpm test:extension msteams`\n  - 70 files passed, 990 tests passed\n- `node scripts/run-vitest.mjs extensions/msteams/src/monitor.lifecycle.test.ts`\n  - 20 tests passed\n- `node scripts/run-tsgo.mjs -p tsconfig.extensions.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions.tsbuildinfo`\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo`\n- `git diff --check`\n- `.agents/skills/autoreview/scripts/autoreview --mode local --prompt \"...MSTeams durable card.action...\"`\n  - clean: no accepted/actionable findings reported\n",
+        "branch": "bug/msteams-durable-inbound",
+        "head_sha": "427b3a9216896796a96fb3f46c669a85af2fb46b",
+        "author": "youngting520",
+        "labels": [
+          "channel: msteams",
+          "size: L",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/msteams/src/conversation-reference.ts",
+            "additions": 46,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/msteams/src/durable-inbound.ts",
+            "additions": 213,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/msteams/src/inbound-delivery-control.ts",
+            "additions": 29,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/msteams/src/monitor-handler/message-handler.ts",
+            "additions": 24,
+            "deletions": 49,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/monitor.lifecycle.test.ts",
+            "additions": 453,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/monitor.ts",
+            "additions": 118,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 883,
+        "deletions": 54,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96648",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96648.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 92,
+          "gatingTotal": 87,
+          "counts": {
+            "SUCCESS": 56,
+            "SKIPPED": 33,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 794,
+    "total_ms": 3126,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 387
+        "ms": 403
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2406
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +181,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 395
+        "ms": 294
       },
       {
         "name": "append_ledger",
