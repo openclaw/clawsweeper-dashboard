@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T11:01:00.226Z",
+  "generated_at": "2026-06-25T11:01:31.062Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T08:00:57.769Z",
+  "since": "2026-06-25T08:01:30.484Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     96729
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4798515104
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -37,123 +39,12 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/96729#issuecomment-4797854703",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96729,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 96740,
+      "author": "anagnorisis2peripeteia",
+      "author_id": 129746152,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T09:39:50Z",
-      "comment_updated_at": "2026-06-25T11:00:54Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=b38de2302c102cc9162a37176b4965fa58c5805d)",
-      "review_summary": "The PR changes plain JSON-schema union coercion to preserve exact `null` matches, strips top-level `null` entries before bundle-MCP `callTool`, and adds unit tests for both paths.\n\nPR surface: Source +26, Tests +58. Total +84 across 4 files.\n\nReproducibility: no. high-confidence live reproduction was run in this review. Source and reporter evidence show the suspected null-to-empty-string path and MCP dispatch boundary, but there is no real awslabs EKS MCP run or raw wire capture here.",
-      "review_followup": "- [P1] Maintainers need to decide the compatibility-sensitive MCP argument contract and the contributor needs real MCP proof before this can merge.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "b38de2302c102cc9162a37176b4965fa58c5805d",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): strip null-valued optional args from MCP tool calls",
-        "body": "## Summary\n\nLLM-generated MCP tool call arguments often contain `null` for unset optional parameters. Some MCP servers (e.g., awslabs eks-mcp-server) treat JSON `null` differently from an absent key — coercing `null` to `\"\"` and causing spurious failures. Other MCP clients (Cursor, Claude Desktop) already strip null keys from arguments before sending.\n\nThis fix addresses the problem at **two layers**:\n\n1. **Validation layer** — `packages/llm-core/src/validation.ts`: `coerceWithUnionSchema` now prefers exact type matches over coercion. For `anyOf [{type: \"string\"}, {type: \"null\"}]`, `null` naturally matches `{type: \"null\"}` and is returned as-is without entering the string coercion path that would convert it to `\"\"`.\n\n2. **Runtime boundary** — `src/agents/agent-bundle-mcp-materialize.ts`: As defense-in-depth, null-valued keys are stripped at the `createExecute` boundary before `callTool` receives them, matching the behavior of other MCP clients.\n\nNot modified: MCP SDK transport layer, JSON-RPC serialization, non-object input paths, resource/prompt utility tools.\n\n## Real Behavior Proof\n\n**Environment**: Vitest unit tests.\n\n**Proof scripts**:\n- `packages/llm-core/src/validation.test.ts` — test \"preserves null in anyOf [{type: string}, {type: null}] without coercing to empty string\"\n- `src/agents/agent-bundle-mcp-tools.materialize.test.ts` — test \"strips null-valued optional arguments from MCP tool calls (issue #96716)\"\n\n**Negative Control** (before fix): `coerceWithUnionSchema` tries `{type: \"string\"}` first -> `coercePrimitiveByType(null, \"string\")` returns `\"\"` -> validator accepts `\"\"` as a valid string -> union returns `\"\"`. By the time `createExecute` runs, the value is already `\"\"`, so a `v !== null` filter misses it entirely.\n\n**After fix**:\n- Validation: `{insight_id: null, cluster_name: \"testenv\"}` -> validates to `{insight_id: null, cluster_name: \"testenv\"}` (null preserved) ✅\n- Runtime (defense-in-depth): `{insight_id: null, cluster_name: \"test\"}` -> callTool gets `{cluster_name: \"test\"}` ✅\n- `{cluster_name: \"test\"}` (no nulls) -> callTool gets `{cluster_name: \"test\"}` (unchanged) ✅\n\n**Untested**: Real MCP server integration (requires running MCP servers).\n\n## Regression Test Plan\n\n```\n$ pnpm vitest run packages/llm-core/src/validation.test.ts src/agents/agent-bundle-mcp-tools.materialize.test.ts --run\n✓ |unit| 3 passed (3)\n✓ |unit-fast| 14 passed (14)\n```\n\nAll 17 tests pass. No other files modified.\n\n## Root Cause\n\n### Issue #1: Validation-layer anyOf coercion order\n\nIn `coerceWithUnionSchema()` (`packages/llm-core/src/validation.ts:207`), union members are iterated in order and each member applies coercion before validation. For `anyOf [{type: \"string\"}, {type: \"null\"}]` with `null` input, the `{type: \"string\"}` branch coerces `null` to `\"\"` via `coercePrimitiveByType` *before* the `{type: \"null\"}` branch is ever reached. Since `\"\"` passes as a valid string, the union returns `\"\"`. Only an exact-type-first ordering guarantees that `null` finds its `{type: \"null\"}` match before being corrupted by a sibling branch's coercion.\n\n### Issue #2: Runtime-layer unconditional forwarding\n\nIn `materializeBundleMcpToolsForRun`'s `createExecute` callback, raw (or post-validation) input is passed directly to `callTool` without normalization for null-valued optional arguments. This is the last line of defense; without it, any future change to validation that lets `null` through would still fail at the MCP server.",
-        "branch": "fix/96716-mcp-strip-null-optional-args-clean",
-        "head_sha": "b38de2302c102cc9162a37176b4965fa58c5805d",
-        "author": "maweibin",
-        "labels": [
-          "agents",
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "packages/llm-core/src/validation.test.ts",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/llm-core/src/validation.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-bundle-mcp-materialize.ts",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 85,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96729",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96729.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 99,
-          "gatingTotal": 94,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 65,
-            "SKIPPED": 32,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96729:4798410834:2026-06-25T10:47:35Z:re_review",
-      "comment_id": "4798410834",
-      "comment_version_key": "4798410834:2026-06-25T10:47:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96729#issuecomment-4798410834",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96729,
-      "author": "maweibin",
-      "author_id": 18023423,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T10:47:35Z",
-      "comment_updated_at": "2026-06-25T10:47:35Z",
+      "comment_created_at": "2026-06-25T10:59:22Z",
+      "comment_updated_at": "2026-06-25T10:59:22Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -173,102 +64,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): strip null-valued optional args from MCP tool calls",
-        "body": "## Summary\n\nLLM-generated MCP tool call arguments often contain `null` for unset optional parameters. Some MCP servers (e.g., awslabs eks-mcp-server) treat JSON `null` differently from an absent key — coercing `null` to `\"\"` and causing spurious failures. Other MCP clients (Cursor, Claude Desktop) already strip null keys from arguments before sending.\n\nThis fix addresses the problem at **two layers**:\n\n1. **Validation layer** — `packages/llm-core/src/validation.ts`: `coerceWithUnionSchema` now prefers exact type matches over coercion. For `anyOf [{type: \"string\"}, {type: \"null\"}]`, `null` naturally matches `{type: \"null\"}` and is returned as-is without entering the string coercion path that would convert it to `\"\"`.\n\n2. **Runtime boundary** — `src/agents/agent-bundle-mcp-materialize.ts`: As defense-in-depth, null-valued keys are stripped at the `createExecute` boundary before `callTool` receives them, matching the behavior of other MCP clients.\n\nNot modified: MCP SDK transport layer, JSON-RPC serialization, non-object input paths, resource/prompt utility tools.\n\n## Real Behavior Proof\n\n**Environment**: Vitest unit tests.\n\n**Proof scripts**:\n- `packages/llm-core/src/validation.test.ts` — test \"preserves null in anyOf [{type: string}, {type: null}] without coercing to empty string\"\n- `src/agents/agent-bundle-mcp-tools.materialize.test.ts` — test \"strips null-valued optional arguments from MCP tool calls (issue #96716)\"\n\n**Negative Control** (before fix): `coerceWithUnionSchema` tries `{type: \"string\"}` first -> `coercePrimitiveByType(null, \"string\")` returns `\"\"` -> validator accepts `\"\"` as a valid string -> union returns `\"\"`. By the time `createExecute` runs, the value is already `\"\"`, so a `v !== null` filter misses it entirely.\n\n**After fix**:\n- Validation: `{insight_id: null, cluster_name: \"testenv\"}` -> validates to `{insight_id: null, cluster_name: \"testenv\"}` (null preserved) ✅\n- Runtime (defense-in-depth): `{insight_id: null, cluster_name: \"test\"}` -> callTool gets `{cluster_name: \"test\"}` ✅\n- `{cluster_name: \"test\"}` (no nulls) -> callTool gets `{cluster_name: \"test\"}` (unchanged) ✅\n\n**Untested**: Real MCP server integration (requires running MCP servers).\n\n## Regression Test Plan\n\n```\n$ pnpm vitest run packages/llm-core/src/validation.test.ts src/agents/agent-bundle-mcp-tools.materialize.test.ts --run\n✓ |unit| 3 passed (3)\n✓ |unit-fast| 14 passed (14)\n```\n\nAll 17 tests pass. No other files modified.\n\n## Root Cause\n\n### Issue #1: Validation-layer anyOf coercion order\n\nIn `coerceWithUnionSchema()` (`packages/llm-core/src/validation.ts:207`), union members are iterated in order and each member applies coercion before validation. For `anyOf [{type: \"string\"}, {type: \"null\"}]` with `null` input, the `{type: \"string\"}` branch coerces `null` to `\"\"` via `coercePrimitiveByType` *before* the `{type: \"null\"}` branch is ever reached. Since `\"\"` passes as a valid string, the union returns `\"\"`. Only an exact-type-first ordering guarantees that `null` finds its `{type: \"null\"}` match before being corrupted by a sibling branch's coercion.\n\n### Issue #2: Runtime-layer unconditional forwarding\n\nIn `materializeBundleMcpToolsForRun`'s `createExecute` callback, raw (or post-validation) input is passed directly to `callTool` without normalization for null-valued optional arguments. This is the last line of defense; without it, any future change to validation that lets `null` through would still fail at the MCP server.",
-        "branch": "fix/96716-mcp-strip-null-optional-args-clean",
-        "head_sha": "b38de2302c102cc9162a37176b4965fa58c5805d",
-        "author": "maweibin",
-        "labels": [
-          "agents",
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "packages/llm-core/src/validation.test.ts",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/llm-core/src/validation.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-bundle-mcp-materialize.ts",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 85,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96729",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96729.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 99,
-          "gatingTotal": 94,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 65,
-            "SKIPPED": 32,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2780,
+    "total_ms": 2100,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 379
+        "ms": 564
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2061
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -280,7 +93,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 313
+        "ms": 1522
       },
       {
         "name": "append_ledger",
