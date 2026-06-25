@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T08:41:34.886Z",
+  "generated_at": "2026-06-25T08:42:16.707Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T05:41:34.515Z",
+  "since": "2026-06-25T05:42:13.224Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96710
+    96702
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,222 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96702:4797179315:2026-06-25T08:42:08Z:clawsweeper_needs_human",
+      "comment_id": "4797179315",
+      "comment_version_key": "4797179315:2026-06-25T08:42:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96702#issuecomment-4797179315",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96702,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T08:11:19Z",
+      "comment_updated_at": "2026-06-25T08:42:08Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] The code and proof are strong enough for maintainer review, but the plugin API overlap question is a maintainer compatibility decision rather than a safe automated repair.; Cleared: No security-sensitive file, dependency, workflow, secret, lockfile, or supply-chain surface is changed by this small CLI/test diff. (sha=9e40706668a3952988ad6f7bc4c151b5968f6f0a)",
+      "review_summary": "The PR adds an argv-based guard in `registerNodesCli` so built-in `openclaw nodes` subcommands skip plugin CLI/runtime registration while unknown plugin-provided node subcommands still trigger lazy plugin registration.\n\nPR surface: Source +24, Tests +10. Total +34 across 2 files.\n\nReproducibility: yes. Source inspection shows current main unconditionally enters plugin CLI registration inside `registerNodesCli`, and the linked issue plus PR proof show the observable slow/plugin-load path for `nodes status/list`.",
+      "review_followup": "- [P2] The code and proof are strong enough for maintainer review, but the plugin API overlap question is a maintainer compatibility decision rather than a safe automated repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "9e40706668a3952988ad6f7bc4c151b5968f6f0a",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cli): keep built-in nodes commands off the plugin load path",
+        "body": "## What Problem This Solves\n\n`openclaw nodes status` / `openclaw nodes list` are lightweight built-in CLI commands, but on recent versions they load the full plugin CLI/runtime during command registration. `registerNodesCli` (`src/cli/nodes-cli/register.ts`) unconditionally calls `registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, { mode: \"lazy\", primary: \"nodes\" })`, so enabled plugins initialize even for these built-in commands.\n\nThis is a regression: the reporter observed `openclaw nodes status --json --connected` taking ~10.5s on 2026.5.28 vs ~1.3s on 2026.5.7, and confirmed that removing the unconditional plugin registration drops it to ~0.95s. The `nodes` command family resolves to `loadPlugins: \"never\"` under the command-path policy, so it should stay on the no-plugin path. Fixes #96697.\n\n## Why This Change Was Made\n\nThe unconditional plugin registration block was introduced when canvas moved from a built-in node command to a plugin surface (commit `330ba1fa31`), so that plugin-provided node subcommands such as `nodes canvas` still register under `nodes`. Simply removing the block (or hard-guarding it on the `nodes` path policy, which is always `\"never\"`) would also drop plugin-provided node subcommands.\n\nThe fix keeps both properties: built-in node subcommands stay fast, and plugin-provided subcommands still resolve. After the built-in commands are registered, `registerNodesCli` now skips the plugin CLI/runtime load when the invoked subcommand is already a registered built-in (`status`, `list`, `describe`, `invoke`, `pending`, `camera`, …). Plugin load is only paid when the invoked subcommand is not a built-in (e.g. `nodes canvas`), for bare `nodes` listing, and during eager/root-help registration — preserving the full command tree where it matters.\n\nReading the actually-registered `nodes.commands` (rather than a hardcoded name list) means future built-in subcommand additions stay on the fast path automatically.\n\n## User Impact\n\n- `openclaw nodes status` / `nodes list` and other built-in node subcommands no longer trigger plugin CLI/runtime initialization, restoring fast startup for node discovery and health-check automation.\n- Plugin-provided node subcommands (e.g. `nodes canvas`) and `nodes` help/listing are unchanged.\n- No config, schema, or public CLI surface changes.\n\n## Evidence\n\n### Real behavior proof\n\nRan the actual CLI from source (`node --import tsx` → `runCli`) with bundled plugins present. The \"Config warnings: plugins: …\" line is emitted only when the plugin CLI/runtime load path runs during registration, so it is a direct signal of whether plugins were loaded.\n\n**Before fix** (parent commit, unconditional registration) — `nodes status` loads plugins:\n\n```\n$ openclaw nodes status --json --connected\nConfig warnings:\n- plugins: plugin: OpenClaw source checkout detected without pnpm workspace dependencies; run `pnpm install` from the repo root so bundled plugins can load package-local dependencies.\n>>> PLUGINS LOADED (warning present, before any gateway call)\n```\n\n**After fix** — the same built-in command stays on the clean no-plugin path:\n\n```\n$ openclaw nodes status --json --connected\n>>> NO plugin output (no plugin CLI/runtime load); command proceeds straight to the gateway call\n```\n\n**After fix** — plugin-provided `nodes canvas` still resolves on demand (plugins loaded only here):\n\n```\n$ openclaw nodes canvas --help\nConfig warnings:\n- plugins: plugin: OpenClaw source checkout detected without pnpm workspace dependencies; ...\nUsage: openclaw nodes canvas [options] [command]\nCommands:\n  a2ui        Render A2UI content on the canvas\n  eval        Evaluate JavaScript in the canvas\n  snapshot    Capture a canvas snapshot (prints the saved path)\n  ...\n```\n\n`openclaw nodes --help` (bare) still lists `canvas` alongside the built-ins, confirming plugin extensions are preserved.\n\n### Tests\n\n`src/cli/nodes-cli.plugin-registration.test.ts` drives the **real** built-in node command registration (only the plugin-loader boundary is stubbed), so the guard is exercised against the actual registered subcommand names:\n\n- Built-in subcommands (`status`, `list`, `describe`, `invoke`, `pending`, `camera`) → `registerPluginCliCommandsFromValidatedConfig` is **not** called.\n- Plugin-provided subcommand (`nodes canvas snapshot --json`) → plugin commands registered lazily with `{ mode: \"lazy\", primary: \"nodes\" }`, and registration logs are routed to stderr in JSON mode.\n- Bare `nodes` listing → plugin subcommands still surfaced.\n- Pass-through `nodes canvas -- --json` → terminator still suppresses JSON-mode stderr routing.\n\n```\n$ node scripts/run-vitest.mjs src/cli/nodes-cli.plugin-registration.test.ts\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n\n$ node scripts/run-vitest.mjs src/cli/program.nodes-basic.e2e.test.ts\n Test Files  1 passed (1)\n      Tests  25 passed (25)\n```\n\n`oxfmt` and `oxlint` clean on the changed files. Full typecheck/build run in CI (all green).\n\n---\nAI-assisted.\n",
+        "branch": "fix/96697-nodes-skip-plugin-load-builtin",
+        "head_sha": "9e40706668a3952988ad6f7bc4c151b5968f6f0a",
+        "author": "zengwen-dt",
+        "labels": [
+          "cli",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/cli/nodes-cli.plugin-registration.test.ts",
+            "additions": 30,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/nodes-cli/register.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 54,
+        "deletions": 20,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96702",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96702.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 33,
+            "SUCCESS": 61,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96702:4797321207:2026-06-25T08:31:33Z:re_review",
+      "comment_id": "4797321207",
+      "comment_version_key": "4797321207:2026-06-25T08:31:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96702#issuecomment-4797321207",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96702,
+      "author": "ZengWen-DT",
+      "author_id": 290981215,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T08:31:33Z",
+      "comment_updated_at": "2026-06-25T08:31:33Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cli): keep built-in nodes commands off the plugin load path",
+        "body": "## What Problem This Solves\n\n`openclaw nodes status` / `openclaw nodes list` are lightweight built-in CLI commands, but on recent versions they load the full plugin CLI/runtime during command registration. `registerNodesCli` (`src/cli/nodes-cli/register.ts`) unconditionally calls `registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, { mode: \"lazy\", primary: \"nodes\" })`, so enabled plugins initialize even for these built-in commands.\n\nThis is a regression: the reporter observed `openclaw nodes status --json --connected` taking ~10.5s on 2026.5.28 vs ~1.3s on 2026.5.7, and confirmed that removing the unconditional plugin registration drops it to ~0.95s. The `nodes` command family resolves to `loadPlugins: \"never\"` under the command-path policy, so it should stay on the no-plugin path. Fixes #96697.\n\n## Why This Change Was Made\n\nThe unconditional plugin registration block was introduced when canvas moved from a built-in node command to a plugin surface (commit `330ba1fa31`), so that plugin-provided node subcommands such as `nodes canvas` still register under `nodes`. Simply removing the block (or hard-guarding it on the `nodes` path policy, which is always `\"never\"`) would also drop plugin-provided node subcommands.\n\nThe fix keeps both properties: built-in node subcommands stay fast, and plugin-provided subcommands still resolve. After the built-in commands are registered, `registerNodesCli` now skips the plugin CLI/runtime load when the invoked subcommand is already a registered built-in (`status`, `list`, `describe`, `invoke`, `pending`, `camera`, …). Plugin load is only paid when the invoked subcommand is not a built-in (e.g. `nodes canvas`), for bare `nodes` listing, and during eager/root-help registration — preserving the full command tree where it matters.\n\nReading the actually-registered `nodes.commands` (rather than a hardcoded name list) means future built-in subcommand additions stay on the fast path automatically.\n\n## User Impact\n\n- `openclaw nodes status` / `nodes list` and other built-in node subcommands no longer trigger plugin CLI/runtime initialization, restoring fast startup for node discovery and health-check automation.\n- Plugin-provided node subcommands (e.g. `nodes canvas`) and `nodes` help/listing are unchanged.\n- No config, schema, or public CLI surface changes.\n\n## Evidence\n\n### Real behavior proof\n\nRan the actual CLI from source (`node --import tsx` → `runCli`) with bundled plugins present. The \"Config warnings: plugins: …\" line is emitted only when the plugin CLI/runtime load path runs during registration, so it is a direct signal of whether plugins were loaded.\n\n**Before fix** (parent commit, unconditional registration) — `nodes status` loads plugins:\n\n```\n$ openclaw nodes status --json --connected\nConfig warnings:\n- plugins: plugin: OpenClaw source checkout detected without pnpm workspace dependencies; run `pnpm install` from the repo root so bundled plugins can load package-local dependencies.\n>>> PLUGINS LOADED (warning present, before any gateway call)\n```\n\n**After fix** — the same built-in command stays on the clean no-plugin path:\n\n```\n$ openclaw nodes status --json --connected\n>>> NO plugin output (no plugin CLI/runtime load); command proceeds straight to the gateway call\n```\n\n**After fix** — plugin-provided `nodes canvas` still resolves on demand (plugins loaded only here):\n\n```\n$ openclaw nodes canvas --help\nConfig warnings:\n- plugins: plugin: OpenClaw source checkout detected without pnpm workspace dependencies; ...\nUsage: openclaw nodes canvas [options] [command]\nCommands:\n  a2ui        Render A2UI content on the canvas\n  eval        Evaluate JavaScript in the canvas\n  snapshot    Capture a canvas snapshot (prints the saved path)\n  ...\n```\n\n`openclaw nodes --help` (bare) still lists `canvas` alongside the built-ins, confirming plugin extensions are preserved.\n\n### Tests\n\n`src/cli/nodes-cli.plugin-registration.test.ts` drives the **real** built-in node command registration (only the plugin-loader boundary is stubbed), so the guard is exercised against the actual registered subcommand names:\n\n- Built-in subcommands (`status`, `list`, `describe`, `invoke`, `pending`, `camera`) → `registerPluginCliCommandsFromValidatedConfig` is **not** called.\n- Plugin-provided subcommand (`nodes canvas snapshot --json`) → plugin commands registered lazily with `{ mode: \"lazy\", primary: \"nodes\" }`, and registration logs are routed to stderr in JSON mode.\n- Bare `nodes` listing → plugin subcommands still surfaced.\n- Pass-through `nodes canvas -- --json` → terminator still suppresses JSON-mode stderr routing.\n\n```\n$ node scripts/run-vitest.mjs src/cli/nodes-cli.plugin-registration.test.ts\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n\n$ node scripts/run-vitest.mjs src/cli/program.nodes-basic.e2e.test.ts\n Test Files  1 passed (1)\n      Tests  25 passed (25)\n```\n\n`oxfmt` and `oxlint` clean on the changed files. Full typecheck/build run in CI (all green).\n\n---\nAI-assisted.\n",
+        "branch": "fix/96697-nodes-skip-plugin-load-builtin",
+        "head_sha": "9e40706668a3952988ad6f7bc4c151b5968f6f0a",
+        "author": "zengwen-dt",
+        "labels": [
+          "cli",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/cli/nodes-cli.plugin-registration.test.ts",
+            "additions": 30,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/nodes-cli/register.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 54,
+        "deletions": 20,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96702",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96702.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 33,
+            "SUCCESS": 61,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 632,
+    "total_ms": 3791,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 360
+        "ms": 453
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 3014
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +256,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 261
+        "ms": 297
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
