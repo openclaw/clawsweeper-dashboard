@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T12:18:04.246Z",
+  "generated_at": "2026-06-25T12:18:34.756Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T09:18:02.303Z",
+  "since": "2026-06-25T09:18:32.413Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    93234
+    94772
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 5,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,252 +31,153 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93234:4706521256:2026-06-25T12:17:57Z:clawsweeper_needs_human",
-      "comment_id": "4706521256",
-      "comment_version_key": "4706521256:2026-06-25T12:17:57Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93234#issuecomment-4706521256",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:94772:4748254623:2026-06-25T12:18:28Z:clawsweeper_auto_repair",
+      "comment_id": "4748254623",
+      "comment_version_key": "4748254623:2026-06-25T12:18:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/94772#issuecomment-4748254623",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 93234,
+      "issue_number": 94772,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-15T09:34:57Z",
-      "comment_updated_at": "2026-06-25T12:17:57Z",
+      "comment_created_at": "2026-06-19T03:26:55Z",
+      "comment_updated_at": "2026-06-25T12:18:28Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=025dcb172f1dfbdac29eefe39e6fe1c6e35549ae)",
-      "review_summary": null,
-      "review_followup": null,
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=76009f4e3e16e5fad7ac86435ed2dc75ce45e1d1)",
+      "review_summary": "The branch adds a process-global channel-reload abort flag, SIGUSR1 handler calls, reload cancellation checks, a regression test, and a root proof script for the deferred channel reload versus in-process restart race.\n\nPR surface: Source +55, Tests +106, Other +131. Total +292 across 6 files.\n\nReproducibility: yes. The linked issue has concrete logs and steps, and current main shows deferred channel reload work is not owned or drained by restart; this review did not run a live gateway reproduction.",
+      "review_followup": "- [P1] The remaining action is maintainer review of competing fix shapes and contributor proof, not a safe automated repair on this branch.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "025dcb172f1dfbdac29eefe39e6fe1c6e35549ae",
+      "expected_head_sha": "76009f4e3e16e5fad7ac86435ed2dc75ce45e1d1",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(mattermost): backfill thread history only on first-sighting recovery",
-        "body": "## Summary\n\n- Backfill a Mattermost thread from the server **only on first-sighting recovery** (gateway restart / session clear), not on every empty pending-history window.\n- Fixes the regression flagged in review: ordinary active-thread follow-ups no longer rehydrate the whole server thread or add an awaited REST call to the inbound path.\n\n## Motivation\n\nCloses #93204.\n\nWhen the bot is re-mentioned inside an existing Mattermost thread after a gateway restart or session clear, the in-memory pending-history window is empty, so it replied without thread context. The first version of this fix fetched the server thread whenever that window was empty.\n\nAs [@clawsweeper correctly caught](https://github.com/openclaw/openclaw/pull/93234#issuecomment), the shared turn kernel clears the pending-history window after **every** successful dispatch (`src/channels/turn/kernel.ts` → `clearPendingHistoryAfterTurn`). So an empty window is also the **normal steady state** for an active thread — backfilling on a bare empty window therefore:\n\n1. rehydrated the full server thread on ordinary follow-up mentions, and\n2. added an awaited Mattermost REST call to the inbound path on those follow-ups.\n\n## The fix\n\nNew pure gate `shouldBackfillThreadFromServer` (in `thread-backfill.ts`) distinguishes recovery from steady state by **process lifetime**:\n\n- It tracks thread roots already serviced this process in a caller-owned `Set`.\n- The **first** empty-window sighting of a never-serviced root = genuine restart/session-clear recovery → backfill.\n- Any later empty window for an already-serviced root = the kernel's normal post-turn clear → **do not** backfill.\n- A root is marked serviced even when its window already had context, so a later kernel-cleared window can never re-trigger recovery.\n\n`monitor.ts` now owns a per-process `backfilledThreadRoots` set and routes the decision through this gate. The fetch fires at most once per root per process lifetime, and never on ordinary post-turn empty windows.\n\n## Real behavior proof\n\n- **Behavior addressed:** an active Mattermost thread, after the turn kernel clears its pending-history window post-turn, must NOT re-fetch and inject the full server thread on the next mention (the review's P1 regression). Only the first empty window for a never-serviced root (restart / session clear) backfills.\n- **Real environment tested:** the shipped `thread-backfill.ts` functions (`shouldBackfillThreadFromServer`, `buildThreadBackfillEntries`) loaded directly via `tsx` in a real Node v25 process and driven through the issue scenario against live process state — no test runner, no vitest, no mocked module shim. A real `Set` carries process-lifetime state across calls exactly as `monitor.ts` uses it.\n- **Exact steps or command run after this patch:**\n  ```\n  npx tsx .proof-mattermost-backfill.mjs\n  ```\n  (harness imports the shipped functions and replays: restart → first empty window; same active thread after the kernel clears the window; a different active thread that still has context; then maps a real server-thread payload.)\n- **Evidence after fix:** copied live stdout from the command above —\n  ```\n  === PR #93204 live runtime proof (process-state, no test runner) ===\n  1) restart, first empty window  -> backfill: true\n  2) post-turn kernel-cleared window (same root) -> backfill: false\n  3) active thread, window has context -> backfill: false\n  4) buildThreadBackfillEntries (current post skipped):\n  [\n    {\n      \"sender\": \"alice\",\n      \"body\": \"kickoff question\",\n      \"messageId\": \"p1\"\n    },\n    {\n      \"sender\": \"bob\",\n      \"body\": \"an answer\",\n      \"messageId\": \"p2\"\n    }\n  ]\n  PROOF_RESULT: PASS\n  ```\n- **Observed result after fix:** the restart's first empty window backfills (`true`); the **same active thread's** next empty window — left behind by the kernel's post-turn clear — returns `false`, so it does NOT re-fetch or re-inject the server thread (the P1 regression is gone); an active thread that still has in-memory context returns `false`; and `buildThreadBackfillEntries` returns the two prior posts in order with resolved sender labels, correctly skipping the current mention (`p3`). The harness asserts all four and prints `PROOF_RESULT: PASS`.\n- **What was not tested:** a fully live Mattermost server HTTP round-trip + the monitor's inbound integration end-to-end. The network boundary (`fetchMattermostThread`) is exercised by its own fetch-level unit test; the recovery decision and the mapper are pure and proven above against real process state. I do not have a live Mattermost instance to capture an end-to-end gateway-restart screenshot.\n\n## Addressing the review P1s\n\n- **Gate backfill on recovery, not empty window** — done; first-sighting-per-process gate replaces the bare empty-window condition.\n- **Regression coverage for active thread + cleared window not rehydrating** — added (unit test `does NOT rehydrate an active thread whose window the kernel cleared post-turn`, 12/12 passing) and proven live above.\n- **Awaited-REST-on-ordinary-replies risk** — eliminated; the fetch can fire at most once per root per process lifetime, never on normal follow-ups.\n",
-        "branch": "fix/93204-mattermost-thread-backfill",
-        "head_sha": "025dcb172f1dfbdac29eefe39e6fe1c6e35549ae",
-        "author": "bartok9",
+        "title": "fix(gateway): cancel deferred channel reload when restart becomes pending",
+        "body": "## Summary\n\n- **Behavior addressed:** When a config change triggers a channel hot-reload while a SIGUSR1-driven in-process gateway restart is in progress (or becomes pending during the channel-reload deferral), the original code race-conditions: the deferral loop runs to completion, then `applyHotReload` proceeds to call `stopChannel` + `startChannel` for the same channels that the in-process restart is also trying to start. The two `startChannel` calls collide on the same port and crash the gateway in an `EADDRINUSE` loop.\n- **Why this matters now:** Operators hitting this race see the gateway enter a crash loop after any config change that lands within the restart deferral window (typically a few hundred ms).\n- **Intended outcome:** Both the channel-reload deferral loop AND the per-channel `restartChannel` step check `isChannelReloadCancelled()` and bail out cleanly (info log + skip), so the in-process restart's own `startChannel` is the only one that runs.\n- **Out of scope:** No changes to the restart flow itself, the deferral timeout behavior, or the channel-start logic.\n\n## Linked context\n\nCloses #79487\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Deferred channel reload racing with SIGUSR1 in-process restart causes duplicate `startChannel()` → EADDRINUSE crash loop.\n- **Real environment tested:** Node.js v24.16.0 on Windows 11 x64, local openclaw checkout on branch `feat/issue-79487-channel-reload-race-deferred-reload`.\n- **Exact steps or command run after this patch**:\n\n  ```bash\n  cd work/openclaw\n  git checkout feat/issue-79487-channel-reload-race-deferred-reload\n  node --import tsx proof-79487-l2.mjs\n  ```\n\n- **Evidence after fix (terminal capture)**:\n\n  ```\n  === PR #94772 L2 Real Behavior Proof (#79487) ===\n  Node.js: v24.16.0\n  Platform: win32 x64\n  Date: 2026-06-25T12:11:31.459Z\n  Branch: feat/issue-79487-channel-reload-race-deferred-reload\n\n  --- [1/6] Module exports ---\n    abortPendingChannelReloads: function\n    createGatewayReloadHandlers: function\n    isGatewayRestartPending: function\n\n  --- [2/6] Proof A: abortPendingChannelReloads prevents channel restart ---\n    Scenario: deferred channel reload in progress, SIGUSR1 arrives,\n    abortPendingChannelReloads() called, reload should skip stop+start.\n    isGatewayRestartPending(): false (false = no actual signal)\n    stopChannel calls: 0 (expected 0)\n    startChannel calls: 0 (expected 0)\n    ✓ Both stop+start correctly blocked by durable flag\n\n  --- [3/6] Proof B: abortPendingChannelReloads works without restart signal ---\n    The flag is set from SIGUSR1 handler but does not depend on\n    restart.ts transient signal state.\n\n  --- [4/6] Proof C: stop→start recheck present ---\n    Verified via source: isChannelReloadCancelled() check exists after\n    stopChannel and before startChannel in restartChannel().\n\n  --- [5/6] Proof D: vitest regression test exists ---\n    Test: 'cancels deferred channel reload when gateway restart\n           becomes pending during deferral polling'\n    Suite: src/gateway/server-reload-handlers.test.ts\n\n  --- [6/6] Summary ---\n    ✓ Proof A: stopChannel blocked (0 calls)\n    ✓ Proof A: startChannel blocked (0 calls)\n    ✓ Proof B: abortPendingChannelReloads callable standalone\n    ✓ Proof C: stop→start recheck covers SIGUSR1-during-stop window\n    ✓ Proof D: vitest regression test covers deferred-poll cancellation\n\n    Overall: ✓ PASS\n      - pendingChannelReloadAborted=true blocks channel restart\n      - abortPendingChannelReloads() callable standalone, no restart signal needed\n      - stop→start recheck covers SIGUSR1-during-stop window\n  ```\n\n- **Real test added to the PR (in `src/gateway/server-reload-handlers.test.ts`):**\n\n  ```ts\n  it(\"cancels deferred channel reload when gateway restart becomes pending during deferral polling\", async () => {\n    // ...\n    hoisted.gatewayRestartPending.value = false;\n    vi.useFakeTimers();\n    const reloadPromise = applyHotReload(...);\n    try {\n      await Promise.resolve();\n      await vi.advanceTimersByTimeAsync(500);\n      expect(stopChannel).not.toHaveBeenCalled();\n      expect(startChannel).not.toHaveBeenCalled();\n      expect(logReload.warn).toHaveBeenCalledWith(\n        expect.stringContaining(\"deferring until 1\"),\n      );\n      // Simulate gateway restart becoming pending during deferral\n      hoisted.gatewayRestartPending.value = true;\n      await vi.advanceTimersByTimeAsync(500);\n      await reloadPromise;\n    } finally { ... cleanup ... }\n    expect(stopChannel).not.toHaveBeenCalled();\n    expect(startChannel).not.toHaveBeenCalled();\n    expect(logReload.info).toHaveBeenCalledWith(\n      expect.stringContaining(\"gateway restart is now in progress\"),\n    );\n  });\n  ```\n\n- **Observed result after fix:**\n  - Proof A (dormant-persistent): `pendingChannelReloadAborted=true` blocks restartChannel even when `isGatewayRestartPending()=false` (no actual SIGUSR1 signal). stopChannel and startChannel are never called.\n  - Proof B: `abortPendingChannelReloads()` is callable without any restart infrastructure.\n  - Proof C: stop→start recheck covers SIGUSR1 arriving during stopChannel call.\n  - Proof D: vitest passes (44/44 including new regression test).\n\n- **Before evidence (revert replay):** The original 3 `isGatewayRestartPending()` checks fail because `markGatewaySigusr1RestartHandled()` consumes the transient signal before the deferred reload wakes. Reverting to the transient-only check (removing `pendingChannelReloadAborted` from `isChannelReloadCancelled`) causes the proof to fail (stop/start called).\n\n- **What was not tested:** Live E2E EADDRINUSE scenario (requires a running gateway with a Telegram/Discord channel, triggering a config reload + SIGUSR1 restart in the deferral window). The L2 runtime harness + vitest regression test verify the same decision surface the live path uses.\n\n- **Proof limitations:** L2 runtime fixture + vitest regression test. The L2 fixture directly calls the production `applyHotReload` function with the same `restartChannel` path that the gateway uses. Live E2E with an actual Telegram channel listening on a port would constitute L3.\n\n- **Reproduction command for maintainers**:\n\n  ```bash\n  cd work/openclaw\n  git checkout feat/issue-79487-channel-reload-race-deferred-reload\n  node --import tsx proof-79487-l2.mjs && \\\n    node --import tsx scripts/run-vitest.mjs \\\n      src/gateway/server-reload-handlers.test.ts\n  ```\n\n## Tests and validation\n\n- `node --import tsx proof-79487-l2.mjs` — exit 0, 5/5 verdicts pass\n- `node --import tsx scripts/run-vitest.mjs src/gateway/server-reload-handlers.test.ts` — full suite passed including the new regression test\n- 1 new test added: `cancels deferred channel reload when gateway restart becomes pending during deferral polling`\n- All 44 existing `server-reload-handlers.test.ts` tests still pass\n\n## Conflict resolution\n\nNo conflicts against upstream/main at the time of latest push (`76009f4e`).\n\n## Risk checklist\n\n- **Did user-visible behavior change?** Yes — for any user triggering a config reload during a SIGUSR1 in-process restart, the channel reload is now skipped instead of crashing the gateway in an EADDRINUSE loop.\n- **Did config, environment, or migration behavior change?** No\n- **Did security, auth, secrets, network, or tool execution behavior change?** No\n- **Highest-risk area:** The `pendingChannelReloadAborted` flag is set from the SIGUSR1 handler and reset at `createGatewayReloadHandlers` — these are in the correct order (SIGUSR1 handler sets before `markGatewaySigusr1RestartHandled`, new lifecycle creates a fresh handler with flag=false). The stop→start recheck prevents the narrow window where SIGUSR1 arrives during stopChannel.\n\n## Diff summary\n\n```\n src/gateway/server-reload-handlers.ts      |  35 ++++++++-\n src/cli/gateway-cli/run-loop.ts            |   4 +\n src/cli/gateway-cli/lifecycle.runtime.ts   |   1 +\n src/gateway/server-reload-handlers.test.ts | 106 ++++++++++++++++++++++\n proof-79487-l2.mjs                         | 131 ++++++++++++++++++++++++++++\n 5 files changed, 275 insertions(+), 3 deletions(-)\n```\n\n## Current review state\n\n- **Next action:** Open for maintainer review. All ClawSweeper P1 findings addressed (durable `pendingChannelReloadAborted` flag replaces transient `isGatewayRestartPending` checks; `abortPendingChannelReloads()` exported via lifecycle.runtime; stop→start recheck added).\n",
+        "branch": "feat/issue-79487-channel-reload-race-deferred-reload",
+        "head_sha": "76009f4e3e16e5fad7ac86435ed2dc75ce45e1d1",
+        "author": "liuwqgit",
         "labels": [
-          "channel: mattermost",
+          "gateway",
+          "cli",
           "size: M",
-          "proof: supplied",
+          "triage: needs-real-behavior-proof",
+          "mantis: telegram-visible-proof",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
           "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/mattermost/src/mattermost/client.ts",
-            "additions": 17,
+            "path": "proof-79487-l2.mjs",
+            "additions": 131,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/gateway-cli/lifecycle.runtime.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/monitor.ts",
-            "additions": 71,
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/thread-backfill.test.ts",
-            "additions": 204,
+            "path": "src/gateway/server-reload-handlers.test.ts",
+            "additions": 106,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/thread-backfill.ts",
-            "additions": 98,
+            "path": "src/gateway/server-reload-handlers.ts",
+            "additions": 46,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/session-transcript-files.fs.ts",
-            "additions": 11,
-            "deletions": 3,
+            "path": "src/infra/restart.ts",
+            "additions": 4,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 390,
+        "changedFiles": 6,
+        "additions": 292,
         "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93234",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93234.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-94772",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94772.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 84,
-          "gatingTotal": 79,
+          "total": 96,
+          "gatingTotal": 91,
           "counts": {
-            "SUCCESS": 57,
-            "SKIPPED": 25,
-            "IN_PROGRESS": 1,
+            "SUCCESS": 61,
+            "SKIPPED": 31,
+            "IN_PROGRESS": 2,
+            "FAILURE": 1,
             "NEUTRAL": 1
           },
           "blockers": [
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-guards:FAILURE"
           ],
           "pending": [
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS"
           ],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "check-guards:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:93234:4716760487:2026-06-16T09:01:54Z:re_review",
-      "comment_id": "4716760487",
-      "comment_version_key": "4716760487:2026-06-16T09:01:54Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93234#issuecomment-4716760487",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93234,
-      "author": "Bartok9",
-      "author_id": 259807879,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-16T09:01:54Z",
-      "comment_updated_at": "2026-06-16T09:01:54Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(mattermost): backfill thread history only on first-sighting recovery",
-        "body": "## Summary\n\n- Backfill a Mattermost thread from the server **only on first-sighting recovery** (gateway restart / session clear), not on every empty pending-history window.\n- Fixes the regression flagged in review: ordinary active-thread follow-ups no longer rehydrate the whole server thread or add an awaited REST call to the inbound path.\n\n## Motivation\n\nCloses #93204.\n\nWhen the bot is re-mentioned inside an existing Mattermost thread after a gateway restart or session clear, the in-memory pending-history window is empty, so it replied without thread context. The first version of this fix fetched the server thread whenever that window was empty.\n\nAs [@clawsweeper correctly caught](https://github.com/openclaw/openclaw/pull/93234#issuecomment), the shared turn kernel clears the pending-history window after **every** successful dispatch (`src/channels/turn/kernel.ts` → `clearPendingHistoryAfterTurn`). So an empty window is also the **normal steady state** for an active thread — backfilling on a bare empty window therefore:\n\n1. rehydrated the full server thread on ordinary follow-up mentions, and\n2. added an awaited Mattermost REST call to the inbound path on those follow-ups.\n\n## The fix\n\nNew pure gate `shouldBackfillThreadFromServer` (in `thread-backfill.ts`) distinguishes recovery from steady state by **process lifetime**:\n\n- It tracks thread roots already serviced this process in a caller-owned `Set`.\n- The **first** empty-window sighting of a never-serviced root = genuine restart/session-clear recovery → backfill.\n- Any later empty window for an already-serviced root = the kernel's normal post-turn clear → **do not** backfill.\n- A root is marked serviced even when its window already had context, so a later kernel-cleared window can never re-trigger recovery.\n\n`monitor.ts` now owns a per-process `backfilledThreadRoots` set and routes the decision through this gate. The fetch fires at most once per root per process lifetime, and never on ordinary post-turn empty windows.\n\n## Real behavior proof\n\n- **Behavior addressed:** an active Mattermost thread, after the turn kernel clears its pending-history window post-turn, must NOT re-fetch and inject the full server thread on the next mention (the review's P1 regression). Only the first empty window for a never-serviced root (restart / session clear) backfills.\n- **Real environment tested:** the shipped `thread-backfill.ts` functions (`shouldBackfillThreadFromServer`, `buildThreadBackfillEntries`) loaded directly via `tsx` in a real Node v25 process and driven through the issue scenario against live process state — no test runner, no vitest, no mocked module shim. A real `Set` carries process-lifetime state across calls exactly as `monitor.ts` uses it.\n- **Exact steps or command run after this patch:**\n  ```\n  npx tsx .proof-mattermost-backfill.mjs\n  ```\n  (harness imports the shipped functions and replays: restart → first empty window; same active thread after the kernel clears the window; a different active thread that still has context; then maps a real server-thread payload.)\n- **Evidence after fix:** copied live stdout from the command above —\n  ```\n  === PR #93204 live runtime proof (process-state, no test runner) ===\n  1) restart, first empty window  -> backfill: true\n  2) post-turn kernel-cleared window (same root) -> backfill: false\n  3) active thread, window has context -> backfill: false\n  4) buildThreadBackfillEntries (current post skipped):\n  [\n    {\n      \"sender\": \"alice\",\n      \"body\": \"kickoff question\",\n      \"messageId\": \"p1\"\n    },\n    {\n      \"sender\": \"bob\",\n      \"body\": \"an answer\",\n      \"messageId\": \"p2\"\n    }\n  ]\n  PROOF_RESULT: PASS\n  ```\n- **Observed result after fix:** the restart's first empty window backfills (`true`); the **same active thread's** next empty window — left behind by the kernel's post-turn clear — returns `false`, so it does NOT re-fetch or re-inject the server thread (the P1 regression is gone); an active thread that still has in-memory context returns `false`; and `buildThreadBackfillEntries` returns the two prior posts in order with resolved sender labels, correctly skipping the current mention (`p3`). The harness asserts all four and prints `PROOF_RESULT: PASS`.\n- **What was not tested:** a fully live Mattermost server HTTP round-trip + the monitor's inbound integration end-to-end. The network boundary (`fetchMattermostThread`) is exercised by its own fetch-level unit test; the recovery decision and the mapper are pure and proven above against real process state. I do not have a live Mattermost instance to capture an end-to-end gateway-restart screenshot.\n\n## Addressing the review P1s\n\n- **Gate backfill on recovery, not empty window** — done; first-sighting-per-process gate replaces the bare empty-window condition.\n- **Regression coverage for active thread + cleared window not rehydrating** — added (unit test `does NOT rehydrate an active thread whose window the kernel cleared post-turn`, 12/12 passing) and proven live above.\n- **Awaited-REST-on-ordinary-replies risk** — eliminated; the fetch can fire at most once per root per process lifetime, never on normal follow-ups.\n",
-        "branch": "fix/93204-mattermost-thread-backfill",
-        "head_sha": "025dcb172f1dfbdac29eefe39e6fe1c6e35549ae",
-        "author": "bartok9",
-        "labels": [
-          "channel: mattermost",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/mattermost/src/mattermost/client.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/monitor.ts",
-            "additions": 71,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/thread-backfill.test.ts",
-            "additions": 204,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/thread-backfill.ts",
-            "additions": 98,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 390,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93234",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93234.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 84,
-          "gatingTotal": 79,
-          "counts": {
-            "SUCCESS": 57,
-            "SKIPPED": 25,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2189,
+    "total_ms": 2647,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 351
+        "ms": 430
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1576
+        "ms": 1900
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -288,11 +189,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 234
+        "ms": 293
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
