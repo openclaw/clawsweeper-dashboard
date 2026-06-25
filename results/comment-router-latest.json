@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T15:58:09.839Z",
+  "generated_at": "2026-06-25T15:58:19.464Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T12:58:03.166Z",
+  "since": "2026-06-25T12:58:19.036Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96776
+    96823
   ],
-  "comment_ids": [
-    4801476202
-  ],
-  "status_comment_id": 4801476998,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,132 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96776:4801476202:2026-06-25T15:57:19Z:re_review",
-      "comment_id": "4801476202",
-      "comment_version_key": "4801476202:2026-06-25T15:57:19Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96776#issuecomment-4801476202",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 96776,
-      "author": "wangmiao0668000666",
-      "author_id": 290215524,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T15:57:19Z",
-      "comment_updated_at": "2026-06-25T15:57:19Z",
-      "status_comment_id": 4801476998,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-25T15:58:10.689Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96776
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-25T15:58:13.216Z",
-          "response_comment_id": "4799890586",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(image-generation): replace unbounded response.json() with readProviderJsonResponse",
-        "body": "## What Problem This Solves\n\n`src/image-generation/openai-compatible-image-provider.ts:272` calls `await response.json()` with no byte-level cap. A hostile or malfunctioning image generation endpoint (or an intermediary) can return an oversized JSON body that exhausts process memory during JSON parsing.\n\nThis is the same bounded-read pattern Alix-007 applied to 15+ other providers (`readProviderJsonResponse`, 16 MiB cap). Image generation was one of the remaining unbounded `.json()` call sites.\n\n## Changes\n\n- `src/image-generation/openai-compatible-image-provider.ts:272` — replace `parseOpenAiCompatibleImageResponse(await response.json(), ...)` with `readProviderJsonResponse` + `parseOpenAiCompatibleImageResponse(parsedBody, ...)`. Adds `readProviderJsonResponse` to the existing SDK import.\n- `src/image-generation/openai-compatible-image-provider.test.ts` — add `readProviderJsonResponse` to the `openclaw/plugin-sdk/provider-http` mock definition so the new import resolves in tests.\n\n## Real behavior proof\n\n- **Behavior addressed**: unbounded `response.json()` on image generation HTTP responses; after the fix reads are capped at 16 MiB.\n- **Real environment tested**: a real `node:http` server bound to `127.0.0.1` returning a JSON body exceeding 16 MiB (20 MiB), plus a 1 MiB negative-control body, plus a valid OpenAI-compatible image response. Drives the production `readProviderJsonResponse` and `parseOpenAiCompatibleImageResponse` over a real TCP socket. Node v22.22.0.\n- **Exact steps**: `node --import tsx _proof_image_gen_json.mts` (proof script kept local-only, not committed).\n- **Evidence after fix**:\n  ```\n  === image-generation JSON response bounded read (cap=16777216) ===\n\n  PASS  Image generation JSON bounded: overflow; bytesSent=20971709; server.aborted=true\n  PASS  Image generation JSON negative control: small body parsed; cap did not trigger\n  PASS  Image generation JSON happy path: OpenAI-compatible response parsed (images created)\n\n  === All image-generation JSON bounded-read assertions passed ===\n  ```\n- **Observed result after fix**: `readProviderJsonResponse` threw the canonical overflow error when JSON body exceeded 16 MiB. Server-side `socket.bytesWritten` confirmed ~20 MiB was sent before cancellation.\n- **What was not tested**: live image generation API call (the proof exercises the same production SDK helper against the same shape of attack); cross-platform Node differences.\n\n## Out of scope\n\n- `extensions/googlechat/src/` — covered by separate PR (#3e, #96772).\n- `src/video-generation/dashscope-compatible.ts` — has 2 more unbounded `response.json()` calls; could be a follow-up if needed.\n\n## Risk\n\n- **Very low**: swap from `response.json()` to `readProviderJsonResponse`. Error behavior preserves the same upstream catch path — the helper throws `${label}: malformed JSON response` on parse errors, which is equivalent to the old JSON syntax error.\n- **Byte cap (16 MiB, default)**: invisible to normal-sized image responses (typically < 1 MiB). Only oversized/bodies trigger the new boundary.\n- **Existing SDK helper**: `readProviderJsonResponse` has been in `openclaw/plugin-sdk/provider-http` since the Alix-007 bounded-read sweep, used by 15+ providers.\n\n## Diff stats\n\n```\n2 files changed, 11 insertions(+), 1 deletion(-)\n```\n\nNet code change (excl. import line + mock): **1 line** (the actual call site swap).\n",
-        "branch": "fix/image-generation-bounded-read",
-        "head_sha": "7f7c2bc1fabe1acabf6c337964dcbec6b3c3f7c6",
-        "author": "wangmiao0668000666",
-        "labels": [
-          "size: XS",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/image-generation/openai-compatible-image-provider.test.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/image-generation/openai-compatible-image-provider.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 12,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96776",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96776.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SUCCESS": 63,
-            "SKIPPED": 33,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 10655,
+    "total_ms": 794,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 4568
+        "ms": 417
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2092
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -168,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3971
+        "ms": 367
       },
       {
         "name": "append_ledger",
