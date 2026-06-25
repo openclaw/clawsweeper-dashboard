@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T16:36:02.475Z",
+  "generated_at": "2026-06-25T16:36:22.501Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T13:35:58.883Z",
+  "since": "2026-06-25T13:36:22.134Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    92011
+    96827
   ],
-  "comment_ids": [
-    4801943483
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,214 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:92011:4801943483:2026-06-25T16:33:30Z:re_review",
-      "comment_id": "4801943483",
-      "comment_version_key": "4801943483:2026-06-25T16:33:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92011#issuecomment-4801943483",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 92011,
-      "author": "MertBasar0",
-      "author_id": 100199793,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T16:33:30Z",
-      "comment_updated_at": "2026-06-25T16:33:30Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): prevent recursive task execution during model fallback",
-        "body": "## Problem\n\nWhen a session's primary model becomes unavailable mid-session and a fallback model serves a turn that was triggered by an internal completion announcement, the fallback can misread the announced report as a directive and spawn duplicate work. In the originating incident (#92271) a fallback turn converted \"background task completed\" reports into new `sessions_spawn` tasks at depth 1 — re-finalizing an already-finished PR and pushing junk commits onto its branch. `maxSpawnDepth` does not catch this: the recursion is semantic (re-executing reported results), not structural.\n\n## Invariant\n\n> A fallback turn replying to completion announcements must not re-execute or re-spawn work already reported as completed.\n\nDefined once at the shared fallback/run boundary, then enforced per surface — per the review feedback.\n\n## Changes\n\n1. **Completion announcements are marked as evidence (all harnesses).** `buildAnnounceReplyInstruction` (`src/agents/subagent-announce.ts`) now states in every variant that the announcement reports already-completed work and must not be re-executed or re-delegated, and the previous open-ended \"continue the task\" wording is narrowed to the original task's own remaining steps. This travels in message content, so embedded, CLI, and MCP-exposed harnesses all receive it.\n2. **Fallback turns are identified mechanically.** `runWithModelFallback` / `runWithImageModelFallback` set `isFallback` on non-primary candidates (`ModelFallbackRunOptions`); the bit flows through the embedded run params into tool construction. Primary attempts keep their exact previous call shape.\n3. **Work-spawning is blocked at the tool choke point.** `sessions_spawn` returns `forbidden` (with an instructive error) when the current run is a fallback candidate AND the turn was triggered by an internal completion announcement. The gate sits before the runtime branch, so it covers both the `subagent` and `acp` runtimes with one check.\n4. **Completion-announce detection is a shared predicate.** `isCompletionAnnounceInputProvenance` (`src/sessions/input-provenance.ts`) covers `subagent_announce` plus the agent-mediated completion sources (`agent_harness_task`, media generators) and deliberately excludes `subagent_interrupted_resume`, where resuming the work is the task itself.\n\n## Coverage matrix (per review)\n\n| Surface | Status |\n|---|---|\n| Embedded runtime (`sessions_spawn`, subagent + ACP runtimes) | Mechanically enforced, unit-tested |\n| CLI / MCP harnesses | Covered by the content-level evidence guard in the announcement itself |\n| CLI / gateway loopback `sessions_spawn` | **Not** mechanically gated by this PR — the gateway tool-resolution path constructs `sessions_spawn` above the layer where fallback is decided, so the guard inputs are not threaded there yet. Covered only by the content-level evidence guard. Tracked as a follow-up. |\n| Codex-native `spawn_agent` | Owned by the `codex-rs` tool registry (`multi_agents_spec.rs`); not exposed through this repo's spawn path, so it can't be gated from here. Scoped to a `codex-rs` follow-up. |\n\n## Tests\n\n- `sessions-spawn-tool.test.ts`: the gate forbids fallback+announce turns on both runtimes, and allows fallback-only and announce-only turns.\n- `input-provenance.test.ts`: predicate coverage including the resume exclusion.\n- `model-fallback.probe.test.ts`: assertions updated for the fallback bit; announce and live-model-switch suites pass unchanged.\n- `pnpm tsgo` and `pnpm tsgo:test` are clean locally.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** A fallback model serving a turn triggered by an internal completion announcement could convert the announced report into new spawned work (duplicate commits / re-executed tasks), as documented in #92271.\n\n**Real environment tested:** Real OpenClaw runtime source from this branch executed on Linux (WSL2 Ubuntu, Node 22) via tsx against a freshly initialized isolated `OPENCLAW_HOME`. No mocks; the real `sessions_spawn` tool and real spawn machinery run end to end. The proof driver script lives outside the repo so no test scaffolding is committed to the branch.\n\n**Exact steps or command run after this patch:**\n\n```bash\ncd <branch-checkout> && pnpm exec tsx /home/<user>/openclaw-pr92011-proof.mts\n# driver: creates an isolated OPENCLAW_HOME, builds the real sessions_spawn tool via\n# createSessionsSpawnTool(...) once with { isFallbackRun: true, completionAnnounceTriggered: true }\n# (incident shape) and once without (normal turn), and executes the same spawn request on both.\n```\n\n**Evidence after fix:** Copied live console output from the run above.\n\nScenario A — fallback turn + completion announcement (the #92271 incident shape):\n\n```text\n=== A: fallback turn + completion announcement (must be forbidden) ===\n{\n  \"status\": \"forbidden\",\n  \"error\": \"sessions_spawn is not allowed in this turn: a fallback model is replying to an internal completion announcement. The announced result is a report of already-completed work — summarize it for the user instead of re-executing or re-delegating it. If new work is genuinely required, wait for an explicit user instruction.\"\n}\n```\n\nScenario B — identical request on a normal turn (gate must not trip; request reaches the real spawn machinery, creating a real child session key and run id, then stops only at gateway credentials in the bare proof environment):\n\n```text\n=== B: normal turn, same request (gate must not trip) ===\n{\n  \"status\": \"error\",\n  \"error\": \"gateway agent requires credentials before opening a websocket\\nFix: configure gateway.auth token/password, pair this device, or pass --token/--password.\\nConfig: /tmp/openclaw-proof-PjbSSB/.openclaw/openclaw.json\",\n  \"childSessionKey\": \"agent:main:subagent:95390638-9bac-4529-ae14-4f913e9af288\",\n  \"runId\": \"f690c275-cb30-4afd-8680-b23355e8af2d\"\n}\n```\n\n**Observed result after fix:** The incident-shaped turn is refused with a `forbidden` status and an instructive message, while the identical request on a normal turn passes the gate and proceeds into the real spawn machinery — no false positive.\n\n**Before evidence:** Documented in #92271 from a real production setup: redacted session-log and task-registry evidence showing a fallback turn spawning depth-1 duplicate tasks (including the verbatim task text \"I am passing this task because I lack the terminal execution tool\") and pushing a junk commit onto an open PR branch.\n\n**What was not tested:** A live end-to-end provider-quota exhaustion forcing a real mid-session fallback (requires burning provider quota and a full gateway/channel setup); the fallback bit itself is covered by `model-fallback.probe.test.ts`. Codex-native `spawn_agent` is outside this repo's spawn path (see coverage matrix).\n\n## Scope\n\nThis PR **mechanically** enforces the invariant on the **embedded runtime** spawn path (`sessions_spawn`, both `subagent` and `acp` runtimes), plus the content-level evidence guard that travels in announcement text to all harnesses. Two spawn surfaces are intentionally **out of scope** here and tracked as follow-ups:\n\n- **CLI / gateway loopback `sessions_spawn`** — needs the fallback/announce guard inputs threaded through the gateway tool-resolution path (a separate seam; see coverage matrix).\n- **Native Codex `spawn_agent`** — owned by `codex-rs`, needs an upstream follow-up.\n\nBecause those surfaces remain mechanically unguarded, this PR does **not** claim to fully close the linked issue on its own — using a non-closing reference so the issue stays open until the remaining surfaces are covered.\n\nRefs #92271\n\n",
-        "branch": "fix/fallback-recursive-task-execution",
-        "head_sha": "d41b6d1c0661e79ea081625ec49824931b6faf6b",
-        "author": "mertbasar0",
-        "labels": [
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-tools.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/params.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.probe.test.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.test.ts",
-            "additions": 19,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openclaw-tools.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/outcome-fallback-runtime-contract.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-announce.ts",
-            "additions": 11,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/sessions-spawn-tool.test.ts",
-            "additions": 69,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/sessions-spawn-tool.ts",
-            "additions": 18,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-run-params.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-utils.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/sessions/input-provenance.test.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/sessions/input-provenance.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 18,
-        "additions": 231,
-        "deletions": 17,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92011",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92011.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 99,
-          "gatingTotal": 94,
-          "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3961,
+    "total_ms": 596,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1231
+        "ms": 357
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2347
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -250,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 369
+        "ms": 229
       },
       {
         "name": "append_ledger",
