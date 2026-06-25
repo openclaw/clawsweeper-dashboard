@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T02:40:31.012Z",
+  "generated_at": "2026-06-25T02:40:42.709Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-24T23:40:29.209Z",
+  "since": "2026-06-24T23:40:42.318Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96607
+    96634
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,155 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96607:4794817477:2026-06-25T02:40:26Z:clawsweeper_needs_human",
-      "comment_id": "4794817477",
-      "comment_version_key": "4794817477:2026-06-25T02:40:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96607#issuecomment-4794817477",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96607,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T00:38:58Z",
-      "comment_updated_at": "2026-06-25T02:40:26Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- No automated repair is needed; maintainers should accept or tune the 16 MiB Copilot usage response cap before relying on normal exact-head merge gates.; Cleared: No new security or supply-chain concern was found; the diff narrows an unbounded response-read availability exposure without changing dependencies, workflows, secrets, permissions, or package metadata. (sha=af6a48358fa8826a59549b4dbaa8f67cf703bd11)",
-      "review_summary": "The PR routes GitHub Copilot usage success-body parsing through the plugin SDK bounded JSON reader and adds an oversized-stream cancellation regression test.\n\nPR surface: Source +4, Tests +41. Total +45 across 2 files.\n\nReproducibility: yes. Current main clearly calls `res.json()` on successful Copilot usage responses, and the PR body plus regression test exercise an oversized streamed response that demonstrates the bounded cancellation path.",
-      "review_followup": "- No automated repair is needed; maintainers should accept or tune the 16 MiB Copilot usage response cap before relying on normal exact-head merge gates.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "af6a48358fa8826a59549b4dbaa8f67cf703bd11",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(github-copilot): bound usage response reads",
-        "body": "## What Problem This Solves\n\n`fetchCopilotUsage` in `extensions/github-copilot/usage.ts` parsed the usage success\nresponse with an unbounded `await res.json()`. The shared fetch layer applies an abort\ntimeout but does **not** bound the body size, so a misbehaving or compromised\n`api.github.com/copilot_internal/user` endpoint can stream an arbitrarily large (or\n`Content-Length`-less, never-ending) JSON body that `res.json()` fully buffers into memory\nbefore parsing — a memory-pressure / hang (OOM) vector on the usage-accounting path.\n\n## Changes\n\n- Route the success-body read through the shared bounded reader\n  `readProviderJsonResponse` (re-exported via `openclaw/plugin-sdk/provider-http`), which\n  reads under the shared 16 MiB `PROVIDER_JSON_RESPONSE_MAX_BYTES` cap, **cancels the\n  underlying stream on overflow**, and throws\n  `github-copilot-usage: JSON response exceeds <N> bytes` — then `JSON.parse`s the decoded\n  prefix.\n- No new abstraction — reuses the same bounded reader the recently merged provider\n  response-limit PRs use (#95218 / #96027 / #96038), bringing GitHub Copilot usage in line\n  with the other providers' bounded JSON reads.\n\n## Real behavior proof\n\n- **Behavior addressed**: An untrusted Copilot usage success response with no\n  `Content-Length` and an oversized / never-ending body must not be buffered whole; the\n  read must stop at the cap, cancel the stream, and throw a bounded error — while valid\n  small responses still parse unchanged.\n- **Real environment tested**: A real local `node:http` server (`http.createServer`) bound\n  to `127.0.0.1`, streaming a `Content-Length`-less JSON body in 64 KiB chunks (advertised\n  ~64 MiB, 4× the 16 MiB cap). The **real exported** `fetchCopilotUsage` was driven against\n  it over a **real TCP socket** — the supplied `fetchFn` rewrites the `api.github.com` URL\n  to the loopback server and calls the global undici `fetch`, so the real\n  `fetchCopilotUsage` → `fetchJson` → real `fetch` → real socket →\n  `readProviderJsonResponse` path runs. Not an in-process `Response`. Node v22.22.0.\n- **Exact steps**: `node --import tsx _proof_copilot_usage_bound.mts` — start the server →\n  drive the **real** `fetchCopilotUsage` against `/huge` and assert it rejects + the server\n  observed the socket abort + bytes-on-wire ≪ the full body → run a negative control (the\n  OLD unbounded full-body read against the same `/huge` endpoint) → drive the real\n  `fetchCopilotUsage` against `/small` (a valid usage object) and assert it still parses.\n- **Evidence after fix**:\n  - Oversized case: `fetchCopilotUsage` threw exactly\n    `github-copilot-usage: JSON response exceeds 16777216 bytes`; the server observed the\n    socket aborted after **18,743,305 bytes** (≪ the ~67 MiB it would have streamed),\n    confirming the stream was **cancelled**, not drained.\n  - Negative control: the OLD unbounded read pulled the **full 67,108,875 bytes** (> the\n    16 MiB cap), proving the cap is load-bearing — without it the body keeps accumulating\n    past 16 MiB.\n  - Small case: `fetchCopilotUsage` parsed the valid usage JSON intact\n    (`plan=individual`, Premium used 27%, Chat used 9%).\n- **What was not tested**: Did not hit the live `api.github.com` endpoint (would not\n  reproduce a hostile oversized body); the untrusted-body behavior is fully reproduced with\n  a local streaming server over the same transport. The proof script is not committed.\n\n## Evidence\n\n```\n[proof] real node:http server on http://127.0.0.1:40987, cap=16777216 bytes, would-stream≈67108864 bytes\n\nPASS  oversized body: real fetchCopilotUsage throws the bounded cap error :: msg=\"github-copilot-usage: JSON response exceeds 16777216 bytes\"\nPASS  stream cancelled: server observed the socket abort (body not drained) :: socketAborted=true\nPASS  bytes on wire stayed near the cap, not the full ~64 MiB body :: bytesSent=18743305 (< 67108864)\nPASS  negative control: unbounded read buffers PAST the 16 MiB cap (cap is load-bearing) :: buffered=67108875 bytes (> 16777216)\nPASS  happy path: small valid usage JSON still parsed by real fetchCopilotUsage :: plan=individual Premium.used=27 Chat.used=9\n\n[proof] ALL PASS (pass=5 fail=0)\n```\n\nRegression suite + checks (worktree on `upstream/main`):\n- `node scripts/run-vitest.mjs extensions/github-copilot/models.test.ts --run` → **29/29 passed**\n  (includes a streaming-fixture regression test asserting the oversized read cancels the\n  stream and never pulls the full advertised body)\n- `oxlint extensions/github-copilot/usage.ts extensions/github-copilot/models.test.ts` → exit 0, clean\n- `tsgo -p tsconfig.extensions.json` → exit 0, no errors\n\n**Label**: security\n\n_AI-assisted._\n",
-        "branch": "fix/bound-copilot-usage",
-        "head_sha": "af6a48358fa8826a59549b4dbaa8f67cf703bd11",
-        "author": "alix-007",
-        "labels": [
-          "size: XS",
-          "proof: sufficient",
-          "extensions: github-copilot",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/github-copilot/models.test.ts",
-            "additions": 41,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/github-copilot/usage.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 46,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96607",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96607.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 92,
-          "gatingTotal": 87,
-          "counts": {
-            "SUCCESS": 58,
-            "SKIPPED": 33,
-            "FAILURE": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-whole-1:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-large-whole-1:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96607:4794927418:2026-06-25T01:04:16Z:re_review",
-      "comment_id": "4794927418",
-      "comment_version_key": "4794927418:2026-06-25T01:04:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96607#issuecomment-4794927418",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96607,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T01:04:16Z",
-      "comment_updated_at": "2026-06-25T01:04:16Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2772,
+    "total_ms": 753,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 256
+        "ms": 381
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1531
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -189,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 956
+        "ms": 361
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
