@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T17:30:32.188Z",
+  "generated_at": "2026-06-25T17:32:17.615Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T14:30:29.958Z",
+  "since": "2026-06-25T14:32:15.319Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96705
+    96723
   ],
-  "comment_ids": [
-    4802406043
-  ],
-  "status_comment_id": 4802406469,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,21 +31,120 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96705:4802406043:2026-06-25T17:29:50Z:re_review",
-      "comment_id": "4802406043",
-      "comment_version_key": "4802406043:2026-06-25T17:29:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96705#issuecomment-4802406043",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96723:4797685923:2026-06-25T17:32:08Z:clawsweeper_needs_human",
+      "comment_id": "4797685923",
+      "comment_version_key": "4797685923:2026-06-25T17:32:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96723#issuecomment-4797685923",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 96705,
-      "author": "lin-hongkuan",
-      "author_id": 234943746,
+      "target_branch": null,
+      "issue_number": 96723,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T17:29:50Z",
-      "comment_updated_at": "2026-06-25T17:29:50Z",
-      "status_comment_id": 4802406469,
+      "comment_created_at": "2026-06-25T09:18:46Z",
+      "comment_updated_at": "2026-06-25T17:32:08Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The remaining action is maintainer acceptance or tuning of the intentional 16 MiB fail-closed boundary and sibling PR sequencing, not an automated code repair.; Cleared: The diff hardens an availability-sensitive provider stream path and does not add dependencies, lockfiles, CI permissions, secret handling, or third-party code execution. (sha=3407ee1021556bcf509c30de98dfd04dd6135c23)",
+      "review_summary": "The PR adds an internal SSE byte guard, applies a 16 MiB cap to Anthropic provider streaming success-body reads, exports the iterator for tests, and adds overflow-cancellation coverage.\n\nPR surface: Source +107, Tests +37. Total +144 across 3 files.\n\nReproducibility: yes. Current main reads and appends Content-Length-less SSE chunks in `iterateSseMessages` with no byte cap, and the PR body includes live local-server output showing the before path consuming 64 MiB while the after path stops near the 16 MiB cap.",
+      "review_followup": "- [P1] The remaining action is maintainer acceptance or tuning of the intentional 16 MiB fail-closed boundary and sibling PR sequencing, not an automated code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "3407ee1021556bcf509c30de98dfd04dd6135c23",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(anthropic): bound streaming 200 success-body SSE reads at 16 MiB (provider path)",
+        "body": "## What Problem This Solves\n\n`src/llm/providers/anthropic.ts` (`iterateSseMessages`, the legacy provider SSE parser) accumulates an unbounded SSE byte stream into a string buffer while waiting for line delimiters. A hostile or malfunctioning Anthropic-compatible endpoint (including an MITM-able proxy or a hijacked self-hosted provider) can return a `Content-Length`-less SSE body that streams forever, exhausting process memory on a code path that runs for every legacy-provider Anthropic streaming call.\n\nThis is the streaming-body analogue of the bounded-read sweep Alix-007 finished for non-streaming `response.json()`. Same 16 MiB cap, same helper-driven design (`createSseByteGuard`), but on the chunk-by-chunk SSE path that the non-streaming sweep did not cover.\n\n## Changes\n\n- `src/agents/streaming-byte-guard.ts` (NEW, 87 lines) — `createSseByteGuard` helper wrapping a `ReadableStreamDefaultReader` with a byte-level cap. Cancel-on-overflow with `onOverflow` callback producing the error. Core-internal (no SDK surface change).\n- `src/llm/providers/anthropic.ts:347-362` — `iterateSseMessages` wraps `body.getReader()` in `createSseByteGuard` with `ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024`. Function re-exported as `iterateSseMessagesForTest` for direct test access.\n- `src/llm/providers/anthropic.test.ts` — 1 regression test for the capped read.\n\n## Real behavior proof\n\nDrives production `createSseByteGuard` over a real `node:http` server (127.0.0.1, chunked transfer-encoding, no Content-Length). Covers AFTER (capped), happy path, and BEFORE (unbounded OOM vector). Node v22.22.0, Linux x86_64.\n\n```\n=== AFTER (16 MiB cap via createSseByteGuard) ===\n\n  PASS  hostile 64 MiB SSE body: overflow thrown at 16 MiB cap\n  PASS  happy path: small 2 KiB SSE body drained without overflow\n\n=== BEFORE (unbounded SSE read — OOM vector) ===\n\n  unbounded read consumed 64.0 MiB — OOM vector confirmed\n  PASS  (negative control) unbounded read exceeded 16 MiB cap\n\n=== All anthropic provider bounded-read assertions: 3/3 passed ===\n```\n\n- **Evidence after fix**: 3/3 assertions pass. AFTER: 64 MiB hostile SSE body triggers overflow at 16 MiB cap, 2 KiB happy path drains cleanly. BEFORE: unbounded read consumes full 64.0 MiB (OOM vector confirmed — 4× the cap).\n- **Behavior addressed**: unbounded SSE buffering in `iterateSseMessages`; after the fix the provider-path streaming read is capped at 16 MiB via `createSseByteGuard`.\n- **Real environment tested**: real `node:http` server (127.0.0.1, no Content-Length, chunked SSE) driving production `createSseByteGuard`. Node v22.22.0.\n- **Negative control**: unbounded read consumed 64.0 MiB vs capped read stopped at ~16 MiB — cap is load-bearing.\n- **What was not tested**: live Anthropic API call (same production helper against same attack shape); cross-platform Node differences.\n\n## Out of scope (separate PRs, sequenced)\n\n- `src/llm/providers/openai-chatgpt-responses.ts` (`parseSSE`, ChatGPT Responses SSE parser) — covered by sibling PR #96772.\n- `src/agents/runtime/proxy.ts` (`streamProxy`, internal proxy SSE parser) — covered by sibling PR #96782.\n- `extensions/google/transport-stream.ts` and `extensions/ollama/src/{setup,stream}.ts` — need `createSseByteGuard` promoted to plugin-SDK first (separate PR).\n\n## Risk\n\n- **Low**: same 16 MiB cap used by `readProviderJsonResponse` for non-streaming Anthropic success bodies. Normal-sized responses unchanged — only the unbounded case throws a clear overflow error instead of OOM.\n- **Helper**: core-internal (`src/agents/streaming-byte-guard.ts`); no SDK surface change, no API-baseline regen needed.\n- **Cancel propagation**: `createSseByteGuard.cancel(reason)` propagates overflow error to the underlying reader.\n\nSibling PRs: #96772 (openai-chatgpt SSE), #96782 (proxy SSE), #96777 (chutes-oauth JSON). Together these close the bounded-read gap for the Anthropic + OpenAI + proxy + Chutes surfaces.\n\nAI-assisted: implemented and proof-tested with AI assistance; reviewed by a human before submission.\n\n## Diff stats\n\n```\n3 files changed, 146 insertions(+), 2 deletions(-)\n```",
+        "branch": "fix/anthropic-provider-stream-bound",
+        "head_sha": "3407ee1021556bcf509c30de98dfd04dd6135c23",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/streaming-byte-guard.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/llm/providers/anthropic.test.ts",
+            "additions": 38,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/anthropic.ts",
+            "additions": 21,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 146,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96723",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96723.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 11,
+          "gatingTotal": 6,
+          "counts": {
+            "SUCCESS": 8,
+            "SKIPPED": 3
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96723:4802373453:2026-06-25T17:26:02Z:re_review",
+      "comment_id": "4802373453",
+      "comment_version_key": "4802373453:2026-06-25T17:26:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96723#issuecomment-4802373453",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96723,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T17:26:02Z",
+      "comment_updated_at": "2026-06-25T17:26:02Z",
+      "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-review after new head `73c22c6e377f8558023a65e97d3457a9a0648ca6`",
+      "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -58,169 +155,96 @@
       "repair_reason": null,
       "review_summary": null,
       "review_followup": null,
-      "freeform_prompt": "after new head `73c22c6e377f8558023a65e97d3457a9a0648ca6`.",
+      "freeform_prompt": null,
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-25T17:30:33.338Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96705
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-25T17:30:34.766Z",
-          "response_comment_id": "4802406469",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(slack): fail unconfirmed threaded deliveries",
-        "body": "## What Problem This Solves\nSlack threaded outbound sends could report success even when Slack did not confirm delivery into the requested thread. The send layer previously exposed `threadTs` by falling back to the requested value, so callers could not distinguish a real Slack-confirmed thread from an echoed request.\n\nThe earlier repair only guarded selected caller paths, which left direct reply delivery and Slack action sends able to call `sendMessageSlack` with `threadTs` and still treat missing or mismatched Slack thread evidence as success. It also allowed the sent-thread participation cache to be updated from the fallback thread before a caller-side guard could throw.\n\n## Why This Change Was Made\nThis change separates requested thread fallback from Slack-confirmed thread evidence on text/block sends, then enforces the confirmation invariant at the Slack send boundary before thread participation is recorded. `sendMessageSlack` now fails non-media threaded text/block sends unless Slack returns `message.thread_ts` matching the requested target thread.\n\nThe existing caller-side guards remain for injected/test send functions, but the production invariant now lives in one canonical place. Threaded media uploads remain exempt because Slack media uploads preserve the requested thread through the upload flow rather than the text-message confirmation field.\n\n## User Impact\nWhen Slack omits or changes the destination thread for a text or block message, OpenClaw now surfaces a delivery failure instead of silently marking the reply as delivered to the original thread. Direct Slack replies, Slack action sends, outbound payloads, and channel text sends all share that fail-closed behavior.\n\nSuccessful threaded Slack text/block sends are unchanged when Slack confirms the requested thread. Threaded Slack file/media uploads keep working and are not rejected just because the text-message confirmation field is absent.\n\n## Evidence\nHead commit: `73c22c6e377f8558023a65e97d3457a9a0648ca6`.\n\n- `node scripts/run-vitest.mjs run extensions/slack/src/send.blocks.test.ts extensions/slack/src/monitor/replies.test.ts extensions/slack/src/action-runtime.test.ts extensions/slack/src/outbound-adapter.test.ts extensions/slack/src/channel.test.ts extensions/slack/src/channel.message-adapter.test.ts extensions/slack/src/outbound-delivery.test.ts` passed: 7 files, 187 tests.\n- `pnpm oxfmt --check extensions/slack/src/thread-delivery-confirmation.ts extensions/slack/src/send.ts extensions/slack/src/send.blocks.test.ts extensions/slack/src/monitor/replies.test.ts extensions/slack/src/action-runtime.test.ts` passed.\n- `pnpm tsgo:extensions:test` passed.\n- `pnpm check:madge-import-cycles` passed: 0 cycles.\n- `git diff --check` passed.\n\nRegression coverage now includes:\n\n- `sendMessageSlack` rejects requested threaded text sends when Slack omits confirmed thread evidence;\n- `sendMessageSlack` rejects requested threaded text sends when Slack confirms a different thread;\n- thread participation is not recorded after either confirmation failure;\n- successful threaded text/block sends continue to record participation only from matching confirmed thread evidence;\n- chunked threaded text sends continue to carry the requested `thread_ts` and preserve confirmed thread receipts;\n- direct `deliverReplies` threaded text delivery propagates send-boundary confirmation failures;\n- Slack action `sendMessage` does not mark `replyToMode: \"first\"` as used when threaded delivery confirmation fails;\n- threaded media uploads preserve the requested `thread_ts` path and are not rejected by the text-send confirmation guard.\n\nLive Slack proof is still not included from this environment because no redacted Slack workspace credentials are available here.\r\n",
-        "branch": "fix/slack-thread-delivery-confirmation",
-        "head_sha": "73c22c6e377f8558023a65e97d3457a9a0648ca6",
-        "author": "lin-hongkuan",
+        "title": "fix(anthropic): bound streaming 200 success-body SSE reads at 16 MiB (provider path)",
+        "body": "## What Problem This Solves\n\n`src/llm/providers/anthropic.ts` (`iterateSseMessages`, the legacy provider SSE parser) accumulates an unbounded SSE byte stream into a string buffer while waiting for line delimiters. A hostile or malfunctioning Anthropic-compatible endpoint (including an MITM-able proxy or a hijacked self-hosted provider) can return a `Content-Length`-less SSE body that streams forever, exhausting process memory on a code path that runs for every legacy-provider Anthropic streaming call.\n\nThis is the streaming-body analogue of the bounded-read sweep Alix-007 finished for non-streaming `response.json()`. Same 16 MiB cap, same helper-driven design (`createSseByteGuard`), but on the chunk-by-chunk SSE path that the non-streaming sweep did not cover.\n\n## Changes\n\n- `src/agents/streaming-byte-guard.ts` (NEW, 87 lines) — `createSseByteGuard` helper wrapping a `ReadableStreamDefaultReader` with a byte-level cap. Cancel-on-overflow with `onOverflow` callback producing the error. Core-internal (no SDK surface change).\n- `src/llm/providers/anthropic.ts:347-362` — `iterateSseMessages` wraps `body.getReader()` in `createSseByteGuard` with `ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024`. Function re-exported as `iterateSseMessagesForTest` for direct test access.\n- `src/llm/providers/anthropic.test.ts` — 1 regression test for the capped read.\n\n## Real behavior proof\n\nDrives production `createSseByteGuard` over a real `node:http` server (127.0.0.1, chunked transfer-encoding, no Content-Length). Covers AFTER (capped), happy path, and BEFORE (unbounded OOM vector). Node v22.22.0, Linux x86_64.\n\n```\n=== AFTER (16 MiB cap via createSseByteGuard) ===\n\n  PASS  hostile 64 MiB SSE body: overflow thrown at 16 MiB cap\n  PASS  happy path: small 2 KiB SSE body drained without overflow\n\n=== BEFORE (unbounded SSE read — OOM vector) ===\n\n  unbounded read consumed 64.0 MiB — OOM vector confirmed\n  PASS  (negative control) unbounded read exceeded 16 MiB cap\n\n=== All anthropic provider bounded-read assertions: 3/3 passed ===\n```\n\n- **Evidence after fix**: 3/3 assertions pass. AFTER: 64 MiB hostile SSE body triggers overflow at 16 MiB cap, 2 KiB happy path drains cleanly. BEFORE: unbounded read consumes full 64.0 MiB (OOM vector confirmed — 4× the cap).\n- **Behavior addressed**: unbounded SSE buffering in `iterateSseMessages`; after the fix the provider-path streaming read is capped at 16 MiB via `createSseByteGuard`.\n- **Real environment tested**: real `node:http` server (127.0.0.1, no Content-Length, chunked SSE) driving production `createSseByteGuard`. Node v22.22.0.\n- **Negative control**: unbounded read consumed 64.0 MiB vs capped read stopped at ~16 MiB — cap is load-bearing.\n- **What was not tested**: live Anthropic API call (same production helper against same attack shape); cross-platform Node differences.\n\n## Out of scope (separate PRs, sequenced)\n\n- `src/llm/providers/openai-chatgpt-responses.ts` (`parseSSE`, ChatGPT Responses SSE parser) — covered by sibling PR #96772.\n- `src/agents/runtime/proxy.ts` (`streamProxy`, internal proxy SSE parser) — covered by sibling PR #96782.\n- `extensions/google/transport-stream.ts` and `extensions/ollama/src/{setup,stream}.ts` — need `createSseByteGuard` promoted to plugin-SDK first (separate PR).\n\n## Risk\n\n- **Low**: same 16 MiB cap used by `readProviderJsonResponse` for non-streaming Anthropic success bodies. Normal-sized responses unchanged — only the unbounded case throws a clear overflow error instead of OOM.\n- **Helper**: core-internal (`src/agents/streaming-byte-guard.ts`); no SDK surface change, no API-baseline regen needed.\n- **Cancel propagation**: `createSseByteGuard.cancel(reason)` propagates overflow error to the underlying reader.\n\nSibling PRs: #96772 (openai-chatgpt SSE), #96782 (proxy SSE), #96777 (chutes-oauth JSON). Together these close the bounded-read gap for the Anthropic + OpenAI + proxy + Chutes surfaces.\n\nAI-assisted: implemented and proof-tested with AI assistance; reviewed by a human before submission.\n\n## Diff stats\n\n```\n3 files changed, 146 insertions(+), 2 deletions(-)\n```",
+        "branch": "fix/anthropic-provider-stream-bound",
+        "head_sha": "3407ee1021556bcf509c30de98dfd04dd6135c23",
+        "author": "wangmiao0668000666",
         "labels": [
-          "channel: slack",
-          "size: M",
+          "agents",
+          "size: S",
+          "proof: sufficient",
           "P2",
-          "rating: 🧂 unranked krab",
+          "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/slack/src/action-runtime.test.ts",
-            "additions": 33,
+            "path": "src/agents/streaming-byte-guard.ts",
+            "additions": 87,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "extensions/slack/src/channel.message-adapter.test.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/channel.test.ts",
-            "additions": 44,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/channel.ts",
-            "additions": 5,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/replies.test.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/outbound-adapter.test.ts",
-            "additions": 146,
+            "path": "src/llm/providers/anthropic.test.ts",
+            "additions": 38,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/slack/src/outbound-adapter.ts",
-            "additions": 4,
-            "deletions": 0,
+            "path": "src/llm/providers/anthropic.ts",
+            "additions": 21,
+            "deletions": 1,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/outbound-delivery.test.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/send.blocks.test.ts",
-            "additions": 72,
-            "deletions": 28,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/send.ts",
-            "additions": 12,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/thread-delivery-confirmation.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 11,
-        "additions": 387,
-        "deletions": 41,
+        "changedFiles": 3,
+        "additions": 146,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96705",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96705.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96723",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96723.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 39,
-          "gatingTotal": 34,
+          "total": 11,
+          "gatingTotal": 6,
           "counts": {
-            "SUCCESS": 17,
-            "IN_PROGRESS": 3,
-            "SKIPPED": 19
+            "SUCCESS": 8,
+            "SKIPPED": 3
           },
-          "blockers": [
-            "preflight:IN_PROGRESS",
-            "security-fast:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS"
-          ],
-          "pending": [
-            "preflight:IN_PROGRESS",
-            "security-fast:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5616,
+    "total_ms": 2611,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 645
+        "ms": 470
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1569
+        "ms": 1812
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -232,11 +256,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3373
+        "ms": 303
       },
       {
         "name": "append_ledger",
-        "ms": 4
+        "ms": 1
       }
     ]
   }
