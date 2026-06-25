@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T06:32:53.068Z",
+  "generated_at": "2026-06-25T06:33:04.657Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T03:32:50.612Z",
+  "since": "2026-06-25T03:33:04.317Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96668
+    96681
   ],
-  "comment_ids": [
-    4796504856
-  ],
-  "status_comment_id": 4796505169,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,213 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96668:4796504856:2026-06-25T06:31:44Z:re_review",
-      "comment_id": "4796504856",
-      "comment_version_key": "4796504856:2026-06-25T06:31:44Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96668#issuecomment-4796504856",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 96668,
-      "author": "MonkeyLeeT",
-      "author_id": 6754057,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T06:31:44Z",
-      "comment_updated_at": "2026-06-25T06:31:44Z",
-      "status_comment_id": 4796505169,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-25T06:32:54.076Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96668
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-25T06:32:55.370Z",
-          "response_comment_id": "4796505169",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): keep lightweight cron prompts out of no-op compaction",
-        "body": "## What Problem This Solves\n\nFixes #96658.\n\nLightweight isolated cron runs on very small context windows can reserve too much of the model window for response headroom before the first prompt is sent. In the reported 4,096-token model case, current `main` leaves only 2,048 prompt tokens for a 3,544-token lightweight cron prompt, so the precheck routes to `compact_only` even though lightweight cron has no bootstrap history to compact.\n\n## Why This Change Was Made\n\nThis keeps the shared small-context prompt floor conservative and restores `MIN_PROMPT_BUDGET_RATIO` to `0.5` for full-context callers, settings reserve capping, CLI compaction, and mid-turn guard paths.\n\nThe higher 87.5% prompt share is now scoped to lightweight pre-prompt runner admission only. That gives history-free lightweight cron prompts enough room on 4k local models without changing the global reserve policy.\n\nCodex also pointed out that provider requests carry tool schemas next to messages. The current fix passes the runner's effective tool list into the pre-prompt decision and subtracts estimated `toolSchemaTokens` before accepting a small-window `fits` route. A 3,544-token lightweight prompt with no tools still fits; the same prompt plus a 570-token tool schema now routes to `compact_only` instead of over-submitting the provider payload.\n\n## User Impact\n\nLightweight cron jobs on small-context fallback models can proceed when the rendered prompt plus tool schema surface fits the model window, instead of failing through repeated compact-only recovery with nothing useful to compact.\n\nTool-heavy small-context runs remain conservative, and non-lightweight/full-context paths keep the previous shared reserve behavior.\n\n## Evidence\n\nEarlier real lightweight cron behavior proof on this PR branch:\n\n```text\nSetup: source Gateway from this PR branch, temp HOME and OPENCLAW_STATE_DIR, local mock OpenAI Responses server.\nConfig: openai/gpt-5.5 contextWindow=4096 contextTokens=4096, agents.defaults.compaction.reserveTokens=20000.\nAction: cron.add with sessionTarget=isolated, payload.kind=agentTurn, payload.lightContext=true, then cron.run mode=force.\nResult: cron finished status=ok; mock provider received 2 POST /v1/responses requests.\n```\n\nGateway debug proof from that run:\n\n```text\n[context-overflow-precheck] pre-prompt check ... provider=openai/gpt-5.5 route=fits estimatedPromptTokens=3318 pressureSource=llm_boundary_normalized_prompt promptBudgetBeforeReserve=3584 overflowTokens=0 toolResultReducibleChars=0 reserveTokens=20000 effectiveReserveTokens=512 contextTokenBudget=4096 messages=0 unwindowedMessages=0 sessionFile=<tmp-state>/agents/main/sessions/<session>.jsonl\n```\n\nFresh current-head source probe for the reported 4,096-token / 20,000-reserve / 3,544-token boundary:\n\n```json\n{\n  \"lightweightNoTools\": {\n    \"route\": \"fits\",\n    \"shouldCompact\": false,\n    \"estimatedPromptTokens\": 3544,\n    \"toolSchemaTokens\": 0,\n    \"pressureSource\": \"reported_lightweight_cron\",\n    \"promptBudgetBeforeReserve\": 3584,\n    \"overflowTokens\": 0,\n    \"toolResultReducibleChars\": 0,\n    \"effectiveReserveTokens\": 512\n  },\n  \"lightweightWithToolSchema\": {\n    \"route\": \"compact_only\",\n    \"shouldCompact\": true,\n    \"estimatedPromptTokens\": 3544,\n    \"toolSchemaTokens\": 570,\n    \"pressureSource\": \"reported_lightweight_cron\",\n    \"promptBudgetBeforeReserve\": 3014,\n    \"overflowTokens\": 530,\n    \"toolResultReducibleChars\": 0,\n    \"effectiveReserveTokens\": 512\n  },\n  \"fullModeNoTools\": {\n    \"route\": \"compact_only\",\n    \"shouldCompact\": true,\n    \"estimatedPromptTokens\": 3544,\n    \"toolSchemaTokens\": 0,\n    \"pressureSource\": \"reported_lightweight_cron\",\n    \"promptBudgetBeforeReserve\": 2048,\n    \"overflowTokens\": 1496,\n    \"toolResultReducibleChars\": 0,\n    \"effectiveReserveTokens\": 2048\n  }\n}\n```\n\nRed test before the original fix:\n\n```text\nnode scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/preemptive-compaction.test.ts\nAssertionError: expected 2048 to be greater than or equal to 3544\n```\n\nFocused validation on the current head:\n\n```text\nnode scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/preemptive-compaction.test.ts\n# PASS 19 tests\n\nnode scripts/run-vitest.mjs src/agents/agent-settings.test.ts\n# PASS 29 tests\n\nnode scripts/run-vitest.mjs src/agents/embedded-agent-runner/run.overflow-compaction.test.ts src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts\n# PASS 75 tests\n\nnode scripts/run-vitest.mjs src/agents/command/cli-compaction.test.ts\n# PASS 19 tests\n\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo\n# PASS\n\nnode --import tsx --input-type=module -e \"await import('./src/agents/embedded-agent-runner/run/attempt.ts'); console.log('attempt import ok')\"\n# attempt import ok\n\nnode_modules/.bin/oxfmt --check --threads=1 src/agents/agent-compaction-constants.ts src/agents/embedded-agent-runner/run/preemptive-compaction.ts src/agents/embedded-agent-runner/run/attempt.ts src/agents/embedded-agent-runner/run/preemptive-compaction.test.ts src/agents/command/cli-compaction.test.ts\n# PASS\n\ngit diff --check\n# PASS\n```\n\nCI follow-up: `check-test-types` failed on `b2144a64d36` because CLI compaction test stubs were missing the newly required `toolSchemaTokens` field. Commit `d3710f9e031` updates those stubs, and the local core test-type runner above now passes.\n\nReview comments: Codex's tool-schema budgeting comment is addressed by the current head, and the inline thread is resolved/outdated. The current implementation restores the shared ratio, scopes the larger prompt share to lightweight pre-prompt checks, and accounts for provider-visible tool schemas.\n\nAutoreview: attempted one local draft-PR review round, but the helper failed before review due local Codex config parsing (`service_tier = priority`; helper expected `fast` or `flex`). No review findings were produced.\n\nAgent transcript: a matching local session was found, but no transcript is included because adding sanitized transcript logs requires explicit approval.\n",
-        "branch": "codex/96658-lightweight-cron-budget",
-        "head_sha": "d3710f9e031ee9c00797ae58cd1caaa4fb81f95b",
-        "author": "monkeyleet",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-compaction-constants.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/cli-compaction.test.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/preemptive-compaction.test.ts",
-            "additions": 78,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/preemptive-compaction.ts",
-            "additions": 54,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 154,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96668",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96668.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 91,
-          "gatingTotal": 86,
-          "counts": {
-            "IN_PROGRESS": 27,
-            "SUCCESS": 39,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Scan changed paths (precise):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Scan changed paths (precise):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5505,
+    "total_ms": 615,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 672
+        "ms": 319
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1770
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -245,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3039
+        "ms": 276
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
