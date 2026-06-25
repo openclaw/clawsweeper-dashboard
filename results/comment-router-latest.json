@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T08:35:19.682Z",
+  "generated_at": "2026-06-25T08:36:22.958Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T05:35:16.025Z",
+  "since": "2026-06-25T05:36:22.191Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4797340784
   ],
-  "status_comment_id": 4797341355,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4797340784:2026-06-25T08:34:04Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/96347#issuecomment-4797340784",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 96347,
       "author": "Pandah97",
       "author_id": 80405497,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-25T08:34:04Z",
       "comment_updated_at": "2026-06-25T08:34:04Z",
-      "status_comment_id": 4797341355,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,102 +62,26 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-25T08:35:20.797Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96347
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-25T08:35:23.560Z",
-          "response_comment_id": "4787918659",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(tools-manager): bound GitHub API JSON response reads",
-        "body": "## Summary\n\n`getLatestVersion()` reads the GitHub API release response via `response.json()` without a size cap. A compromised or misconfigured upstream could force unbounded buffering.\n\n**Fix:** Read through `readResponseWithLimit` with a 1 MB cap before JSON parsing.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/agents/utils/tools-manager.ts` | Replace `response.json()` with bounded read + `JSON.parse` |\n\n## Real behavior proof\n\n**Behavior addressed**: GitHub API release response is now read with a 1 MB size limit before JSON parsing, preventing unbounded buffering.\n\n**Real environment tested**: Linux (x64, kernel 4.19.112, EL8), Node v24.13.1\n\n**Exact steps or command run after this patch**:\n\n```bash\nnode --import tsx -e '\nimport { readResponseWithLimit } from \"@openclaw/media-core/read-response-with-limit\";\nimport { createServer } from \"node:http\";\nconst MAX = 1024 * 1024;\nconst onOverflow = ({ maxBytes }) => new Error(\"GitHub API release response exceeds \" + maxBytes + \" bytes\");\n\nconst sv = createServer((req, res) => {\n  if (req.url === \"/fd\") res.end(JSON.stringify({ tag_name: \"v10.3.0\" }));\n  else if (req.url === \"/rg\") res.end(JSON.stringify({ tag_name: \"14.1.0\" }));\n  else if (req.url === \"/big\") res.end(JSON.stringify({ tag_name: \"bad\", _padding: \"x\".repeat(MAX) }));\n  else { res.writeHead(404); res.end(); }\n});\nawait new Promise(r => sv.listen(19635, r));\n\nfor (const [name, url, expectOk] of [\n  [\"fd release (~370 B)\", \"/fd\", true],\n  [\"rg release (~380 B)\", \"/rg\", true],\n  [\"oversized response (1 MiB+)\", \"/big\", false],\n]) {\n  const resp = await fetch(\"http://127.0.0.1:19635\" + url);\n  try {\n    const bytes = await readResponseWithLimit(resp, MAX, { onOverflow });\n    const data = JSON.parse(new TextDecoder().decode(bytes));\n    if (!expectOk) throw new Error(\"should have rejected \" + name);\n    console.log(\"OK  \" + name + \" — tag:\", data.tag_name);\n  } catch (e) {\n    if (expectOk) console.log(\"FAIL \" + name + \":\", e.message);\n    else console.log(\"OK  \" + name + \" — rejected:\", e.message.slice(0, 60));\n  }\n}\nsv.close();\n'\n```\n\n**After-fix evidence**:\n\n```\nOK  fd release (~370 B) — tag: v10.3.0\nOK  rg release (~380 B) — tag: v14.1.0\nOK  oversized response (1 MiB+) — rejected: GitHub API release response exceeds 1048576 bytes\n```\n\nThe inline script imports `readResponseWithLimit` from `@openclaw/media-core/read-response-with-limit` — the identical production package import used in the PR code — and exercises it against real HTTP `fetch()` responses. Normal GitHub-release-size payloads (fd: ~370 B, rg: ~380 B) are accepted and parsed correctly. An oversized response exceeding 1 MiB is rejected with the exact error message including `1048576`.\n\n## Risk checklist\n\nDid user-visible behavior change? (`No`)\n\nDid config, environment, or migration behavior change? (`No`)\n\nDid security, auth, secrets, network, or tool execution behavior change? (`No`)\n\nWhat is the highest-risk area?\n- A legitimate GitHub API release response exceeding 1 MB would cause a fetch failure. GitHub's \"latest release\" endpoint returns ~1 KB in practice.\n\nHow is that risk mitigated?\n- 1 MB cap is ~2000x typical response size\n- Error is a clear `Error` with the limit in the message\n- Same `readResponseWithLimit` pattern already merged in 6+ Alix-007 PRs (ClawHub, Matrix transport, etc.)\n\n## Current review state\n\nWhat is the next action?\n- Maintainer review\n",
-        "branch": "fix/bound-tools-manager-json",
-        "head_sha": "122bea0e6fc916ef28f6936309b569a90f18117c",
-        "author": "pandah97",
-        "labels": [
-          "agents",
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/utils/tools-manager.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/agents/utils/tools-manager-proof.test.ts",
-            "additions": 54,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 61,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96347",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96347.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "SUCCESS": 63,
-            "SKIPPED": 32,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 8340,
+    "total_ms": 2416,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 698
+        "ms": 756
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2945
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -169,7 +93,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 4674
+        "ms": 1648
       },
       {
         "name": "append_ledger",
