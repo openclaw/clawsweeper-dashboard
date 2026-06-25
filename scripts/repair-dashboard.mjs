@@ -103,6 +103,10 @@ State: ${repairState(totals, inspectionRows)}
 
 ### Owner Action Dashboard
 
+#### Recap
+
+${ownerDashboard.recapLines.join("\n")}
+
 | Bucket | Count | Operator read |
 | --- | ---: | --- |
 ${rowsOrNone(ownerDashboard.summaryRows, 3)}
@@ -233,7 +237,30 @@ function ownerActionDashboard(latest, closedRows, mergedRows) {
     ["Done", bucketed.done.length, "recently merged or closed"],
   ].map(([label, count, meaning]) => `| ${label} | ${count} | ${meaning} |`);
   const stateRows = [...stateCounts.entries()].map(([state, count]) => `| ${state} | ${count} |`);
-  return { ...bucketed, summaryRows, stateRows };
+  const recapLines = ownerRecapLines(bucketed, latest.length);
+  return { ...bucketed, summaryRows, stateRows, recapLines };
+}
+
+function ownerRecapLines(bucketed, latestCount) {
+  const activeCount = bucketed.needsNico.length + bucketed.automationRunning.length + bucketed.readyAutonomous.length;
+  return [
+    "- Flow: bot challenge -> repair/fix -> checks/review -> merge or close.",
+    `- Current snapshot: ${countLabel(activeCount, "active lane")} and ${countLabel(bucketed.done.length, "done lane")} from ${countLabel(latestCount, "latest cluster")}: ${bucketed.needsNico.length} need Nico, ${bucketed.automationRunning.length} automation running, ${bucketed.readyAutonomous.length} ready/autonomous.`,
+    ownerRecapItem("Nico first", bucketed.needsNico[0], "nothing needs Nico right now"),
+    ownerRecapItem("Automation first", bucketed.automationRunning[0], "nothing is waiting on automation"),
+    ownerRecapItem("Ready/autonomous first", bucketed.readyAutonomous[0], "nothing is queued for autonomous action"),
+    ownerRecapItem("Done latest", bucketed.done[0], "nothing recently merged or closed"),
+  ];
+}
+
+function countLabel(count, singular) {
+  return `${count} ${singular}${count === 1 ? "" : "s"}`;
+}
+
+function ownerRecapItem(label, row, emptyText) {
+  if (!row) return `- ${label}: ${emptyText}.`;
+  const item = targetLink(row.record, row.action ?? {}) || clusterLink(row.record);
+  return `- ${label}: ${repoLink(row.record)} ${item} is ${row.state}: ${truncate(row.reason, 140)}.`;
 }
 
 function ownerRowFromRecord(record) {

@@ -176,6 +176,16 @@ test("repair dashboard groups owner action lanes by operator bucket", () => {
   const dashboard = renderRepairDashboard(root);
 
   assert.match(dashboard, /### Owner Action Dashboard/);
+  assert.match(dashboard, /#### Recap/);
+  assert.match(dashboard, /Flow: bot challenge -> repair\/fix -> checks\/review -> merge or close\./);
+  assert.match(
+    dashboard,
+    /Current snapshot: 3 active lanes and 1 done lane from 4 latest clusters: 2 need Nico, 1 automation running, 0 ready\/autonomous\./,
+  );
+  assert.match(dashboard, /Nico first: \[openclaw\/openclaw\]\(https:\/\/github\.com\/openclaw\/openclaw\).*issue implementation PR checks are green/);
+  assert.match(dashboard, /Automation first: \[openclaw\/openclaw\]\(https:\/\/github\.com\/openclaw\/openclaw\).*checks are not clean: test: IN_PROGRESS/);
+  assert.match(dashboard, /Ready\/autonomous first: nothing is queued for autonomous action\./);
+  assert.match(dashboard, /Done latest: \[openclaw\/openclaw\]\(https:\/\/github\.com\/openclaw\/openclaw\).*fix merged thing/);
   assert.match(dashboard, /\| Needs Nico \| 2 \| approve merge\/deploy/);
   assert.match(dashboard, /\| Automation Running \| 1 \| worker, repair, review, or checks still in motion \|/);
   assert.match(dashboard, /\| Done \| 1 \| recently merged or closed \|/);
