@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T13:20:03.886Z",
+  "generated_at": "2026-06-25T13:20:39.224Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T10:20:01.315Z",
+  "since": "2026-06-25T10:20:37.163Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     89965
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4799696434
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,117 +33,10 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89965:4615492400:2026-06-25T13:19:58Z:clawsweeper_needs_human",
-      "comment_id": "4615492400",
-      "comment_version_key": "4615492400:2026-06-25T13:19:58Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89965#issuecomment-4615492400",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 89965,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T18:22:53Z",
-      "comment_updated_at": "2026-06-25T13:19:58Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Contributor or maintainer action is needed to supply real behavior proof or explicitly override the proof gate; there is no narrow automated code repair to queue from this review.; Cleared: The diff changes agent runner logic and tests only; it does not touch dependencies, workflows, secrets, install scripts, package metadata, or other supply-chain surfaces. (sha=d02b758bc370f7c175cecbaa4c41834306bba761)",
-      "review_summary": "The PR adds an embedded-runner terminal notice for timed-out no-output turns, a pure decision helper, and regression tests for delivered, silent, compaction, messaging-delivery, and approval-prompt cases.\n\nPR surface: Source +129, Tests +125. Total +254 across 3 files.\n\nReproducibility: yes. source inspection gives a high-confidence reproduction path: a timeout during tool execution makes timedOutDuringPrompt false, timedOut suppresses the existing incomplete-turn warning, and the terminal path can return no payloads. I did not run a live long-running agent/channel timeout in this read-only review.",
-      "review_followup": "- [P1] Contributor or maintainer action is needed to supply real behavior proof or explicitly override the proof gate; there is no narrow automated code repair to queue from this review.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "d02b758bc370f7c175cecbaa4c41834306bba761",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): emit user-visible notice when a turn exhausts its time budget",
-        "body": "## Update — rebased onto current `main` (2026-06-25)\n\nThe branch had drifted ~5,800 commits behind `main` (ClawSweeper flagged it conflicting). It is now rebased; the 3-commit series applies on current `main`:\n\n- `run.ts` and `run/incomplete-turn.ts` resolved cleanly — the `resolveTurnBudgetTimeoutNotice` signature is reconciled to the current `allowSilentReply` form, and the integration tests were re-seated inside the runner describe block.\n- **Re-verified on current `main` (Node 22):** `run.incomplete-turn.test.ts` **244/244 passing** (the 3 turn-budget integration tests through the real `runEmbeddedAgent` terminal path + the 8-case `resolveTurnBudgetTimeoutNotice` decision matrix); **`tsgo:core` clean**; **`tsgo:test:src` clean**.\n\nThe committed fault-injection regression tests drive the **real** `runEmbeddedAgent` terminal path (not a mock of it). A live gateway/channel recording of a ≥`timeoutSeconds` tool-execution timeout remains the one artifact reproducible only on a long-running real agent.\n\n---\n\n## Problem\n\nWhen an agent turn exhausts its time budget (`agents.defaults.timeoutSeconds`) or a run-level deadline **while no assistant reply has been produced**, the gateway can go completely silent — no message reaches the channel, no indication a limit was hit. From a user's seat this is indistinguishable from a hung process.\n\nThis is not the prompt/provider timeout case, which already surfaces *\"Request timed out before a response was generated…\"*. It's the timeout that fires **outside a model prompt** — most commonly while a tool is executing on a complex turn:\n\n- `attempt.timedOut` is `true`, but because `countActiveToolExecutions(...) > 0` the runner also sets `timedOutDuringToolExecution = true`;\n- `timedOutDuringPrompt = timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution` is therefore `false`, so the existing prompt-timeout notice is skipped;\n- with no partial assistant text there's no `incompleteTurnText`, so the run falls through to the terminal \"embedded run done\" path, returns `payloads: undefined`, and the reply layer returns silently on the empty payload array.\n\n## Fix\n\nAdd one terminal branch in `runEmbeddedAgent` that surfaces a recoverable, user-visible notice when a turn timed out and is about to deliver nothing visible — mirroring the prompt-level timeout copy already emitted from the same function. Because the branch returns a non-empty payload, it flows through the normal gateway-agnostic reply path (Discord, Matrix, etc.) and never reaches the silent return.\n\nThe decision is a small pure helper, `resolveTurnBudgetTimeoutNotice(...)`, returning the notice only when correct and `null` otherwise. It keys on **`timedOut`** (distinct from a user cancel) and is suppressed for the turns that are silent/handled by design:\n\n- `timedOutDuringCompaction` — compaction timeouts are **paused/resumable**, not abandoned; emitting a notice (passed as `incompleteTurnText`) would also override the `paused` liveness state the terminal path preserves;\n- `allowEmptyAssistantReplyAsSilent` (the **raw** flag — note the derived `shouldTreatEmptyAssistantReplyAsSilent` is always `false` for timed-out attempts, so it cannot protect this case) — cron/heartbeat/autonomous contexts;\n- a messaging tool already delivered out-of-band (`hasMessagingToolDeliveryEvidence`);\n- a deterministic approval prompt was delivered out-of-band (`didSendDeterministicApprovalPrompt`; payload building intentionally suppresses assistant artifacts there).\n\nA separate copy variant covers an idle (no-output) model timeout. Net change is additive: it only produces output where there is currently none.\n\n## Proof\n\n**1. Committed real-`runEmbeddedAgent` regression tests** (`run.incomplete-turn.test.ts`) drive the real terminal path via the existing harness loader:\n\n- tool-execution timeout, empty reply → notice delivered, `livenessState: \"abandoned\"`;\n- same, in a silent-reply context (`allowEmptyAssistantReplyAsSilent: true`) → **no notice** (stays silent);\n- compaction timeout → **no notice**, `livenessState: \"paused\"` preserved.\n\nPlus full unit coverage of the helper's decision matrix. Suite: **123 passing**; `tsgo:core` and oxlint clean.\n\n**2. Before/after through the real terminal path** (fault-injected timed-out attempt, real `runEmbeddedAgent`):\n\n```\n# tool-execution timeout, empty reply\nBEFORE (origin/main):  result.payloads = undefined                 livenessState = blocked   → silent\nAFTER  (this PR):       result.payloads = [{ text: \"⚠️ I hit my time budget on this request and\n                        stopped before finishing. Ask me to continue, or simplify the request.\n                        If this happens often, raise `agents.defaults.timeoutSeconds` in your\n                        config.\", isError: true }]                  livenessState = abandoned → delivered\n\n# compaction timeout, empty reply  (regression guard)\nAFTER:                  result.payloads = undefined                 livenessState = paused    → correctly silent\n```\n\n**On a live gateway/channel capture:** the trigger is a ≥`agents.defaults.timeoutSeconds` (default 600s) budget exhausted *during tool execution* — not reproducible against a real channel in CI or by an external contributor without a long-running live agent. The fault-injection harness drives the **real** `runEmbeddedAgent` terminal path (`makeAttemptResult({ timedOut: true, timedOutDuringToolExecution: true, assistantTexts: [] })`) and the committed tests assert end-to-end behavior through the same function; the harness itself is kept out of the committed diff to keep the patch narrow.\n\n",
-        "branch": "fix/emit-user-message-on-turn-timeout",
-        "head_sha": "d02b758bc370f7c175cecbaa4c41834306bba761",
-        "author": "spencer2211",
-        "labels": [
-          "agents",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
-            "additions": 125,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 66,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts",
-            "additions": 63,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 254,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89965",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89965.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 64,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89965:4615609811:2026-06-03T18:37:31Z:re_review",
-      "comment_id": "4615609811",
-      "comment_version_key": "4615609811:2026-06-03T18:37:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89965#issuecomment-4615609811",
+      "idempotency_key": "comment-router:openclaw/openclaw:96339:4799696434:2026-06-25T13:18:21Z:re_review",
+      "comment_id": "4799696434",
+      "comment_version_key": "4799696434:2026-06-25T13:18:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96339#issuecomment-4799696434",
       "repo": "openclaw/openclaw",
       "target_branch": null,
       "issue_number": 89965,
@@ -246,21 +141,21 @@
       "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2781,
+    "total_ms": 2262,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 301
+        "ms": 555
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2255
+        "ms": 1494
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -272,11 +167,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 200
+        "ms": 201
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
