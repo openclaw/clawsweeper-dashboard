@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-25T08:43:41.575Z",
+  "generated_at": "2026-06-25T08:44:29.910Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T05:43:40.760Z",
+  "since": "2026-06-25T05:44:27.612Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96710
+    96701
   ],
-  "comment_ids": [
-    4797393855
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,18 +31,118 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:95695:4797393855:2026-06-25T08:41:18Z:re_review",
-      "comment_id": "4797393855",
-      "comment_version_key": "4797393855:2026-06-25T08:41:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95695#issuecomment-4797393855",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96701:4797131464:2026-06-25T08:44:24Z:clawsweeper_needs_human",
+      "comment_id": "4797131464",
+      "comment_version_key": "4797131464:2026-06-25T08:44:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96701#issuecomment-4797131464",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95695,
-      "author": "zw-xysk",
-      "author_id": 294457748,
+      "issue_number": 96701,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T08:41:18Z",
-      "comment_updated_at": "2026-06-25T08:41:18Z",
+      "comment_created_at": "2026-06-25T08:04:45Z",
+      "comment_updated_at": "2026-06-25T08:44:24Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] The remaining action is maintainer acceptance or tuning of the 16 MiB compatibility boundary, not an automated code repair.; Cleared: The diff hardens an availability-sensitive provider stream path and does not add dependencies, lockfile changes, CI permissions, secret handling, package metadata, or downloaded third-party execution. (sha=fc43cb4bc4f639af55e1b82aa281c1dbc3c0b780)",
+      "review_summary": "The PR adds an internal `createSseByteGuard`, wraps Anthropic Messages streaming success-body reads with a 16 MiB cap, and adds an oversized-stream regression test.\n\nPR surface: Source +100, Tests +43. Total +143 across 3 files.\n\nReproducibility: yes. from source inspection: current main appends Anthropic 200 SSE chunks into an unbounded buffer until delimiters arrive. I did not execute a current-main repro in this read-only pass, but the PR body supplies after-fix local HTTP proof for the guarded path.",
+      "review_followup": "- [P2] The remaining action is maintainer acceptance or tuning of the 16 MiB compatibility boundary, not an automated code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "fc43cb4bc4f639af55e1b82aa281c1dbc3c0b780",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(anthropic): bound streaming 200 success-body SSE reads at 16 MiB",
+        "body": "## What Problem This Solves\n\n`src/agents/anthropic-transport-stream.ts` accumulates an unbounded SSE byte stream into a string buffer while waiting for `\\n\\n` frame delimiters. The companion **error-body** path (`readAnthropicMessagesErrorBodySnippet`, 8 KiB cap + 10s idle timeout) was bounded by #95108; the symmetric **200 success-body** path was left open. A hostile or malfunctioning Anthropic-compatible endpoint (including an MITM-able proxy, a cloud-hosted mirror like `Anthropic-Vertex`, or a hijacked self-hosted provider) can return a `Content-Length`-less SSE body that streams forever, exhausting process memory on a code path that runs for every `/v1/messages` call.\n\nThis is the streaming-body analogue of the bounded-read sweep Alix-007 finished for non-streaming `response.json()` / `response.text()`. Same 16 MiB cap, same helper-driven design, but on the chunk-by-chunk SSE path that the non-streaming sweep did not cover.\n\n## Changes\n\n- `src/agents/streaming-byte-guard.ts` (NEW, 88 lines) — `createSseByteGuard(reader, { maxBytes, onOverflow? })` wraps a `ReadableStreamDefaultReader<Uint8Array>`, tracks accumulated bytes across the existing chunk loop, cancels the underlying reader on overflow, and throws a canonical overflow error. The guard tracks `overflowed` and `cancelled` flags separately so callers can distinguish byte-cap overflow from explicit cancellation. Internal core helper for now; if extensions (`extensions/google`, `extensions/ollama`) need it, promote to a plugin-SDK subpath in a separate, dedicated PR with full SDK metadata sync.\n- `src/agents/anthropic-transport-stream.ts:56` — `parseAnthropicSseBody` wraps `body.getReader()` in `createSseByteGuard` with `ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024`. The existing `\\n\\n` frame parsing loop, abort signal handling via `readAnthropicSseChunk`, and `reader.releaseLock()` cleanup are unchanged. The `readAnthropicSseChunk` type was widened to accept any `{ read, cancel }` so the same wrapper drives the guarded reader.\n\n## Real behavior proof\n\n- **Behavior addressed**: unbounded buffering of the Anthropic Messages streaming 200 success-body SSE read; after the fix the read is capped at 16 MiB and the stream is cancelled on overflow.\n- **Real environment tested**: a real `node:http` server bound to `127.0.0.1` returning a `Content-Length`-less 64 MiB body (4× the cap) chunk-by-chunk with backpressure, plus a small (8 MiB) negative-control body, plus a happy-path body. Drives the production `createSseByteGuard` over a real TCP socket. Node v22.22.0.\n- **Exact steps**: `node --import tsx _proof_anthropic_stream.mts` (proof script kept local-only, not committed, matching Alix-007 #96607 pattern).\n- **Evidence after fix**:\n  ```\n  === Anthropic streaming success-body bounded read (cap=16777216, would-stream≈67108864) ===\n\n  PASS  Anthropic streaming success body bounded: rejected with \"Anthropic Messages success body exceeded 16777216 bytes (received 16836692)...\"; bytesSent=20971520 (< 67108864); server.aborted=true; overflowed=true; cancelled=true\n  PASS  cap-trace: bounded reader cancelled at 16756082 bytes (full body = 67108864); server.bytesSent=19922944; server.aborted=true\n  PASS  negative control: small body fully drained (8388608 bytes >= 8388608); cap did not trigger; overflowed=false; cancelled=false; aborted=false\n  PASS  happy path: small valid Anthropic SSE response drained end-to-end (88 bytes <= 16777216)\n\n  === All Anthropic streaming success-body bounded-read assertions passed ===\n  ```\n- **Observed result after fix**: `createSseByteGuard` cancelled the upstream `ReadableStreamDefaultReader` at ~16 MiB (well under 64 MiB). Server-side `bytesSent` observed at 19-20 MiB — bounded, not drained. `cancel(reason)` received an `Error` instance. Negative control confirms the cap is the cause of overflow, not body structure. Both `overflowed` and `cancelled` flags are true after overflow; only `cancelled` is true after explicit cancel (verifies the [P3] review fix from #96701).\n- **What was not tested**: live Anthropic API call (the proof exercises the same production helper against the same shape of attack the live endpoint could carry); cross-platform Node 18/20 differences (Node 22 only, matches CI).\n\n## Out of scope (separate PRs, sequenced)\n\n- `src/llm/providers/anthropic.ts` (`iterateSseMessages`, legacy provider SSE parser) — same bounded-read pattern, separate PR.\n- `src/llm/providers/openai-chatgpt-responses.ts` (`parseSSE`, ChatGPT Responses SSE parser) — same.\n- `src/agents/runtime/proxy.ts` (`streamProxy`, internal proxy SSE parser) — same.\n- `extensions/google/transport-stream.ts` and `extensions/ollama/src/{setup,stream}.ts` — need the helper promoted to a plugin-SDK subpath first.\n\n## Risk\n\n- **Low**: same 16 MiB cap already used by `readProviderJsonResponse` for non-streaming Anthropic success bodies. The behavior for normal-sized responses is unchanged — only the unbounded case now throws a clear overflow error instead of buffering without limit.\n- **Cancel propagation**: `createSseByteGuard.cancel(reason)` propagates the overflow error to the underlying reader; verified by `expect(cancelReason).toBeInstanceOf(Error)` in the test.\n- **No SDK surface change**: helper is core-internal (`src/agents/streaming-byte-guard.ts`); no `package.json` export, no `scripts/lib/plugin-sdk-entrypoints.json` entry, no API-baseline regen needed.\n- **ClawSweeper r1 fixes applied**: separated `overflowed` (set on byte-cap overflow) and `cancelled` (set on either overflow or explicit cancel) flags. The [P3] \"track overflow separately from cancellation\" finding is closed by exposing both flags.\n\n## Diff stats\n\n```\n3 files changed, 147 insertions(+), 5 deletions(-)\ncreate mode 100644 src/agents/streaming-byte-guard.ts\n```\n\nCode change (excluding the inline test file): **103 LoC** (88 helper + 15 source). Test additions: 43 LoC inline in existing describe block.",
+        "branch": "fix/anthropic-transport-stream-bound",
+        "head_sha": "fc43cb4bc4f639af55e1b82aa281c1dbc3c0b780",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/anthropic-transport-stream.test.ts",
+            "additions": 43,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/anthropic-transport-stream.ts",
+            "additions": 15,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/streaming-byte-guard.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 145,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96701",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96701.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 66,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96701:4797314526:2026-06-25T08:30:33Z:re_review",
+      "comment_id": "4797314526",
+      "comment_version_key": "4797314526:2026-06-25T08:30:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96701#issuecomment-4797314526",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96701,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T08:30:33Z",
+      "comment_updated_at": "2026-06-25T08:30:33Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -64,24 +162,91 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(anthropic): bound streaming 200 success-body SSE reads at 16 MiB",
+        "body": "## What Problem This Solves\n\n`src/agents/anthropic-transport-stream.ts` accumulates an unbounded SSE byte stream into a string buffer while waiting for `\\n\\n` frame delimiters. The companion **error-body** path (`readAnthropicMessagesErrorBodySnippet`, 8 KiB cap + 10s idle timeout) was bounded by #95108; the symmetric **200 success-body** path was left open. A hostile or malfunctioning Anthropic-compatible endpoint (including an MITM-able proxy, a cloud-hosted mirror like `Anthropic-Vertex`, or a hijacked self-hosted provider) can return a `Content-Length`-less SSE body that streams forever, exhausting process memory on a code path that runs for every `/v1/messages` call.\n\nThis is the streaming-body analogue of the bounded-read sweep Alix-007 finished for non-streaming `response.json()` / `response.text()`. Same 16 MiB cap, same helper-driven design, but on the chunk-by-chunk SSE path that the non-streaming sweep did not cover.\n\n## Changes\n\n- `src/agents/streaming-byte-guard.ts` (NEW, 88 lines) — `createSseByteGuard(reader, { maxBytes, onOverflow? })` wraps a `ReadableStreamDefaultReader<Uint8Array>`, tracks accumulated bytes across the existing chunk loop, cancels the underlying reader on overflow, and throws a canonical overflow error. The guard tracks `overflowed` and `cancelled` flags separately so callers can distinguish byte-cap overflow from explicit cancellation. Internal core helper for now; if extensions (`extensions/google`, `extensions/ollama`) need it, promote to a plugin-SDK subpath in a separate, dedicated PR with full SDK metadata sync.\n- `src/agents/anthropic-transport-stream.ts:56` — `parseAnthropicSseBody` wraps `body.getReader()` in `createSseByteGuard` with `ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024`. The existing `\\n\\n` frame parsing loop, abort signal handling via `readAnthropicSseChunk`, and `reader.releaseLock()` cleanup are unchanged. The `readAnthropicSseChunk` type was widened to accept any `{ read, cancel }` so the same wrapper drives the guarded reader.\n\n## Real behavior proof\n\n- **Behavior addressed**: unbounded buffering of the Anthropic Messages streaming 200 success-body SSE read; after the fix the read is capped at 16 MiB and the stream is cancelled on overflow.\n- **Real environment tested**: a real `node:http` server bound to `127.0.0.1` returning a `Content-Length`-less 64 MiB body (4× the cap) chunk-by-chunk with backpressure, plus a small (8 MiB) negative-control body, plus a happy-path body. Drives the production `createSseByteGuard` over a real TCP socket. Node v22.22.0.\n- **Exact steps**: `node --import tsx _proof_anthropic_stream.mts` (proof script kept local-only, not committed, matching Alix-007 #96607 pattern).\n- **Evidence after fix**:\n  ```\n  === Anthropic streaming success-body bounded read (cap=16777216, would-stream≈67108864) ===\n\n  PASS  Anthropic streaming success body bounded: rejected with \"Anthropic Messages success body exceeded 16777216 bytes (received 16836692)...\"; bytesSent=20971520 (< 67108864); server.aborted=true; overflowed=true; cancelled=true\n  PASS  cap-trace: bounded reader cancelled at 16756082 bytes (full body = 67108864); server.bytesSent=19922944; server.aborted=true\n  PASS  negative control: small body fully drained (8388608 bytes >= 8388608); cap did not trigger; overflowed=false; cancelled=false; aborted=false\n  PASS  happy path: small valid Anthropic SSE response drained end-to-end (88 bytes <= 16777216)\n\n  === All Anthropic streaming success-body bounded-read assertions passed ===\n  ```\n- **Observed result after fix**: `createSseByteGuard` cancelled the upstream `ReadableStreamDefaultReader` at ~16 MiB (well under 64 MiB). Server-side `bytesSent` observed at 19-20 MiB — bounded, not drained. `cancel(reason)` received an `Error` instance. Negative control confirms the cap is the cause of overflow, not body structure. Both `overflowed` and `cancelled` flags are true after overflow; only `cancelled` is true after explicit cancel (verifies the [P3] review fix from #96701).\n- **What was not tested**: live Anthropic API call (the proof exercises the same production helper against the same shape of attack the live endpoint could carry); cross-platform Node 18/20 differences (Node 22 only, matches CI).\n\n## Out of scope (separate PRs, sequenced)\n\n- `src/llm/providers/anthropic.ts` (`iterateSseMessages`, legacy provider SSE parser) — same bounded-read pattern, separate PR.\n- `src/llm/providers/openai-chatgpt-responses.ts` (`parseSSE`, ChatGPT Responses SSE parser) — same.\n- `src/agents/runtime/proxy.ts` (`streamProxy`, internal proxy SSE parser) — same.\n- `extensions/google/transport-stream.ts` and `extensions/ollama/src/{setup,stream}.ts` — need the helper promoted to a plugin-SDK subpath first.\n\n## Risk\n\n- **Low**: same 16 MiB cap already used by `readProviderJsonResponse` for non-streaming Anthropic success bodies. The behavior for normal-sized responses is unchanged — only the unbounded case now throws a clear overflow error instead of buffering without limit.\n- **Cancel propagation**: `createSseByteGuard.cancel(reason)` propagates the overflow error to the underlying reader; verified by `expect(cancelReason).toBeInstanceOf(Error)` in the test.\n- **No SDK surface change**: helper is core-internal (`src/agents/streaming-byte-guard.ts`); no `package.json` export, no `scripts/lib/plugin-sdk-entrypoints.json` entry, no API-baseline regen needed.\n- **ClawSweeper r1 fixes applied**: separated `overflowed` (set on byte-cap overflow) and `cancelled` (set on either overflow or explicit cancel) flags. The [P3] \"track overflow separately from cancellation\" finding is closed by exposing both flags.\n\n## Diff stats\n\n```\n3 files changed, 147 insertions(+), 5 deletions(-)\ncreate mode 100644 src/agents/streaming-byte-guard.ts\n```\n\nCode change (excluding the inline test file): **103 LoC** (88 helper + 15 source). Test additions: 43 LoC inline in existing describe block.",
+        "branch": "fix/anthropic-transport-stream-bound",
+        "head_sha": "fc43cb4bc4f639af55e1b82aa281c1dbc3c0b780",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/anthropic-transport-stream.test.ts",
+            "additions": 43,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/anthropic-transport-stream.ts",
+            "additions": 15,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/streaming-byte-guard.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 145,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96701",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96701.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 66,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2923,
+    "total_ms": 2559,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 802
+        "ms": 288
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1995
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -93,7 +258,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2108
+        "ms": 249
       },
       {
         "name": "append_ledger",
