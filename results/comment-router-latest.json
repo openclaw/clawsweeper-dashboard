@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T18:15:44.095Z",
+  "generated_at": "2026-06-26T18:15:54.065Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-26T15:15:42.237Z",
+  "since": "2026-06-26T15:15:51.900Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97059
+    96865
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4812230469
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97059:4811356852:2026-06-26T18:15:39Z:clawsweeper_auto_repair",
-      "comment_id": "4811356852",
-      "comment_version_key": "4811356852:2026-06-26T18:15:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97059#issuecomment-4811356852",
+      "idempotency_key": "comment-router:openclaw/openclaw:96865:4812230469:2026-06-26T18:13:19Z:re_review",
+      "comment_id": "4812230469",
+      "comment_version_key": "4812230469:2026-06-26T18:13:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96865#issuecomment-4812230469",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97059,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 96865,
+      "author": "tayoun",
+      "author_id": 39609208,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-26T16:16:25Z",
-      "comment_updated_at": "2026-06-26T18:15:39Z",
+      "comment_created_at": "2026-06-26T18:13:19Z",
+      "comment_updated_at": "2026-06-26T18:13:19Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -62,77 +64,64 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(ollama): preserve custom memory provider endpoints",
-        "body": "Closes #97055\n\n## What Problem This Solves\n\nUsers who set `memorySearch.provider` to a custom Ollama-backed provider (e.g. `ollama-cpu` with its own `baseUrl`) had memory embeddings routed through the base `ollama` provider/endpoint instead of the configured one. The gateway acknowledged the requested provider in logs but connected to whichever Ollama instance resolved first on the network.\n\nAI-assisted: this PR was prepared with Codex and reviewed with Claude.\n\n## Why This Change Was Made\n\nThere were two layers dropping the configured provider id:\n\n1. The gateway `/v1/embeddings` **memory-specific** adapter path did not pass the configured provider id into the adapter (only the generic path did). `embeddings-http.ts` now forwards `provider: providerId`, matching the generic path.\n2. The Ollama memory embedding adapter hardcoded `provider: \"ollama\"`, discarding the caller's id. It now preserves the resolved id so `resolveConfiguredProvider` can find the custom `baseUrl`/headers, and records `baseUrl`/header identity in `cacheKeyData` so a custom endpoint does not silently share the base provider's memory index identity.\n\n**Secret-header hardening (addresses the ClawSweeper P1 finding):** because `cacheKeyData` is hashed into the memory provider key, any credential header placed in it would force a full reindex on credential rotation. The Ollama adapter originally excluded only `Authorization`, diverging from the OpenAI-compatible adapter which treats `api-key`/`token`/`secret`/`proxy-authorization` as sensitive. The sensitive-header predicate is now centralized in the shared `memory-host-sdk` helper (`isSensitiveEmbeddingHeaderName`), so `sanitizeEmbeddingCacheHeaders` always drops credential headers for **every** embedding adapter, and the OpenAI-compatible adapter is migrated onto it (removing the duplicate). Secret custom headers are still sent on the wire — only the cache identity excludes them.\n\nNo new config surface is added.\n\n## User Impact\n\nUsers can dedicate memory embeddings to a configured Ollama endpoint such as `ollama-cpu` without requests falling back to the default `ollama` endpoint, and memory indexing distinguishes custom endpoint identity instead of reusing vectors from a different endpoint.\n\n**Compatibility note:** adding `baseUrl`/`headers` to the Ollama memory cache identity changes the provider-key hash for existing Ollama memory indexes (including the default `ollama` provider), so they will rebuild once via the normal memory index rebuild flow on upgrade. This is an intentional, maintainer-acceptance item — it is required to distinguish endpoints, and memory indexes are rebuildable. Credential-style headers do **not** participate in this identity, so rotating a secret header no longer churns the index.\n\n## Evidence\n\n**Behavior addressed:** custom `models.providers.<id>.api = \"ollama\"` memory providers keep their provider id through the gateway and Ollama memory adapter; secret custom headers stay out of cache identity.\n\n**Real environment tested:** local source checkout with focused Vitest shards and mocked HTTP/provider boundaries.\n\n**Exact steps:**\n\n```bash\nnode scripts/run-vitest.mjs \\\n  extensions/ollama/src/embedding-provider.test.ts \\\n  src/gateway/embeddings-http.test.ts \\\n  src/plugins/openai-compatible-embedding-provider.test.ts \\\n  extensions/memory-core/src/memory/embeddings.test.ts\ngit diff --check\n```\n\n**Evidence after fix:** all focused shards pass (Ollama provider, gateway embeddings HTTP, OpenAI-compatible provider, memory-core embeddings). Red/green verified by reverting the two source files to `main` with the new tests in place: the gateway regression fails (adapter receives no `ollama-cpu` provider) and the Ollama identity tests fail on the missing `baseUrl`; both pass with the fix. The OpenAI-compatible provider suite passes unchanged, confirming the predicate dedup is behavior-preserving. `pnpm tsgo:prod`, `pnpm tsgo:extensions:test`, oxlint, and oxfmt are clean. `git diff --check` passes.\n\n**Observed result:** the new Ollama regression sends `ollama-cpu` embeddings (including a custom `X-Api-Key` header) to the configured base URL, records provider/baseUrl/non-secret-header cache identity, and excludes `X-Api-Key` from `cacheKeyData`; the gateway regression proves configured custom provider ids reach memory-specific adapters.\n\n**What was not tested:** no live two-Ollama deployment was run — the routing is proven at the unit level by asserting the outgoing request URL/headers and the gateway adapter call args, which is the deterministic seam. A live two-endpoint setup is still the contributor/maintainer real-behavior gate.\n",
-        "branch": "codex/97055-ollama-memory-provider-id",
-        "head_sha": "02ddd3dd63e0a5bc7b13aec04ecba956125c4fb8",
-        "author": "harjothkhara",
+        "title": "fix(codex): honor workspace-only fs for native tools",
+        "body": "## What Problem This Solves\nWhen an OpenClaw agent sets `tools.fs.workspaceOnly=true`, OpenClaw-owned file tools enforce a workspace boundary. Codex app-server code mode also has a native shell/filesystem surface. Current Codex `workspace-write` is not a true OpenClaw workspace-only read boundary, so OpenClaw must fail closed for that native surface instead of projecting an unsafe sandbox downgrade.\n\n## Summary\n- disable the Codex app-server native code/file surface when effective `tools.fs.workspaceOnly=true`\n- preserve explicit per-agent `tools.fs.workspaceOnly=false` as an opt-out from global workspace-only policy\n- resolve workspace-only policy from the active agent, runtime/session key, default agent, then global config\n- stop downgrading `danger-full-access` to Codex `workspace-write`, because that implied a stronger read boundary than Codex exposes\n- cover mixed-agent, global, default-agent, runtime-session, explicit per-agent opt-out, malformed-config, and app-server request behavior\n\n## Evidence\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/dynamic-tool-build.test.ts -t \"workspace-only\"` passed locally\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts -t \"disables native Codex file/code mode\"` passed locally\n- `pnpm exec oxfmt --check --threads=1 extensions/codex/src/app-server/dynamic-tool-build.ts extensions/codex/src/app-server/dynamic-tool-build.test.ts extensions/codex/src/app-server/run-attempt.ts extensions/codex/src/app-server/run-attempt.test.ts` passed locally\n- `node scripts/run-oxlint.mjs extensions/codex/src/app-server/dynamic-tool-build.ts extensions/codex/src/app-server/dynamic-tool-build.test.ts extensions/codex/src/app-server/run-attempt.ts extensions/codex/src/app-server/run-attempt.test.ts` passed locally\n- `pnpm tsgo:core` passed locally\n- `pnpm tsgo:core:test` passed locally\n- `git diff --check` passed locally\n\n## Real Behavior Proof\nFresh live proof collected 2026-06-26 with a temporary redacted runner that starts the real Codex app-server via:\n\n`/opt/homebrew/bin/codex app-server --listen stdio://`\n\nThe runner uses the production `runCodexAppServerAttempt` startup path, wraps the real initialized app-server client, records `initialize`, `thread/start`, and `turn/start` RPC attempts, and intentionally stops before forwarding `turn/start` so no model turn is executed.\n\nRedacted terminal output:\n```json\n{\n  \"proofKind\": \"live-codex-app-server-thread-start\",\n  \"collectedAt\": \"2026-06-26T18:11:18.452Z\",\n  \"codexCli\": \"codex-cli 0.141.0\",\n  \"runtimeIdentity\": {\n    \"serverVersion\": \"0.141.0\",\n    \"userAgent\": \"openclaw/0.141.0 (Mac OS 26.3.1; arm64) dumb (openclaw; 2026.6.10)\",\n    \"codexHome\": \"<proof-temp>/agent/codex-home\",\n    \"platformFamily\": \"unix\",\n    \"platformOs\": \"macos\"\n  },\n  \"workspaceOnlyPolicy\": true,\n  \"requestedAppServerSandbox\": \"danger-full-access\",\n  \"observedMethods\": [\n    \"initialize\",\n    \"thread/start\",\n    \"turn/start\"\n  ],\n  \"threadStartObserved\": true,\n  \"turnStartForwarded\": false,\n  \"threadStart\": {\n    \"sandbox\": \"danger-full-access\",\n    \"approvalPolicy\": \"never\",\n    \"featuresCodeMode\": false,\n    \"featuresCodeModeOnly\": false,\n    \"defaultAppDenialPatch\": {\n      \"enabled\": false,\n      \"destructive_enabled\": false,\n      \"open_world_enabled\": false\n    }\n  },\n  \"blockedTurnStartSandboxPolicy\": {\n    \"type\": \"dangerFullAccess\"\n  },\n  \"stopReason\": \"proof stop before model turn after live thread/start capture\"\n}\n```\n\nObserved result: in a real Codex app-server process (`serverVersion=0.141.0`) with effective `tools.fs.workspaceOnly=true` and configured `appServer.sandbox=\"danger-full-access\"`, OpenClaw sends `thread/start` with native code/file mode disabled (`features.code_mode=false`, `features.code_mode_only=false`) and an `apps._default` denial patch while preserving the requested sandbox. Workspace-scoped filesystem access remains on OpenClaw-owned dynamic tools.\n\n## Dependency Check\nChecked sibling Codex source before the fix:\n- `codex-rs/sandboxing/src/seatbelt_tests.rs`\n- `codex-rs/app-server/src/thread_state.rs`\n\nCurrent Codex sandbox profiles do not expose the OpenClaw workspace-only read/write boundary ClawSweeper asked for, so this PR now fails closed by disabling the native surface when workspace-only fs policy is active.\n\n## Notes\n- Per-agent `tools.fs.workspaceOnly=false` is treated as an explicit opt-out from a global workspace-only policy; omit the per-agent key to fall through to the global policy.\n",
+        "branch": "fix/codex-workspace-only-native-tools",
+        "head_sha": "d2d95873bd2873743f8f0dbc9c65c0cd38d07ea7",
+        "author": "tayoun",
         "labels": [
-          "gateway",
           "size: M",
-          "extensions: ollama",
-          "P2",
+          "extensions: codex",
+          "triage: blank-template",
+          "P1",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/ollama/src/embedding-provider.test.ts",
-            "additions": 93,
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
+            "additions": 187,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/ollama/src/memory-embedding-adapter.ts",
-            "additions": 9,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/memory-host-sdk/src/host/embedding-provider-adapter-utils.ts",
-            "additions": 28,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/embeddings-http.test.ts",
-            "additions": 63,
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.ts",
+            "additions": 75,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/embeddings-http.ts",
-            "additions": 1,
+            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
+            "additions": 37,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 194,
-        "deletions": 6,
+        "changedFiles": 3,
+        "additions": 299,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97059",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97059.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96865",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96865.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 93,
-          "gatingTotal": 88,
+          "total": 46,
+          "gatingTotal": 41,
           "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 26,
-            "FAILURE": 1,
-            "NEUTRAL": 1
+            "SKIPPED": 38,
+            "SUCCESS": 8
           },
           "blockers": [
             "QA Smoke CI:FAILURE"
@@ -145,25 +134,25 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2091,
+    "total_ms": 2417,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 296
+        "ms": 583
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1547
+        "ms": 1570
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -175,7 +164,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 223
+        "ms": 251
       },
       {
         "name": "append_ledger",
