@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T12:06:01.412Z",
+  "generated_at": "2026-06-26T12:07:14.287Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-26T09:05:57.640Z",
+  "since": "2026-06-26T09:07:13.698Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4809407865
   ],
-  "status_comment_id": 4809408272,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4809407865:2026-06-26T12:04:57Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/89367#issuecomment-4809407865",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 89367,
       "author": "Pick-cat",
       "author_id": 266665499,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-26T12:04:57Z",
       "comment_updated_at": "2026-06-26T12:04:57Z",
-      "status_comment_id": 4809408272,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,211 +62,26 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-26T12:06:02.124Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 89367
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-26T12:06:03.225Z",
-          "response_comment_id": "4809408272",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: forward pending timeout snapshot in waitForAgentJob fallback timer",
-        "body": "## What Problem This Solves\nFixes an issue where sub-agent runs killed by their hard timeout would record `status: timeout` in the registry but the waiting parent session never received the notification. The parent's `agent.wait` outer fallback timer only checked `getPendingAgentRunError` and skipped `getPendingAgentRunTimeout`, so it resolved `null` and `agent.wait` downgraded the outcome to a generic soft/`gateway_draining` timeout, losing the hard-phase context.\n\n## Why This Change Was Made\nThe `waitForAgentJob` outer fallback timer now also forwards a pending hard-timeout snapshot — but it does **not** rederive the hard/soft decision locally. It reuses the existing `terminalOutcomeFromSnapshot()` helper (which runs the shared `buildAgentRunTerminalOutcome` classifier) and forwards only when `reason === \"hard_timeout\"`.\n\nThis honors the single canonical contract in `src/agents/agent-run-terminal-outcome.ts` (per the root rule: *\"Agent run terminal state: normalize/merge via `agent-run-terminal-outcome.ts`; do not rederive timeout/cancel precedence in projections\"*). In particular the canonical classifier excludes:\n- **restart-cancelled** snapshots (`stopReason === \"restart\"`) even when they reached provider-started with a timeout status — these are `cancelled`, not hard timeouts, and must stay correctable via retry grace;\n- soft `queue` / `gateway_draining` phases.\n\nAn earlier revision hand-rolled the gate as `isHardAgentRunTimeoutPhase(phase) || (status === \"timeout\" && providerStarted === true)`, which dropped the `!restartCancelled` guard and would forward a restart-cancelled snapshot as a false hard timeout. Reusing the shared classifier fixes that and shrinks the diff: `agent-run-terminal-outcome.ts` is now unchanged from `main`, and the production change is confined to `src/gateway/server-methods/agent-job.ts` (+17/-1).\n\n## User Impact\nParent sessions correctly receive hard-timeout completion events for timed-out sub-agents (instead of a generic `gateway_draining` timeout), while restart-cancelled and soft-phase runs are left to retry grace instead of being mislabeled as hard timeouts.\n\n## Evidence\n\nAll proofs re-run on head `9c074e57180` (Node v22.22.0, Linux).\n\n### 1. E2E — real `waitForAgentJob` + real `emitAgentEvent`, incl. restart-cancelled regression\n\n```\n$ node scripts/run-vitest.mjs src/gateway/server-methods/agent-job.subagent-timeout-notify.e2e.test.ts --run\n Test Files  1 passed (1) / Tests  4 passed (4)\n```\n\nThe 4 cases drive the real in-process agent event bus and the real `waitForAgentJob`: the three hard-timeout phases (`preflight` / `provider` / `post_turn`) forward the precise snapshot, and a new case asserts a **restart-cancelled provider-started timeout is NOT forwarded as a hard timeout**.\n\n### 2. Negative control — the regression test guards the exact bug\n\nReverting only the production change in `agent-job.ts` to the earlier hand-rolled gate (tests kept) fails exactly the new case, proving it guards the `!restartCancelled` contract:\n\n```\n$ node scripts/run-vitest.mjs src/gateway/server-methods/agent-job.subagent-timeout-notify.e2e.test.ts --run\n × does not forward a restart-cancelled provider-started timeout as a hard timeout\n   AssertionError: expected { …(9) } to be null\n Test Files  1 failed (1) / Tests  1 failed | 3 passed (4)\n```\n\n### 3. Contract + server-methods lanes\n\n```\n$ node scripts/run-vitest.mjs src/agents/agent-run-terminal-outcome.test.ts --run\n Test Files  1 passed (1) / Tests  14 passed (14)\n\n$ node scripts/run-vitest.mjs src/gateway/server-methods/server-methods.test.ts --run\n Test Files  1 passed (1) / Tests  161 passed (161)\n\n$ node scripts/run-oxlint.mjs src/gateway/server-methods/agent-job.ts src/gateway/server-methods/agent-job.subagent-timeout-notify.e2e.test.ts\n exit 0 (clean)\n```\n\n### Not tested here\nA live external Gateway with a real model/tool turn was not captured (no live model in this environment). This change is confined to the wait-layer snapshot-forwarding decision, which now defers entirely to the shared `buildAgentRunTerminalOutcome` classifier; the canonical classifier and its restart-cancelled / soft-phase behavior are covered by the contract tests above plus the real-event-bus e2e and its negative control.\n\nRelated: #89095 (this PR covers the wait-layer fallback slice; the broader no-deliverable-payload parent-wake path is tracked separately).\n",
-        "branch": "fix/issue-89095-subagent-timeout-notify",
-        "head_sha": "9c074e57180dbd2ddc64d19b2d163dcab8f6dada",
-        "author": "pick-cat",
-        "labels": [
-          "gateway",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-methods/agent-job.subagent-timeout-notify.e2e.test.ts",
-            "additions": 100,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent-job.ts",
-            "additions": 17,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/server-methods.test.ts",
-            "additions": 90,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 207,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89367",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89367.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 90,
-          "gatingTotal": 85,
-          "counts": {
-            "SUCCESS": 16,
-            "IN_PROGRESS": 48,
-            "SKIPPED": 30,
-            "QUEUED": 1
-          },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "pnpm-store-warmup:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:QUEUED",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "pnpm-store-warmup:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:QUEUED",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6095,
+    "total_ms": 2320,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 488
+        "ms": 578
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 3269
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -278,11 +93,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2312
+        "ms": 1731
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
