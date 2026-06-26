@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T15:49:48.815Z",
+  "generated_at": "2026-06-26T15:50:20.628Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-26T12:49:48.562Z",
+  "since": "2026-06-26T12:50:18.633Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    97055
+    96927
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4811149348
+  ],
+  "status_comment_id": 4811149802,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,18 +31,215 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96927:4811149348:2026-06-26T15:49:16Z:re_review",
+      "comment_id": "4811149348",
+      "comment_version_key": "4811149348:2026-06-26T15:49:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96927#issuecomment-4811149348",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 96927,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-26T15:49:16Z",
+      "comment_updated_at": "2026-06-26T15:49:16Z",
+      "status_comment_id": 4811149802,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-26T15:50:21.302Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 96927
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-26T15:50:22.233Z",
+          "response_comment_id": "4811149802",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(comfy): bound JSON response reads via readProviderJsonResponse",
+        "body": "## What Problem This Solves\n\n`extensions/comfy/workflow-runtime.ts:322` calls `await response.json()` with no byte-level cap. A hostile, compromised, or misconfigured ComfyUI endpoint can return a success status with no `Content-Length` and stream an arbitrarily large JSON payload, causing OOM. This is the same unbounded-read pattern fixed in the companion pixverse PR (#96885).\n\nThe fix routes through `readProviderJsonResponse` (openclaw/plugin-sdk/provider-http, 16 MiB default cap), which reads the body as a bounded stream and cancels on overflow.\n\n## Changes\n\n- `extensions/comfy/workflow-runtime.ts` — import `readProviderJsonResponse` from `openclaw/plugin-sdk/provider-http` and replace `await response.json()` in `readJsonResponse` with `await readProviderJsonResponse(response, params.errorPrefix)`.\n- `extensions/comfy/workflow-runtime.ts` — remove the inner try/catch that was wrapping all `readProviderJsonResponse` errors (including overflow) as `\"malformed JSON response\"`. `readProviderJsonResponse` already handles both overflow and malformed JSON internally. This matches the sibling pixverse fix (#96885) which removed the same redundant catch wrapper.\n\n## Real behavior proof\n\nDrives `readProviderJsonResponse` through the exact Comfy `readJsonResponse` wrapper pattern over a real `node:http` server (chunked transfer, no Content-Length). Node v22.22.0.\n\n```\nPASS  OVERFLOW: bounded-read error propagates — \"Comfy workflow: JSON response exceeds 16777216 bytes\"\nPASS  OVERFLOW: bytes on wire ~18.4 MiB (cap=16 MiB)\nPASS  HAPPY: small valid Comfy JSON parsed correctly\nPASS  NEGATIVE: old catch masks overflow as \"malformed JSON response\" — the bug!\n       Underlying cause: Comfy workflow: JSON response exceeds 16777216 bytes\n\n=== Comfy bounded-read: 3/3 PASS (fix verified, negative confirmed) ===\n```\n\n- **Behavior addressed**: unbounded `response.json()` on ComfyUI workflow-runtime JSON responses; now capped at 16 MiB (SDK default) with cancellation on overflow. The redundant catch wrapper that masked overflow errors is removed.\n- **Real environment tested**: real `node:http` server (127.0.0.1, chunked transfer, no Content-Length). Node v22.22.0.\n- **Exact steps**: `node --import tsx _proof_comfy_fix.mts` (working tree only, not committed)\n- **Evidence after fix**: 4 assertions pass. Overflow: bounded-read error propagates (\"exceeds 16777216 bytes\") at ~18.4 MiB, not masked as \"malformed JSON\". Happy path: small JSON parsed correctly. Negative control: old catch wrapper DOES mask the overflow — confirming the defect.\n- **What was not tested**: live ComfyUI API call (the proof exercises the same `readProviderJsonResponse` helper used in production). Comfy-specific envelope validation is preserved.\n\n## Out of scope\n\n- Other unbounded `response.json()` call sites across extensions — covered in separate bounded-read sibling PRs (companion to #96885).\n- Default cap policy — 16 MiB is the SDK helper default, matching all other non-image provider JSON reads.\n\n## Risk\n\n- **Low**: swap from `response.json()` to `readProviderJsonResponse`, with the redundant catch wrapper removed. The `readProviderJsonResponse` helper handles both overflow and malformed JSON internally with better error messages. Byte cap is 16 MiB — invisible to normal ComfyUI JSON responses (typically < 1 MiB).\n- **Tested**: 21/21 existing unit tests pass (index + image-generation + video-generation + music-generation).\n\nAI-assisted; reviewed before submission.\n",
+        "branch": "fix/comfy-bounded-json-read",
+        "head_sha": "41dae4583e36f6922b813838630c5170284cb221",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "size: S",
+          "triage: blank-template",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/comfy/workflow-runtime.test.ts",
+            "additions": 171,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/comfy/workflow-runtime.ts",
+            "additions": 5,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 176,
+        "deletions": 5,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96927",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96927.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 91,
+          "gatingTotal": 86,
+          "counts": {
+            "SUCCESS": 18,
+            "SKIPPED": 32,
+            "IN_PROGRESS": 40,
+            "QUEUED": 1
+          },
+          "blockers": [
+            "pnpm-store-warmup:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:QUEUED",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
+          ],
+          "pending": [
+            "pnpm-store-warmup:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:QUEUED",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 491,
+    "total_ms": 4130,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 240
+        "ms": 504
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1477
       },
       {
         "name": "classify_comment_commands",
@@ -56,11 +255,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 239
+        "ms": 2125
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
