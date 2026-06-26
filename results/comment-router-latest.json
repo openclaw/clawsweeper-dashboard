@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T01:58:05.441Z",
-  "repo": "openclaw/crabbox",
+  "generated_at": "2026-06-26T01:59:26.686Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T22:58:05.054Z",
+  "since": "2026-06-25T22:59:24.100Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    706
+    96889
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,132 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96889:4805730686:2026-06-26T01:59:20Z:clawsweeper_needs_human",
+      "comment_id": "4805730686",
+      "comment_version_key": "4805730686:2026-06-26T01:59:20Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96889#issuecomment-4805730686",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96889,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-26T01:53:38Z",
+      "comment_updated_at": "2026-06-26T01:59:20Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] A narrow repair can complete the existing PR by replacing the remaining metadata JSON read and adding focused file_id-path coverage.; Needs attention: The diff improves three response reads but leaves a same-provider oversized success JSON response path unbounded.; Review finding: [P1] Bound the file_id metadata response too — extensions/minimax/video-generation-provider.ts:273 (sha=4a7c12a1df321d29f1d4482050d1a7682114cd17)",
+      "review_summary": "The PR changes MiniMax image generation, video task submission, and video status polling to parse successful JSON responses through `readProviderJsonResponse`, and updates the MiniMax provider HTTP test mock.\n\nPR surface: Source +17. Total +17 across 3 files.\n\nReproducibility: yes. Current source shows unbounded MiniMax success JSON reads, the PR body provides terminal loopback proof for the helper behavior, and the remaining `file_id` metadata path is source-reproducible without needing MiniMax credentials.",
+      "review_followup": "- [P2] A narrow repair can complete the existing PR by replacing the remaining metadata JSON read and adding focused file_id-path coverage.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "4a7c12a1df321d29f1d4482050d1a7682114cd17",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(minimax): bound image/video success response reads",
+        "body": "## What Problem This Solves\n\nThe MiniMax image and video providers read their **success-path** responses with an unbounded `await response.json()`, so a misbehaving or hostile MiniMax endpoint can stream an arbitrarily large body into memory before parsing and exhaust the process (OOM / hang). The HTTP error path is already bounded by `assertOkOrThrowHttpError`; this closes the matching gap on the success-JSON side.\n\nThree success-path reads were affected:\n\n- `extensions/minimax/image-generation-provider.ts` — image generation result (may carry base64 image data)\n- `extensions/minimax/video-generation-provider.ts` — video generation **task submit** response\n- `extensions/minimax/video-generation-provider.ts` — video generation **status poll** response\n\nMiniMax TTS is already bounded and is left unchanged.\n\n## Changes\n\n- Read all three success bodies through the shared bounded reader `readProviderJsonResponse` (16 MiB cap — the same limit the sibling MiniMax web-search provider and other bundled providers already use), which cancels the underlying stream on overflow instead of buffering the whole payload.\n- No new abstraction added; this reuses the existing plugin-SDK helper.\n- The binary video download already enforces a byte cap via `fetchProviderDownloadResponse`, so it is unchanged.\n\n## Real behavior proof\n\n- **Behavior addressed:** an untrusted MiniMax success response that streams more than 16 MiB must be rejected without buffering the full body; small/legitimate responses must still parse.\n- **Real environment tested:** a real `node:http` loopback server streaming a >16 MiB JSON body with **no Content-Length** (chunked), fetched over a real TCP socket, driving the exact export the patched success-paths now call (`readProviderJsonResponse`).\n- **Exact steps:**\n  1. Loopback server streams ~20 MiB of an open JSON object body (no Content-Length).\n  2. `fetch()` the body over TCP, then call `readProviderJsonResponse(response, label)` with the same labels the three patched sites pass.\n  3. Assert it throws `... JSON response exceeds 16777216 bytes` and that the client cancelled the socket before the full body was delivered.\n  4. Negative control: emulate the removed unbounded `await response.json()` path and confirm it buffers past the 16 MiB cap.\n  5. Happy path: a small JSON object still parses correctly through the bounded reader.\n- **Observed result:** bounded throw fires for both labels, the socket is aborted, the server never delivers the full body, the unbounded control buffers past the cap, and the happy path parses. See Evidence.\n- **What was not tested:** no live calls to the real MiniMax API (no credentials); the loopback server stands in for the upstream endpoint to exercise the real TCP + fetch + reader path.\n\nThe patched code paths are also covered by the existing focused vitest suites (`image-generation-provider.test.ts`, `video-generation-provider.test.ts`), which pass after the change.\n\n## Evidence\n\n```\n$ node --import tsx proof-minimax-bound.mts\nPASS: [MiniMax image generation failed] bounded throw on oversize stream -- msg=\"MiniMax image generation failed: JSON response exceeds 16777216 bytes\"\nPASS: [MiniMax image generation failed] stream cancelled (socket aborted by client) -- aborted=true\nPASS: [MiniMax image generation failed] bytesSent (18022426) < full body (20971520) -- bytesSent=18022426\nPASS: [MiniMax video generation failed] bounded throw on oversize stream -- msg=\"MiniMax video generation failed: JSON response exceeds 16777216 bytes\"\nPASS: [MiniMax video generation failed] stream cancelled (socket aborted by client) -- aborted=true\nPASS: [MiniMax video generation failed] bytesSent (18808858) < full body (20971520) -- bytesSent=18808858\nPASS: negative control: unbounded read buffers PAST the 16 MiB cap -- buffered=16823166 > cap=16777216\nPASS: happy path: small JSON parses through bounded reader -- parsed.task_id=task-123\n\nALL PROOFS PASSED\n```\n\nFocused vitest (after the change):\n\n```\n Test Files  2 passed (2)\n      Tests  14 passed (14)\n```\n\n**Label**: security\n\n_AI-assisted._\n",
+        "branch": "fix/bound-minimax",
+        "head_sha": "4a7c12a1df321d29f1d4482050d1a7682114cd17",
+        "author": "alix-007",
+        "labels": [
+          "size: XS",
+          "extensions: minimax",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/minimax/image-generation-provider.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/provider-http.test-helpers.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/video-generation-provider.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 20,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96889",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96889.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 89,
+          "gatingTotal": 84,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 33,
+            "SUCCESS": 52,
+            "IN_PROGRESS": 2
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 642,
+    "total_ms": 2896,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 375
+        "ms": 442
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 2131
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +166,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 254
+        "ms": 300
       },
       {
         "name": "append_ledger",
