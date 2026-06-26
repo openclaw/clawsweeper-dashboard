@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T07:43:58.187Z",
+  "generated_at": "2026-06-26T07:44:11.255Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-26T04:43:55.742Z",
+  "since": "2026-06-26T04:44:10.817Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96972
+    96975
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
-  "commands_seen": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,151 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96972:4807316445:2026-06-26T07:43:52Z:clawsweeper_needs_human",
-      "comment_id": "4807316445",
-      "comment_version_key": "4807316445:2026-06-26T07:43:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96972#issuecomment-4807316445",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96972,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-26T07:30:17Z",
-      "comment_updated_at": "2026-06-26T07:43:52Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] A narrow automated repair can preserve the intended cap while fixing the guard placement and adding one regression test.; Needs attention: The diff adds no dependency or secret-handling risk, but the parser guard can create an availability failure for valid coalesced SSE streams.; Review finding: [P1] Drain complete SSE events before enforcing the cap — src/llm/providers/openai-chatgpt-responses.ts:737 (sha=ee967346a7ba5e0fe30cad56051b5989c164f3d6)",
-      "review_summary": "The PR adds a 64 KiB guard to the OpenAI/Codex SSE parser buffer and a focused test for an oversized delimiter-free SSE response.\n\nPR surface: Source +10, Tests +35. Total +45 across 2 files.\n\nReproducibility: yes. Source inspection shows current main keeps appending to `buffer` until a `\\n\\n` boundary appears, and the PR-introduced regression is also source-reproducible with one large chunk containing many complete small SSE events.",
-      "review_followup": "- [P2] A narrow automated repair can preserve the intended cap while fixing the guard placement and adding one regression test.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "ee967346a7ba5e0fe30cad56051b5989c164f3d6",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(openai): bound SSE parser buffer to prevent OOM",
-        "body": "## What Problem This Solves\n\nThe `parseSSE` generator in `src/llm/providers/openai-chatgpt-responses.ts:719` accumulates decoded SSE chunks into an internal `buffer` string (line 726) that only shrinks when a `\\n\\n` event boundary is found. If a hostile or misconfigured SSE endpoint sends data without double-newline delimiters, the buffer grows unboundedly — consuming all available memory and OOM-killing the gateway process.\n\nThis affects every streaming Codex/OpenAI chat completion call routed through the SSE transport path (`transport: \"sse\"` or WebSocket failure fallback).\n\n## Changes\n\n- `src/llm/providers/openai-chatgpt-responses.ts` (+10 LoC): Added `SSE_PARSE_MAX_BUFFER_BYTES = 64 KiB` constant. After each chunk decode, the buffer check throws `CodexProtocolError` if the accumulated buffer exceeds the cap — preventing unbounded memory growth.\n\n- `src/llm/providers/openai-chatgpt-responses.test.ts` (+35 LoC): Added inline test `\"rejects oversized SSE response that exceeds buffer cap\"` — creates a `Response` with a `ReadableStream` body of 65 KiB (no `\\n\\n`), runs it through the production `streamOpenAICodexResponses` -> `parseSSE` chain, and asserts the error shows the buffer cap message.\n\n## Real behavior proof\n\n- **Behavior addressed**: Unbounded SSE buffer growth when streaming endpoint sends data without \\n\\n event delimiters — buffer capped at 64 KiB, throws CodexProtocolError on overflow.\n- **Real environment tested**: Linux x86_64, Node 22.19, OpenClaw main@81e53202f2\n- **Exact steps or command run after this patch**:\n  ```\n  node --import tsx _proof_sse_cap.mts\n  ```\n- **Evidence after fix**:\n  ```\n  PASS  oversized SSE body without \\n\\n triggers buffer cap error\n  PASS  well-formed SSE with \\n\\n boundaries is accepted\n  PASS  SSE body of exactly cap size without \\n\\n is still under limit\n\n  Results: 3/3 passed\n  ```\n  17/17 unit tests passed: `pnpm test src/llm/providers/openai-chatgpt-responses.test.ts --run`\n- **Observed result after fix**: A 65 KiB SSE response without \\n\\n correctly triggers `CodexProtocolError: Codex SSE response exceeded max buffer size (65536 bytes)`. A well-formed SSE response passes through unchanged. The exact-cap (65536 byte) response does not throw (cap is strict >, not >=).\n- **What was not tested**: WebSocket transport path (different parser); non-OpenAI providers (separate PRs for Anthropic, agent transport streams).\n\n## Out of scope\n\n- Anthropic SSE decoder (`src/llm/providers/anthropic.ts:345` — `iterateSseMessages`) has the same pattern plus `data[]`/`raw[]` array accumulation. Follow-up PR.\n- Agent transport SSE buffers (`src/agents/provider-transport-fetch.ts`, `src/agents/runtime/proxy.ts`) — separate PRs.\n\n## Risk\n\n**Low.** The cap (64 KiB) is well above any reasonable SSE event payload. If triggered, the stream errors with a clear `CodexProtocolError` message rather than silently terminating. The change is additive — no existing behavior is modified, only a guard added.\n\nAI-assisted; reviewed before submission.\n",
-        "branch": "fix/bound-openai-sse-parser-buffer",
-        "head_sha": "ee967346a7ba5e0fe30cad56051b5989c164f3d6",
-        "author": "wangmiao0668000666",
-        "labels": [
-          "size: XS",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/llm/providers/openai-chatgpt-responses.test.ts",
-            "additions": 35,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-chatgpt-responses.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 45,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96972",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96972.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SUCCESS": 62,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96972:4807357044:2026-06-26T07:36:50Z:re_review",
-      "comment_id": "4807357044",
-      "comment_version_key": "4807357044:2026-06-26T07:36:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96972#issuecomment-4807357044",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96972,
-      "author": "wangmiao0668000666",
-      "author_id": 290215524,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-26T07:36:50Z",
-      "comment_updated_at": "2026-06-26T07:36:50Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3684,
+    "total_ms": 781,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 351
+        "ms": 424
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2076
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -185,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1229
+        "ms": 343
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
