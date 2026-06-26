@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T01:08:33.621Z",
+  "generated_at": "2026-06-26T01:08:41.604Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T22:08:31.673Z",
+  "since": "2026-06-25T22:08:39.211Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96510
+    96776
   ],
-  "comment_ids": [
-    4805537367
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 7,
+  "commands_seen": 5,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,18 +31,111 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96510:4805537367:2026-06-26T01:07:19Z:re_review",
-      "comment_id": "4805537367",
-      "comment_version_key": "4805537367:2026-06-26T01:07:19Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96510#issuecomment-4805537367",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96776:4799205900:2026-06-26T01:08:35Z:clawsweeper_auto_repair",
+      "comment_id": "4799205900",
+      "comment_version_key": "4799205900:2026-06-26T01:08:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96776#issuecomment-4799205900",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96510,
-      "author": "nocodet666",
-      "author_id": 184504278,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-26T01:07:19Z",
-      "comment_updated_at": "2026-06-26T01:07:19Z",
+      "issue_number": 96776,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T12:29:08Z",
+      "comment_updated_at": "2026-06-26T01:08:35Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=7f7c2bc1fabe1acabf6c337964dcbec6b3c3f7c6)",
+      "review_summary": "The branch replaces the shared OpenAI-compatible image provider success JSON parse with `readProviderJsonResponse` using a 64 MiB cap and updates the provider-http mock in its tests.\n\nPR surface: Source +6, Tests +5. Total +11 across 2 files.\n\nReproducibility: yes. at source level: current main and `v2026.6.10` use raw `response.json()` after successful OpenAI-compatible image responses. The PR body also gives real `node:http` terminal proof for the capped path, but I did not run a live provider OOM reproduction in this read-only review.",
+      "review_followup": "- [P2] A maintainer needs to accept or adjust the image JSON response cap; that compatibility policy is not a safe automated repair target.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "7f7c2bc1fabe1acabf6c337964dcbec6b3c3f7c6",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(image-generation): replace unbounded response.json() with readProviderJsonResponse",
+        "body": "## What Problem This Solves\n\n`src/image-generation/openai-compatible-image-provider.ts:272` calls `await response.json()` with no byte-level cap. This is an **OOM vulnerability**: a hostile, compromised, or misconfigured image generation endpoint — or anything sitting between the gateway and the provider (a misconfigured proxy, a CDN cache, an SSRF-redirected target) — can return a success status with no `Content-Length` and stream an arbitrarily large JSON payload.\n\nBecause `response.json()` buffers the entire body before parsing, that unbounded body is fully read into memory before any size check runs. Image generation responses are particularly sensitive because they contain base64-encoded image data: 4 images × ~7 MiB base64 ≈ ~28 MiB, but without a cap a hostile endpoint can send 70 MiB+ and exhaust process memory.\n\nThis is part of the broader bounded-read campaign across the OpenClaw codebase — sibling PRs apply the same pattern to Google Chat, Dashscope video, OpenAI video, and other providers. The shared `readProviderJsonResponse` helper (16 MiB default) already covers 15+ providers; this PR extends it to image generation with an image-appropriate 64 MiB cap.\n\n## Changes\n\n- `src/image-generation/openai-compatible-image-provider.ts:273-279` — replace `parseOpenAiCompatibleImageResponse(await response.json(), ...)` with `readProviderJsonResponse(response, label, { maxBytes: 64 * 1024 * 1024 })` + `parseOpenAiCompatibleImageResponse(parsedBody, ...)`. Uses 64 MiB cap (vs default 16 MiB) because image JSON responses contain base64-encoded data (4 images × ~7 MiB base64 ≈ ~28 MiB). Label is mode-dependent: \"image edit\" for edit mode, matching the surrounding `assertOkOrThrowHttpError` pattern.\n- `src/image-generation/openai-compatible-image-provider.test.ts` — add `readProviderJsonResponse` to test mock.\n\n## Real behavior proof\n\nDrives the production chain — `readProviderJsonResponse` → `parseOpenAiCompatibleImageResponse` — over a real `node:http` server (chunked transfer, no Content-Length, real sockets). Covers the changed provider factory end-to-end. Node v22.22.0.\n\n```\n=== Production-chain proof for #96776 ===\n\n  PASS  happy path: response status ok\n  PASS  happy path: readProviderJsonResponse returns object\n  PASS  happy path: returns 1 image with correct mime — count=1, mime=image/png\n  PASS  oversized: throws bounded error with label — err=image generation test: JSON response exceeds 67108864 bytes\n  PASS  oversized: bytes on wire stayed near cap (< 80 MiB, server observed abort) — bytesSent=66.4 MiB, cap=64 MiB\n  PASS  negative: raw response.json() reads full body when under cap\n  PASS  negative: capped path also succeeds for under-cap payload — count=1\n\n=== Image-generation production-chain: 7/7 passed ===\n```\n\n- **Behavior addressed**: unbounded `response.json()` on image generation HTTP responses; after the fix, the full production chain (`readProviderJsonResponse` → `parseOpenAiCompatibleImageResponse`) protects against oversized streams. The happy path correctly returns parsed images; the oversized path throws a bounded error near the 64 MiB cap.\n- **Real environment tested**: real `node:http` server (127.0.0.1, chunked transfer, no Content-Length) driving the combined production chain: `readProviderJsonResponse(response, label, { maxBytes })` then `parseOpenAiCompatibleImageResponse(parsedBody, ...)`. Node v22.22.0.\n- **Exact steps run after this patch**: `node --import tsx _proof_image_gen.mts` (working tree only, not committed)\n- **Evidence after fix**: 7/7 assertions pass. Happy path: 1 image returned with correct mime type. Oversized (endless chunked stream): throws \"JSON response exceeds 67108864 bytes\" at ~66.4 MiB. Negative control: `response.json()` (unbounded) reads full under-cap body successfully, same data through capped path also succeeds.\n- **What was not tested**: live image generation API call (the proof exercises the same production functions against the same attack shape); cross-platform Node differences.\n\n## Out of scope\n\n- Other unbounded `response.json()` call sites — covered by sibling bounded-read PRs (#96772, #96782, etc.).\n- Default cap policy — 64 MiB chosen for base64 image payloads; the shared helper defaults to 16 MiB for non-image providers.\n\n## Risk\n\n- **Low**: swap from `response.json()` to `readProviderJsonResponse` + `parseOpenAiCompatibleImageResponse`. Error behavior preserves the same upstream catch path. Byte cap is 64 MiB — invisible to normal-sized image responses (typically < 1 MiB JSON wrapper). Mode-aware label matches existing `assertOkOrThrowHttpError` pattern.\n- **Tested**: 5/5 existing unit tests pass.\n\n## Diff stats\n\n```\n2 files changed, 14 insertions(+), 1 deletion(-)\n```\n\nAI-assisted: implemented and proof-tested with AI assistance; reviewed by a human before submission.",
+        "branch": "fix/image-generation-bounded-read",
+        "head_sha": "7f7c2bc1fabe1acabf6c337964dcbec6b3c3f7c6",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/image-generation/openai-compatible-image-provider.test.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/openai-compatible-image-provider.ts",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 12,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96776",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96776.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "SUCCESS": 63,
+            "SKIPPED": 33,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96776:4805484019:2026-06-26T00:55:16Z:re_review",
+      "comment_id": "4805484019",
+      "comment_version_key": "4805484019:2026-06-26T00:55:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96776#issuecomment-4805484019",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96776,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-26T00:55:16Z",
+      "comment_updated_at": "2026-06-26T00:55:16Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -62,80 +153,128 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "ignored",
+      "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(parallel): bound MCP success response body read",
-        "body": "## What Problem This Solves\r\n\r\n`postMcp` in `parallel-mcp-search.runtime.ts` reads the HTTP response body in a\r\nsingle ternary expression — but only the **error** branch is bounded:\r\n\r\n```ts\r\ntext: response.ok\r\n  ? await response.text()                                                   // ← unbounded\r\n  : await readResponseTextLimited(response, PARALLEL_MCP_ERROR_BODY_LIMIT_BYTES),  // ← 8 KiB cap\r\n```\r\n\r\nThe asymmetry is visible on adjacent lines in the same ternary: `readResponseTextLimited`\r\nis already imported for the error path, yet `response.text()` is used on the\r\nsuccess path with no size guard. A misbehaving or hostile Parallel AI MCP\r\nendpoint can stream an arbitrarily large JSON-RPC body into memory on the\r\nsuccess path, causing OOM — while the identical code one line below already\r\nknows to cap the error body.\r\n\r\nThis follows the same campaign as Alix-007's `#95103`/`#95218` response-limit\r\nfixes, but applied to the MCP transport layer rather than provider JSON\r\nendpoints.\r\n\r\n## Changes\r\n\r\n* `extensions/parallel/src/parallel-mcp-search.runtime.ts`:\r\n  - Adds constant `PARALLEL_MCP_SUCCESS_BODY_LIMIT_BYTES = 16 * 1024 * 1024`\r\n    (16 MiB — same default as `readProviderJsonResponse`; matches expected\r\n    MCP tool-call payload sizes while guarding against runaway bodies).\r\n  - Replaces `await response.text()` in the success branch of `postMcp` with\r\n    `await readResponseTextLimited(response, PARALLEL_MCP_SUCCESS_BODY_LIMIT_BYTES)`.\r\n  - No new imports — `readResponseTextLimited` from `openclaw/plugin-sdk/provider-http`\r\n    is already present for the error branch in the same expression.\r\n  - No test changes needed — test file already uses real `Response` objects\r\n    and all 17 tests pass unchanged.\r\n\r\n## Real behavior proof\r\n\r\n* **Behavior addressed:** A Parallel AI MCP endpoint can no longer stream an\r\n  arbitrarily large success body into memory; the success-branch read is now\r\n  capped at 16 MiB, matching the error branch's capped pattern, and the stream\r\n  is cancelled on overflow.\r\n* **Real environment tested:** A real `node:http` `createServer` bound to\r\n  `127.0.0.1`, streaming a 24 MiB body in 64 KiB chunks with **no\r\n  Content-Length** header, driving the real exported `readResponseTextLimited`\r\n  helper on Node v22.22.0.\r\n* **Exact steps:**\r\n  1. Boot server; `GET /huge-success` (200) and `GET /huge-error` (400) stream\r\n     24 MiB each; `GET /small` returns a valid MCP JSON-RPC response.\r\n  2. Drive `readResponseTextLimited(res, 16 MiB)` against `/huge-success` and\r\n     assert text length ≤ 16 MiB and bytes-on-wire stayed near cap.\r\n  3. Drive `readResponseTextLimited(res, 8 KiB)` against `/huge-error` and\r\n     assert text length ≤ 8 KiB and bytes-on-wire stayed near cap.\r\n  4. **Negative control**: run OLD `await response.text()` against\r\n     `/huge-success` and measure total bytes.\r\n  5. Drive against `/small` and assert the JSON-RPC payload is returned intact.\r\n* **Evidence after fix:**\r\n  * Success cap: text length **16,777,216 bytes** (16 MiB); server sent\r\n    **18,677,760 bytes** — near cap, not the full 24 MiB body.\r\n  * Error cap: text length **8,192 bytes** (8 KiB); server sent\r\n    **589,824 bytes** — near cap, not the full 24 MiB body.\r\n  * Negative control: unbounded `response.text()` pulled the **full\r\n    25,165,824 bytes**, proving both caps are load-bearing.\r\n  * Small case: payload returned intact with `\"jsonrpc\"` field present.\r\n* **Observed result:** `ALL PROOF ASSERTIONS PASSED`.\r\n  In-repo Vitest: **1 file, 17 tests — all passed**, including the existing\r\n  `\"bounds initialize error bodies without using response.text()\"` regression.\r\n* **What was not tested:** Live Parallel AI MCP endpoint calls. The proof\r\n  measures bytes-on-wire and text truncation, which is the load-bearing signal.\r\n\r\n## Evidence\r\n\r\n```\r\n[case 1] oversized SUCCESS body (200), cap=16 MiB\r\n  ok: bounded at 16 MiB (got 16777216 bytes) — true\r\n  ok: bytes on wire near cap, not full 24 MiB (sent 18677760) — true\r\n\r\n[case 2] oversized ERROR body (400), cap=8 KiB\r\n  ok: bounded at 8 KiB (got 8192 bytes) — true\r\n  ok: bytes on wire near cap, not full 24 MiB (sent 589824) — true\r\n\r\n[negative control] OLD unbounded response.text()\r\n  ok: unbounded read pulled full ~24 MiB (sent 25165824) — true\r\n\r\n[case 3] normal small MCP JSON response\r\n  ok: small response returned intact — true\r\n  ok: content matches original — true\r\n\r\nALL PROOF ASSERTIONS PASSED\r\n```\r\n\r\n```\r\n Test Files  1 passed (1)\r\n      Tests  17 passed (17)\r\n   Start at  01:09:24\r\n   Duration  1.23s\r\n```\r\n\r\nProof script: `scripts/proof-parallel-mcp-bound.mjs`\r\nNode version: v22.22.0\r\n\r\n**Label**: security\r\n\r\nAI-assisted.\r\n",
-        "branch": "fix/bound-parallel-mcp-success-response",
-        "head_sha": "f0571ec7a5c412e623d03d3c6d4bdf5154ea4571",
-        "author": "hugenshen",
-        "labels": [
-          "size: XS",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author",
-          "extensions: parallel"
-        ],
-        "files": [
-          {
-            "path": "extensions/parallel/src/parallel-mcp-search.runtime.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 2,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96510",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96510.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 92,
-          "gatingTotal": 87,
-          "counts": {
-            "SUCCESS": 59,
-            "SKIPPED": 33
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "author association NONE and repository permission read are not allowed"
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96776:4801954148:2026-06-25T16:34:29Z:re_review",
+      "comment_id": "4801954148",
+      "comment_version_key": "4801954148:2026-06-25T16:34:29Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96776#issuecomment-4801954148",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96776,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T16:34:29Z",
+      "comment_updated_at": "2026-06-25T16:34:29Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96776:4801825867:2026-06-25T16:23:05Z:re_review",
+      "comment_id": "4801825867",
+      "comment_version_key": "4801825867:2026-06-25T16:23:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96776#issuecomment-4801825867",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96776,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T16:23:05Z",
+      "comment_updated_at": "2026-06-25T16:23:05Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96776:4799890013:2026-06-25T13:34:50Z:re_review",
+      "comment_id": "4799890013",
+      "comment_version_key": "4799890013:2026-06-25T13:34:50Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96776#issuecomment-4799890013",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96776,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-25T13:34:50Z",
+      "comment_updated_at": "2026-06-25T13:34:50Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2131,
+    "total_ms": 7698,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 516
+        "ms": 509
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1418
+        "ms": 1868
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -147,11 +286,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 183
+        "ms": 5293
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
