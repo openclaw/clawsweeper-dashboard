@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-860"
 mode: "autonomous"
-run_id: "28263230634"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28263230634"
+run_id: "28265737565"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28265737565"
 head_sha: "323f7bdf7236983896641b148e1ea9164f7ba917"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-06-26T20:39:22.560Z"
+published_at: "2026-06-26T21:21:57.771Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/860"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/860"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28263230634](https://github.com/openclaw/clawsweeper/actions/runs/28263230634)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28265737565](https://github.com/openclaw/clawsweeper/actions/runs/28265737565)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/860
 
 ## Summary
 
-Issue #860 remains open and viable on current main 37bdd3837709c4fcf4eb3532d1392f111f6c9dfc. The native chat timeline still renders all timeline rows through ScrollView/VStack, while the repo already has an ItemsRepeater virtualization pattern in nearby WinUI code. The target checkout is read-only for this worker, so no code was changed and validation was not run; this emits a scoped new-fix PR artifact for the writable executor.
+Issue #860 remains open and viable on current main f51a8618ed7bb7554b4d753a4ff518c46cde2b65. The native chat timeline still renders all timeline rows through ScrollView/VStack, while the repo already has an ItemsRepeater virtualization pattern in nearby WinUI code. The target checkout is read-only for this worker, so no code was changed and validation was not run; this emits a scoped new-fix PR artifact for the writable executor.
 
 ## Impact
 
