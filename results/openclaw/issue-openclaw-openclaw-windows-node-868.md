@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-868"
 mode: "autonomous"
-run_id: "28269469505"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28269469505"
+run_id: "28270563762"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28270563762"
 head_sha: "84796f0c9b0c04bbed1476251ff2b1465701a915"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-06-26T22:49:21.574Z"
+published_at: "2026-06-26T23:20:04.254Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/868"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/868"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28269469505](https://github.com/openclaw/clawsweeper/actions/runs/28269469505)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28270563762](https://github.com/openclaw/clawsweeper/actions/runs/28270563762)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/868
 
 ## Summary
 
-Issue #868 is live, non-security-sensitive, and still valid on main 977648cc9c846f60a5d047faf63665003c16936b. Current ARM64 virtualization-disabled setup guidance still omits Windows Virtual Machine Platform / Hyper-V platform remediation, so a narrow SetupEngine copy/test fix remains appropriate. No GitHub mutation was performed.
+Issue #868 is live, non-security-sensitive, and still valid on main acfbf62b4c452525d9c8b89ab0c1c7126c67817d. Current ARM64 virtualization-disabled setup guidance still omits Windows Virtual Machine Platform / Hyper-V platform remediation, so a narrow SetupEngine copy/test fix remains appropriate. No GitHub mutation was performed.
 
 ## Impact
 
