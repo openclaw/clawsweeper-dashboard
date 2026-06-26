@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T10:41:58.193Z",
+  "generated_at": "2026-06-26T10:42:46.408Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-26T07:41:56.142Z",
+  "since": "2026-06-26T07:42:44.137Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96495
+    96092
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4808775047
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96495:4791471094:2026-06-26T10:41:52Z:clawsweeper_needs_human",
-      "comment_id": "4791471094",
-      "comment_version_key": "4791471094:2026-06-26T10:41:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96495#issuecomment-4791471094",
+      "idempotency_key": "comment-router:openclaw/openclaw:96092:4808775047:2026-06-26T10:40:22Z:re_review",
+      "comment_id": "4808775047",
+      "comment_version_key": "4808775047:2026-06-26T10:40:22Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96092#issuecomment-4808775047",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96495,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 96092,
+      "author": "SunnyShu0925",
+      "author_id": 265248434,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-24T16:27:22Z",
-      "comment_updated_at": "2026-06-26T10:41:52Z",
+      "comment_created_at": "2026-06-26T10:40:22Z",
+      "comment_updated_at": "2026-06-26T10:40:22Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -62,186 +64,69 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(image-gen): bound image generation provider JSON response reads",
-        "body": "## What Problem This Solves\r\n\r\nSix image generation providers parse their success responses with an unbounded\r\n`await response.json()`. `response.json()` reads the **entire** body into memory\r\nbefore parsing, with no byte ceiling and regardless of (or in the absence of) a\r\n`Content-Length` header. Image generation providers are external, untrusted\r\nsources: a misbehaving, compromised, or hostile endpoint (including a\r\nself-hosted `baseUrl` override) can stream an arbitrarily large or never-ending\r\nJSON body and force the gateway/plugin to buffer it all, causing memory pressure\r\nor a hang on the image generation code path.\r\n\r\nThe affected call sites are:\r\n- `extensions/openrouter/image-generation-provider.ts` — OpenRouter image generation result\r\n- `extensions/google/image-generation-provider.ts` — Google Imagen image generation result\r\n- `extensions/fal/image-generation-provider.ts` — fal image generation result\r\n- `extensions/minimax/image-generation-provider.ts` — MiniMax image generation result\r\n- `extensions/openai/image-generation-provider.ts` — OpenAI image generation/edit result\r\n- `extensions/vydra/image-generation-provider.ts` — Vydra image job submission result\r\n\r\nThis change closes all six unbounded surfaces, making this the image-generation\r\ncompanion to the `#95103` / `#95108` / `#95218` response-limit campaign.\r\n\r\n## Changes\r\n\r\n* Each of the six image-generation providers now reads its success JSON body\r\n  through the shared bounded reader `readProviderJsonResponse` (from\r\n  `openclaw/plugin-sdk/provider-http`), which enforces a **16 MiB cap** and\r\n  calls the shared `readResponseWithLimit` helper internally.\r\n* On overflow the helper cancels the underlying stream and throws a bounded\r\n  error (`<label>: JSON response exceeds <N> bytes`); existing\r\n  malformed-JSON error messages are preserved for backward compatibility.\r\n* No new abstraction — reuses the existing `media-core` bounded reader already\r\n  used across the codebase.\r\n* Two test files (`openai` and `openrouter`) that declare a closed\r\n  `vi.mock(\"openclaw/plugin-sdk/provider-http\")` factory receive a pass-through\r\n  mock for `readProviderJsonResponse` so existing response-fixture tests remain\r\n  valid; bounded-reader enforcement is covered by the existing `media-core` unit\r\n  tests.\r\n\r\n## Real behavior proof\r\n\r\n* **Behavior addressed**: An untrusted image generation success response with no\r\n  `Content-Length` and an oversized/never-ending body must not be buffered\r\n  whole; the read must stop at the cap, cancel the stream, and throw a bounded\r\n  error — while valid small responses still parse unchanged.\r\n* **Real environment tested**: A real `node:http` server (`createServer`) bound\r\n  to `127.0.0.1`, streaming a JSON body in 64 KiB chunks with **no**\r\n  **Content-Length** header, driving the **real exported**\r\n  `readResponseWithLimit` helper (the same helper `readProviderJsonResponse`\r\n  wraps internally) on Node v22.22.0.\r\n* **Exact steps**:\r\n  1. Boot the server; `GET /huge` streams an unbounded JSON object (~24 MiB) with\r\n     no `Content-Length`; `GET /small` returns one valid result.\r\n  2. Drive `readResponseWithLimit(response, 1 MiB)` against `/huge` and assert\r\n     it rejects + the server socket is closed early.\r\n  3. **Negative control**: run the OLD path `await response.json()` against the\r\n     same `/huge` body and measure how many bytes the server pushed.\r\n  4. Drive `readResponseWithLimit(response, 1 MiB)` against `/small` and assert\r\n     the result is parsed intact.\r\n* **Evidence after fix**:\r\n  * Bounded case: threw `xai.video-generation: JSON response exceeds 1048576 bytes`;\r\n    server socket closed early (stream cancelled); only **1,072,370 bytes**\r\n    reached the wire — near the 1 MiB cap, not the 24 MiB body.\r\n  * Negative control: the unbounded `response.json()` read pulled the **full**\r\n    **25,165,824 bytes** (>23x the bounded read), proving the cap is\r\n    load-bearing.\r\n  * Small case: parsed into the expected task result with output URL intact,\r\n    no truncation.\r\n* **Observed result**: `ALL PROOF ASSERTIONS PASSED`. Plus the in-repo Vitest\r\n  suite for the two providers with closed mocks passes — **63/63** for openai\r\n  image-generation and **7/7** for openrouter image-generation — including\r\n  existing generation/edit fixture tests and the Azure OpenAI auth path.\r\n  `oxlint` is clean on changed files.\r\n* **What was not tested**: Live endpoints were not hit (no keys / would not\r\n  reproduce a hostile oversized body). The 64-bit memory-exhaustion end state\r\n  was not driven to OOM — the proof instead measures bytes-on-wire and early\r\n  socket close, which is the load-bearing signal.\r\n\r\n## Evidence\r\n\r\n```\r\n[case 1] oversized video task status JSON, cap=1024 KiB, NO content-length\r\n  ok: readResponseWithLimit rejected on oversized body — true\r\n  ok: bounded error message present (got: xai.video-generation: JSON response exceeds 1048576 bytes) — true\r\n  ok: bytes on wire stayed near the cap, not the full body (sent 1072370) — true\r\n\r\n[negative control] OLD unbounded `await response.json()` buffers whole body\r\n  ok: unbounded read pulled the FULL ~24 MiB body (sent 25165824), proving the cap is load-bearing — true\r\n\r\n[case 3] normal small video status JSON still parses unchanged\r\n  ok: small status body parsed into task result — true\r\n  ok: task output url intact (valid small body not truncated) — true\r\n\r\nALL PROOF ASSERTIONS PASSED\r\n```\r\n\r\n```\r\n Test Files  1 passed (1)\r\n      Tests  63 passed (63)   ← openai image-generation-provider.test.ts\r\n   Start at  00:17:15\r\n   Duration  4.01s\r\n\r\n Test Files  1 passed (1)\r\n      Tests  7 passed (7)   ← openrouter image-generation-provider.test.ts\r\n   Start at  00:17:25\r\n   Duration  4.08s\r\n```\r\n\r\n**Label**: security\r\n\r\nAI-assisted.\r\n",
-        "branch": "fix/bound-image-gen-json-responses",
-        "head_sha": "9490c8a8c62681df295254cf1a00cce6bc6a5dcb",
-        "author": "hugenshen",
+        "title": "fix(memory): schedule qmd embed when embedInterval is explicitly configured in lexical search mode",
+        "body": "## What Problem This Solves\n\nQMD embedding is now triggered periodically in lexical search mode when `memory.qmd.update.embedInterval` is explicitly configured.\n- **Problem**: `shouldRunEmbed()` and `shouldScheduleEmbedTimer()` in `qmd-manager.ts` gate on `qmdUsesVectors(searchMode)` which returns `false` for `\"search\"` — the `embedIntervalMs` check is never reached, so explicit `embedInterval` is silently ignored in lexical search mode.\n- **Solution**: Added `embedIntervalConfigured: boolean` to `ResolvedQmdUpdateConfig`, set to `true` when the user explicitly provides `embedInterval`. Both gate functions now allow embed scheduling when the user has explicitly configured embedInterval, even in lexical search mode.\n- **What changed**: `packages/memory-host-sdk/src/host/backend-config.ts` (new type field + resolver), `extensions/memory-core/src/memory/qmd-manager.ts` (two gate conditions), `packages/memory-host-sdk/src/host/backend-config.test.ts` (regression assertion), `extensions/memory-core/src/memory/qmd-manager.test.ts` (updated test expectation)\n- **What did NOT change**: Default behavior when `embedInterval` is omitted (no periodic embed in lexical mode); query/hybrid mode behavior; `resolveEmbedIntervalMs` signature; docs; `probeEmbeddingAvailability` probe path\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all)\n\n- [ ] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [x] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Related to #73432\n- [x] This PR fixes a bug or regression\n\n## Motivation\n\nA user configuring `memory.qmd.update.embedInterval: \"30m\"` in lexical search mode (`searchMode: \"search\"`) expects QMD embedding to fire periodically. However, commit `b181930c23` introduced `qmdUsesVectors()` which gates `shouldRunEmbed()` and `shouldScheduleEmbedTimer()` to return early in lexical mode — before the `embedIntervalMs` check is reached. The commit's original intent was to skip background vector work in lexical mode, but it also overrides the user's explicit `embedInterval` configuration.\n\nSince `resolveEmbedIntervalMs()` defaults to 60m when `embedInterval` is omitted, we cannot distinguish \"user explicitly set 60m\" from \"user didn't set it\" using the resolved value alone. This fix introduces an explicit `embedIntervalConfigured` boolean that preserves the user's intent through config resolution.\n\n## Evidence\n\n- **Behavior addressed**: Explicit `memory.qmd.update.embedInterval` in lexical search mode now triggers periodic embedding instead of being silently ignored.\n- **Real environment tested**: Linux x86_64, Node v22.11.0, branch `fix/qmd-embed-interval-73432` based on upstream/main\n- **Exact steps or command run after this patch**:\n\n```\nnode --import tsx node_modules/vitest/vitest.mjs run extensions/memory-core/src/memory/qmd-manager.test.ts --reporter verbose -t \"runs periodic embed maintenance\"\nnode --import tsx node_modules/vitest/vitest.mjs run packages/memory-host-sdk/src/host/backend-config.test.ts --reporter verbose -t \"resolves qmd backend with default collections\"\n```\n\n- **Evidence after fix**:\n\n**Primary — production code proof** (config resolution via `node --import tsx`):\n\n```console\n$ node --import tsx --input-type=module <<'NODE'\nimport { resolveMemoryBackendConfig } from './packages/memory-host-sdk/src/host/backend-config.ts';\n\nconst r1 = resolveMemoryBackendConfig({\n  cfg: { agents: { defaults: { workspace: \"/tmp/test\" } }, memory: { backend: \"qmd\", qmd: { update: { embedInterval: \"5m\" } } } },\n  agentId: \"main\"\n});\nconsole.log(\"[explicit embedInterval='5m']: embedIntervalConfigured = \" + r1.qmd?.update.embedIntervalConfigured);\n\nconst r2 = resolveMemoryBackendConfig({\n  cfg: { agents: { defaults: { workspace: \"/tmp/test\" } }, memory: { backend: \"qmd\", qmd: {} } },\n  agentId: \"main\"\n});\nconsole.log(\"[default (no embedInterval)]: embedIntervalConfigured = \" + r2.qmd?.update.embedIntervalConfigured);\n\nconst r3 = resolveMemoryBackendConfig({\n  cfg: { agents: { defaults: { workspace: \"/tmp/test\" } }, memory: { backend: \"qmd\", qmd: { searchMode: \"search\", update: { embedInterval: \"30m\" } } } },\n  agentId: \"main\"\n});\nconsole.log(\"[search + explicit 30m]: embedIntervalConfigured = \" + r3.qmd?.update.embedIntervalConfigured);\nNODE\n\n=== ResolvedQmdUpdateConfig embedIntervalConfigured ===\n\n[explicit embedInterval='5m']: embedIntervalConfigured = true\n[default (no embedInterval)]: embedIntervalConfigured = false\n[search + explicit 30m]: embedIntervalConfigured = true\n```\n\n**Supplementary — unit tests** (vitest, mock spawn):\n\n```console\n$ node --import tsx node_modules/vitest/vitest.mjs run extensions/memory-core/src/memory/qmd-manager.test.ts -t \"embed\"\n ✓ runs periodic embed maintenance in lexical search mode when embedInterval is explicitly configured 5ms\n ✓ runs periodic embed maintenance even when regular update scheduling is disabled 36ms\n 3 passed\n```\n\n**Matrix evidence** — Gate behavior comparison:\n\n| Configuration | qmdUsesVectors | embedIntervalConfigured | Before fix | After fix |\n|---|---|---|---|---|\n| searchMode: \"search\", no embedInterval | false | false | No embed | No embed (unchanged) |\n| searchMode: \"search\", embedInterval: \"5m\" | false | true | No embed (bug) | Embed fires ✅ |\n| searchMode: \"query\", no embedInterval | true | false | Embed fires | Embed fires (unchanged) |\n| searchMode: \"query\", embedInterval: \"5m\" | true | true | Embed fires | Embed fires (unchanged) |\n\n- **Observed result after fix**:\n  1. When `embedInterval` is explicitly configured in lexical search mode, both `shouldRunEmbed()` and `shouldScheduleEmbedTimer()` now pass the gate and respect the configured interval\n  2. When `embedInterval` is omitted (defaults to 60m), lexical mode behavior is unchanged — no periodic embedding\n  3. Query/hybrid search mode behavior is unchanged\n  4. `probeEmbeddingAvailability()` and `probeVectorAvailability()` continue to skip in lexical mode (unchanged)\n  5. All 127 non-SQLite tests pass (3 SQLite failures pre-existing — Node 22.11.0 lacks `node:sqlite`)\n- **What was not tested**: Live QMD process with a real embedding provider (requires QMD binary and API key); long-running timer scheduling with wall clock; multi-agent lexical mode with per-agent embedInterval overrides; the private `shouldRunEmbed()`/`shouldScheduleEmbedTimer()` methods via direct invocation (only validated via vitest mock tests)\n\n## Root Cause (if applicable)\n\nCommit `b181930c23` (fix(memory): skip qmd vectors in lexical mode) introduced `qmdUsesVectors()` which gates `shouldRunEmbed()` and `shouldScheduleEmbedTimer()` to return `false` in lexical search mode. The `embedIntervalMs` check in both functions is downstream of this gate and is never reached. Since `resolveEmbedIntervalMs()` applies a default of 60m when `embedInterval` is omitted, the resolved value alone cannot distinguish between \"user explicitly configured 60m\" and \"default\".\n\n**Provenance**:\n- `introduced by`: `b181930c23` — initial `qmdUsesVectors()` gate in both functions\n- `made visible by`: same commit — the gate simultaneously introduced the lexical mode skip and the bug\n- `carried forward by`: `1ee2733b2f` (QA lab fix, unchanged gate)\n- Confidence: clear\n\n## Regression Test Plan (if applicable)\n\nN/A — The change is additive (new boolean field, expanded gate condition). The existing \"skips periodic embed maintenance in lexical search mode\" test was updated to expect embed to fire (since it configures `embedInterval: \"5m\"`). The underlying `shouldRunEmbed()` and `shouldScheduleEmbedTimer()` unit tests for query/hybrid modes are unchanged.\n\n## User-visible / Behavior Changes\n\nUsers who explicitly set `memory.qmd.update.embedInterval` in lexical search mode will now see QMD embedding fire periodically. Users who did not configure `embedInterval` see no change in behavior.\n\n## Security Impact (required)\n\n**All checkboxes must be checked or explained**\n\n- [x] New permissions/capabilities? No\n- [x] Secrets/tokens handling changed? No\n- [x] New/changed network calls? No\n- [x] Command/tool execution surface changed? No\n- [x] Data access scope changed? No\n\n## Human Verification (required)\n\n- **Verified scenarios**: Config resolution with/without explicit embedInterval; both gate functions in lexical mode with configured embedInterval; default (no embedInterval) lexical mode unchanged; query mode unchanged\n- **Edge cases checked**: `embedIntervalConfigured` is `false` when `embedInterval` is omitted (including `undefined`, `\"\"`, whitespace-only strings caught by `resolveEmbedIntervalMs` which falls back to default); new field in `ResolvedQmdUpdateConfig` type is consumed by both `shouldRunEmbed()` and `shouldScheduleEmbedTimer()`; backend-config test confirms default value is `false`\n- **What you did NOT verify**: Live QMD process end-to-end; multi-agent lexical mode with per-agent embedInterval; timer scheduling across long-running sessions\n\n## Compatibility / Migration\n\n- [x] Backward compatible? Yes — when `embedInterval` is not configured (the common case), lexical mode behavior is identical to before\n- [x] Config/env changes? No — the new field is internal to config resolution and does not change the user-facing config schema\n- [x] Migration needed? No\n\n## Best-fix Verdict\n\n- **Best fix**: Yes — minimal change (9 lines total production code) that introduces a single boolean to track user intent through config resolution. The alternative (removing the gate entirely, as attempted in #73512) would change default behavior for all lexical mode users.\n- **Refactor needed**: No — the fix is bounded to two gate functions and one type field. The config resolution layer already has the right boundary (resolved config vs raw config).\n- **Alternative considered**: Using `embedIntervalMs <= 0` as a sentinel for \"not configured\" — rejected because `resolveEmbedIntervalMs()` returns default value 3,600,000, not 0. Changing the default to 0 would break query mode users who rely on the default 60m periodic embed.\n\n## AI Assistance\n\n- **AI-assisted**: Yes\n- **Co-Authored-By**: iCodeMate <noreply@anthropic.com>\n- **Human confirmed understanding of code changes**: Yes\n- **AI prompts / session excerpts**: Full open-source-pr skill workflow; issue #73432 analysis across qmd-manager.ts, backend-config.ts, qmd-manager.test.ts; provenance tracing through git blame/log; implementation with focused vitest verification\n\n## Risks and Mitigations\n\n**Highest risk area**: Users who intentionally use lexical `\"search\"` mode to avoid background QMD embedding might not expect that configuring `embedInterval` re-enables it.\n\n**Mitigations**:\n- The change only activates when `embedInterval` is **explicitly configured** — users who don't set it see no change\n- Setting an embed interval is itself an affirmative signal that periodic embedding is desired\n- `probeEmbeddingAvailability()` and `probeVectorAvailability()` remain gated by `qmdUsesVectors()` alone (unchanged), so status probes still skip in lexical mode\n\n**Compatibility impact**: No breaking changes. Existing configurations without explicit `embedInterval` work identically.\n\n## Open Question\n\nThis PR changes behavior when `embedInterval` is explicitly configured in lexical (`searchMode: \"search\"`) mode. The decision for maintainers:\n\n- **Accept**: explicit `embedInterval` overrides lexical mode's default skip behavior. Users who set `embedInterval` get periodic embedding regardless of search mode.\n- **Reject**: keep current behavior (lexical mode never embeds automatically, even with explicit `embedInterval`). Users must switch to `searchMode: \"query\"` for automatic embedding.\n\nThe change is minimal (+2 type fields, ~2 gate conditions) and default behavior (when `embedInterval` is not set) is completely unchanged.\n\n---\n\nRelated to #73432\n\n",
+        "branch": "fix/qmd-embed-interval-73432",
+        "head_sha": "6e8c77fd357ca4469fa52c1225f19fb08fb27a2e",
+        "author": "sunnyshu0925",
         "labels": [
-          "docs",
-          "scripts",
-          "size: L",
-          "extensions: openai",
-          "extensions: minimax",
-          "extensions: fal",
-          "extensions: litellm",
-          "extensions: deepinfra",
-          "proof: sufficient",
-          "extensions: google",
-          "extensions: openrouter",
-          "extensions: xai",
+          "extensions: memory-core",
+          "size: XS",
           "P2",
           "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/deepinfra/image-generation-provider.test.ts",
-            "additions": 34,
-            "deletions": 25,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/fal/image-generation-provider.ts",
+            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
             "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google/image-generation-provider.test.ts",
-            "additions": 88,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google/image-generation-provider.ts",
-            "additions": 23,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/litellm/image-generation-provider.test.ts",
-            "additions": 25,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/microsoft-foundry/image-generation-provider.test.ts",
-            "additions": 77,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/microsoft-foundry/image-generation-provider.ts",
-            "additions": 28,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/minimax/image-generation-provider.ts",
-            "additions": 30,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/image-generation-provider.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/image-generation-provider.ts",
-            "additions": 18,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/index.test.ts",
-            "additions": 14,
-            "deletions": 22,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openrouter/image-generation-provider.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openrouter/image-generation-provider.ts",
-            "additions": 22,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/vydra/image-generation-provider.ts",
-            "additions": 6,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/xai/image-generation-provider.test.ts",
-            "additions": 45,
-            "deletions": 40,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/plugin-sdk-surface-report.mjs",
+            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
             "additions": 2,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/image-generation/image-assets.test.ts",
-            "additions": 13,
+            "path": "packages/memory-host-sdk/src/host/backend-config.test.ts",
+            "additions": 36,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/image-generation/image-assets.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/image-generation/openai-compatible-image-provider.test.ts",
-            "additions": 94,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/image-generation/openai-compatible-image-provider.ts",
-            "additions": 23,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/image-generation.ts",
-            "additions": 1,
+            "path": "packages/memory-host-sdk/src/host/backend-config.ts",
+            "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 22,
-        "additions": 568,
-        "deletions": 166,
+        "changedFiles": 4,
+        "additions": 44,
+        "deletions": 4,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96495",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96495.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96092",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96092.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 99,
-          "gatingTotal": 94,
+          "total": 91,
+          "gatingTotal": 86,
           "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 31,
-            "FAILURE": 1,
+            "SUCCESS": 65,
+            "SKIPPED": 25,
             "NEUTRAL": 1
           },
           "blockers": [
@@ -255,25 +140,25 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2281,
+    "total_ms": 2492,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 230
+        "ms": 533
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1806
+        "ms": 1724
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -285,7 +170,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 220
+        "ms": 221
       },
       {
         "name": "append_ledger",
