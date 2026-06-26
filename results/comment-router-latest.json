@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T05:46:02.408Z",
+  "generated_at": "2026-06-26T05:46:25.869Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-26T02:46:00.105Z",
+  "since": "2026-06-26T02:46:25.662Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96946
+    96947
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,122 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96946:4806681021:2026-06-26T05:45:54Z:clawsweeper_needs_human",
-      "comment_id": "4806681021",
-      "comment_version_key": "4806681021:2026-06-26T05:45:54Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96946#issuecomment-4806681021",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96946,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-26T05:38:12Z",
-      "comment_updated_at": "2026-06-26T05:45:54Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=1c5ca3930647cc8100bbffaae871f3ec942709f6)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "1c5ca3930647cc8100bbffaae871f3ec942709f6",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(web-fetch): decode astral HTML entities by code point, not fromCharCode",
-        "body": "## Summary\n\nSalvages #96739 by @ly-wang19 onto current `main` — rebased cleanly (single commit, original authorship preserved). The original was auto-closed by `openclaw-barnacle` for the author's >20-active-PR cap, not for any quality reason; the bug is still live on `main`.\n\n`web_fetch` HTML→markdown extraction corrupts every astral-plane (non-BMP) character — emoji, many CJK extension glyphs, math/symbol code points — that a fetched page writes as a numeric HTML entity. The decoded text handed to the model contains a wrong Private-Use glyph instead of the real character.\n\n## Root Cause\n\n**Symptom** — A page containing `&#128512;` (😀, U+1F600) or `&#x1F600;` returns `\\uF600` (a PUA glyph) in the model-facing text, not the emoji. Any code point above U+FFFF is silently mangled.\n\n**Root cause** — In `src/agents/tools/web-fetch-utils.ts`, `decodeEntities()` decodes numeric character references with `String.fromCharCode(Number.parseInt(...))`. `String.fromCharCode` operates on a UTF-16 code *unit* and truncates its argument mod 2^16, so `0x1F600 & 0xFFFF === 0xF600`. A numeric character reference denotes a Unicode *code point*, which requires `String.fromCodePoint`.\n\n**Evidence** — On current `main`, lines 19–20:\n```\n.replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))\n.replace(/&#(\\d+);/gi, (_, dec) => String.fromCharCode(Number.parseInt(dec, 10)));\n```\nThe new guardrail test fails against this `main` source (see Real behavior proof) and passes with the fix.\n\n**Fix + why this level** — Decode at the entity-decoding boundary with a `decodeNumericEntity()` helper that uses `String.fromCodePoint`, with a finite/range guard (`0 ≤ cp ≤ 0x10FFFF`) that preserves the original entity text on out-of-range input instead of throwing. This mirrors the existing `decodeHtmlEntity` in `src/agents/tools/../utils/html.ts`, so the two HTML decoders stay consistent. Fixing here is correct because this is the single function that turns entities into text for the model; patching downstream consumers would be both incomplete and wrong-layer.\n\n**Scope / risk** — Touches only numeric-entity decoding in `web-fetch-utils.ts`. BMP entities (`&#65;` → `A`, `&#9731;` → `☃`) are unchanged. Out-of-range references (`&#9999999;`) are now preserved verbatim rather than producing a replacement/throw. Named entities (`&nbsp;`/`&amp;`/etc.) are untouched.\n\n## Real behavior proof\n\n- **Regression test (new):** `src/agents/tools/web-fetch-utils.test.ts` — asserts the new output shape and **fails without the fix**.\n- **Captured run on this branch:**\n\nWITH fix (HEAD of this branch):\n```\n ✓ src/agents/tools/web-fetch-utils.test.ts (3 tests) 3ms\n Test Files  1 passed (1)\n      Tests  3 passed (3)\n```\n\nWITHOUT fix (same test against current `main` source for `web-fetch-utils.ts`):\n```\n Test Files  1 failed (1)\n      Tests  2 failed | 1 passed (3)\n```\nThe two failing cases are exactly the astral-plane decodes (`&#128512;` and `&#x1F600;`); the BMP case still passes — confirming the test is a real guardrail for this defect.\n\n## Changes from original\n\n- Rebased onto current `main` (clean single commit, no conflicts).\n- No code changes from @ly-wang19's original — the fix and test are preserved as authored.\n\nCredit: **Salvage of #96739 by @ly-wang19** — rebased onto current main. Original closed by the >20-active-PR queue cap, not on merits.\n",
-        "branch": "salvage/96739-web-fetch-astral-entities",
-        "head_sha": "1c5ca3930647cc8100bbffaae871f3ec942709f6",
-        "author": "bartok9",
-        "labels": [
-          "agents",
-          "size: XS",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "src/agents/tools/web-fetch-utils.test.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/tools/web-fetch-utils.ts",
-            "additions": 12,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 35,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96946",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96946.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 33,
-            "SUCCESS": 61,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2520,
+    "total_ms": 410,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 294
+        "ms": 195
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1993
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -156,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 201
+        "ms": 204
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
