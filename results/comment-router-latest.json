@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T02:58:34.501Z",
+  "generated_at": "2026-06-26T02:58:56.556Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-25T23:58:34.289Z",
+  "since": "2026-06-25T23:58:54.974Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96910
+    90579
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 18,
+  "commands_seen": 6,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,424 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90579:4629004367:2026-06-26T02:58:51Z:clawsweeper_needs_human",
+      "comment_id": "4629004367",
+      "comment_version_key": "4629004367:2026-06-26T02:58:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90579#issuecomment-4629004367",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 90579,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-05T06:58:32Z",
+      "comment_updated_at": "2026-06-26T02:58:51Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] The remaining action is maintainer/security acceptance of the trusted HTML lifecycle, not a narrow automated repair.; Needs attention: No concrete exploit was found in the current patch, but the diff intentionally expands a local host-read HTML trust boundary and needs owner acceptance. (sha=4f4dccc48f26e4b4a3eda2b93e3f4df33f9d4c79)",
+      "review_summary": "The PR adds content-bound SQLite provenance for trusted generated HTML staged into outbound media, updates host-read validation and cleanup, and adds media/state regression coverage.\n\nPR surface: Source +195, Tests +394, Generated +19. Total +608 across 8 files.\n\nReproducibility: yes. at source level. Current main stages local reply media into media/outbound and Telegram reloads that staged .html through a host-read gate that only trusts temp-root realpaths; I did not run a live Telegram repro in this read-only review.",
+      "review_followup": "- [P2] The remaining action is maintainer/security acceptance of the trusted HTML lifecycle, not a narrow automated repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "4f4dccc48f26e4b4a3eda2b93e3f4df33f9d4c79",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: allow trusted host-read html after outbound staging",
+        "body": "## Summary\n\nFixes Telegram/file outbound delivery for trusted generated `text/html` reports after the attachment is staged into the OpenClaw outbound media store.\n\nPR #87982 allowed generated HTML reports under the OpenClaw temp root, but the live outbound flow loads the original file, copies it to `~/.openclaw/media/outbound/<uuid>.html`, then the channel adapter loads that staged copy again. The second load no longer lives under the temp root, so host-read rejected it and the Telegram message was silently dropped.\n\nThis extends the trusted-host-read HTML boundary to the outbound-staged copy through a **content-bound provenance marker** persisted in the shared SQLite state DB, instead of trusting the staging directory by path alone. Trust is bound to the exact staged bytes and verified read-once at host-read time.\n\nFixes #90557.\n\n## Design\n\nWhen `resolveOutboundAttachmentFromUrl` stages a file whose source was a trusted-generated HTML path (under the temp root), it records a provenance row in a new `outbound_media_provenance` table keyed by the staged file's realpath, storing the `sha256` + `size_bytes` of the staged bytes (`kind = \"trusted-generated-html\"`, `version = 1`).\n\nAt host-read time, a file inside `<mediaDir>/outbound/` is trusted **only if** a provenance row exists for its realpath **and** the row's `sha256` + size match the bytes that `loadWebMedia` already read. Files under the temp root keep their existing unconditional trust. The provenance row is pruned in lockstep with the staged file by `pruneStaleTrustedGeneratedHtmlMarkers`, wired into the media-store retention pass (`cleanOldMedia`).\n\nPreserved guards (unchanged): regular file, not a symlink, `nlink === 1`, final read still validates text shape and HTML document shape.\n\n## ClawSweeper P1 resolution\n\nTwo prior P1 code findings are addressed in this revision (independently confirmed sound by a second-model review, which also flagged the read-once requirement below):\n\n- **Path-keyed provenance bypass** → **content-bound + read-once.** The marker now stores `sha256` + `size_bytes`, and host-read trust is decided by hashing the **same buffer `loadWebMedia` already read** (no second filesystem read, so there is no hash-then-read TOCTOU window). A file whose bytes are replaced after the marker is written is rejected. New regression test: stage bytes `B1` + mark with the real digest, overwrite the same path with different bytes `B2`, assert host-read is rejected with `path-not-allowed`.\n- **Swallowed marker write failure** → **propagate.** `resolveOutboundAttachmentFromUrl` no longer swallows `markTrustedGeneratedHtmlPath` errors; on failure it best-effort unlinks the staged file and rethrows, so an infrastructure/write error surfaces through the normal media-failure path instead of deferring to a later silent Telegram reload drop. New test asserts the rethrow and the best-effort `rm`.\n\nThe trust expansion is therefore provenance-gated, content-bound, fail-closed, and persisted in SQLite (matching the canonical-storage policy; an in-memory allowlist would break delayed/restarted delivery).\n\n## Test plan\n\n```text\npnpm db:kysely:gen && pnpm db:kysely:check          # generated types in sync with the new table\nnode scripts/run-vitest.mjs run src/media/web-media.test.ts src/media/outbound-attachment.test.ts\n```\n\n## Real behavior proof\n\n### Deterministic real-code-path before/after (2026-06-24)\n\nThis exercises the **same production helpers the Telegram channel adapter uses** — `resolveOutboundAttachmentFromUrl` (stage) followed by `loadWebMedia(stagedPath, { hostReadCapability: true })` (the second reload) — on two worktrees that differ by **only this PR's diff**:\n\n- **baseline** = `301213a05f` (this PR's merge-base with `main`; temp-root-only trust gate)\n- **candidate** = `2dcfc944` (PR head; content-bound outbound provenance)\n\nThe driver writes a generated report under the real OpenClaw temp root, stages it into `media/outbound` (which moves it outside the temp root), then performs the host-read reload exactly as the channel adapter does. Environment: macOS (Darwin 25.4.0, arm64), Node v26.0.0.\n\n```text\n# baseline (301213a05f) — same source sha256 50fcd4b2…\n[baseline] staged path   = …/media/outbound/pr90579-proof-…---<uuid>.html\n[baseline] staged under media/outbound = true\n[baseline] staged outside temp root    = true\n[baseline] RESULT: REJECTED — staged reload host-read BLOCKED\n[baseline]         LocalMediaAccessError: hostReadCapability permits only validated plain-text documents and trusted generated HTML reports for local reads\n\n# candidate (2dcfc944) — identical source sha256 50fcd4b2…\n[candidate] staged path   = …/media/outbound/pr90579-proof-…---<uuid>.html\n[candidate] staged under media/outbound = true\n[candidate] staged outside temp root    = true\n[candidate] RESULT: DELIVERED — staged reload host-read ALLOWED (144 bytes, sha==source? true)\n[candidate] TAMPER CHECK: ✅ replaced bytes REJECTED — LocalMediaAccessError: hostReadCapability permits only validated plain-text documents and trusted generated HTML reports for local reads\n```\n\nThis is the exact production silent-drop (`LocalMediaAccessError: hostReadCapability permits only validated plain-text documents and trusted generated HTML reports for local reads`) on baseline, and delivery on candidate — with the live tamper step confirming the content binding rejects swapped bytes at the same staged path. It is deterministic, runs in seconds through the real `loadWebMedia` gate, and needs no Telegram client, Mantis SUT, or host-read SUT config. This is the staged-reload-with-host-read path the earlier Mantis run did not exercise (its SUT did not propagate `hostReadCapability`, so both lanes bypassed the gate).\n\n### Original production trace + unit-level confirmation\n\nBehavior addressed: when an agent reply emits `MEDIA:/tmp/openclaw/<file>.html`, OpenClaw's outbound pipeline loads the file once (`/tmp/openclaw/...` is inside the tmp root, so trusted), stages a copy to `~/.openclaw/media/outbound/<file>---<uuid>.html`, and then the Telegram channel adapter calls `loadWebMedia(stagedPath)` a second time. Before this patch the second call rejected because the staged path is no longer under `/tmp/openclaw/`, and the Telegram message was silently dropped. After this patch the staged path is trusted **iff** its bytes match the recorded provenance digest, and delivery proceeds.\n\nReal environment tested: live OpenClaw on macOS 26.4 (Darwin 25.4.0, arm64), Node v26.0.0, Telegram Bot API channel (polling). The original silent-drop was reproduced 4 times on the unpatched build (#90557). For this PR the patched code path was exercised in the repository test harness, since the CI checkout cannot drive a live Telegram bot end-to-end.\n\nEvidence after fix (PR head):\n\n```text\nnode scripts/generate-kysely-types.mjs --verify\n# (exit 0 — generated Kysely types match the schema, incl. sha256 / size_bytes columns)\n\nnode scripts/run-vitest.mjs run src/media/web-media.test.ts src/media/outbound-attachment.test.ts\n ✓ media  src/media/web-media.test.ts (79 tests)\n ✓ media  src/media/outbound-attachment.test.ts (5 tests)\n Test Files  2 passed (2)\n      Tests  84 passed (84)\n```\n\nKey new coverage:\n\n```text\n# Replacement attack (A1): bytes swapped after the marker → rejected\n✓ rejects an outbound-staged HTML whose bytes were replaced after the provenance marker (content-bound trust)\n# Provenance row records the real sha256 + size_bytes (no hardcoded digest)\n✓ writes a trusted-generated-html provenance row keyed by the staged file's realpath\n# Marker write failure (A2): propagated + staged file unlinked\n✓ propagates a marker write failure and best-effort unlinks the staged file\n```\n\nWhat was not tested from this checkout: live Telegram Bot API delivery, because the CI environment lacks bot credentials. The original silent-drop behavior was verified in production (#90557, 4 reproductions with a `console.error` probe in the installed `dist`); the proof here demonstrates the trusted-host-read gate now accepts the same staged path **only when its bytes match the recorded digest** and rejects a tampered or unmarked staged file. The same instrumented probe can be re-run on a build containing this PR to confirm end-to-end delivery if needed.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
+        "branch": "fix/trusted-outbound-html-staging",
+        "head_sha": "4f4dccc48f26e4b4a3eda2b93e3f4df33f9d4c79",
+        "author": "wangwllu",
+        "labels": [
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/media/outbound-attachment.test.ts",
+            "additions": 79,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media/outbound-attachment.ts",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media/store.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media/web-media.test.ts",
+            "additions": 316,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media/web-media.ts",
+            "additions": 179,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 8,
+        "additions": 624,
+        "deletions": 16,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90579",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90579.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 91,
+          "gatingTotal": 86,
+          "counts": {
+            "SUCCESS": 64,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90579:4725339923:2026-06-17T02:25:13Z:re_review",
+      "comment_id": "4725339923",
+      "comment_version_key": "4725339923:2026-06-17T02:25:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90579#issuecomment-4725339923",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 90579,
+      "author": "wangwllu",
+      "author_id": 7668944,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-17T02:25:13Z",
+      "comment_updated_at": "2026-06-17T02:25:13Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: allow trusted host-read html after outbound staging",
+        "body": "## Summary\n\nFixes Telegram/file outbound delivery for trusted generated `text/html` reports after the attachment is staged into the OpenClaw outbound media store.\n\nPR #87982 allowed generated HTML reports under the OpenClaw temp root, but the live outbound flow loads the original file, copies it to `~/.openclaw/media/outbound/<uuid>.html`, then the channel adapter loads that staged copy again. The second load no longer lives under the temp root, so host-read rejected it and the Telegram message was silently dropped.\n\nThis extends the trusted-host-read HTML boundary to the outbound-staged copy through a **content-bound provenance marker** persisted in the shared SQLite state DB, instead of trusting the staging directory by path alone. Trust is bound to the exact staged bytes and verified read-once at host-read time.\n\nFixes #90557.\n\n## Design\n\nWhen `resolveOutboundAttachmentFromUrl` stages a file whose source was a trusted-generated HTML path (under the temp root), it records a provenance row in a new `outbound_media_provenance` table keyed by the staged file's realpath, storing the `sha256` + `size_bytes` of the staged bytes (`kind = \"trusted-generated-html\"`, `version = 1`).\n\nAt host-read time, a file inside `<mediaDir>/outbound/` is trusted **only if** a provenance row exists for its realpath **and** the row's `sha256` + size match the bytes that `loadWebMedia` already read. Files under the temp root keep their existing unconditional trust. The provenance row is pruned in lockstep with the staged file by `pruneStaleTrustedGeneratedHtmlMarkers`, wired into the media-store retention pass (`cleanOldMedia`).\n\nPreserved guards (unchanged): regular file, not a symlink, `nlink === 1`, final read still validates text shape and HTML document shape.\n\n## ClawSweeper P1 resolution\n\nTwo prior P1 code findings are addressed in this revision (independently confirmed sound by a second-model review, which also flagged the read-once requirement below):\n\n- **Path-keyed provenance bypass** → **content-bound + read-once.** The marker now stores `sha256` + `size_bytes`, and host-read trust is decided by hashing the **same buffer `loadWebMedia` already read** (no second filesystem read, so there is no hash-then-read TOCTOU window). A file whose bytes are replaced after the marker is written is rejected. New regression test: stage bytes `B1` + mark with the real digest, overwrite the same path with different bytes `B2`, assert host-read is rejected with `path-not-allowed`.\n- **Swallowed marker write failure** → **propagate.** `resolveOutboundAttachmentFromUrl` no longer swallows `markTrustedGeneratedHtmlPath` errors; on failure it best-effort unlinks the staged file and rethrows, so an infrastructure/write error surfaces through the normal media-failure path instead of deferring to a later silent Telegram reload drop. New test asserts the rethrow and the best-effort `rm`.\n\nThe trust expansion is therefore provenance-gated, content-bound, fail-closed, and persisted in SQLite (matching the canonical-storage policy; an in-memory allowlist would break delayed/restarted delivery).\n\n## Test plan\n\n```text\npnpm db:kysely:gen && pnpm db:kysely:check          # generated types in sync with the new table\nnode scripts/run-vitest.mjs run src/media/web-media.test.ts src/media/outbound-attachment.test.ts\n```\n\n## Real behavior proof\n\n### Deterministic real-code-path before/after (2026-06-24)\n\nThis exercises the **same production helpers the Telegram channel adapter uses** — `resolveOutboundAttachmentFromUrl` (stage) followed by `loadWebMedia(stagedPath, { hostReadCapability: true })` (the second reload) — on two worktrees that differ by **only this PR's diff**:\n\n- **baseline** = `301213a05f` (this PR's merge-base with `main`; temp-root-only trust gate)\n- **candidate** = `2dcfc944` (PR head; content-bound outbound provenance)\n\nThe driver writes a generated report under the real OpenClaw temp root, stages it into `media/outbound` (which moves it outside the temp root), then performs the host-read reload exactly as the channel adapter does. Environment: macOS (Darwin 25.4.0, arm64), Node v26.0.0.\n\n```text\n# baseline (301213a05f) — same source sha256 50fcd4b2…\n[baseline] staged path   = …/media/outbound/pr90579-proof-…---<uuid>.html\n[baseline] staged under media/outbound = true\n[baseline] staged outside temp root    = true\n[baseline] RESULT: REJECTED — staged reload host-read BLOCKED\n[baseline]         LocalMediaAccessError: hostReadCapability permits only validated plain-text documents and trusted generated HTML reports for local reads\n\n# candidate (2dcfc944) — identical source sha256 50fcd4b2…\n[candidate] staged path   = …/media/outbound/pr90579-proof-…---<uuid>.html\n[candidate] staged under media/outbound = true\n[candidate] staged outside temp root    = true\n[candidate] RESULT: DELIVERED — staged reload host-read ALLOWED (144 bytes, sha==source? true)\n[candidate] TAMPER CHECK: ✅ replaced bytes REJECTED — LocalMediaAccessError: hostReadCapability permits only validated plain-text documents and trusted generated HTML reports for local reads\n```\n\nThis is the exact production silent-drop (`LocalMediaAccessError: hostReadCapability permits only validated plain-text documents and trusted generated HTML reports for local reads`) on baseline, and delivery on candidate — with the live tamper step confirming the content binding rejects swapped bytes at the same staged path. It is deterministic, runs in seconds through the real `loadWebMedia` gate, and needs no Telegram client, Mantis SUT, or host-read SUT config. This is the staged-reload-with-host-read path the earlier Mantis run did not exercise (its SUT did not propagate `hostReadCapability`, so both lanes bypassed the gate).\n\n### Original production trace + unit-level confirmation\n\nBehavior addressed: when an agent reply emits `MEDIA:/tmp/openclaw/<file>.html`, OpenClaw's outbound pipeline loads the file once (`/tmp/openclaw/...` is inside the tmp root, so trusted), stages a copy to `~/.openclaw/media/outbound/<file>---<uuid>.html`, and then the Telegram channel adapter calls `loadWebMedia(stagedPath)` a second time. Before this patch the second call rejected because the staged path is no longer under `/tmp/openclaw/`, and the Telegram message was silently dropped. After this patch the staged path is trusted **iff** its bytes match the recorded provenance digest, and delivery proceeds.\n\nReal environment tested: live OpenClaw on macOS 26.4 (Darwin 25.4.0, arm64), Node v26.0.0, Telegram Bot API channel (polling). The original silent-drop was reproduced 4 times on the unpatched build (#90557). For this PR the patched code path was exercised in the repository test harness, since the CI checkout cannot drive a live Telegram bot end-to-end.\n\nEvidence after fix (PR head):\n\n```text\nnode scripts/generate-kysely-types.mjs --verify\n# (exit 0 — generated Kysely types match the schema, incl. sha256 / size_bytes columns)\n\nnode scripts/run-vitest.mjs run src/media/web-media.test.ts src/media/outbound-attachment.test.ts\n ✓ media  src/media/web-media.test.ts (79 tests)\n ✓ media  src/media/outbound-attachment.test.ts (5 tests)\n Test Files  2 passed (2)\n      Tests  84 passed (84)\n```\n\nKey new coverage:\n\n```text\n# Replacement attack (A1): bytes swapped after the marker → rejected\n✓ rejects an outbound-staged HTML whose bytes were replaced after the provenance marker (content-bound trust)\n# Provenance row records the real sha256 + size_bytes (no hardcoded digest)\n✓ writes a trusted-generated-html provenance row keyed by the staged file's realpath\n# Marker write failure (A2): propagated + staged file unlinked\n✓ propagates a marker write failure and best-effort unlinks the staged file\n```\n\nWhat was not tested from this checkout: live Telegram Bot API delivery, because the CI environment lacks bot credentials. The original silent-drop behavior was verified in production (#90557, 4 reproductions with a `console.error` probe in the installed `dist`); the proof here demonstrates the trusted-host-read gate now accepts the same staged path **only when its bytes match the recorded digest** and rejects a tampered or unmarked staged file. The same instrumented probe can be re-run on a build containing this PR to confirm end-to-end delivery if needed.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
+        "branch": "fix/trusted-outbound-html-staging",
+        "head_sha": "4f4dccc48f26e4b4a3eda2b93e3f4df33f9d4c79",
+        "author": "wangwllu",
+        "labels": [
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/media/outbound-attachment.test.ts",
+            "additions": 79,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media/outbound-attachment.ts",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media/store.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media/web-media.test.ts",
+            "additions": 316,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media/web-media.ts",
+            "additions": 179,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 8,
+        "additions": 624,
+        "deletions": 16,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90579",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90579.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 91,
+          "gatingTotal": 86,
+          "counts": {
+            "SUCCESS": 64,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90579:4714070633:2026-06-16T01:41:52Z:re_review",
+      "comment_id": "4714070633",
+      "comment_version_key": "4714070633:2026-06-16T01:41:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90579#issuecomment-4714070633",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 90579,
+      "author": "wangwllu",
+      "author_id": 7668944,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-16T01:41:52Z",
+      "comment_updated_at": "2026-06-16T01:41:52Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90579:4678119785:2026-06-11T07:16:55Z:re_review",
+      "comment_id": "4678119785",
+      "comment_version_key": "4678119785:2026-06-11T07:16:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90579#issuecomment-4678119785",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 90579,
+      "author": "wangwllu",
+      "author_id": 7668944,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T07:16:55Z",
+      "comment_updated_at": "2026-06-11T07:16:55Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90579:4637872560:2026-06-06T07:52:10Z:re_review",
+      "comment_id": "4637872560",
+      "comment_version_key": "4637872560:2026-06-06T07:52:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90579#issuecomment-4637872560",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 90579,
+      "author": "wangwllu",
+      "author_id": 7668944,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-06T07:52:10Z",
+      "comment_updated_at": "2026-06-06T07:52:10Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90579:4636600003:2026-06-06T00:29:05Z:re_review",
+      "comment_id": "4636600003",
+      "comment_version_key": "4636600003:2026-06-06T00:29:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90579#issuecomment-4636600003",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 90579,
+      "author": "wangwllu",
+      "author_id": 7668944,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-06T00:29:05Z",
+      "comment_updated_at": "2026-06-06T00:29:05Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 340,
+    "total_ms": 2601,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 202
+        "ms": 285
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1281
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +458,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 128
+        "ms": 1007
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
