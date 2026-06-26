@@ -1,24 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T07:10:16.517Z",
+  "generated_at": "2026-06-26T07:10:43.013Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-26T04:10:15.971Z",
+  "since": "2026-06-26T04:10:40.768Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88992
-  ],
-  "comment_ids": [
-    4807179853
+    96969
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -32,22 +29,122 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96969:4807143618:2026-06-26T07:10:37Z:clawsweeper_needs_human",
+      "comment_id": "4807143618",
+      "comment_version_key": "4807143618:2026-06-26T07:10:37Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96969#issuecomment-4807143618",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96969,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-26T07:04:16Z",
+      "comment_updated_at": "2026-06-26T07:10:37Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The contributor needs to repair the affected embedded-agent delivery path and add real behavior proof; the missing proof gate makes this unsuitable for ClawSweeper repair markers as-is.; Needs attention: The PR tries to fix a hidden-reasoning leak, but the patch misses the central delivery extractor used by the reported external channel path.; Review finding: [P1] Apply the filter to the delivery extractor —... (sha=858496a27f71c3767b2bfff204187e4bfe32f0ea)",
+      "review_summary": "The PR adds a shared assistant-text heuristic that drops unphased text blocks before a later thinking block, plus regression tests for the MiniMax-M3 interleaved content shape.\n\nPR surface: Source +55, Tests +98. Total +153 across 2 files.\n\nReproducibility: Partly: the linked issue and PR provide a concrete content-block shape that reproduces the shared extraction leak at source level. The PR still lacks a current-main real Discord delivery reproduction from the affected setup.",
+      "review_followup": "- [P1] The contributor needs to repair the affected embedded-agent delivery path and add real behavior proof; the missing proof gate makes this unsuitable for ClawSweeper repair markers as-is.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "858496a27f71c3767b2bfff204187e4bfe32f0ea",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(runtime): drop intermediate monologue text blocks from visible delivery",
+        "body": "## Summary\n\nFix Discord main-session replies leaking model thinking content for providers\nlike MiniMax-M3 via the openai-completions API.\n\nThe fix is in the shared assistant-text extraction layer\n(`src/shared/chat-message-content.ts`) rather than the Discord plugin, because\nthe same root cause affects every channel that reads `extractAssistantVisibleText`\n/ `extractAssistantTextForPhase` (Telegram, mirror writes, session transcripts).\nDiscord just happens to be where #96849 was first observed.\n\n## Root Cause\n\nMiniMax-M3 emits internal monologue as plain `type: \"text\"` content blocks\ninterleaved with native `type: \"thinking\"` blocks, with no phase metadata:\n\n```json\n[\n  { \"type\": \"thinking\", \"thinking\": \"Gabe is asking me to confirm...\" },\n  { \"type\": \"thinking\", \"thinking\": \"Excellent! Key info...\" },\n  { \"type\": \"text\",      \"text\":     \"All done. Let me give Gabe a clean status update...\" },\n  { \"type\": \"thinking\", \"thinking\": \"Let me give Gabe a tight summary...\" },\n  { \"type\": \"thinking\", \"thinking\": \"Also, this message is the verification test...\" },\n  { \"type\": \"text\",      \"text\":     \"Done. Here's the final status: ...\" }\n]\n```\n\n`sealNativeReasoningBeforeText()` in `openai-completions.ts` closes the open\nthinking block when visible-text deltas begin, but it does not retroactively\nmark the preceding text region as commentary. So `extractAssistantTextForPhase`\njoined every unphased text block, concatenating the monologue with the final\nanswer. The Discord `sanitizeAssistantVisibleText` / `stripReasoningTagsFromText`\npipeline is a no-op here because the monologue text contains no `<think>` tags.\n\nIsolated sessions are unaffected because cron `agentTurn` doesn't use the\nstreaming subscription path — it reads payloads through a different lane that\ndoesn't depend on this extraction.\n\n## Fix\n\nHeuristic in `extractAssistantTextForPhase`: an unphased `text` block at\nindex `i` is treated as intermediate monologue iff there is a `thinking`\nblock at `j > i` AND another `text` block at `k > j`. That `text → thinking\n→ text` shape is the smoking gun for provider-routed monologue — the model\ntalked, thought again, then produced its real answer.\n\nProperties:\n- `text → thinking` only (post-answer reflective thinking) → final text is preserved\n- All-text content (no thinking blocks) → unchanged\n- Messages with explicit phase metadata (`textSignature.phase`) → unchanged behavior\n- `extractAssistantText` (no-phase variant used by `extractAssistantThinking`\n  callers etc.) is intentionally untouched — that helper is consumed by paths\n  that need the full text including monologue for replay/diagnostics\n\n## Real Behavior Proof\n\nTargeted unit tests pass; full Discord/Telegram delivery suites unaffected.\n\n```\n$ ./node_modules/.bin/vitest run src/shared/chat-message-content.test.ts\n ✓ src/shared/chat-message-content.test.ts (19 tests) 2ms\n   Test Files  1 passed (1)\n        Tests  19 passed (19)\n\n$ ./node_modules/.bin/vitest run src/agents/embedded-agent-utils.test.ts src/config/sessions/transcript.test.ts\n ✓ src/agents/embedded-agent-utils.test.ts (48 tests) 11ms\n ✓ src/config/sessions/transcript.test.ts (51 tests) 457ms\n   Test Files  2 passed (2)\n        Tests  99 passed (99)\n```\n\nBefore (with the exact #96849 transcript shape): visible reply was\n`\"All done. Let me give Gabe a clean status update...\\nDone. Here's the\nfinal status: ...\"`.\n\nAfter: visible reply is `\"Done. Here's the final status: ...\"`.\n\n## Regression Test Plan\n\nAdded to `src/shared/chat-message-content.test.ts` inside the\n`extractAssistantVisibleText` describe block:\n\n1. **`drops unphased text blocks emitted before a later thinking block`** —\n   uses the exact 6-block transcript from the issue body. Asserts the visible\n   text equals only the trailing `text` block (the final answer), never the\n   earlier monologue text block.\n2. **`keeps unphased final text even when a trailing thinking block follows`** —\n   `thinking → text → thinking` shape. Asserts the text block is preserved\n   (post-answer reflective thinking must not drop the final answer).\n3. **`keeps all text when no thinking blocks are present`** — pure text-only\n   content. Asserts joining behavior is unchanged when no thinking interleave\n   exists.\n\nThe 16 pre-existing tests in the file continue to pass, including:\n- final_answer-vs-commentary phase preference\n- legacy unphased fallback when no phased blocks exist\n- empty-final-answer non-fallback to legacy text\n\n## Files Touched\n\n- `src/shared/chat-message-content.ts` — heuristic added inside\n  `extractAssistantTextForPhase`\n- `src/shared/chat-message-content.test.ts` — 3 regression tests\n\nFixes #96849\n",
+        "branch": "fix/issue-96849",
+        "head_sha": "858496a27f71c3767b2bfff204187e4bfe32f0ea",
+        "author": "symbolstar",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "src/shared/chat-message-content.test.ts",
+            "additions": 108,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/shared/chat-message-content.ts",
+            "additions": 60,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 168,
+        "deletions": 15,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96969",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96969.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 34,
+            "SUCCESS": 60,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 740,
+    "total_ms": 2451,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 536
+        "ms": 213
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2019
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -59,7 +156,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 194
+        "ms": 195
       },
       {
         "name": "append_ledger",
