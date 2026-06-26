@@ -1,18 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T06:06:41.039Z",
+  "generated_at": "2026-06-26T06:06:53.439Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-26T03:06:39.126Z",
+  "since": "2026-06-26T03:06:51.538Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96889
+    96278
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4806816923
+  ],
+  "status_comment_id": 4806817260,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
   "commands_seen": 1,
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96889:4805730686:2026-06-26T06:06:35Z:clawsweeper_auto_repair",
-      "comment_id": "4805730686",
-      "comment_version_key": "4805730686:2026-06-26T06:06:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96889#issuecomment-4805730686",
+      "idempotency_key": "comment-router:openclaw/openclaw:96278:4806816923:2026-06-26T06:05:40Z:re_review",
+      "comment_id": "4806816923",
+      "comment_version_key": "4806816923:2026-06-26T06:05:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96278#issuecomment-4806816923",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96889,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": "main",
+      "issue_number": 96278,
+      "author": "wyf027",
+      "author_id": 39647285,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-26T01:53:38Z",
-      "comment_updated_at": "2026-06-26T06:06:35Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "comment_created_at": "2026-06-26T06:05:40Z",
+      "comment_updated_at": "2026-06-26T06:05:40Z",
+      "status_comment_id": 4806817260,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -60,71 +62,95 @@
       "visual_lens": null,
       "expected_head_sha": "d9ff0be75fb2eddb764ad26038a458df92b36227",
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-26T06:06:54.263Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 96278
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-26T06:06:55.274Z",
+          "response_comment_id": "4806817260",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(minimax): bound image/video success response reads",
-        "body": "## What Problem This Solves\n\nThe MiniMax image and video providers read several **success/control-path** JSON responses with unbounded `await response.json()`, so a misbehaving or hostile MiniMax endpoint can stream an arbitrarily large body into memory before parsing and exhaust the process (OOM / hang). The HTTP error path is already bounded by `assertOkOrThrowHttpError`; this closes the matching gap on the success-JSON side.\n\nFour success/control JSON reads were affected:\n\n- `extensions/minimax/image-generation-provider.ts` — image generation result (may carry base64 image data)\n- `extensions/minimax/video-generation-provider.ts` — video generation **task submit** response\n- `extensions/minimax/video-generation-provider.ts` — video generation **status poll** response\n- `extensions/minimax/video-generation-provider.ts` — video generation `file_id` metadata response before the binary download\n\nMiniMax TTS is already bounded and is left unchanged. The binary video download already enforces a media byte cap via `fetchProviderDownloadResponse` / `readResponseWithLimit` and is also left unchanged.\n\n## Changes\n\n- Read all four MiniMax success/control JSON bodies through the shared bounded reader `readProviderJsonResponse` (16 MiB cap), which cancels the underlying stream on overflow instead of buffering the whole payload.\n- No new abstraction added; this reuses the existing plugin-SDK helper already used by sibling provider paths.\n- Keep the MiniMax provider HTTP tests' `readProviderJsonResponse` implementation real via `importActual`, while continuing to mock transport/auth seams.\n- Update MiniMax video tests to use real `Response` JSON fixtures and add a focused `file_id` metadata overflow regression proving the metadata path fails before attempting the binary download.\n\n## Real behavior proof\n\n- **Behavior addressed:** an untrusted MiniMax success/control JSON response that streams more than 16 MiB must be rejected without buffering the full body; small/legitimate responses must still parse.\n- **Real environment tested:** a real `node:http` loopback server streaming a >16 MiB JSON body with **no Content-Length** (chunked), fetched over a real TCP socket, driving the exact export the patched success paths now call (`readProviderJsonResponse`).\n- **Exact steps:**\n  1. Loopback server streams ~20 MiB of an open JSON object body (no Content-Length).\n  2. `fetch()` the body over TCP, then call `readProviderJsonResponse(response, label)` with the same labels the patched sites pass.\n  3. Assert it throws `... JSON response exceeds 16777216 bytes` and that the client cancelled the socket before the full body was delivered.\n  4. Negative control: emulate the removed unbounded `await response.json()` path and confirm it buffers past the 16 MiB cap.\n  5. Happy path: a small JSON object still parses correctly through the bounded reader.\n- **Observed result:** bounded throw fires, the socket is aborted, the server never delivers the full body, the unbounded control buffers past the cap, and the happy path parses. See Evidence.\n- **What was not tested:** no live calls to the real MiniMax API (no credentials); loopback upstream proof exercises the real TCP + fetch + reader path.\n\n## Evidence\n\nOriginal loopback proof:\n\n```\n$ node --import tsx proof-minimax-bound.mts\nPASS: [MiniMax image generation failed] bounded throw on oversize stream -- msg=\"MiniMax image generation failed: JSON response exceeds 16777216 bytes\"\nPASS: [MiniMax image generation failed] stream cancelled (socket aborted by client) -- aborted=true\nPASS: [MiniMax image generation failed] bytesSent (18022426) < full body (20971520) -- bytesSent=18022426\nPASS: [MiniMax video generation failed] bounded throw on oversize stream -- msg=\"MiniMax video generation failed: JSON response exceeds 16777216 bytes\"\nPASS: [MiniMax video generation failed] stream cancelled (socket aborted by client) -- aborted=true\nPASS: [MiniMax video generation failed] bytesSent (18808858) < full body (20971520) -- bytesSent=18808858\nPASS: negative control: unbounded read buffers PAST the 16 MiB cap -- buffered=16823166 > cap=16777216\nPASS: happy path: small JSON parses through bounded reader -- parsed.task_id=task-123\n\nALL PROOFS PASSED\n```\n\nRefreshed current-head focused regression after adding the `file_id` metadata bound:\n\n```\n$ node scripts/run-vitest.mjs extensions/minimax/video-generation-provider.test.ts -- --run\n\n Test Files  1 passed (1)\n      Tests  6 passed (6)\n```\n\n```\n$ git diff --check\n# no output\n```\n\nKnown validation note: `node scripts/run-tsgo.mjs -p extensions/minimax/tsconfig.json --incremental false` currently fails in existing `extensions/minimax/oauth.ts` imports from `openclaw/plugin-sdk/number-runtime`; that file is outside this PR's touched surface.\n\n**Label**: security\n\n_AI-assisted._\n",
-        "branch": "fix/bound-minimax",
-        "head_sha": "d9ff0be75fb2eddb764ad26038a458df92b36227",
-        "author": "alix-007",
+        "title": "feat(telegram): send voice typing cue before transcription",
+        "body": "Restored replacement for #94384 after the fork/head repository was recreated.\n\n## Summary\n\n- Send the initial Telegram direct-chat typing cue for audio-only voice messages before inbound body resolution starts audio transcription.\n- Move configured binding readiness ahead of body/STT work so unavailable configured bindings do not emit preflight typing cues.\n- Add and fix a typing-order regression test that proves `sendChatAction(\"typing\")` runs before `transcribeFirstAudio` for voice-only direct messages.\n\nFixes #58887.\n\n## Verification\n\n- `node scripts/run-vitest.mjs run extensions/telegram/src/bot-message-context.typing.test.ts extensions/telegram/src/bot-message-context.body.test.ts extensions/telegram/src/bot-message.test.ts --reporter=verbose`\n- `git diff --check origin/main...HEAD`\n\n## Real behavior proof\n\nBehavior addressed: Telegram direct-chat voice messages now emit the first typing cue before audio transcription starts, so the sender gets immediate activity feedback during potentially slow STT work.\n\nReal environment tested: Local full OpenClaw checkout on PR branch `codex/telegram-voice-preflight-typing-58887-20260618`, exercising Telegram message-context construction and the voice preflight typing path through the repository extension-telegram Vitest harness after the patch.\n\nExact steps or command run after this patch:\n\n```text\nnode scripts/run-vitest.mjs run extensions/telegram/src/bot-message-context.typing.test.ts extensions/telegram/src/bot-message-context.body.test.ts extensions/telegram/src/bot-message.test.ts --reporter=verbose\ngit diff --check origin/main...HEAD\n```\n\nEvidence after fix: Terminal capture from the focused Telegram run showed the voice typing/transcription ordering path passing:\n\n```text\n✓ |extension-telegram| extensions/telegram/src/bot-message-context.typing.test.ts > buildTelegramMessageContext typing > sends direct typing before voice transcription starts\n✓ |extension-telegram| extensions/telegram/src/bot-message-context.typing.test.ts > buildTelegramMessageContext typing > does not send early direct typing before DM access passes\n✓ |extension-telegram| extensions/telegram/src/bot-message-context.body.test.ts > resolveTelegramInboundBody > transcribes DM voice notes via preflight (not only groups)\n\nTest Files  3 passed (3)\nTests  38 passed (38)\n[test] passed 1 Vitest shard in 5.42s\n```\n\nObserved result after fix: The focused tests verify `sendChatAction(\"typing\")` is emitted once before `transcribeFirstAudio` for a voice-only direct message, access-denied DMs do not emit the early cue, and existing Telegram body/message processor behavior remains green. `git diff --check origin/main...HEAD` produced no output.\n\nWhat was not tested: A live Telegram bot with real Telegram credentials was not started in this environment; the focused Telegram context/body/processor tests exercise the changed runtime ordering without external network credentials.\n",
+        "branch": "codex/telegram-voice-preflight-typing-58887-20260618",
+        "head_sha": "85232ebe372d902d5c9f75c82cdb2a5d1391f94b",
+        "author": "wyf027",
         "labels": [
-          "size: S",
-          "extensions: minimax",
-          "proof: sufficient",
+          "channel: telegram",
+          "size: M",
+          "mantis: telegram-visible-proof",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "status: 📣 needs proof",
+          "merge-risk: 🚨 other"
         ],
         "files": [
           {
-            "path": "extensions/minimax/image-generation-provider.ts",
-            "additions": 5,
-            "deletions": 1,
+            "path": "extensions/telegram/src/bot-message-context.acp-bindings.test.ts",
+            "additions": 115,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/minimax/provider-http.test-helpers.ts",
-            "additions": 28,
-            "deletions": 24,
+            "path": "extensions/telegram/src/bot-message-context.ts",
+            "additions": 113,
+            "deletions": 26,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/minimax/video-generation-provider.test.ts",
-            "additions": 85,
-            "deletions": 38,
+            "path": "extensions/telegram/src/bot-message-context.typing.test.ts",
+            "additions": 87,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/minimax/video-generation-provider.ts",
-            "additions": 13,
-            "deletions": 3,
+            "path": "test/scripts/bench-gateway-restart.test.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/resolve-openclaw-ref.test.ts",
+            "additions": 6,
+            "deletions": 5,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 131,
-        "deletions": 66,
+        "changedFiles": 5,
+        "additions": 323,
+        "deletions": 33,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96889",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96889.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96278",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96278.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 92,
-          "gatingTotal": 87,
+          "total": 85,
+          "gatingTotal": 80,
           "counts": {
-            "SUCCESS": 59,
-            "SKIPPED": 33
+            "SUCCESS": 60,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
@@ -139,15 +165,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2182,
+    "total_ms": 4324,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 249
+        "ms": 527
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1649
+        "ms": 1360
       },
       {
         "name": "classify_comment_commands",
@@ -163,7 +189,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 257
+        "ms": 2410
       },
       {
         "name": "append_ledger",
