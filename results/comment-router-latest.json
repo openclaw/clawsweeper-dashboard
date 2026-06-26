@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T08:42:35.117Z",
+  "generated_at": "2026-06-26T08:42:46.219Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-26T05:42:32.369Z",
+  "since": "2026-06-26T05:42:43.301Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96979
+    96971
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 6,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,142 +31,276 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96979:4807491991:2026-06-26T08:42:28Z:clawsweeper_auto_repair",
-      "comment_id": "4807491991",
-      "comment_version_key": "4807491991:2026-06-26T08:42:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96979#issuecomment-4807491991",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96971:4807276357:2026-06-26T08:42:38Z:clawsweeper_needs_human",
+      "comment_id": "4807276357",
+      "comment_version_key": "4807276357:2026-06-26T08:42:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96971#issuecomment-4807276357",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96979,
+      "issue_number": 96971,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-26T07:58:22Z",
-      "comment_updated_at": "2026-06-26T08:42:28Z",
+      "comment_created_at": "2026-06-26T07:23:41Z",
+      "comment_updated_at": "2026-06-26T08:42:38Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=ed149331cb1e16d499fcc0c1b96e26dba97b0f38)",
-      "review_summary": "The PR adds surrendered-run suppression around TUI `sessions.changed` history reloads, plus a `ChatLog.hasStreamingRun()` helper and mock type updates, to avoid duplicate assistant rows after history replay.\n\nPR surface: Source +117, Tests 0, Docs +95, Other 0. Total +212 across 6 files.\n\nReproducibility: yes. at source level: current main can adopt an in-flight run with empty buffered text and no streaming component, and the PR’s suppression gate keys only on `chatLog.hasStreamingRun()`. I did not run a live Telegram/TUI reproduction in this read-only review.",
-      "review_followup": "- [P1] This needs author or maintainer follow-up because real behavior proof is a human gate, and maintainers should decide whether to repair this branch or prefer the cleaner sibling PR path.",
+      "repair_reason": "- [P2] The remaining blockers involve persisted TLS material ownership and SAN identity policy, so maintainer/security direction is needed before a repair lane chooses the final shape.; Needs attention: The diff changes TLS identity and persisted certificate handling, and the current rewrite path can replace explicit custom certificate material.; Review finding: [P1] Stop treating custom CN-only certs as generated —... (sha=665e8b566790c036637fa061a6239897e41f4187)",
+      "review_summary": "The branch adds subjectAltName entries to auto-generated gateway self-signed certificates and adds runtime/tests to regenerate existing CN-only certificates.\n\nPR surface: Source +89, Tests +77. Total +166 across 2 files.\n\nReproducibility: yes. at source level: current main and v2026.6.10 generate CN-only gateway certs, while Node's TLS identity check requires IP SANs for IP hostnames. I did not run a full gateway handshake in this read-only review.",
+      "review_followup": "- [P2] The remaining blockers involve persisted TLS material ownership and SAN identity policy, so maintainer/security direction is needed before a repair lane chooses the final shape.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "ed149331cb1e16d499fcc0c1b96e26dba97b0f38",
+      "expected_head_sha": "665e8b566790c036637fa061a6239897e41f4187",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(tui): suppress duplicate assistant message after sessions.changed event",
-        "body": "## What Problem This Solves\n\nFixes a TUI rendering bug where assistant messages appear twice when a `sessions.changed` event with `reason: \"new\"` fires while a chat run is still streaming. This commonly occurs when using the Telegram plugin — the assistant's reply renders once via the chat event pipeline, then a second time via the history replay triggered by `sessions.changed`.\n\n## Why This Change Was Made\n\n**Root cause: race condition between `handleChatEvent` final and `handleSessionsChangedEvent` history reload.**\n\nWhen a `sessions.changed` event with `reason: \"new\"` fires while a chat run is still streaming:\n\n1. `handleSessionsChangedEvent` calls `clearTrackedRunState()` which clears all tracking state including `finalizedRuns`, `sessionRuns`, and the stream assembler\n2. `loadHistory()` is called, which runs `chatLog.clearAll()` — removing the streaming assistant component — then replays the message from server history as a static entry\n3. When the `chat` final event arrives afterward, both `finalizedRuns` and `streamingRuns` are empty, so `chatLog.finalizeAssistant()` cannot find the existing component and **appends a duplicate**\n\n**Fix:** Introduce a `surrenderedToHistoryRunIds` set that collects all tracked runIds **before** `clearTrackedRunState()` in `handleSessionsChangedEvent`. In `handleChatEvent`, check this set and skip late-arriving delta/final events whose runId was already handed off to history replay — but **only when no active streaming component exists for that runId**. If `loadHistory()` restored the run as in-flight (via `inFlightRun`), a streaming component will be present, and we let events flow through normally so the in-flight run can reach its final state. A 15-second cleanup timer prevents the set from growing unbounded.\n\n### In-flight run preservation (post-review fix)\n\nThe initial fix unconditionally suppressed all events for surrendered runIds. But `loadHistory()` may return an `inFlightRun` — a run still generating on the server. When this happens, `loadHistory()` calls `chatLog.updateAssistant()` which creates a **new streaming component** that needs live delta/final events. The fix now uses `ChatLog.hasStreamingRun()` to detect this case and let those events through.\n\n## User Impact\n\n- TUI no longer shows duplicate assistant messages when receiving messages via external channels (Telegram, etc.)\n- In-flight runs restored by `loadHistory()` continue to receive live delta/final updates correctly\n- No changes to config, Gateway protocol, or plugin behavior\n\n## What Changed\n\n3 files, +60/−39 lines:\n\n| File | Change |\n|------|--------|\n| `src/tui/tui-event-handlers.ts` | Add `surrenderedToHistoryRunIds` set, `hasStreamingRun` type entry, in-flight-aware suppression logic |\n| `src/tui/components/chat-log.ts` | Add `hasStreamingRun()` method to detect active streaming components |\n| `src/tui/tui-event-handlers.test.ts` | Add `hasStreamingRun` to mock types and factory |\n\n## Evidence\n\n- Branch base: `origin/main` (9a735bea03)\n- Environment: Linux x64, Node v22.19.0, Vitest v4.1.8\n\n### Test results\n\n```text\n# TUI event handlers — 79/79 passed\npnpm test src/tui/tui-event-handlers.test.ts\n ✓ 79 passed\n\n# Chat log component — 19/19 passed\npnpm test src/tui/components/chat-log.test.ts\n ✓ 19 passed\n\n# Full TUI suite — 516/517 passed (1 pre-existing build artifact issue)\npnpm test src/tui/\n ✓ 516 passed | 1 failed (unrelated: missing dist/extensions/anthropic/provider-policy-api.js)\n```\n\n## Root Cause Detail\n\n- `handleSessionsChangedEvent` ([tui-event-handlers.ts:825](src/tui/tui-event-handlers.ts#L825)) collects `surrenderedToHistoryRunIds` before `clearTrackedRunState()`\n- In `handleChatEvent` ([tui-event-handlers.ts:640](src/tui/tui-event-handlers.ts#L640)), only suppresses when `!chatLog.hasStreamingRun(evt.runId)` — meaning the message was replayed as static, not restored as in-flight\n- `ChatLog.hasStreamingRun()` ([chat-log.ts:326](src/tui/components/chat-log.ts#L326)) checks `streamingRuns` map to detect in-flight components\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/tui-duplicate-message-sessions-changed",
-        "head_sha": "ed149331cb1e16d499fcc0c1b96e26dba97b0f38",
-        "author": "chenyangjun-xy",
+        "title": "fix(tls): add subjectAltName to auto-generated gateway self-signed certificate (fixes #96910)",
+        "body": "## What Problem This Solves\n\nFixes #96910.\n\nWhen gateway TLS is enabled with `autoGenerate=true` (the default), the self-signed certificate is generated with only `CN=openclaw-gateway` and no `subjectAltName` extension. Node.js ≥17 ignores the CN for hostname/IP verification per RFC 6125, so the CLI probe to `wss://127.0.0.1:18789` fails with:\n\n```\nGateway probe failed: Hostname/IP does not match certificate's altnames: IP: 127.0.0.1 is not in the cert's list:\n```\n\n## Why This Change Was Made\n\n`openssl req -x509` was invoked without `-addext subjectAltName=...`, producing a CN-only certificate. Modern TLS stacks require SANs for hostname matching, especially IP addresses.\n\n## User Impact\n\nUsers with `gateway.tls.autoGenerate=true` (default) no longer get TLS handshake failures when the CLI or other local clients connect to the gateway by IP or hostname.\n\nExisting users who already have a CN-only certificate generated by a previous OpenClaw version will have it **automatically detected and regenerated** with SANs on the next gateway start. A warning log is emitted when this happens.\n\n## Changes Made\n\n- `src/infra/tls/gateway.ts`:\n  - Added `import os` and `-addext \"subjectAltName=...\"` to `generateSelfSignedCert`\n  - Added `isOpenClawGeneratedCnOnlyCert()` to detect old CN-only certs\n  - Added `maybeUpgradeCnOnlyCert()` to regenerate old certs with SANs\n  - Added `buildTlsResult()` helper to reduce duplication\n- `src/infra/tls/gateway.test.ts`: Added regression tests for new SAN generation and CN-only cert upgrade\n\n## Evidence\n\n- **Unit tests:** `node scripts/run-vitest.mjs run src/infra/tls/gateway.test.ts` — 9/9 passed\n\n## Real behavior proof\n\n### Proof 1: New certificate contains SAN\n\n```\n$ openssl x509 -in gateway-cert.pem -noout -ext subjectAltName\nX509v3 Subject Alternative Name:\n    DNS:localhost, DNS:LIN-66D8BD4EA2C, IP Address:127.0.0.1, IP Address:0:0:0:0:0:0:0:1\n```\n\n```\n$ node -e \"... tls.checkServerIdentity(127.0.0.1, cert)\"\n✅ STRICT TLS CHECK PASSED for 127.0.0.1\n✅ STRICT TLS CHECK PASSED for localhost\n```\n\n### Proof 2: Existing CN-only certificate is auto-upgraded\n\n**Before:**\n```\nBEFORE - subject: CN=openclaw-gateway\nBEFORE - subjectAltName: (none)\n```\n\n**During (log):**\n```\n[warn] gateway tls: upgrading CN-only certificate to include subjectAltName\n[info] gateway tls: generated self-signed cert at /tmp/.../cert.pem\n```\n\n**After:**\n```\nAFTER - subject: CN=openclaw-gateway\nAFTER - subjectAltName: DNS:localhost, DNS:LIN-66D8BD4EA2C, IP Address:127.0.0.1, IP Address:0:0:0:0:0:0:0:1\n```\n\n### Scope\n\n- ✅ Only OpenClaw-generated certs (`CN=openclaw-gateway`, no SAN) are upgraded\n- ✅ User-provided certs (`caPath` or non-OpenClaw certs) are **untouched**\n- ✅ Upgrade only happens when `autoGenerate=true` (the default)\n- ✅ Logged with `warn` level for full traceability\n\n**What was not tested:** Live non-loopback TLS client handshake with external bind addresses (requires security review to determine acceptable SAN scope).\n\n- [x] AI-assisted",
+        "branch": "fix/issue-96910-gateway-tls-subjectAltName",
+        "head_sha": "665e8b566790c036637fa061a6239897e41f4187",
+        "author": "zw-xysk",
         "labels": [
-          "scripts",
           "size: M",
-          "extensions: ollama",
+          "proof: sufficient",
           "P2",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": ".pr-body.md",
-            "additions": 95,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/ollama/src/embedding-provider.test.ts",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/plugin-sdk-surface-report.mjs",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/components/chat-log.ts",
-            "additions": 4,
+            "path": "src/infra/tls/gateway.test.ts",
+            "additions": 77,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/tui/tui-event-handlers.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/tui-event-handlers.ts",
-            "additions": 113,
-            "deletions": 0,
+            "path": "src/infra/tls/gateway.ts",
+            "additions": 108,
+            "deletions": 19,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 6,
-        "additions": 218,
-        "deletions": 6,
+        "changedFiles": 2,
+        "additions": 185,
+        "deletions": 19,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96979",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96979.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96971",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96971.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
           "total": 97,
           "gatingTotal": 92,
           "counts": {
             "SUCCESS": 62,
-            "SKIPPED": 33,
-            "FAILURE": 1,
+            "SKIPPED": 34,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "checks-node-compact-small-whole-2:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-whole-2:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96971:4807744606:2026-06-26T08:23:00Z:re_review",
+      "comment_id": "4807744606",
+      "comment_version_key": "4807744606:2026-06-26T08:23:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96971#issuecomment-4807744606",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96971,
+      "author": "zw-xysk",
+      "author_id": 294457748,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-26T08:23:00Z",
+      "comment_updated_at": "2026-06-26T08:23:00Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tls): add subjectAltName to auto-generated gateway self-signed certificate (fixes #96910)",
+        "body": "## What Problem This Solves\n\nFixes #96910.\n\nWhen gateway TLS is enabled with `autoGenerate=true` (the default), the self-signed certificate is generated with only `CN=openclaw-gateway` and no `subjectAltName` extension. Node.js ≥17 ignores the CN for hostname/IP verification per RFC 6125, so the CLI probe to `wss://127.0.0.1:18789` fails with:\n\n```\nGateway probe failed: Hostname/IP does not match certificate's altnames: IP: 127.0.0.1 is not in the cert's list:\n```\n\n## Why This Change Was Made\n\n`openssl req -x509` was invoked without `-addext subjectAltName=...`, producing a CN-only certificate. Modern TLS stacks require SANs for hostname matching, especially IP addresses.\n\n## User Impact\n\nUsers with `gateway.tls.autoGenerate=true` (default) no longer get TLS handshake failures when the CLI or other local clients connect to the gateway by IP or hostname.\n\nExisting users who already have a CN-only certificate generated by a previous OpenClaw version will have it **automatically detected and regenerated** with SANs on the next gateway start. A warning log is emitted when this happens.\n\n## Changes Made\n\n- `src/infra/tls/gateway.ts`:\n  - Added `import os` and `-addext \"subjectAltName=...\"` to `generateSelfSignedCert`\n  - Added `isOpenClawGeneratedCnOnlyCert()` to detect old CN-only certs\n  - Added `maybeUpgradeCnOnlyCert()` to regenerate old certs with SANs\n  - Added `buildTlsResult()` helper to reduce duplication\n- `src/infra/tls/gateway.test.ts`: Added regression tests for new SAN generation and CN-only cert upgrade\n\n## Evidence\n\n- **Unit tests:** `node scripts/run-vitest.mjs run src/infra/tls/gateway.test.ts` — 9/9 passed\n\n## Real behavior proof\n\n### Proof 1: New certificate contains SAN\n\n```\n$ openssl x509 -in gateway-cert.pem -noout -ext subjectAltName\nX509v3 Subject Alternative Name:\n    DNS:localhost, DNS:LIN-66D8BD4EA2C, IP Address:127.0.0.1, IP Address:0:0:0:0:0:0:0:1\n```\n\n```\n$ node -e \"... tls.checkServerIdentity(127.0.0.1, cert)\"\n✅ STRICT TLS CHECK PASSED for 127.0.0.1\n✅ STRICT TLS CHECK PASSED for localhost\n```\n\n### Proof 2: Existing CN-only certificate is auto-upgraded\n\n**Before:**\n```\nBEFORE - subject: CN=openclaw-gateway\nBEFORE - subjectAltName: (none)\n```\n\n**During (log):**\n```\n[warn] gateway tls: upgrading CN-only certificate to include subjectAltName\n[info] gateway tls: generated self-signed cert at /tmp/.../cert.pem\n```\n\n**After:**\n```\nAFTER - subject: CN=openclaw-gateway\nAFTER - subjectAltName: DNS:localhost, DNS:LIN-66D8BD4EA2C, IP Address:127.0.0.1, IP Address:0:0:0:0:0:0:0:1\n```\n\n### Scope\n\n- ✅ Only OpenClaw-generated certs (`CN=openclaw-gateway`, no SAN) are upgraded\n- ✅ User-provided certs (`caPath` or non-OpenClaw certs) are **untouched**\n- ✅ Upgrade only happens when `autoGenerate=true` (the default)\n- ✅ Logged with `warn` level for full traceability\n\n**What was not tested:** Live non-loopback TLS client handshake with external bind addresses (requires security review to determine acceptable SAN scope).\n\n- [x] AI-assisted",
+        "branch": "fix/issue-96910-gateway-tls-subjectAltName",
+        "head_sha": "665e8b566790c036637fa061a6239897e41f4187",
+        "author": "zw-xysk",
+        "labels": [
+          "size: M",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/infra/tls/gateway.test.ts",
+            "additions": 77,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/tls/gateway.ts",
+            "additions": 108,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 185,
+        "deletions": 19,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96971",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96971.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "SUCCESS": 62,
+            "SKIPPED": 34,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96971:4807403634:2026-06-26T07:44:01Z:re_review",
+      "comment_id": "4807403634",
+      "comment_version_key": "4807403634:2026-06-26T07:44:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96971#issuecomment-4807403634",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96971,
+      "author": "zw-xysk",
+      "author_id": 294457748,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-26T07:44:01Z",
+      "comment_updated_at": "2026-06-26T07:44:01Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96971:4807226702:2026-06-26T07:15:49Z:re_review",
+      "comment_id": "4807226702",
+      "comment_version_key": "4807226702:2026-06-26T07:15:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96971#issuecomment-4807226702",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96971,
+      "author": "zw-xysk",
+      "author_id": 294457748,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-26T07:15:49Z",
+      "comment_updated_at": "2026-06-26T07:15:49Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3131,
+    "total_ms": 3924,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 519
+        "ms": 490
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2213
+        "ms": 2412
       },
       {
         "name": "classify_comment_commands",
@@ -182,11 +316,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 368
+        "ms": 994
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 1
       }
     ]
   }
