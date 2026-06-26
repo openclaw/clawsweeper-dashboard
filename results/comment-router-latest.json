@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T07:39:24.493Z",
+  "generated_at": "2026-06-26T07:39:59.613Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-26T04:39:23.748Z",
+  "since": "2026-06-26T04:39:58.209Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    96973
+    96322
   ],
   "comment_ids": [
-    4807357174
+    4807369325
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4807369671,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96973:4807357174:2026-06-26T07:36:51Z:re_review",
-      "comment_id": "4807357174",
-      "comment_version_key": "4807357174:2026-06-26T07:36:51Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96973#issuecomment-4807357174",
+      "idempotency_key": "comment-router:openclaw/openclaw:96322:4807369325:2026-06-26T07:38:53Z:re_review",
+      "comment_id": "4807369325",
+      "comment_version_key": "4807369325:2026-06-26T07:38:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96322#issuecomment-4807369325",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96972,
-      "author": "wangmiao0668000666",
-      "author_id": 290215524,
+      "target_branch": "main",
+      "issue_number": 96322,
+      "author": "lsr911",
+      "author_id": 18230762,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-26T07:36:50Z",
-      "comment_updated_at": "2026-06-26T07:36:50Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-26T07:38:53Z",
+      "comment_updated_at": "2026-06-26T07:38:53Z",
+      "status_comment_id": 4807369671,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -62,22 +62,130 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-26T07:40:00.347Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 96322
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-26T07:40:01.707Z",
+          "response_comment_id": "4807369671",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(minimax): bound JSON response reads to prevent OOM",
+        "body": "## What Problem This Solves\n\n`extensions/minimax/` providers make unbounded `await response.json()` reads\nof external MiniMax API responses. A misconfigured / hostile / SSRF-reachable\nendpoint can return a Content-Length-less body that streams forever — each\nunbounded read buffers the entire payload before acting on it, driving the\nprocess into memory pressure / OOM. This is the same untrusted-body surface\nclosed by the merged response-limit campaign (#95218 / #96027 / #96038).\n\nSix reads are affected across 4 files: video-generation (poll response,\nmetadata response, create response), image-generation, OAuth token exchange,\nand TTS voice list.\n\n## Changes\n\nReplace unbounded `await response.json()` with `readResponseWithLimit`\n(1 MiB cap) in all 6 call sites. Each site uses a file-local constant\n(`*_JSON_RESPONSE_MAX_BYTES`) and a descriptive overflow error message.\nNo new abstraction — reuses the shared `media-core` bounded reader already\nused across the codebase.\n\n| File | Sites |\n|------|------:|\n| `video-generation-provider.ts` | 3 |\n| `image-generation-provider.ts` | 1 |\n| `oauth.ts` | 1 |\n| `tts.ts` | 1 |\n\n## Real behavior proof\n\n- **Behavior addressed**: An untrusted MiniMax API response with no\n  Content-Length and an oversized / never-ending body must not be buffered\n  whole; the read must stop at the 1 MiB cap, cancel the stream, and throw a\n  bounded error — while valid small responses still parse unchanged.\n- **Real environment tested**: A real local `node:http` server\n  (`http.createServer`) bound to `127.0.0.1`, streaming a\n  Content-Length-less JSON body in 64 KiB chunks (advertised ~64 MiB, well\n  above the 1 MiB cap). The real `readResponseWithLimit` from the\n  production `media-core` package was driven against it — real `fetch()`,\n  real TCP socket, real `Response`, real bounded reader. Not an in-process\n  mock. Node v22.12.0.\n- **Exact steps**: `node --import tsx test/_proof_minimax_bound.mts` — start\n  the server, drive `readResponseWithLimit` against the streaming overflow\n  route and assert it throws + the server observed the connection was\n  cancelled at ~1 MiB (not the full ~64 MiB) → run a negative control\n  (unbounded `res.arrayBuffer()` on the same endpoint — buffers well past\n  the cap) → drive `readResponseWithLimit` against the small valid route\n  and assert it still parses.\n- **What was not tested**: Did not hit the live `api.minimax.io` endpoint\n  (no key / would not reproduce a hostile oversized body); the untrusted-body\n  behavior is fully reproduced with a local streaming server over the same\n  transport.\n\n## Evidence\n\n```\nnode --import tsx test/_proof_minimax_bound.mts\n\n[proof] real node:http server, cap=1048576 bytes, would-stream≈67108864 bytes\n\nPASS  oversized body: real readResponseWithLimit throws the bounded cap error :: msg=\"Error: MiniMax JSON response exceeds 1048576 bytes\"\nPASS  stream cancelled at cap: server sent ≈ cap bytes, not the full ~64 MiB body :: bytesSent=1114112 (cap=1048576, would-stream=67108864)\nPASS  happy path: small valid JSON still parsed by real readResponseWithLimit :: status=ok id=batch-1\nPASS  negative control: unbounded read buffers PAST the 1 MiB cap (cap is load-bearing) :: buffered=33554457 bytes (> 1048576)\n\n[proof] 4 PASS, 0 FAIL\n[proof] ALL PASS\n```\n\nIn-repo Vitest suite (real ReadableStream fixtures + overflow regression test):\n\n```\npnpm exec vitest run extensions/minimax/\n  Test Files  9 passed (9)\n       Tests  81 passed (81)\n```\n\n**Label**: security\n\n_AI-assisted._",
+        "branch": "fix/minimax-bounded-json-response",
+        "head_sha": "842b6e9be35c92714efca410b2b3c2ef91d9dfc6",
+        "author": "lsr911",
+        "labels": [
+          "size: L",
+          "extensions: minimax",
+          "triage: blank-template",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/minimax/image-generation-provider.ts",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/oauth.ts",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/tts.ts",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/video-generation-provider.test.ts",
+            "additions": 108,
+            "deletions": 83,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/video-generation-provider.ts",
+            "additions": 19,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/_proof_minimax_bound.mts",
+            "additions": 204,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/proof-bounded-json.test.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 7,
+        "additions": 481,
+        "deletions": 89,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96322",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96322.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 17,
+          "gatingTotal": 12,
+          "counts": {
+            "SKIPPED": 10,
+            "SUCCESS": 7
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2690,
+    "total_ms": 4107,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 733
+        "ms": 540
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 850
       },
       {
         "name": "classify_comment_commands",
@@ -93,7 +201,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1944
+        "ms": 2690
       },
       {
         "name": "append_ledger",
