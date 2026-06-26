@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-26T09:07:36.602Z",
+  "generated_at": "2026-06-26T09:07:49.391Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-26T06:07:32.919Z",
+  "since": "2026-06-26T06:07:47.788Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    94013
+    96322
   ],
-  "comment_ids": [
-    4808118637
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 74,
-  "commands_seen": 33,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,18 +31,150 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:94013:4808118637:2026-06-26T09:05:10Z:re_review",
-      "comment_id": "4808118637",
-      "comment_version_key": "4808118637:2026-06-26T09:05:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94013#issuecomment-4808118637",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96322:4787074126:2026-06-26T09:07:44Z:clawsweeper_needs_human",
+      "comment_id": "4787074126",
+      "comment_version_key": "4787074126:2026-06-26T09:07:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96322#issuecomment-4787074126",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 94013,
-      "author": "xydt-tanshanshan",
-      "author_id": 291969148,
+      "issue_number": 96322,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-26T09:05:10Z",
-      "comment_updated_at": "2026-06-26T09:05:10Z",
+      "comment_created_at": "2026-06-24T07:53:50Z",
+      "comment_updated_at": "2026-06-26T09:07:44Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=db715ae57d1eb5ef3b69f2f2af007e97d5f927ae)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "db715ae57d1eb5ef3b69f2f2af007e97d5f927ae",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(minimax): bound JSON response reads to prevent OOM",
+        "body": "## What Problem This Solves\n\n`extensions/minimax/` providers make unbounded `await response.json()` reads\nof external MiniMax API responses. A misconfigured / hostile / SSRF-reachable\nendpoint can return a Content-Length-less body that streams forever — each\nunbounded read buffers the entire payload before acting on it, driving the\nprocess into memory pressure / OOM. This is the same untrusted-body surface\nclosed by the merged response-limit campaign (#95218 / #96027 / #96038).\n\nSix reads are affected across 4 files: video-generation (poll response,\nmetadata response, create response), image-generation, OAuth token exchange,\nand TTS voice list.\n\n## Changes\n\nReplace unbounded `await response.json()` with `readResponseWithLimit`\n(1 MiB cap) in all 6 call sites. Each site uses a file-local constant\n(`*_JSON_RESPONSE_MAX_BYTES`) and a descriptive overflow error message.\nNo new abstraction — reuses the shared `media-core` bounded reader already\nused across the codebase.\n\n| File | Sites |\n|------|------:|\n| `video-generation-provider.ts` | 3 |\n| `image-generation-provider.ts` | 1 |\n| `oauth.ts` | 1 |\n| `tts.ts` | 1 |\n\n## Real behavior proof\n\n- **Behavior addressed**: An untrusted MiniMax API response with no\n  Content-Length and an oversized / never-ending body must not be buffered\n  whole; the read must stop at the 1 MiB cap, cancel the stream, and throw a\n  bounded error — while valid small responses still parse unchanged.\n- **Real environment tested**: A real local `node:http` server\n  (`http.createServer`) bound to `127.0.0.1`, streaming a\n  Content-Length-less JSON body in 64 KiB chunks (advertised ~64 MiB, well\n  above the 1 MiB cap). The real `readResponseWithLimit` from the\n  production `media-core` package was driven against it — real `fetch()`,\n  real TCP socket, real `Response`, real bounded reader. Not an in-process\n  mock. Node v22.12.0.\n- **Exact steps**: `node --import tsx test/_proof_minimax_bound.mts` — start\n  the server, drive `readResponseWithLimit` against the streaming overflow\n  route and assert it throws + the server observed the connection was\n  cancelled at ~1 MiB (not the full ~64 MiB) → run a negative control\n  (unbounded `res.arrayBuffer()` on the same endpoint — buffers well past\n  the cap) → drive `readResponseWithLimit` against the small valid route\n  and assert it still parses.\n- **What was not tested**: Did not hit the live `api.minimax.io` endpoint\n  (no key / would not reproduce a hostile oversized body); the untrusted-body\n  behavior is fully reproduced with a local streaming server over the same\n  transport.\n\n## Evidence\n\n```\nnode --import tsx test/_proof_minimax_bound.mts\n\n[proof] real node:http server, cap=1048576 bytes, would-stream≈67108864 bytes\n\nPASS  oversized body: real readResponseWithLimit throws the bounded cap error :: msg=\"Error: MiniMax JSON response exceeds 1048576 bytes\"\nPASS  stream cancelled at cap: server sent ≈ cap bytes, not the full ~64 MiB body :: bytesSent=1114112 (cap=1048576, would-stream=67108864)\nPASS  happy path: small valid JSON still parsed by real readResponseWithLimit :: status=ok id=batch-1\nPASS  negative control: unbounded read buffers PAST the 1 MiB cap (cap is load-bearing) :: buffered=33554457 bytes (> 1048576)\n\n[proof] 4 PASS, 0 FAIL\n[proof] ALL PASS\n```\n\nIn-repo Vitest suite (real ReadableStream fixtures + overflow regression test):\n\n```\npnpm exec vitest run extensions/minimax/\n  Test Files  9 passed (9)\n       Tests  81 passed (81)\n```\n\n**Label**: security\n\n_AI-assisted._",
+        "branch": "fix/minimax-bounded-json-response",
+        "head_sha": "db715ae57d1eb5ef3b69f2f2af007e97d5f927ae",
+        "author": "lsr911",
+        "labels": [
+          "size: M",
+          "extensions: minimax",
+          "triage: blank-template",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/minimax/image-generation-provider.ts",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/oauth.ts",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/tts.ts",
+            "additions": 14,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/video-generation-provider.test.ts",
+            "additions": 108,
+            "deletions": 83,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/video-generation-provider.ts",
+            "additions": 19,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/_proof_minimax_bound.mts",
+            "additions": 204,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 361,
+        "deletions": 95,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96322",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96322.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 91,
+          "gatingTotal": 86,
+          "counts": {
+            "SUCCESS": 54,
+            "SKIPPED": 33,
+            "IN_PROGRESS": 2,
+            "FAILURE": 2
+          },
+          "blockers": [
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "pending": [
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:96322:4807369325:2026-06-26T07:38:53Z:re_review",
+      "comment_id": "4807369325",
+      "comment_version_key": "4807369325:2026-06-26T07:38:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96322#issuecomment-4807369325",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 96322,
+      "author": "lsr911",
+      "author_id": 18230762,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-26T07:38:53Z",
+      "comment_updated_at": "2026-06-26T07:38:53Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -67,58 +197,97 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "[AI] fix(feishu): guard partial channelRuntime in monitor startup",
-        "body": "## Summary\r\n\r\nGuard partial channelRuntime in Feishu monitor startup to prevent silent incoming-message loss.\r\n- Problem: `monitor.account.ts` uses `??` to select `channelRuntime`, which picks a partial `ChannelRuntimeSurface` (only `runtimeContexts`, missing `inbound`/`debounce`) over the full local runtime. This crashes monitor startup at `channelRuntime.debounce.resolveInboundDebounceMs()`, silently dropping all incoming Feishu messages.\r\n- Solution: Mirror the same `?.inbound` guard pattern from `bot.ts:739` (PR #93466) in `monitor.account.ts:487`. When `channelRuntime` lacks `inbound`, fall back to `getFeishuRuntime().channel` which always has the full surface.\r\n- What changed: `extensions/feishu/src/monitor.account.ts` (+1 line)\r\n- What did NOT change: `bot.ts`, `monitor.message-handler.ts`, `comment-handler.ts` behavior; config schema; adapter registration; existing behavior for full runtimes\r\n\r\n## Change Type (select all)\r\n\r\n- [x] Bug fix\r\n- [ ] Feature\r\n- [ ] Refactor required for the fix\r\n- [ ] Docs\r\n- [ ] Security hardening\r\n- [ ] Chore/infra\r\n\r\n## Scope (select all)\r\n\r\n- [ ] Gateway / orchestration\r\n- [ ] Skills / tool execution\r\n- [ ] Auth / tokens\r\n- [ ] Memory / storage\r\n- [x] Integrations\r\n- [ ] API / contracts\r\n- [ ] UI / DX\r\n- [ ] CI/CD / infra\r\n\r\n## Linked Issue/PR\r\n\r\n- Related to #92595\r\n- Related to #93466 (sibling fix for same root cause in bot.ts)\r\n- [x] This PR fixes a bug or regression\r\n\r\n## Motivation\r\n\r\n`monitor.account.ts:487` has the same `??` pattern as the pre-#93466 `bot.ts:739` — when the gateway passes a partial `ChannelRuntimeSurface` (only guarantees `runtimeContexts`), the nullish coalescing selects it over the full `getFeishuRuntime().channel`. This causes `monitor.message-handler.ts:174` to crash on `channelRuntime.debounce.resolveInboundDebounceMs()`, preventing the monitor from starting. Outgoing push (cron, direct send) works because it bypasses the monitor, but all incoming Feishu messages are silently dropped.\r\n\r\n## Real behavior proof\r\n\r\n**Behavior addressed**: Partial channelRuntime from gateway crashes Feishu monitor startup at `channelRuntime.debounce.resolveInboundDebounceMs()`, silently dropping all incoming Feishu messages.\r\n\r\n**Real environment tested**: OpenClaw dev worktree, Node v24.13.1, Linux x86_64, `fix/feishu-monitor-channelruntime-guard-92595` branch (commit `1e80d0551`).\r\n\r\n**Exact steps or command run after this patch**:\r\n\r\n1. `node --import tsx proof.mts` — exercises the production `getFeishuRuntime()` function directly, registers a full local runtime, then evaluates BOTH the old `??` expression and the new `?.inbound ? :` expression against three inputs (undefined, partial, full). Demonstrates the crash on partial runtime access to `.debounce.resolveInboundDebounceMs()`.\r\n2. `pnpm test extensions/feishu/src/monitor.reaction.test.ts -t \"monitorSingleAccount channelRuntime guard\"` — 27 tests (24 existing + 3 new guard tests), all passing.\r\n\r\n**Evidence after fix**:\r\n\r\n**Primary proof** — `node --import tsx` exercising production `getFeishuRuntime()` with before/after guard comparison:\r\n\r\n```console\r\n$ node --import tsx proof.mts\r\n\r\n── Local runtime registered ──\r\n  localChannel.inbound:        object\r\n  localChannel.debounce:       object\r\n  localChannel.debounce.resolveInboundDebounceMs(): 2000\r\n\r\n── Guard: BEFORE FIX `??` (original code) ──\r\n  undefined                             => selected.inbound=object  debounce ok=true\r\n  partial (runtimeContexts only)        => selected.inbound=undefined  debounce ok=false\r\n  full (with inbound)                   => selected.inbound=object  debounce ok=true\r\n\r\n── Guard: AFTER FIX `?.inbound ? :` (PR change) ──\r\n  undefined                             => selected.inbound=object  debounce ok=true\r\n  partial (runtimeContexts only)        => selected.inbound=object  debounce ok=true\r\n  full (with inbound)                   => selected.inbound=object  debounce ok=true\r\n\r\n── Crash demo ──\r\n  partial.debounce = undefined → TypeError at monitor startup:\r\n  TypeError: Cannot read properties of undefined (reading 'resolveInboundDebounceMs')\r\n  full.debounce.resolveInboundDebounceMs() = 2000 ✔\r\n\r\n── Behavior matrix ──\r\n  Input type                                    Expression     Result                     Debounce accessible?\r\n  ────────────────────────────────────────────  ─────────────  ─────────────────────────  ────────────────────\r\n  undefined                                     BEFORE(??)     full runtime ✔       yes ✔\r\n                                                AFTER(?inbound) full runtime ✔       yes ✔\r\n  partial (runtimeContexts only)                BEFORE(??)     CRASH ❌       NO ❌\r\n                                                AFTER(?inbound) full runtime ✔       yes ✔\r\n  full (with inbound)                           BEFORE(??)     full runtime ✔       yes ✔\r\n                                                AFTER(?inbound) full runtime ✔       yes ✔\r\n\r\n── ALL CHECKS PASSED ──\r\n```\r\n\r\n**Supplementary** — unit tests covering the `monitorSingleAccount` guard (27 test file, all passing):\r\n\r\n```console\r\n$ pnpm test extensions/feishu/src/monitor.reaction.test.ts \\\r\n    -t \"monitorSingleAccount channelRuntime guard\"\r\n\r\n ✓ |extension-feishu| extensions/feishu/src/monitor.reaction.test.ts (27 tests) 104ms\r\n Test Files  1 passed (1)\r\n      Tests  27 passed (27)\r\n```\r\n\r\n**Observed result after fix**:\r\n\r\n1. **undefined channelRuntime** → both `??` and `?.inbound` correctly select `getFeishuRuntime().channel` (full runtime, debounce accessible) — no change in behavior\r\n2. **Partial channelRuntime** (only `runtimeContexts`, no `inbound`/`debounce`) → old `??` selects the partial, crashes on `debounce.resolveInboundDebounceMs()`; new `?.inbound` rejects it, falls back to full local runtime ✔\r\n3. **Full channelRuntime** (has `inbound`) → both expressions select it — no change in behavior\r\n4. The fix is a surgical 1-line change that mirrors the identical `?.inbound` guard already merged in PR #93466 for `bot.ts:739`\r\n\r\n**What was not tested**: Live Feishu E2E with a gateway that passes a real partial runtime (requires specific gateway configuration and Feishu credentials). The guard logic is verified at the production-function level via `node --import tsx` exercising `getFeishuRuntime()` directly, plus 3 targeted vitest cases that exercise the full `monitorSingleAccount` function with mocked transport/dedup layers.\r\n\r\n## Root Cause (if applicable)\r\n\r\n`ChannelRuntimeSurface` type (defined in `src/channels/plugins/channel-runtime-surface.types.ts`) only guarantees `runtimeContexts`, but `channel.ts:1326` unconditionally casts it to `PluginRuntime[\"channel\"]` via `as PluginRuntime[\"channel\"] | undefined`. The `??` operator in `monitor.account.ts:487` selects this partial object because it is truthy, causing `monitor.message-handler.ts:174` to crash on the missing `debounce` property.\r\n\r\n## Regression Test Plan\r\n\r\n3 new tests in `extensions/feishu/src/monitor.reaction.test.ts`:\r\n1. Partial channelRuntime (no `inbound`) → falls back to local runtime, no crash\r\n2. Full channelRuntime with `inbound` → uses provided runtime\r\n3. No channelRuntime (undefined) → falls back to local runtime\r\nAll 27 tests pass (24 existing + 3 new).\r\n\r\n## User-visible / Behavior Changes\r\n\r\nNone for users running with a properly configured gateway runtime resolver. Users who previously experienced silent incoming-message loss (Feishu outgoing push works but replies are ignored) will now have their incoming messages processed.\r\n\r\n## Security Impact\r\n\r\n- [x] New permissions/capabilities? No\r\n- [x] Secrets/tokens handling changed? No\r\n- [x] New/changed network calls? No\r\n- [x] Command/tool execution surface changed? No\r\n- [x] Data access scope changed? No\r\n\r\n## Repro + Verification\r\n\r\n### Environment\r\n\r\n- OS: Any\r\n- Runtime: Node 22+\r\n- Integration/channel: Feishu\r\n- Relevant config: Gateway with a partial channelRuntime (no runtime resolver configured)\r\n\r\n### Steps\r\n\r\n1. Configure OpenClaw with a gateway that does not provide a full channel runtime\r\n2. Start Feishu account monitor\r\n3. Send an incoming message to the Feishu bot\r\n\r\n### Expected (before fix)\r\n\r\nMonitor starts, incoming messages are processed normally\r\n\r\n### Actual (before fix)\r\n\r\nMonitor startup fails silently, incoming messages are dropped, outgoing push works\r\n\r\n## Human Verification\r\n\r\n- Verified scenarios: Full channelRuntime (no change), partial channelRuntime (guard activates)\r\n- Edge cases checked: `params.channelRuntime` is undefined/null → `??` already falls back correctly; `params.channelRuntime` has `inbound` → guard selects it; `params.channelRuntime` is partial (no `inbound`) → guard falls back\r\n- What you did NOT verify: Live Feishu E2E with a real partial-runtime gateway\r\n\r\n## Compatibility / Migration\r\n\r\n- [x] Backward compatible? Yes\r\n- [x] Config/env changes? No\r\n- [x] Migration needed? No\r\n\r\n## Best-fix Verdict\r\n\r\n- **Best fix**: Yes. The fix operates at the same boundary as PR #93466 (the `channelRuntime` consumption site) and uses the identical guard pattern (`?.inbound` ternary). Fixing at the source (the type cast in `channel.ts:1326`) would require a broader type-system change.\r\n- **Refactor needed**: No. The change is bounded (1 line in one function).\r\n- **Alternative considered**: Adding a `?.debounce` guard at `monitor.message-handler.ts:174`. Rejected because it would paper over the root cause; the `?.inbound` guard at the monitor level is the correct boundary.\r\n\r\n## AI Assistance\r\n\r\n- **AI-assisted**: Yes\r\n- **Human confirmed understanding of code changes**: Yes\r\n- **AI model**: deepseek-v4-pro\r\n- **AI prompts / session excerpts**: Root cause analysis of `monitor.account.ts:487` and `monitor.message-handler.ts:174` interaction with `ChannelRuntimeSurface` type. Design reviewed with user before implementation.\r\n\r\n## Risks and Mitigations\r\n\r\n**Highest risk area**: A gateway that passes a full runtime disguised as `ChannelRuntimeSurface` with `inbound` but missing `debounce` would still crash — the guard only checks `inbound`.\r\n**Mitigation**: This is extremely unlikely: the `ChannelRuntimeSurface` is only used at the type-cast boundary, and any full runtime from `createPluginRuntime()` always provides the complete `PluginRuntime[\"channel\"]` surface. The `inbound` property is a reliable sentinel because it is the deepest, most specific property consumed downstream.\r\n",
-        "branch": "fix/feishu-monitor-channelruntime-guard-92595",
-        "head_sha": "1e80d0551e000afe438f752c6c48a416a864ba28",
-        "author": "xydt-tanshanshan",
+        "title": "fix(minimax): bound JSON response reads to prevent OOM",
+        "body": "## What Problem This Solves\n\n`extensions/minimax/` providers make unbounded `await response.json()` reads\nof external MiniMax API responses. A misconfigured / hostile / SSRF-reachable\nendpoint can return a Content-Length-less body that streams forever — each\nunbounded read buffers the entire payload before acting on it, driving the\nprocess into memory pressure / OOM. This is the same untrusted-body surface\nclosed by the merged response-limit campaign (#95218 / #96027 / #96038).\n\nSix reads are affected across 4 files: video-generation (poll response,\nmetadata response, create response), image-generation, OAuth token exchange,\nand TTS voice list.\n\n## Changes\n\nReplace unbounded `await response.json()` with `readResponseWithLimit`\n(1 MiB cap) in all 6 call sites. Each site uses a file-local constant\n(`*_JSON_RESPONSE_MAX_BYTES`) and a descriptive overflow error message.\nNo new abstraction — reuses the shared `media-core` bounded reader already\nused across the codebase.\n\n| File | Sites |\n|------|------:|\n| `video-generation-provider.ts` | 3 |\n| `image-generation-provider.ts` | 1 |\n| `oauth.ts` | 1 |\n| `tts.ts` | 1 |\n\n## Real behavior proof\n\n- **Behavior addressed**: An untrusted MiniMax API response with no\n  Content-Length and an oversized / never-ending body must not be buffered\n  whole; the read must stop at the 1 MiB cap, cancel the stream, and throw a\n  bounded error — while valid small responses still parse unchanged.\n- **Real environment tested**: A real local `node:http` server\n  (`http.createServer`) bound to `127.0.0.1`, streaming a\n  Content-Length-less JSON body in 64 KiB chunks (advertised ~64 MiB, well\n  above the 1 MiB cap). The real `readResponseWithLimit` from the\n  production `media-core` package was driven against it — real `fetch()`,\n  real TCP socket, real `Response`, real bounded reader. Not an in-process\n  mock. Node v22.12.0.\n- **Exact steps**: `node --import tsx test/_proof_minimax_bound.mts` — start\n  the server, drive `readResponseWithLimit` against the streaming overflow\n  route and assert it throws + the server observed the connection was\n  cancelled at ~1 MiB (not the full ~64 MiB) → run a negative control\n  (unbounded `res.arrayBuffer()` on the same endpoint — buffers well past\n  the cap) → drive `readResponseWithLimit` against the small valid route\n  and assert it still parses.\n- **What was not tested**: Did not hit the live `api.minimax.io` endpoint\n  (no key / would not reproduce a hostile oversized body); the untrusted-body\n  behavior is fully reproduced with a local streaming server over the same\n  transport.\n\n## Evidence\n\n```\nnode --import tsx test/_proof_minimax_bound.mts\n\n[proof] real node:http server, cap=1048576 bytes, would-stream≈67108864 bytes\n\nPASS  oversized body: real readResponseWithLimit throws the bounded cap error :: msg=\"Error: MiniMax JSON response exceeds 1048576 bytes\"\nPASS  stream cancelled at cap: server sent ≈ cap bytes, not the full ~64 MiB body :: bytesSent=1114112 (cap=1048576, would-stream=67108864)\nPASS  happy path: small valid JSON still parsed by real readResponseWithLimit :: status=ok id=batch-1\nPASS  negative control: unbounded read buffers PAST the 1 MiB cap (cap is load-bearing) :: buffered=33554457 bytes (> 1048576)\n\n[proof] 4 PASS, 0 FAIL\n[proof] ALL PASS\n```\n\nIn-repo Vitest suite (real ReadableStream fixtures + overflow regression test):\n\n```\npnpm exec vitest run extensions/minimax/\n  Test Files  9 passed (9)\n       Tests  81 passed (81)\n```\n\n**Label**: security\n\n_AI-assisted._",
+        "branch": "fix/minimax-bounded-json-response",
+        "head_sha": "db715ae57d1eb5ef3b69f2f2af007e97d5f927ae",
+        "author": "lsr911",
         "labels": [
-          "channel: feishu",
-          "size: S",
-          "proof: supplied",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
+          "size: M",
+          "extensions: minimax",
+          "triage: blank-template",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "extensions/feishu/src/monitor.account.ts",
-            "additions": 1,
+            "path": "extensions/minimax/image-generation-provider.ts",
+            "additions": 8,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/monitor.reaction.test.ts",
-            "additions": 63,
-            "deletions": 0,
+            "path": "extensions/minimax/oauth.ts",
+            "additions": 8,
+            "deletions": 1,
             "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/tts.ts",
+            "additions": 14,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/video-generation-provider.test.ts",
+            "additions": 108,
+            "deletions": 83,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/video-generation-provider.ts",
+            "additions": 19,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/_proof_minimax_bound.mts",
+            "additions": 204,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 64,
-        "deletions": 1,
+        "changedFiles": 6,
+        "additions": 361,
+        "deletions": 95,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94013",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94013.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96322",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96322.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 164,
-          "gatingTotal": 159,
+          "total": 91,
+          "gatingTotal": 86,
           "counts": {
-            "SUCCESS": 132,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
+            "SUCCESS": 54,
+            "SKIPPED": 33,
+            "IN_PROGRESS": 2,
+            "FAILURE": 2
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
+          "blockers": [
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "pending": [
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
@@ -127,21 +296,21 @@
       "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 3994,
+    "total_ms": 1829,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 643
+        "ms": 336
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 3028
+        "ms": 1252
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -153,11 +322,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 311
+        "ms": 215
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
