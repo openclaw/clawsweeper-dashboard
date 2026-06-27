@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-27T19:06:22.897Z",
+  "generated_at": "2026-06-27T19:06:34.686Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-27T16:06:21.003Z",
+  "since": "2026-06-27T16:06:32.567Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    89045
+    96865
   ],
   "comment_ids": [
-    4820467738
+    4820468208
   ],
-  "status_comment_id": 4820468206,
+  "status_comment_id": 4820468834,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89045:4820467738:2026-06-27T19:05:19Z:re_review",
-      "comment_id": "4820467738",
-      "comment_version_key": "4820467738:2026-06-27T19:05:19Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89045#issuecomment-4820467738",
+      "idempotency_key": "comment-router:openclaw/openclaw:96865:4820468208:2026-06-27T19:05:21Z:re_review",
+      "comment_id": "4820468208",
+      "comment_version_key": "4820468208:2026-06-27T19:05:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96865#issuecomment-4820468208",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 89045,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 96865,
+      "author": "tayoun",
+      "author_id": 39609208,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-27T19:05:19Z",
-      "comment_updated_at": "2026-06-27T19:05:19Z",
-      "status_comment_id": 4820468206,
+      "comment_created_at": "2026-06-27T19:05:21Z",
+      "comment_updated_at": "2026-06-27T19:05:21Z",
+      "status_comment_id": 4820468834,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -74,74 +74,55 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-06-27T19:06:23.549Z",
+          "dispatched_at": "2026-06-27T19:06:35.706Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 89045
+          "item_number": 96865
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-06-27T19:06:24.798Z",
-          "response_comment_id": "4820468206",
+          "commented_at": "2026-06-27T19:06:36.833Z",
+          "response_comment_id": "4820468834",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix: recover terminal session status on visible inbound turns",
-        "body": "## Summary\n\nFixes #86827 — group chat sessions stuck in `failed` status silently drop all subsequent messages.\n\nWhen a group chat session enters a terminal status (`failed`, `timeout`, or `killed`), the reply dispatch path returns a successful no-op (`queuedFinal: false`, zero dispatch counts) without starting an AI turn or delivering any user-visible error. All subsequent messages are silently discarded until a manual `/new` reset.\n\n## Root Cause\n\nThree independent mechanisms conspire to create the silent drop:\n\n1. **Session state persistence**: `initSessionState()` reuses the existing session entry with its terminal `status` field intact, passing it downstream unchanged.\n2. **Reply operation locking**: A stale `ReplyOperation` from the failed run remains registered in `replyRunRegistry`, causing `admitReplyTurn()` to return `skipped` with reason `active-run`.\n3. **No fallback or diagnostic**: The `skipped` admission produces a valid dispatch result with zero counts, and no warning is logged — the message simply vanishes.\n\n## Changes\n\n### 1. Auto-recover terminal sessions (`session.ts`)\n\nWhen a **visible** (non-cron/heartbeat) inbound message hits a session with recoverable terminal status, automatically clear the stale lifecycle fields (`status`, `startedAt`, `endedAt`, `runtimeMs`, `abortedLastRun`) while **preserving the `sessionId` and transcript continuity** — no session rotation.\n\n### 2. Clear stale reply operations with race guard (`dispatch-from-config.ts`)\n\nWhen `admitReplyTurn()` returns `skipped` with reason `active-run` but the persisted session is in terminal status, force-clear the stale reply operation via `forceClearReplyRunBySessionId()` and retry admission **once**. This breaks the deadlock without risking infinite retry loops.\n\n**Concurrent recovery guard**: After a recovery turn clears the proven stale leftover and admits its own fresh operation, it is marked with a `terminalRecovery` flag. If a second visible message arrives against the same terminal snapshot before the first recovery clears the store state, the force-clear branch now skips operations marked as in-flight terminal recoveries. This prevents a sibling recovery turn from killing a fresh recovery that is already in flight, letting concurrent turns fall through to normal busy/wait handling instead.\n\n### 3. Agent API path (`agent.ts`)\n\nMirror the same terminal recovery logic in the agent API dispatch path so agent API requests also clear terminal state for visible requests.\n\n### 4. Diagnostics (`kernel.ts`, `types.ts`)\n\nAdd a structured warning log when a visible channel turn dispatch completes with `queuedFinal: false` and zero tool/block/final counts — a sentinel for future silent message drops. Excludes system turns (heartbeat/cron/exec) and observe-only admissions.\n\n## Real behavior proof\n\nCaptured by driving the **real** runtime modules (`dispatchReplyFromConfig`, `initSessionState`, `reply-run-registry`) with verbose logging on, **no vitest and no module mocks** — only the production parameters the Gateway supplies plus a real on-disk JSON session store. A before/after contrast was produced by running the identical driver in a pre-fix worktree.\n\n- **Behavior or issue addressed**: A group-chat session left in a terminal lifecycle status (`failed`/`timeout`/`killed`) silently drops every later message — the stale lifecycle entry plus a leftover \"active\" reply operation block turn admission, so a subsequent visible inbound message gets no AI turn and no reply (#86827).\n- **Real environment tested**: Compiled branch source at HEAD `ac52eb0b24`; macOS 15.3.1 (Darwin 24.3.0, arm64), Node `v24.10.0`. Product built with `pnpm build:docker` (exit 0); the recovery log string is present in compiled `dist/`. Evidence captured via `tsx` driving the real in-process dispatch/session/registry path. Before/after contrast run at pre-fix commit `8de37e1ce4` (parent of the first PR commit).\n- **Failing proof before fix** (`8de37e1ce4`, identical driver + input): real `dispatchReplyFromConfig()` for a visible group turn on a `status=\"failed\"` session with a stale running reply op —\n  ```\n  [dispatch] registered stale running reply op; isActive=true\n  [dispatch] calling REAL dispatchReplyFromConfig() for visible group turn on terminal session ...\n  [dispatch] dispatch TIMED-OUT (no reply within 8s): visible turn stuck behind the stale terminal reply op -> SILENT DROP\n  [dispatch] stale op result after dispatch = null\n  [dispatch] registry isActive after dispatch = true\n  ```\n  And real `initSessionState()` against an on-disk store: `RESULT: STILL-TERMINAL — session entry remains status=failed after a visible inbound turn`.\n- **Exact steps or command run after this patch**:\n  ```\n  NODE_OPTIONS=--max-old-space-size=8192 pnpm build:docker\n  export OPENCLAW_HOME=$(mktemp -d) OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 \\\n         OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_PROVIDERS=1 OPENCLAW_SKIP_CRON=1\n  node_modules/.bin/tsx ./_dispatch_driver.mts   # drives real dispatchReplyFromConfig()\n  node_modules/.bin/tsx ./_proof_driver.mts      # drives real initSessionState() + registry\n  ```\n  The driver seeds a real session store with a terminal `failed` group entry, registers a real stale running reply operation, then calls the real `dispatchReplyFromConfig()` for a visible inbound group message.\n- **Evidence after fix (`ac52eb0b24`)**: copied live console output from running the real in-process driver `node_modules/.bin/tsx ./_dispatch_driver.mts` (drives the production `dispatchReplyFromConfig()`); redacted runtime log:\n  ```\n  [dispatch] registered stale running reply op; isActive=true\n  [dispatch] calling REAL dispatchReplyFromConfig() for visible group turn on terminal session ...\n  dispatch-from-config: cleared stale active reply operation for terminal session agent:main:telegram:group:<redacted>\n  [dispatch] dispatch returned: {\"queuedFinal\":true,\"counts\":{\"tool\":0,\"block\":0,\"final\":1}}\n  [dispatch] stale op result after dispatch = {\"kind\":\"failed\",\"code\":\"run_failed\"}\n  [dispatch] registry isActive after dispatch = false\n  ```\n  Real session lifecycle: `initSessionState -> isNewSession=false sessionId=<same> abortedLastRun=false`, and `AFTER turn -> status=undefined ... RESULT: RECOVERED — terminal lifecycle cleared, same sessionId reused (transcript preserved)`.\n- **Observed result after fix**: A visible inbound message to a terminal session (1) emits the new recovery log, (2) force-fails the stale leftover op and frees the registry (`isActive=false`), (3) produces a real queued reply (`queuedFinal:true, counts.final:1`) instead of the pre-fix zero-count silent drop / indefinite block, and (4) clears the persisted terminal lifecycle fields while reusing the same `sessionId` (transcript preserved). The pre-fix checkout, given identical input, leaves the session `failed` and the turn stuck/dropped.\n- **What was not tested**: The full Docker image build failed at the `pnpm install --frozen-lockfile` layer due to transient npm-registry CDN errors fetching optional native packages (network, not OOM and not code), so no end-to-end live channel socket round-trip was performed; the proof drives the real in-process dispatch/session/registry runtime that a channel turn funnels into. The `agent.ts` Gateway RPC path and the `kernel.ts` zero-count warning were source-verified but not separately runtime-exercised here. Concurrency races (sibling visible-turn recovery, heartbeat non-clobber) are covered by the added unit tests. Architecture: arm64 (macOS) only; CI truth is Linux x64 Node 24.\n\n## Tests\n\n- **session.test.ts**: Verify failed group sessions recover without rotating the transcript\n- **dispatch-from-config.test.ts**: Verify stale active reply operations are cleared for terminal sessions and admission is retried; verify two concurrent visible turns against the same terminal snapshot do not kill each other's recovery operations\n- **agent.test.ts**: Verify terminal failed agent API sessions recover without session rotation; updated existing failed-session tests to verify terminal state clearing\n- **kernel.test.ts**: Verify zero-count visible dispatch warning is emitted\n- **agent-runner-execution.test.ts / agent-runner-memory.test.ts**: Updated mock `ReplyOperation` stubs with new `terminalRecovery` field and `markTerminalRecovery` method\n\nAll focused tests pass across 2 Vitest shards (512 cases).\n\n\n",
-        "branch": "fix/86827-failed-session-silent-drop",
-        "head_sha": "415c3d43029e54dc46185a56cab8c8dd0e0025a8",
-        "author": "jerry-xin",
+        "title": "fix(codex): honor workspace-only fs for native tools",
+        "body": "## What Problem This Solves\nWhen an OpenClaw agent sets `tools.fs.workspaceOnly=true`, OpenClaw-owned file tools enforce a workspace boundary. Codex app-server code mode also has a native shell/filesystem surface. Current Codex `workspace-write` is not a true OpenClaw workspace-only read boundary, so OpenClaw must fail closed for that native surface instead of projecting an unsafe sandbox downgrade.\n\n## Summary\n- disable the Codex app-server native code/file surface when effective `tools.fs.workspaceOnly=true`\n- preserve explicit per-agent `tools.fs.workspaceOnly=false` as an opt-out from global workspace-only policy\n- resolve workspace-only policy from the active agent, runtime/session key, default agent, then global config\n- stop downgrading `danger-full-access` to Codex `workspace-write`, because that implied a stronger read boundary than Codex exposes\n- cover mixed-agent, global, default-agent, runtime-session, explicit per-agent opt-out, malformed-config, and app-server request behavior\n\n## Evidence\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/dynamic-tool-build.test.ts -t \"workspace-only\"` passed locally\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts -t \"disables native Codex file/code mode\"` passed locally\n- `pnpm exec oxfmt --check --threads=1 extensions/codex/src/app-server/dynamic-tool-build.ts extensions/codex/src/app-server/dynamic-tool-build.test.ts extensions/codex/src/app-server/run-attempt.ts extensions/codex/src/app-server/run-attempt.test.ts` passed locally\n- `node scripts/run-oxlint.mjs extensions/codex/src/app-server/dynamic-tool-build.ts extensions/codex/src/app-server/dynamic-tool-build.test.ts extensions/codex/src/app-server/run-attempt.ts extensions/codex/src/app-server/run-attempt.test.ts` passed locally\n- `pnpm tsgo:core` passed locally\n- `pnpm tsgo:core:test` passed locally\n- `git diff --check` passed locally\n\n## Real Behavior Proof\nFresh live proof collected 2026-06-26 with a temporary redacted runner that starts the real Codex app-server via:\n\n`/opt/homebrew/bin/codex app-server --listen stdio://`\n\nThe runner uses the production `runCodexAppServerAttempt` startup path, wraps the real initialized app-server client, records `initialize`, `thread/start`, and `turn/start` RPC attempts, and intentionally stops before forwarding `turn/start` so no model turn is executed.\n\nRedacted terminal output:\n```json\n{\n  \"proofKind\": \"live-codex-app-server-thread-start\",\n  \"collectedAt\": \"2026-06-26T18:11:18.452Z\",\n  \"codexCli\": \"codex-cli 0.141.0\",\n  \"runtimeIdentity\": {\n    \"serverVersion\": \"0.141.0\",\n    \"userAgent\": \"openclaw/0.141.0 (Mac OS 26.3.1; arm64) dumb (openclaw; 2026.6.10)\",\n    \"codexHome\": \"<proof-temp>/agent/codex-home\",\n    \"platformFamily\": \"unix\",\n    \"platformOs\": \"macos\"\n  },\n  \"workspaceOnlyPolicy\": true,\n  \"requestedAppServerSandbox\": \"danger-full-access\",\n  \"observedMethods\": [\n    \"initialize\",\n    \"thread/start\",\n    \"turn/start\"\n  ],\n  \"threadStartObserved\": true,\n  \"turnStartForwarded\": false,\n  \"threadStart\": {\n    \"sandbox\": \"danger-full-access\",\n    \"approvalPolicy\": \"never\",\n    \"featuresCodeMode\": false,\n    \"featuresCodeModeOnly\": false,\n    \"defaultAppDenialPatch\": {\n      \"enabled\": false,\n      \"destructive_enabled\": false,\n      \"open_world_enabled\": false\n    }\n  },\n  \"blockedTurnStartSandboxPolicy\": {\n    \"type\": \"dangerFullAccess\"\n  },\n  \"stopReason\": \"proof stop before model turn after live thread/start capture\"\n}\n```\n\nObserved result: in a real Codex app-server process (`serverVersion=0.141.0`) with effective `tools.fs.workspaceOnly=true` and configured `appServer.sandbox=\"danger-full-access\"`, OpenClaw sends `thread/start` with native code/file mode disabled (`features.code_mode=false`, `features.code_mode_only=false`) and an `apps._default` denial patch while preserving the requested sandbox. Workspace-scoped filesystem access remains on OpenClaw-owned dynamic tools.\n\n## Dependency Check\nChecked sibling Codex source before the fix:\n- `codex-rs/sandboxing/src/seatbelt_tests.rs`\n- `codex-rs/app-server/src/thread_state.rs`\n\nCurrent Codex sandbox profiles do not expose the OpenClaw workspace-only read/write boundary ClawSweeper asked for, so this PR now fails closed by disabling the native surface when workspace-only fs policy is active.\n\n## Notes\n- Per-agent `tools.fs.workspaceOnly=false` is treated as an explicit opt-out from a global workspace-only policy; omit the per-agent key to fall through to the global policy.\n",
+        "branch": "fix/codex-workspace-only-native-tools",
+        "head_sha": "d38d1ce563a7a5594167a56dcb1666c0c19a52cf",
+        "author": "tayoun",
         "labels": [
-          "gateway",
-          "size: L",
-          "proof: supplied",
+          "size: M",
+          "extensions: codex",
+          "triage: blank-template",
           "proof: sufficient",
-          "mantis: telegram-visible-proof",
           "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: 🔁 re-review loop"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
-            "additions": 2,
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
+            "additions": 264,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
-            "additions": 2,
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.ts",
+            "additions": 73,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/dispatch-from-config.test.ts",
-            "additions": 371,
+            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
+            "additions": 37,
             "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 60,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.test.ts",
-            "additions": 59,
-            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
@@ -181,54 +162,38 @@
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 12,
-        "additions": 793,
-        "deletions": 29,
+        "changedFiles": 3,
+        "additions": 374,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89045",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89045.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96865",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96865.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 90,
-          "gatingTotal": 85,
+          "total": 83,
+          "gatingTotal": 78,
           "counts": {
-            "IN_PROGRESS": 49,
-            "SUCCESS": 17,
-            "SKIPPED": 23,
-            "NEUTRAL": 1
+            "SUCCESS": 27,
+            "SKIPPED": 25,
+            "IN_PROGRESS": 31
           },
           "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "pnpm-store-warmup:IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
             "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
             "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
@@ -247,39 +212,21 @@
             "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS",
             "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "pnpm-store-warmup:IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
             "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
             "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
@@ -298,9 +245,6 @@
             "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS",
@@ -316,19 +260,19 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4289,
+    "total_ms": 5034,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 576
+        "ms": 624
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1304
+        "ms": 1482
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -340,7 +284,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2383
+        "ms": 2904
       },
       {
         "name": "append_ledger",
