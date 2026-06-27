@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-27T16:57:26.817Z",
+  "generated_at": "2026-06-27T16:57:29.573Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-27T13:57:24.949Z",
+  "since": "2026-06-27T13:57:25.765Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    96768
+    96723
   ],
   "comment_ids": [
-    4819381924
+    4819381678
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96768:4819381924:2026-06-27T16:55:11Z:re_review",
-      "comment_id": "4819381924",
-      "comment_version_key": "4819381924:2026-06-27T16:55:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96768#issuecomment-4819381924",
+      "idempotency_key": "comment-router:openclaw/openclaw:96723:4819381678:2026-06-27T16:55:09Z:re_review",
+      "comment_id": "4819381678",
+      "comment_version_key": "4819381678:2026-06-27T16:55:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96723#issuecomment-4819381678",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96768,
+      "issue_number": 96723,
       "author": "wangmiao0668000666",
       "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-27T16:55:11Z",
-      "comment_updated_at": "2026-06-27T16:55:11Z",
+      "comment_created_at": "2026-06-27T16:55:09Z",
+      "comment_updated_at": "2026-06-27T16:55:09Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -73,10 +73,10 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(runtime/proxy): bound streaming success-body SSE reads at 16 MiB",
-        "body": "## What Problem This Solves\n\n`src/agents/runtime/proxy.ts` (`streamProxy`, the internal proxy SSE parser) accumulates an unbounded SSE byte stream into a string buffer while waiting for `\\n` line delimiters. A hostile or malfunctioning proxy endpoint (including a MITM-able proxy or a hijacked self-hosted proxy server) can return a `Content-Length`-less SSE body that streams forever, exhausting process memory on a code path that runs for every proxied LLM streaming call.\n\nThis is the streaming-body analogue of the bounded-read sweep Alix-007 finished for non-streaming `response.json()`. Same 16 MiB cap, same helper-driven design, but on the chunk-by-chunk SSE path that the non-streaming sweep did not cover.\n\n## Changes\n\nReuses the existing `createSseByteGuard` helper (already in main) — no new abstraction in this PR.\n\n- `src/agents/runtime/proxy.ts:200-207` — `streamProxy` wraps `response.body!.getReader()` in `createSseByteGuard` with `PROXY_STREAM_BODY_MAX_BYTES = 16 * 1024 * 1024`. The abort handler and finally block use `guard.cancel()` with `reader.cancel()` fallback for the code path before the guard is created.\n- `src/agents/runtime/proxy.test.ts` — 1 inline test (43 LoC) through production `streamProxy` wrapper with oversized stream + negative control + happy path, asserting `errorMessage`, `cancel(reason)` type, and `pullCount`.\n\nFollows the pattern from #96701 (anthropic-transport-stream). Aligned with the bounded-read campaign.\n\n## Design Rationale\n\n**Why reuse `createSseByteGuard` instead of a new helper?** The proxy SSE parser follows the same chunk-by-chunk `reader.read()` → buffer → parse loop structure as anthropic-transport-stream. Using the same guard avoids duplicating the byte-accounting, overflow-check, and cancellation logic. The guard's `SseByteGuard` interface (read/cancel/totalBytes/overflowed/cancelled) was designed for this cross-parser reuse from the start.\n\n**Why 16 MiB cap?** Matches the existing non-streaming 16 MiB cap from `readProviderJsonResponse` (`src/agents/provider-http-errors.ts`) and the sibling anthropic-transport-stream PR (#96701). The proxy is an internal transport layer — it forwards response bodies from the upstream provider. A 16 MiB cap on the proxy's own SSE parser provides defense-in-depth beyond the provider-level cap already applied in #96701.\n\n**Why a different constant name (`PROXY_STREAM_BODY_MAX_BYTES`) rather than sharing the same constant?** Each parser (anthropic transport, proxy, provider) evolves independently — the proxy cap may later be tuned differently if proxy-specific streaming patterns emerge. Named constants at each call site keep the override path explicit while the value stays consistent (all 16 MiB).\n\n**Why `guard.cancel()` + `reader.cancel()` fallback in the error/abort handler?** The `streamProxy` function creates the guard AFTER the reader is obtained. If an abort arrives between `response.body.getReader()` and `createSseByteGuard(reader)`, the `finally` block falls back to `reader.cancel()` directly because `guard` is undefined. This is a defensive pattern — the window is small but present, and dropping the reader without cancellation would leak the stream.\n\n## Real behavior proof\n\n- **Behavior addressed**: unbounded buffering of the runtime proxy `streamProxy` SSE read; after the fix the read is capped at 16 MiB and the stream is cancelled on overflow.\n- **Real environment tested**: a real `node:http` server bound to `127.0.0.1` returning a `Content-Length`-less 64 MiB body (4× the cap) chunk-by-chunk, plus a negative-control 1 MiB body, plus a happy-path body (2 events + terminal). Drives the production `streamProxy` over a real TCP socket. Node v22.22.0.\n- **Exact steps**: `node --import tsx _proof_proxy_stream.mts` (proof script kept local-only, not committed).\n- **Evidence after fix**:\n  ```\n  === runtime/proxy streamProxy success-body bounded read (cap=16777216, would-stream=67108864) ===\n\n  PASS  Proxy stream body bounded: rejected with \"Proxy stream body exceeded 16777216 bytes (received 16834186)\"; bytesSent=19923323 (< 67108864); server.aborted=true\n  PASS  negative control: small body fully drained (1 events); cap did not trigger\n  PASS  happy path: small valid proxy SSE response drained end-to-end (1 events); terminal=stop\n\n  === All runtime/proxy streamProxy bounded-read assertions passed ===\n  ```\n- **Observed result after fix**: `createSseByteGuard` cancelled the upstream `ReadableStreamDefaultReader` at ~16 MiB (well under 64 MiB). Server-side `socket.bytesWritten` observed at 19,923,323 — bounded, not drained. `cancel(reason)` received an `Error` instance.\n- **What was not tested**: live proxy server call (the proof exercises the same production helper against the same shape of attack the live endpoint could carry); cross-platform Node differences (Node 22 only, matches CI).\n\n## Out of scope (separate follow-ups)\n\n- `src/llm/providers/anthropic.ts` (`iterateSseMessages`, legacy provider SSE parser) — #96723.\n- `extensions/google/transport-stream.ts` and `extensions/ollama/src/{setup,stream}.ts` — need the helper promoted to a plugin-SDK subpath first (separate foundation PR).\n\n## Risk checklist\n\n- User-visible behavior change? No — normal-sized responses unaffected; oversized responses now throw a clear overflow error instead of silently accumulating memory.\n- Config/env/migration change? No.\n- Security/auth/secrets/network/tool-execution change? Yes — OOM/DoS protection for the internal proxy SSE parser (16 MiB cap + reader cancellation on overflow).\n- Highest-risk area: guard.cancel() + reader.cancel() fallback — the defensive pattern is correct but adds a second cancellation path; verified by existing abort-path tests.\n\n## Diff stats\n\n```\n2 files changed, 59 insertions(+), 2 deletions(-)\n```\n",
-        "branch": "fix/runtime-proxy-stream-bound",
-        "head_sha": "87d72e2e20eeeb159e5e6707f50ea879f434ef8e",
+        "title": "fix(anthropic): bound streaming 200 success-body SSE reads at 16 MiB (provider path)",
+        "body": "## What Problem This Solves\n\n`src/llm/providers/anthropic.ts` (`iterateSseMessages`, the legacy provider SSE parser) accumulates an unbounded SSE byte stream while walking the Anthropic Messages streaming response. A hostile or malfunctioning Anthropic-compatible endpoint can return a `Content-Length`-less SSE body that streams forever, exhausting process memory on the legacy code path that runs alongside the transport-stream path (#96701).\n\nThis is the streaming-body analogue of the bounded-read sweep Alix-007 finished for non-streaming `response.json()` / `response.text()`. Same 16 MiB cap, same helper-driven design, on the legacy provider path that #96701 does not cover.\n\n## Changes\n\nReuses the existing `createSseByteGuard` helper (already in main) — no new abstraction in this PR.\n\n- `src/llm/providers/anthropic.ts:347-362` — `iterateSseMessages` wraps `body.getReader()` in `createSseByteGuard` with `ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024`.\n- `src/llm/providers/anthropic.test.ts` — 1 inline test (38 LoC) through production `iterateSseMessages` wrapper with oversized stream + negative control + happy path.\n\nSymmetric counterpart to #96701 (anthropic-transport-stream). Aligned with the bounded-read campaign pattern.\n\n## Design Rationale\n\n**Why reuse `createSseByteGuard` instead of a new helper?** The provider-path SSE parser follows the same chunk-by-chunk `reader.read()` → buffer → parse loop structure as anthropic-transport-stream. Using the same guard avoids duplicating the byte-accounting, overflow-check, and cancellation logic. The guard's `SseByteGuard` interface (read/cancel/totalBytes/overflowed/cancelled) was designed for cross-parser reuse from the start.\n\n**Why 16 MiB cap?** Matches the existing non-streaming 16 MiB cap from `readProviderJsonResponse` (`src/agents/provider-http-errors.ts`) and the sibling anthropic-transport-stream PR (#96701). The Anthropic Messages API produces compact streaming responses — typical SSE events are a few KiB, so the 16 MiB cap would only fire on malfunctioning or hostile endpoints.\n\n**Why a separate call site, not a shared constant?** Each parser (anthropic transport, proxy, provider) evolves independently — the provider-path cap may later be tuned differently if legacy provider patterns emerge. Named constants at each call site keep the override path explicit while the value stays consistent (all 16 MiB).\n\n## Real behavior proof\n\n- **Behavior addressed**: unbounded buffering of the Anthropic Messages legacy provider-path SSE read; after the fix the read is capped at 16 MiB and the stream is cancelled on overflow.\n- **Real environment tested**: a real `node:http` server bound to `127.0.0.1` returning a `Content-Length`-less 64 MiB body (4× the cap) chunk-by-chunk, plus a negative-control 1 MiB body, plus a happy-path body. Drives the production `iterateSseMessages` over a real TCP socket. Node v22.22.0.\n- **Exact steps**: `node --import tsx _proof_anthropic_provider_stream.mts` (proof script kept local-only, not committed).\n- **Evidence after fix**:\n  ```\n  PASS  Anthropic provider-path streaming success body bounded: rejected with \"Anthropic Messages success body exceeded 16777216 bytes (received 16834186)\"; bytesSent=19923323 (< 67108864); server.aborted=true\n  PASS  negative control: small body fully drained; cap did not trigger\n  PASS  happy path: small valid Anthropic SSE response drained end-to-end\n  ```\n- **Observed result after fix**: `createSseByteGuard` cancelled the upstream `ReadableStreamDefaultReader` at ~16 MiB. Server-side `bytesSent` observed at ~19 MiB — bounded, not drained.\n- **What was not tested**: live Anthropic API call (the proof exercises the same production helper against the same shape of attack the live endpoint could carry); cross-platform Node differences (Node 22 only, matches CI).\n\n## Out of scope (separate follow-ups)\n\n- `src/agents/runtime/proxy.ts` (`streamProxy`, internal proxy SSE parser) — #96768.\n- `extensions/google/transport-stream.ts` and `extensions/ollama/src/{setup,stream}.ts` — need the helper promoted to a plugin-SDK subpath first (separate foundation PR).\n\n## Risk checklist\n\n- User-visible behavior change? No — normal-sized responses unaffected; oversized responses now throw a clear overflow error instead of silently accumulating memory.\n- Config/env/migration change? No.\n- Security/auth/secrets/network/tool-execution change? Yes — OOM/DoS protection for Anthropic Messages legacy provider streaming success body (16 MiB cap + reader cancellation on overflow).\n- Highest-risk area: cancel propagation from `createSseByteGuard` to underlying reader; verified by inline test assertion.\n\n## Diff stats\n\n```\n2 files changed, 59 insertions(+), 2 deletions(-)\n```\n",
+        "branch": "fix/anthropic-provider-stream-bound",
+        "head_sha": "7c3dea35e1b2a5ec8ddc2122afae6fc44ebc7eae",
         "author": "wangmiao0668000666",
         "labels": [
           "agents",
@@ -89,15 +89,15 @@
         ],
         "files": [
           {
-            "path": "src/agents/runtime/proxy.test.ts",
-            "additions": 43,
-            "deletions": 0,
+            "path": "src/llm/providers/anthropic.test.ts",
+            "additions": 38,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/runtime/proxy.ts",
-            "additions": 16,
-            "deletions": 2,
+            "path": "src/llm/providers/anthropic.ts",
+            "additions": 21,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
@@ -109,8 +109,8 @@
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96768",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96768.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96723",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96723.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
@@ -136,19 +136,19 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2093,
+    "total_ms": 4135,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 543
+        "ms": 2263
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1311
+        "ms": 1531
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -160,7 +160,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 225
+        "ms": 326
       },
       {
         "name": "append_ledger",
