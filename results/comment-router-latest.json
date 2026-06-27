@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-27T14:08:21.104Z",
+  "generated_at": "2026-06-27T14:08:34.209Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-27T11:08:19.522Z",
+  "since": "2026-06-27T11:08:32.193Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97256
+    97257
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,34 +31,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97256:4818151808:2026-06-27T14:08:16Z:clawsweeper_needs_human",
-      "comment_id": "4818151808",
-      "comment_version_key": "4818151808:2026-06-27T14:08:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97256#issuecomment-4818151808",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97257:4818161086:2026-06-27T14:08:29Z:clawsweeper_auto_repair",
+      "comment_id": "4818161086",
+      "comment_version_key": "4818161086:2026-06-27T14:08:29Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97257#issuecomment-4818161086",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97256,
+      "issue_number": 97257,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-27T13:57:12Z",
-      "comment_updated_at": "2026-06-27T14:08:16Z",
+      "comment_created_at": "2026-06-27T13:58:01Z",
+      "comment_updated_at": "2026-06-27T14:08:29Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=98eb2b5c0326ba5c37d79ddf01873deafed57095)",
-      "review_summary": null,
-      "review_followup": null,
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=81aadb0d868d0c7449931f67ca65bc2e420b82da)",
+      "review_summary": "The PR disables the Control UI session picker and agent selector whenever `state.tab` is not `\"chat\"`.\n\nPR surface: Source 0. Total 0 across 1 file.\n\nReproducibility: yes. source-level reproduction is high-confidence: the PR's screenshots show the user-facing confusion, and CI confirms the patch currently disables controls in existing chat-control tests because the fixture lacks `tab: \"chat\"`.",
+      "review_followup": "- [P2] A narrow automated repair can update the chat-control fixture and add focused disabled-state coverage without changing the UX direction.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "98eb2b5c0326ba5c37d79ddf01873deafed57095",
+      "expected_head_sha": "81aadb0d868d0c7449931f67ca65bc2e420b82da",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,80 +70,79 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): recover channel wedged after timed-out recovery stop",
-        "body": "## Summary\n\nA channel can get permanently wedged in a \"stopped\" state after a transient provider/network outage, and the in-process health monitor cannot recover it — only a full gateway process restart does.\n\n### Root cause\n\nWhen a channel's recovery stop (`manual: false`) times out, `stopChannel` intentionally leaves the still-running poll task in `store.tasks` and sets `recoveryStopTimedOut`, deferring the reboot to that task's completion tail (`src/gateway/server-channels.ts`). `startChannelInternal` then short-circuits on `store.tasks.has(id)`, only re-flagging `recoveryStartRequested` and returning.\n\nIf the underlying task **never settles** (e.g. a poller stuck on a network call that ignores its abort signal), the completion tail that would honor the requested restart never runs. `store.tasks` is never cleared, so every subsequent `startChannel` keeps hitting the guard and returning. The health monitor logs `restarting (reason: stopped)` every cycle with no recovery, indefinitely, until the process is restarted.\n\nObserved in production (Telegram channel) after a Telegram API blip (`Too Many Requests` / `502 Bad Gateway` / DNS timeouts): 27 health-monitor restart log lines over ~5 hours with zero actual recovery and zero errors; a full `systemctl restart` recovered in ~3s.\n\n### Fix\n\nAdd a bounded escape hatch in `startChannelInternal`:\n\n- **First** start after a timed-out recovery stop still defers once (unchanged behavior — gives a slow-but-settling task a chance to reboot itself).\n- **Second** start while the task is *still* wedged orphans the stale task (`store.tasks.delete` / `store.aborts.delete`, clear recovery flags) and falls through to boot a fresh provider. The task was already aborted and (for Telegram) its polling lease was already force-released during the timed-out stop, so the replacement starts cleanly.\n\nTo keep this safe, the orphaned task's settle handlers are guarded by slot ownership (`store.tasks.get(id) === trackedPromise`): a zombie that eventually settles no longer writes shared runtime/restart state once a replacement owns the account. Its own scoped runtime is still disposed.\n\nThis is a generic gateway-lifecycle fix — any channel whose task hangs would otherwise trigger the same permanent wedge.\n\n## Verification\n\n- `pnpm test src/gateway/server-channels.test.ts` → **82 passed** (all existing recovery tests + 1 new).\n- New test `force-restarts when a timed-out recovery stop task never settles` reproduces the wedge (a poll task that never settles even after abort) and asserts a fresh provider boots on the repeated start. **Negative control:** the new test fails (times out, channel never restarts) against unpatched `main` and passes with the fix.\n- `pnpm tsgo:core` and `pnpm tsgo:core:test` clean; `oxfmt --check` clean on changed files; `run-oxlint.mjs` clean.\n\n### Real behavior proof\n\n- **Behavior addressed:** Channel stuck \"stopped\" after a timed-out recovery stop whose poll task never settles; health monitor cannot recover it.\n- **Real environment tested:** Reproduced via the gateway channel-manager test harness (deterministic never-settling task); root cause confirmed against a live production incident (Telegram on a self-hosted always-on gateway).\n- **Exact steps or command run after this patch:** `pnpm test src/gateway/server-channels.test.ts`; negative control by shelving the prod change and re-running the new test.\n- **Evidence after fix:** 82/82 tests pass; new test passes with fix, fails without.\n- **Observed result after fix:** A repeated start after a wedged recovery stop orphans the dead task and boots a fresh provider (`running: true`, `restartPending: false`).\n- **What was not tested:** No live re-trigger of the original upstream Telegram API outage (transient/external); the fix is at the gateway lifecycle layer and is provider-agnostic.\n\n### Follow-up (not in this PR)\n\nTelegram-side hardening so the poller honors its abort signal within the stop timeout would let the task settle cleanly and avoid relying on the escape hatch; complementary, not required.\n",
-        "branch": "fix/telegram-channel-wedge-recovery",
-        "head_sha": "98eb2b5c0326ba5c37d79ddf01873deafed57095",
-        "author": "liamiscool",
+        "title": "fix(ui): disable session selection outside chat page to prevent confusion",
+        "body": "## Summary\r\n\r\nAfter commit 2b30951b8090cfea0149c3cd90fe3a43d3044bc1 (landed in [2026.5.31-beta.4](https://github.com/openclaw/openclaw/releases/tag/v2026.5.31-beta.4)), **from a UI interaction perspective**, the chat session selection component was changed from a local control to a global one. While this works fine within the chat page, it causes confusion on other pages – especially the \"Sessions\" page.\r\n\r\nCurrently, the session selection component is still visible and interactive on non-chat pages, but its behavior isn't fully consistent with those pages. Some actions on the component affect the Sessions page, while others don't, leading to unexpected UI interactions.\r\n\r\nIn my test environment, there are two agents: \"main\" and \"opencode\". The component currently has the agent set to \"main\". When I navigate to the Sessions page and select \"opencode\" in the component, the sessions' store changes from \".*/main/.\\*\" to \"(multiple)\" — not to \".\\*/opencode/.\\*\" as I expected. Then, when I click the refresh button on the right side of the Sessions page, the store switches back to \".\\*/main/.\\*\", but still not to \".\\*/opencode/.\\*\". **This is confusing.**\r\n\r\nThere are two long-term directions we could take:\r\n\r\n1. **Keep it local**​ – Only show the session selection component on the chat page. On other pages, either hide it entirely or disable it.\r\n  \r\n2. **Make it truly global**​ – Fully bind the component to every page so that changing the selection updates each page accordingly (e.g., the Sessions page). This would require two-way binding and careful synchronization.\r\n  \r\n\r\nFor now, I propose we go with a quick fix that aligns with option 1: **disable the session selection component on all non-chat pages**. This prevents users from accidentally interacting with it in places where it doesn't behave correctly. It's a safe, low-risk change that eliminates the immediate confusion.\r\n\r\nIf the team later decides to adopt option 2 (global component with full two-way binding), I'll submit a follow-up PR to properly integrate it with the Sessions page and other relevant views.\r\n\r\nThis PR simply disables the component outside the chat context. No behavioral changes inside the chat page itself.\r\n\r\n## Real Behavior Proof\r\n\r\n### Before Fix\r\n\r\nThere are two agents: \"main\" and \"opencode\".\r\n\r\n<img width=\"435\" height=\"957\" alt=\"2026-06-27-21-02-28-image\" src=\"https://github.com/user-attachments/assets/74264771-ff59-4c0c-9b8d-81919cb6e2f2\" />\r\n\r\nNavigate to the Sessions page. The store is \".\\*/main/.\\*\".\r\n\r\n<img width=\"1884\" height=\"1014\" alt=\"2026-06-27-21-04-59-image\" src=\"https://github.com/user-attachments/assets/63f668b3-64ab-4bd7-ab48-3621e8e2dc94\" />\r\n\r\nSelect \"opencode\" in the component, the sessions' store changes from \".\\*/main/.\\*\" to \"(multiple)\"\r\n\r\n<img width=\"1890\" height=\"897\" alt=\"2026-06-27-21-08-36-image\" src=\"https://github.com/user-attachments/assets/6b6abce0-5da2-4710-90d9-58515aa5b7a8\" />\r\n\r\nAfter refreshing, the store switches back to \".\\*/main/.*\".\r\n\r\n<img width=\"1887\" height=\"873\" alt=\"2026-06-27-21-13-52-image\" src=\"https://github.com/user-attachments/assets/a0f0b3cd-b4bb-40b2-8d62-64dc7933b460\" />\r\n\r\n### After Fix\r\n\r\nSelection is disabled on pages other than the chat page.\r\n\r\n<img width=\"407\" height=\"867\" alt=\"2026-06-27-21-31-36-image\" src=\"https://github.com/user-attachments/assets/48eb5828-d928-4ad5-87c3-29011e534e71\" />\r\n\r\nSelection is available on the chat page.\r\n\r\n<img width=\"381\" height=\"1119\" alt=\"2026-06-27-21-31-59-image\" src=\"https://github.com/user-attachments/assets/68fb22c0-5f08-4ceb-b596-c399332bc301\" />",
+        "branch": "fix/disable-session-selection-outside-chat-page",
+        "head_sha": "81aadb0d868d0c7449931f67ca65bc2e420b82da",
+        "author": "forrest0x59",
         "labels": [
-          "gateway",
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
+          "app: web-ui",
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "status: ⏳ waiting on author",
+          "proof: 📸 screenshot",
+          "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "src/gateway/server-channels.test.ts",
-            "additions": 39,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-channels.ts",
-            "additions": 50,
-            "deletions": 9,
+            "path": "ui/src/ui/chat/session-controls.ts",
+            "additions": 2,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 89,
-        "deletions": 9,
+        "changedFiles": 1,
+        "additions": 2,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97256",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97256.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97257",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97257.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 17,
-          "gatingTotal": 12,
+          "total": 74,
+          "gatingTotal": 69,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 10,
-            "SUCCESS": 5
+            "FAILURE": 2,
+            "SUCCESS": 53,
+            "SKIPPED": 19
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:FAILURE",
+            "checks-node-compact-small-whole-3:FAILURE"
           ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-compact-small-whole-3:FAILURE"
           ],
-          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1919,
+    "total_ms": 2250,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 374
+        "ms": 287
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1192
+        "ms": 1710
       },
       {
         "name": "classify_comment_commands",
@@ -159,7 +158,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 326
+        "ms": 223
       },
       {
         "name": "append_ledger",
