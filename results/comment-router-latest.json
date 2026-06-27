@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-27T08:58:57.569Z",
+  "generated_at": "2026-06-27T08:59:08.067Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-27T05:58:57.292Z",
+  "since": "2026-06-27T05:59:05.723Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97219
+    97182
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,230 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97182:4815375904:2026-06-27T08:59:03Z:clawsweeper_needs_human",
+      "comment_id": "4815375904",
+      "comment_version_key": "4815375904:2026-06-27T08:59:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97182#issuecomment-4815375904",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97182,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-27T05:22:18Z",
+      "comment_updated_at": "2026-06-27T08:59:03Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Human review is needed for the real-behavior-proof gate and Bedrock quota/cap acceptance; there is no narrow automated code repair left to request.; Cleared: The diff only changes Bedrock runtime option construction and tests, with no dependency, CI, credential, package, or script surface change. (sha=563c924eada599d3995557d76dbc0894b78d2e0f)",
+      "review_summary": "The branch updates Amazon Bedrock Converse simple option resolution so Fable 5 and adaptive Claude requests derive maxTokens from model metadata, with focused regression tests.\n\nPR surface: Source +21, Tests +72. Total +93 across 2 files.\n\nReproducibility: yes. at source level: current main only sends Bedrock inferenceConfig.maxTokens from resolved options, and the Fable/adaptive branches do not derive that value from model.maxTokens while the non-adaptive Claude branch does. I did not run a live AWS Bedrock request in this read-only review.",
+      "review_followup": "- [P1] Human review is needed for the real-behavior-proof gate and Bedrock quota/cap acceptance; there is no narrow automated code repair left to request.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "563c924eada599d3995557d76dbc0894b78d2e0f",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(bedrock): apply model maxTokens to adaptive-thinking and Fable 5 requests",
+        "body": "## What Problem This Solves\n\nFixes #97176 — Amazon Bedrock Claude models using adaptive thinking (Opus 4.8, Fable 5) are hard-capped at 4096 output tokens. At higher thinking levels the thinking block alone consumes the budget, causing `stop_reason: \"length\"` before any answer or tool call is delivered.\n\n## Why This Change Was Made\n\nRoot cause: `resolveSimpleBedrockOptions` in `extensions/amazon-bedrock/stream.runtime.ts` only calls `adjustMaxTokensForThinking()` for the **non-adaptive Claude branch**. The **Fable 5 branch** (line 361) and **adaptive-thinking branch** (line 391) both return `base` with reasoning/thinkingBudgets set but never derive `maxTokens` from `model.maxTokens` — leaving it at the 4096 default.\n\nFix: Apply `adjustMaxTokensForThinking()` in all three Claude branches so `model.maxTokens` is consulted uniformly. When no explicit caller cap is set (`base.maxTokens` is undefined), the helper uses `model.maxTokens` directly; when a cap exists, it fits the thinking budget inside it.\n\n| Branch | Before | After |\n|--------|--------|-------|\n| Fable 5 | `base.maxTokens` (4096) | `adjusted.maxTokens` (model cap) |\n| Adaptive thinking | `base.maxTokens` (4096) | `adjusted.maxTokens` (model cap) |\n| Non-adaptive Claude | `adjusted.maxTokens` ✓ | unchanged |\n\n## Evidence\n\n### Source-level reproduction (current `main`)\n\n```typescript\n// extensions/amazon-bedrock/stream.runtime.ts:361-367\nif (usesClaudeFable5BedrockContract(model)) {\n  return { ...base, reasoning: ..., thinkingBudgets: ... };\n  // ^ base.maxTokens is 4096 (options?.maxTokens ?? default)\n  //   model.maxTokens is 200000+ but never consulted\n}\n\n// extensions/amazon-bedrock/stream.runtime.ts:391-407\nif (supportsAdaptiveThinking(model)) {\n  return { ...base, reasoning: ..., thinkingBudgets: ... };\n  // ^ same: base.maxTokens stays at 4096\n}\n```\n\nNon-adaptive Claude branch (lines 411-427) correctly calls `adjustMaxTokensForThinking()` — this fix extends that same pattern.\n\n`adjustMaxTokensForThinking` contract ([simple-options.ts:42-71](src/llm/providers/simple-options.ts#L42-L71)):\n- `baseMaxTokens === undefined` → returns `modelMaxTokens`\n- `baseMaxTokens` set → returns `Math.min(baseMaxTokens + thinkingBudget, modelMaxTokens)`\n- Always reserves ≥1024 tokens for output after thinking\n\n### After fix\n\n```\nOpus 4.8 (maxTokens 200000, thinking high): maxTokens=200000, thinkingBudget=16384\nFable 5 (maxTokens 128000, thinking high): maxTokens=128000, thinkingBudget=16384\n```\n\n### Tests\n\n```sh\nnode scripts/run-vitest.mjs run extensions/amazon-bedrock/stream.runtime.test.ts extensions/amazon-bedrock/index.test.ts\n# 2 files, 73 tests passed\nnpx oxlint --deny=warn extensions/amazon-bedrock/stream.runtime.ts\n# ok\n```\n\n## Risk checklist\n\n- [x] Only Bedrock Converse provider affected — 1 file changed\n- [x] Reuses existing `adjustMaxTokensForThinking` helper (same as non-adaptive branch)\n- [x] Explicit `options.maxTokens` still acts as a cap (helper preserves `Math.min`)\n- [x] No config, schema, or SDK changes\n- [x] All 73 Bedrock tests pass\n\n## Proof limitations\n\nLive AWS Bedrock proof is not practical in this contributor PR. The fix is source-reproducible:\n- ClawSweeper confirmed the source gap on `main` in the canonical issue review\n- The non-adaptive Claude branch already proves the same `adjustMaxTokensForThinking` pattern works\n- AWS SDK contract supports `inferenceConfig.maxTokens` (verified in ClawSweeper review)\n\n## Current review state\n\nReady for ClawSweeper review. Triple-stack labeling (queueable-fix, fix-shape-clear, source-repro) on the canonical issue.",
+        "branch": "feat/issue-97176-bedrock-adaptive-maxtokens-cap",
+        "head_sha": "563c924eada599d3995557d76dbc0894b78d2e0f",
+        "author": "liuwqgit",
+        "labels": [
+          "size: S",
+          "extensions: amazon-bedrock",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/amazon-bedrock/stream.runtime.test.ts",
+            "additions": 73,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/stream.runtime.ts",
+            "additions": 24,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 97,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97182",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97182.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 90,
+          "gatingTotal": 85,
+          "counts": {
+            "SUCCESS": 56,
+            "SKIPPED": 33,
+            "FAILURE": 1
+          },
+          "blockers": [
+            "checks-node-compact-small-7:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-compact-small-7:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97182:4816193608:2026-06-27T08:49:21Z:re_review",
+      "comment_id": "4816193608",
+      "comment_version_key": "4816193608:2026-06-27T08:49:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97182#issuecomment-4816193608",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97182,
+      "author": "LiuwqGit",
+      "author_id": 7065327,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-27T08:49:21Z",
+      "comment_updated_at": "2026-06-27T08:49:21Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(bedrock): apply model maxTokens to adaptive-thinking and Fable 5 requests",
+        "body": "## What Problem This Solves\n\nFixes #97176 — Amazon Bedrock Claude models using adaptive thinking (Opus 4.8, Fable 5) are hard-capped at 4096 output tokens. At higher thinking levels the thinking block alone consumes the budget, causing `stop_reason: \"length\"` before any answer or tool call is delivered.\n\n## Why This Change Was Made\n\nRoot cause: `resolveSimpleBedrockOptions` in `extensions/amazon-bedrock/stream.runtime.ts` only calls `adjustMaxTokensForThinking()` for the **non-adaptive Claude branch**. The **Fable 5 branch** (line 361) and **adaptive-thinking branch** (line 391) both return `base` with reasoning/thinkingBudgets set but never derive `maxTokens` from `model.maxTokens` — leaving it at the 4096 default.\n\nFix: Apply `adjustMaxTokensForThinking()` in all three Claude branches so `model.maxTokens` is consulted uniformly. When no explicit caller cap is set (`base.maxTokens` is undefined), the helper uses `model.maxTokens` directly; when a cap exists, it fits the thinking budget inside it.\n\n| Branch | Before | After |\n|--------|--------|-------|\n| Fable 5 | `base.maxTokens` (4096) | `adjusted.maxTokens` (model cap) |\n| Adaptive thinking | `base.maxTokens` (4096) | `adjusted.maxTokens` (model cap) |\n| Non-adaptive Claude | `adjusted.maxTokens` ✓ | unchanged |\n\n## Evidence\n\n### Source-level reproduction (current `main`)\n\n```typescript\n// extensions/amazon-bedrock/stream.runtime.ts:361-367\nif (usesClaudeFable5BedrockContract(model)) {\n  return { ...base, reasoning: ..., thinkingBudgets: ... };\n  // ^ base.maxTokens is 4096 (options?.maxTokens ?? default)\n  //   model.maxTokens is 200000+ but never consulted\n}\n\n// extensions/amazon-bedrock/stream.runtime.ts:391-407\nif (supportsAdaptiveThinking(model)) {\n  return { ...base, reasoning: ..., thinkingBudgets: ... };\n  // ^ same: base.maxTokens stays at 4096\n}\n```\n\nNon-adaptive Claude branch (lines 411-427) correctly calls `adjustMaxTokensForThinking()` — this fix extends that same pattern.\n\n`adjustMaxTokensForThinking` contract ([simple-options.ts:42-71](src/llm/providers/simple-options.ts#L42-L71)):\n- `baseMaxTokens === undefined` → returns `modelMaxTokens`\n- `baseMaxTokens` set → returns `Math.min(baseMaxTokens + thinkingBudget, modelMaxTokens)`\n- Always reserves ≥1024 tokens for output after thinking\n\n### After fix\n\n```\nOpus 4.8 (maxTokens 200000, thinking high): maxTokens=200000, thinkingBudget=16384\nFable 5 (maxTokens 128000, thinking high): maxTokens=128000, thinkingBudget=16384\n```\n\n### Tests\n\n```sh\nnode scripts/run-vitest.mjs run extensions/amazon-bedrock/stream.runtime.test.ts extensions/amazon-bedrock/index.test.ts\n# 2 files, 73 tests passed\nnpx oxlint --deny=warn extensions/amazon-bedrock/stream.runtime.ts\n# ok\n```\n\n## Risk checklist\n\n- [x] Only Bedrock Converse provider affected — 1 file changed\n- [x] Reuses existing `adjustMaxTokensForThinking` helper (same as non-adaptive branch)\n- [x] Explicit `options.maxTokens` still acts as a cap (helper preserves `Math.min`)\n- [x] No config, schema, or SDK changes\n- [x] All 73 Bedrock tests pass\n\n## Proof limitations\n\nLive AWS Bedrock proof is not practical in this contributor PR. The fix is source-reproducible:\n- ClawSweeper confirmed the source gap on `main` in the canonical issue review\n- The non-adaptive Claude branch already proves the same `adjustMaxTokensForThinking` pattern works\n- AWS SDK contract supports `inferenceConfig.maxTokens` (verified in ClawSweeper review)\n\n## Current review state\n\nReady for ClawSweeper review. Triple-stack labeling (queueable-fix, fix-shape-clear, source-repro) on the canonical issue.",
+        "branch": "feat/issue-97176-bedrock-adaptive-maxtokens-cap",
+        "head_sha": "563c924eada599d3995557d76dbc0894b78d2e0f",
+        "author": "liuwqgit",
+        "labels": [
+          "size: S",
+          "extensions: amazon-bedrock",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/amazon-bedrock/stream.runtime.test.ts",
+            "additions": 73,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/stream.runtime.ts",
+            "additions": 24,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 97,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97182",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97182.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 90,
+          "gatingTotal": 85,
+          "counts": {
+            "SUCCESS": 56,
+            "SKIPPED": 33,
+            "FAILURE": 1
+          },
+          "blockers": [
+            "checks-node-compact-small-7:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-compact-small-7:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 503,
+    "total_ms": 2566,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 266
+        "ms": 221
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2106
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -52,15 +260,15 @@
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 226
+        "ms": 211
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
