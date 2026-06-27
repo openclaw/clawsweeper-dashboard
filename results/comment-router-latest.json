@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-27T08:13:41.008Z",
+  "generated_at": "2026-06-27T08:13:38.830Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-27T05:13:38.888Z",
+  "since": "2026-06-27T05:13:38.242Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     95150
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4816014291
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -37,16 +39,16 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/95150#issuecomment-4755775472",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95150,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 97146,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-20T00:58:49Z",
-      "comment_updated_at": "2026-06-27T08:13:33Z",
+      "comment_created_at": "2026-06-27T08:11:24Z",
+      "comment_updated_at": "2026-06-27T08:11:24Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -68,94 +70,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: browser-like Codex headers + Cloudflare challenge classification (#94432)",
-        "body": "## What Problem This Solves\n\nOpenAI/Codex OAuth users can log in successfully but model calls fail with a misleading \"Authentication failed\" error. The real cause: `chatgpt.com/backend-api` returns an HTML Cloudflare browser-challenge page (HTTP 403) instead of an API response. The `openclaw/(os release; arch)` User-Agent and missing browser-standard headers trigger Cloudflare bot detection.\n\nIssue: https://github.com/openclaw/openclaw/issues/94432\n\n## Why This Change Was Made\n\nThree coordinated changes across all `chatgpt.com/backend-api` code paths:\n\n1. **Cloudflare challenge classification.** The `classifyProviderRuntimeFailureKind` function treated ALL 403 HTML responses as `auth_html`, producing misleading \"re-authenticate\" prompts. Cloudflare browser-challenge pages are CDN/gateway blocks, not auth failures — they now return `upstream_html` with the accurate \"CDN or gateway blocked\" message. The detection pattern aligns with the shared Cloudflare detector in `src/shared/assistant-error-format.ts` (`STANDALONE_HTML_ERROR_HINT_RE`) to cover `cdn-cgi/challenge-platform`, `challenge-error-text`, `cloudflare`, `captcha`, `attention required` and more.\n\n2. **Browser-like HTTP headers for Codex model calls.** Chrome-like User-Agent + standard browser headers (`Accept`, `Accept-Language`) replace the `openclaw/...` fingerprint on Codex model calls. The `buildBaseCodexHeaders` builder applies these to SSE, WebSocket, and regular HTTP paths, with `Accept` properly overridden by `buildSSEHeaders`/`buildWebSocketHeaders`.\n\n3. **Browser-like headers for WHAM usage probes.** The Codex usage fetch and WHAM cooldown probe both call `chatgpt.com/backend-api/wham/usage`. The User-Agent override is applied **after** `resolveProviderRequestHeaders()` to bypass the OpenAI attribution policy (`provider-attribution.ts:528`) which injects `openclaw/...` UA during resolution.\n\n## User Impact\n\n- Codex OAuth users see accurate error messages (CDN/gateway block) instead of misleading auth-failure prompts\n- Browser-like headers may reduce or eliminate Cloudflare blocks entirely\n- WHAM quota probes share the same header contract as model calls — no inconsistent fingerprinting\n- Generic 403 HTML still classified as `auth_html` — no regression for non-Cloudflare providers\n\n## Evidence\n\n**137 tests, 0 failures across 4 test suites:**\n\n```\nprovider-error-patterns.test.ts:  40 passed (classification + edge cases)\nopenai-chatgpt-responses.test.ts: 14 passed (header builder contract)\nprovider-usage.fetch.codex.test.ts: 9 passed (post-attribution UA verified)\nusage.test.ts:                     74 passed (WHAM probe header contract)\n```\n\n**Classification coverage:**\n- Cloudflare challenge HTML (`cdn-cgi/challenge-platform`, `Enable JavaScript and cookies to continue`) + 403 → `upstream_html`\n- Generic 403 HTML (plain \"Forbidden\") + 403 → `auth_html` (no regression)\n- 8 Cloudflare markers aligned with shared detector\n\n**Header contract verification (mock-level):**\n- `fetchCodexUsage` → Mozilla UA present on outbound request\n- `probeWhamForCooldown` → Mozilla UA present on outbound request\n- `buildBaseCodexHeaders` → Mozilla UA + Accept + Accept-Language on all transport paths\n\n## Real behavior proof\n\n**Behavior addressed**: Codex OAuth calls to chatgpt.com/backend-api blocked by Cloudflare browser-detection; errors misleadingly blamed authentication.\n\n**Real setup tested**: Linux x86_64 (kernel 4.19.112), Node.js v24.13.1, openclaw main @ 41691a82d5.\n\n**Exact steps or command run after fix**:\n\n```bash\nnode scripts/run-vitest.mjs run   src/agents/embedded-agent-helpers/provider-error-patterns.test.ts   src/llm/providers/openai-chatgpt-responses.test.ts   src/infra/provider-usage.fetch.codex.test.ts   src/agents/auth-profiles/usage.test.ts\n```\n\n**After-fix evidence**: 137 tests pass. Classification correctly distinguishes Cloudflare challenge pages from auth failures. Browser-like headers are set on all three `chatgpt.com/backend-api` paths post-attribution-policy.\n\n**What was not tested**: Live Codex OAuth session — this environment cannot reach chatgpt.com (corporate network restriction). The header change follows the same pattern used by `web_fetch.ts` (Chrome-like User-Agent for Cloudflare-protected endpoints). Codex upstream source (`codex-rs/login/src/auth/default_client.rs`) uses Codex default headers + a Cloudflare cookie store, so browser-like headers are a plausible transport-level workaround. If Cloudflare blocks persist, a follow-up could explore TLS fingerprint impersonation via undici dispatcher options.\n\n## Risk checklist\n\n- [x] Backward-compatible: generic 403 HTML still `auth_html`\n- [x] `Accept` overridden by SSE/WebSocket builders — no conflict\n- [x] `Accept-Language` additive only — no conflict\n- [x] Cloudflare markers aligned with shared detector (`STANDALONE_HTML_ERROR_HINT_RE`)\n- [x] WHAM probe + usage fetch share same browser-like header contract\n- [x] No new dependencies\n",
-        "branch": "fix/issue-94432",
-        "head_sha": "035a6a4cf380aff3b23a79edcd38b10022953362",
-        "author": "sunlit-deng",
-        "labels": [
-          "agents",
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-helpers/errors.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers/provider-error-patterns.test.ts",
-            "additions": 38,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 50,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95150",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95150.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 33,
-            "SUCCESS": 59,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2392,
+    "total_ms": 2553,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 379
+        "ms": 576
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1727
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -163,7 +99,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 260
+        "ms": 1965
       },
       {
         "name": "append_ledger",
