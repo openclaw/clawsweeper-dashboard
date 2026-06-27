@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-27T01:50:48.046Z",
+  "generated_at": "2026-06-27T01:50:51.659Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-26T22:50:45.908Z",
+  "since": "2026-06-26T22:50:48.899Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96979
+    97139
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:96979:4807491991:2026-06-27T01:50:39Z:clawsweeper_needs_human",
-      "comment_id": "4807491991",
-      "comment_version_key": "4807491991:2026-06-27T01:50:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96979#issuecomment-4807491991",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97139:4814612957:2026-06-27T01:50:44Z:clawsweeper_needs_human",
+      "comment_id": "4814612957",
+      "comment_version_key": "4814612957:2026-06-27T01:50:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97139#issuecomment-4814612957",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96979,
+      "issue_number": 97139,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-26T07:58:22Z",
-      "comment_updated_at": "2026-06-27T01:50:39Z",
+      "comment_created_at": "2026-06-27T01:46:01Z",
+      "comment_updated_at": "2026-06-27T01:50:44Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=b924b11d88754d1643863f65b1adf967bdc32af6)",
-      "review_summary": null,
-      "review_followup": null,
+      "repair_reason": "- [P2] The remaining action is maintainer acceptance of the compatibility and availability tradeoff, not an automated code repair.; Cleared: No supply-chain or security-boundary regression was found; the diff routes an existing provider through the shared guarded network path, with compatibility risk tracked separately. (sha=b699e491ea6fac39f9a2f06c60225825bb40caa0)",
+      "review_summary": "The PR injects `buildGuardedModelFetch(model)` into the OpenAI Responses SDK client and adds a guarded-fetch regression test for oversized streaming JSON bodies.\n\nPR surface: Source +2, Tests +52. Total +54 across 2 files.\n\nReproducibility: yes. from source: current main creates the OpenAI Responses SDK client without a custom fetch while the OpenAI SDK stream reader accumulates bytes until an SSE boundary. The PR body also includes copied real-server live output exercising the guarded fetch caps, but I did not run tests because this review is read-only.",
+      "review_followup": "- [P2] The remaining action is maintainer acceptance of the compatibility and availability tradeoff, not an automated code repair.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "b924b11d88754d1643863f65b1adf967bdc32af6",
+      "expected_head_sha": "b699e491ea6fac39f9a2f06c60225825bb40caa0",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,76 +70,72 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(tui): suppress duplicate assistant message after sessions.changed event",
-        "body": "## What Problem This Solves\n\nFixes a TUI rendering bug where assistant messages appear twice when a `sessions.changed` event with `reason: \"new\"` fires while a chat run is still streaming. This commonly occurs when using the Telegram plugin — the assistant's reply renders once via the chat event pipeline, then a second time via the history replay triggered by `sessions.changed`.\n\n## Why This Change Was Made\n\n**Root cause: race condition between `handleChatEvent` final and `handleSessionsChangedEvent` history reload.**\n\nWhen a `sessions.changed` event with `reason: \"new\"` fires while a chat run is still streaming:\n\n1. `handleSessionsChangedEvent` calls `clearTrackedRunState()` which clears all tracking state including `finalizedRuns`, `sessionRuns`, and the stream assembler\n2. `loadHistory()` is called, which runs `chatLog.clearAll()` — removing the streaming assistant component — then replays the message from server history as a static entry\n3. When the `chat` final event arrives afterward, both `finalizedRuns` and `streamingRuns` are empty, so `chatLog.finalizeAssistant()` cannot find the existing component and **appends a duplicate**\n\n**Fix:** Introduce a `surrenderedToHistoryRunIds` set that collects all tracked runIds **before** `clearTrackedRunState()` in `handleSessionsChangedEvent`. In `handleChatEvent`, check this set and skip late-arriving delta/final events whose runId was already handed off to history replay — but **only when no active streaming component exists for that runId**. If `loadHistory()` restored the run as in-flight (via `inFlightRun`), a streaming component will be present, and we let events flow through normally so the in-flight run can reach its final state. A 15-second cleanup timer prevents the set from growing unbounded.\n\n### In-flight run preservation\n\nThe initial fix unconditionally suppressed all events for surrendered runIds. But `loadHistory()` may return an `inFlightRun` — a run still generating on the server. When this happens, `loadHistory()` calls `chatLog.updateAssistant()` which creates a **new streaming component** that needs live delta/final events. The fix now uses `ChatLog.hasStreamingRun()` to detect this case and let those events through.\n\n## User Impact\n\n- TUI no longer shows duplicate assistant messages when receiving messages via external channels (Telegram, etc.)\n- In-flight runs restored by `loadHistory()` continue to receive live delta/final updates correctly\n- No changes to config, Gateway protocol, or plugin behavior\n\n## What Changed\n\n3 files, +60/−39 lines:\n\n| File | Change |\n|------|--------|\n| `src/tui/tui-event-handlers.ts` | Add `surrenderedToHistoryRunIds` set, `hasStreamingRun` type entry, in-flight-aware suppression logic |\n| `src/tui/components/chat-log.ts` | Add `hasStreamingRun()` method to detect active streaming components |\n| `src/tui/tui-event-handlers.test.ts` | Add `hasStreamingRun` to mock types and factory |\n\n## Evidence\n\n- Branch base: `origin/main` (9a735bea03)\n- Environment: Linux x64, Node v22.19.0, Vitest v4.1.8\n\n### Test results\n\n```text\n# TUI event handlers — 79/79 passed\npnpm test src/tui/tui-event-handlers.test.ts\n\n# Chat log component — 19/19 passed\npnpm test src/tui/components/chat-log.test.ts\n\n# TUI session actions — 34/34 passed\npnpm test src/tui/tui-session-actions.test.ts\n```\n\n## Root Cause Detail\n\n- `handleSessionsChangedEvent` ([tui-event-handlers.ts:825](src/tui/tui-event-handlers.ts#L825)) collects `surrenderedToHistoryRunIds` before `clearTrackedRunState()`\n- In `handleChatEvent` ([tui-event-handlers.ts:640](src/tui/tui-event-handlers.ts#L640)), only suppresses when `!chatLog.hasStreamingRun(evt.runId)` — meaning the message was replayed as static, not restored as in-flight\n- `ChatLog.hasStreamingRun()` ([chat-log.ts:326](src/tui/components/chat-log.ts#L326)) checks `streamingRuns` map to detect in-flight components\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/tui-duplicate-message-sessions-changed",
-        "head_sha": "b924b11d88754d1643863f65b1adf967bdc32af6",
-        "author": "chenyangjun-xy",
+        "title": "fix(openai-responses): bound SSE response reads via buildGuardedModelFetch",
+        "body": "## What Problem This Solves\n\nThe openai-responses provider creates an OpenAI SDK client without a custom `fetch` option, so all SSE streaming responses from the OpenAI API are read without any byte cap. A buggy or hostile endpoint returning `text/event-stream` with a large or never-ending body is fully buffered into memory by the SDK internal HTTP layer — an OOM / DoS vector.\n\nThis injects `buildGuardedModelFetch(model)` as the SDK `fetch` option at `src/llm/providers/openai-responses.ts:173`, matching the existing pattern used by the transport-stream path (`openai-transport-stream.ts:2016`). The shared `sanitizeOpenAISdkSseResponse` in `provider-transport-fetch.ts` now caps oversized SSE buffer boundaries (64 KiB per unterminated event) and oversized JSON bodies synthesized into SSE (16 MiB cumulative, merged in #96989), so oversized SSE streams error instead of accumulating memory.\n\n## Changes\n\n- `src/llm/providers/openai-responses.ts:173` — inject `fetch: buildGuardedModelFetch(model)` into the OpenAI SDK constructor, replacing the SDK default fetch with the guarded provider fetch pipeline (SSRF guard, timeout, retry limiting, SSE sanitization with byte caps).\n\n## Real behavior proof\n\nReal-server proof (node:http on 127.0.0.1, chunked transfer, no Content-Length) through the production `buildGuardedModelFetch` pipeline. Covers 64 KiB SSE buffer cap, 16 MiB JSON synthesis cap, and happy path. Post-#96989 merge — all caps are active on main.\n\n```\n=== Real-server proof: openai-responses fetch pipeline ===\n\n  PASS  oversized SSE without boundary: cap error thrown\n       error: Error: SSE response exceeded max buffer size (65536 bytes) without event boundary\n  PASS  oversized JSON without Content-Length: 16 MiB synthesis cap fires\n       error: Error: Streaming JSON body exceeded 16777216 bytes while synthesizing SSE frames\n  PASS  small SSE: passes through correctly\n       body: 20 bytes\n\n=== Results: 3 passed, 0 failed ===\n```\n\nTest suite: 77/77 provider-transport-fetch tests pass (including new openai-responses-specific inline test).\n\n- **Behavior addressed**: The openai-responses provider now routes all HTTP requests through `buildGuardedModelFetch`, which provides SSRF guard, timeout, retry limiting, SSE buffer boundary cap (64 KiB), and JSON synthesis cap (16 MiB).\n- **Real environment tested**: Linux x86_64, Node 22, real node:http server on 127.0.0.1\n- **Exact steps or command run after this patch**:\n  ```bash\n  node --import tsx _proof_openai_responses_bounded.mts\n  ```\n- **Evidence after fix**: 3/3 assertions pass with real HTTP server, 64 KiB SSE buffer cap fires for unbounded SSE, 16 MiB JSON synthesis cap fires for oversized JSON body, small 20-byte SSE passes through.\n- **Observed result after fix**: All three protection layers active through `buildGuardedModelFetch` for openai-responses provider: (1) 64 KiB SSE buffer boundary cap, (2) 16 MiB JSON synthesis cap, (3) SSRF guard, timeout, retry limiting. Small SSE passes through correctly.\n- **What was not tested**: Live OpenAI API endpoint (proof exercises the same production fetch pipeline against the same attack shape).\n\n## Out of scope\n\nSymmetric PRs for azure-openai-responses (#97070) and openai-completions (#97071). The transport-stream path in `openai-transport-stream.ts` already uses `buildGuardedModelFetch`.\n\n## Risk checklist\n\n- User-visible behavior change? No — existing request flows continue to work.\n- Config/env/migration change? No.\n- Security/auth/secrets/network/tool-execution change? Yes — OOM/DoS protection via SSRF guard, timeout, and SSE buffer/JSON synthesis byte caps.\n- Highest-risk area: SSRF policy enforcement from `buildGuardedModelFetch` could reject previously-allowed URLs. This is the same guard already active in the transport-stream path.\n",
+        "branch": "fix/sse-bounded-openai-responses",
+        "head_sha": "b699e491ea6fac39f9a2f06c60225825bb40caa0",
+        "author": "wangmiao0668000666",
         "labels": [
-          "size: M",
-          "extensions: ollama",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": ".pr-body.md",
-            "additions": 95,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/ollama/src/embedding-provider.test.ts",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/components/chat-log.ts",
-            "additions": 4,
+            "path": "src/agents/provider-transport-fetch.test.ts",
+            "additions": 52,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/tui/tui-event-handlers.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/tui-event-handlers.ts",
-            "additions": 113,
+            "path": "src/llm/providers/openai-responses.ts",
+            "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 216,
-        "deletions": 4,
+        "changedFiles": 2,
+        "additions": 54,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96979",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96979.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97139",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97139.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 91,
-          "gatingTotal": 86,
+          "total": 95,
+          "gatingTotal": 90,
           "counts": {
-            "SUCCESS": 63,
-            "SKIPPED": 27,
+            "CANCELLED": 1,
+            "SUCCESS": 55,
+            "IN_PROGRESS": 6,
+            "SKIPPED": 32,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -147,19 +143,59 @@
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97139:4814616971:2026-06-27T01:47:36Z:re_review",
+      "comment_id": "4814616971",
+      "comment_version_key": "4814616971:2026-06-27T01:47:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97139#issuecomment-4814616971",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97139,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-27T01:47:36Z",
+      "comment_updated_at": "2026-06-27T01:47:36Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2477,
+    "total_ms": 4245,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 511
+        "ms": 574
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1612
+        "ms": 2170
       },
       {
         "name": "classify_comment_commands",
@@ -175,7 +211,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 329
+        "ms": 1473
       },
       {
         "name": "append_ledger",
