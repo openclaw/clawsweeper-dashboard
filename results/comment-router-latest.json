@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-27T06:34:28.018Z",
+  "generated_at": "2026-06-27T06:35:22.152Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-27T03:34:27.636Z",
+  "since": "2026-06-27T03:35:19.848Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97190
+    97191
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,134 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97191:4815651592:2026-06-27T06:35:16Z:clawsweeper_needs_human",
+      "comment_id": "4815651592",
+      "comment_version_key": "4815651592:2026-06-27T06:35:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97191#issuecomment-4815651592",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97191,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-27T06:30:33Z",
+      "comment_updated_at": "2026-06-27T06:35:16Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Needs maintainer/contributor revision because the guard misses the no-newline/final-buffer path and the fail-closed 1 MiB proxy line contract needs acceptance.; Needs attention: The diff hardens an availability-sensitive parser path, but the no-newline/final-buffer bypass leaves the claimed OOM protection incomplete.; Review finding: [P1] Cap the final proxy SSE tail as well — src/agents/runtime/proxy.ts:231-... (sha=50a14c4fd7cabb95db44a0d08b815ab8cbbd5c42)",
+      "review_summary": "The branch adds a 1 MiB byte-length check for newline-delimited proxy SSE lines in `streamProxy` and tests oversized and coalesced SSE lines.\n\nPR surface: Source +4, Tests +95. Total +99 across 2 files.\n\nReproducibility: yes. by source inspection. After this patch, an oversized final SSE frame without a trailing newline still reaches `processSseLine(buffer)` with no byte check, and an open no-newline tail can keep growing before any complete-line cap runs.",
+      "review_followup": "- [P1] Needs maintainer/contributor revision because the guard misses the no-newline/final-buffer path and the fail-closed 1 MiB proxy line contract needs acceptance.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "50a14c4fd7cabb95db44a0d08b815ab8cbbd5c42",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(proxy): bound SSE parser via complete-line cap at 1 MiB",
+        "body": "## What Problem This Solves\n\nThe proxy SSE parser (`streamProxy` in `src/agents/runtime/proxy.ts`) appends decoded chunks to a `buffer` and splits on `\\n`. Without any line-size guard, a hostile or misconfigured proxy endpoint returning a single `data:` line > several MiB forces the process to buffer the entire line before parsing — an OOM vector.\n\nUnlike the provider-event SSE path (OpenAI SDK), which uses `\\n\\n` event boundaries and caps only the unterminated tail, the proxy parser is **line-based** (`\\n` delimited). An unterminated tail IS the current in-flight line, regardless of how TCP fragments it. The previous attempt (#96993, closed by maintainer) used a 64 KiB string-`length` tail cap, which failed non-deterministically: a 70 KiB line could cross or not cross the cap depending on TCP chunk boundaries.\n\nThis fix applies a **byte-accurate complete-line cap** at 1 MiB after draining complete lines — deterministic because the cap fires only when a complete line is present in the buffer, regardless of how many TCP chunks delivered it.\n\n## Changes\n\n- `src/agents/runtime/proxy.ts:230` — after splitting complete lines by `\\n`, check each line with `Buffer.byteLength(line, \"utf-8\") > 1024 * 1024` before processing. The cap fires deterministically only on complete lines.\n- `src/agents/runtime/proxy.test.ts` — 3 new tests: (1) oversized line in one chunk, (2) same line split across 3 chunks (deterministic behavior), (3) 1500 small coalesced lines in one chunk (no false positive).\n\n## Design Rationale\n\n**Why complete-line cap instead of tail cap?** The proxy parser's architecture is `split(\"\\n\")`, where the unterminated tail (`lines.pop()`) is the current in-flight line regardless of origin. A tail cap would fire before the line arrives completely — which means the same 1.1 MiB line either passes or fails depending on whether TCP delivers it in one chunk or two. This non-determinism was the maintainer's reason for closing #96993. The complete-line cap eliminates the dependency on TCP chunking: the check runs only on fully-delivered lines, making behavior identical across any chunk boundary.\n\n**Why 1 MiB?** Aligned with sibling SSE handling in the codebase (e.g., `readResponseWithLimit` sibling bounds). `ProxyAssistantMessageEvent` has no event-size contract, so 1 MiB is a generous safe guard that no legitimate text-delta or tool-call payload should approach.\n\n**Why byte-accurate?** `Buffer.byteLength(line, \"utf-8\")` correctly measures UTF-8 bytes, unlike `String.length` which counts UTF-16 code units and undercounts multibyte payloads. The previous tail-cap used `.length` while calling it \"bytes\", which was another finding in the maintainer's closure note.\n\n## Real behavior proof\n\nReal `node:http` server + production `streamProxy` path (not mocked), driving 4 scenarios through real TCP sockets.\n\n- **Behavior addressed**: Proxy SSE lines over 1 MiB are now rejected deterministically regardless of TCP chunk fragmentation.\n- **Real environment tested**: Linux x86_64, Node 22, real `node:http` server on 127.0.0.1 (4 separate scenarios over real TCP sockets)\n- **Exact steps or command run after this patch**:\n  ```bash\n  node --import tsx _proof_proxy_complete_line_cap.mts\n  ```\n- **Evidence after fix**:\n  ```\n  PASS  single-chunk: cap thrown -- msg=\"Proxy SSE line exceeds maximum allowed size of 1 MiB\"\n  PASS  split-chunk (deterministic): cap thrown -- msg=\"Proxy SSE line exceeds maximum allowed size of 1 MiB\"\n  PASS  coalesced valid: 1 events pass without cap\n  PASS  happy path: small event completes -- stopReason=stop\n  \n  === Results: 4 passed, 0 failed ===\n  ```\n- **Observed result after fix**: (1) 1 MiB+ line in one TCP chunk → cap thrown, (2) same line across 3 chunks → cap thrown identically (deterministic), (3) 500 small coalesced lines in one chunk → no false positive, (4) happy path completes normally.\n- **What was not tested**: Live proxy endpoint (would not reproduce a hostile oversized line; the proof exercises the same production parser through a real HTTP response). Cross-platform Node differences (Node 22 only, matches CI).\n\n## Out of scope\n\nTotal proxy response body cap (separate concern, tracked in sibling proxy work). Other `.json()` bounded-read PRs in the campaign. The provider SSE layer (`provider-transport-fetch.ts`) has its own tail-cap mechanism operating at `\\n\\n` event boundaries and is not affected by this change.\n\n## Risk checklist\n\n- User-visible behavior change? Yes — proxy stream lines over 1 MiB now fail where they previously buffered silently.\n- Config/env/migration change? No.\n- Security/auth/secrets/network/tool-execution change? Yes — OOM protection via byte-accurate 1 MiB line cap.\n- Highest-risk area: legitimate proxy lines that exceed 1 MiB would now fail-closed. No OpenClaw proxy event today approaches that size (text deltas and tool call payloads are well under 100 KiB), and 1 MiB aligns with sibling SSE bounds.\n",
+        "branch": "fix/proxy-sse-complete-line-cap",
+        "head_sha": "50a14c4fd7cabb95db44a0d08b815ab8cbbd5c42",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/runtime/proxy.test.ts",
+            "additions": 95,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/runtime/proxy.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 99,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97191",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97191.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "gatingTotal": 91,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 33,
+            "SUCCESS": 58,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 765,
+    "total_ms": 2660,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 372
+        "ms": 452
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1838
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +168,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 383
+        "ms": 345
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
