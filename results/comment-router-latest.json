@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-27T18:25:07.023Z",
+  "generated_at": "2026-06-27T18:26:03.894Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-27T15:25:06.398Z",
+  "since": "2026-06-27T15:26:02.070Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96477
+    97298
   ],
-  "comment_ids": [
-    4820062866
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,22 +29,121 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97298:4820003586:2026-06-27T18:25:59Z:clawsweeper_needs_human",
+      "comment_id": "4820003586",
+      "comment_version_key": "4820003586:2026-06-27T18:25:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97298#issuecomment-4820003586",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97298,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-27T18:17:19Z",
+      "comment_updated_at": "2026-06-27T18:25:59Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No repair lane is needed; the branch is narrow and viable, with normal maintainer review and exact-head validation remaining.; Cleared: The diff only reuses an existing local string helper in cron alert text construction and does not touch dependencies, workflows, permissions, secrets, package resolution, or code execution surfaces. (sha=02511719272436b2cace88c5336fe6b121ec7afb)",
+      "review_summary": "The PR imports `truncateUtf16Safe` and uses it when truncating cron failure-alert error text in `src/cron/service/failure-alerts.ts`.\n\nPR surface: Source +1. Total +1 across 1 file.\n\nReproducibility: yes. Source inspection shows current main uses raw `.slice(0, 200)` on the emitted alert detail, and a 201-code-unit error with a non-BMP character straddling that boundary reproduces the dangling-surrogate failure described in the PR body.",
+      "review_followup": "- No repair lane is needed; the branch is narrow and viable, with normal maintainer review and exact-head validation remaining.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "02511719272436b2cace88c5336fe6b121ec7afb",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): truncate failure alert error text on UTF-16 boundary",
+        "body": "## Summary\nReplace `String.prototype.slice(0, 200)` with `truncateUtf16Safe()` in cron `emitFailureAlert` to prevent broken Unicode from surrogate-pair splitting when error messages contain emoji or non-BMP characters.\n\n## What Problem This Solves\nWhen `emitFailureAlert` in `src/cron/service/failure-alerts.ts:116` truncates an error message for a cron failure notification, it uses `.slice(0, 200)` which can split a UTF-16 surrogate pair in half. The resulting alert text routes through chat channels (as noted by the code comment: \"Keep alert bodies compact because they may route through chat channels with notification previews\") — where users would see garbled `�` characters.\n\n**Code evidence**: The current code does `(params.error?.trim() || \"unknown reason\").slice(0, 200)`, operating on UTF-16 code units. Characters outside BMP (emoji, rare CJK, etc.) are encoded as two code units; slicing at an arbitrary index can cut between them.\n\n## Root Cause\n- **Introduced by**: commit `9d31cbbd6a` (2026-05-31, refactor: split cron service timer helpers)\n- **Violated invariant**: `String.prototype.slice(n)` assumes all characters are single-code-unit BMP characters. Provider error messages can legitimately contain non-BMP characters.\n- **Trigger condition**: A cron job failure whose error message contains an emoji at the 200-character truncation boundary. The alert is then delivered to a chat channel with a broken character.\n\n## Why This Fix\n- **Chosen approach**: Use the existing `truncateUtf16Safe` utility from `src/shared/utf16-slice.ts` (same utility used by the merged PR #97289 for the same class of bug).\n- **Lines changed**: 2 (+import, +call change).\n\n## User Impact\n- **Affected**: Cron failure alerts delivered to chat channels (Telegram, Slack, Discord, etc.)\n- **Before**: Alert text could end with `�` if the error contained an emoji near the 200-char boundary\n- **After**: Alert text is always truncated on a valid code-point boundary\n\n## Evidence\n\nTerminal proof script demonstrating the bug pattern at the 200-code-unit boundary (matching the exact `.slice(0, 200)` in `emitFailureAlert`):\n\n**Before** (`.slice(0, 200)` on a 201-code-unit error with emoji at boundary):\n- Truncated length: 200 code units\n- **FAIL**: Dangling surrogate detected — the emoji surrogate pair was split in half\n\n**After** (`truncateUtf16Safe` at the same boundary):\n- Truncated length: 199 code units (safe boundary)\n- **PASS**: No dangling surrogate\n\n## Real Behavior Proof\n\n### Before (on main)\n```bash\n$ node --import tsx proof.mjs\n=== PROOF: UTF-16 safe truncation in cron failure alerts ===\n\nInput length: 201 UTF-16 code units\nInput ends with emoji: true\n\n=== BEFORE (main, .slice(0, 200)) ===\nTruncated length: 200\nFAIL: Dangling surrogate detected — truncation split the emoji surrogate pair.\nCron failure alerts sent to chat channels would contain garbled characters.\n\n=== AFTER (fix, truncateUtf16Safe) ===\nTruncated length: 199\nPASS: No dangling surrogate — truncation is UTF-16 safe.\n```\n\n### After (with fix)\n```bash\n$ node --import tsx proof.mjs\n=== PROOF: UTF-16 safe truncation in cron failure alerts ===\n\nInput length: 201 UTF-16 code units\nInput ends with emoji: true\n\n=== BEFORE (main, .slice(0, 200)) ===\nTruncated length: 200\nFAIL: Dangling surrogate detected — truncation split the emoji surrogate pair.\n\n=== AFTER (fix, truncateUtf16Safe) ===\nTruncated length: 199\nPASS: No dangling surrogate — truncation is UTF-16 safe.\n```\n\n## Tests and Validation\n- `pnpm check` passed\n- TypeScript compilation verified\n- Manual proof script confirms the fix prevents surrogate-pair splitting\n",
+        "branch": "fix/utf16-safe-cron-failure-alerts",
+        "head_sha": "02511719272436b2cace88c5336fe6b121ec7afb",
+        "author": "zenglingbiao",
+        "labels": [
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/cron/service/failure-alerts.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 2,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97298",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97298.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 60,
+            "SKIPPED": 34,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-compact-large-whole-1:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-compact-large-whole-1:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 965,
+    "total_ms": 2021,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 611
+        "ms": 198
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1612
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -58,11 +155,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 340
+        "ms": 185
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
