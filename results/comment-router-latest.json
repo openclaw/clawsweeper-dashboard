@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-27T08:08:46.433Z",
+  "generated_at": "2026-06-27T08:08:59.428Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-27T05:08:44.423Z",
+  "since": "2026-06-27T05:08:54.691Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97175
+    97139
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4816000499
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 3,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,204 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97175:4815183474:2026-06-27T08:08:40Z:clawsweeper_auto_repair",
-      "comment_id": "4815183474",
-      "comment_version_key": "4815183474:2026-06-27T08:08:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97175#issuecomment-4815183474",
+      "idempotency_key": "comment-router:openclaw/openclaw:97139:4816000499:2026-06-27T08:06:32Z:re_review",
+      "comment_id": "4816000499",
+      "comment_version_key": "4816000499:2026-06-27T08:06:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97139#issuecomment-4816000499",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97175,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 97139,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-27T04:16:24Z",
-      "comment_updated_at": "2026-06-27T08:08:40Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=c2bec2d33f53dd4fa4b75d4ec7744b1cabee9d98)",
-      "review_summary": "The PR adds a configurable per-task timeout for deferred context-engine turn maintenance, fences late maintenance side effects, throttles repeated stalled-session diagnostics, updates config schema/help, and adds focused tests/docs.\n\nPR surface: Source +204, Tests +595, Docs +6. Total +805 across 16 files.\n\nReproducibility: yes. at source level: current main queues deferred turn maintenance without taskTimeoutMs, so a never-resolving maintenance worker can hold the maintenance lane until broader session recovery. I did not run the runtime reproduction in this read-only review, but the PR body includes redacted real-gateway logs for the fixed path.",
-      "review_followup": "- The remaining blocker is maintainer judgment on the new default timeout's upgrade semantics; the docs gap is narrow but does not remove the policy decision.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "c2bec2d33f53dd4fa4b75d4ec7744b1cabee9d98",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(context-engine): bound deferred turn maintenance with a per-task timeout (AI-assisted)",
-        "body": "## What Problem This Solves\n\nA post-turn context-engine **deferred turn maintenance** run can wedge (for example on plugin lock contention) with **no per-task timeout below the ~360s session-level abort**. While it is wedged it holds its maintenance lane, so a user message queued behind it on the same session can wait minutes before being processed, even though the model is healthy. `session.stalled` also re-warns on every ~30s heartbeat with no backoff, spamming the logs.\n\nThis matches the report in #96703: an interactive session effectively hangs until a manual stop.\n\n## Why This Change Was Made\n\nTwo concrete gaps in core code (independent of any specific context-engine plugin):\n\n1. **No per-task timeout on the maintenance enqueue.** `scheduleDeferredTurnMaintenance` enqueued the maintenance worker via `enqueueCommandInLane(...)` with no options. The command queue already supports a per-task timeout (`taskTimeoutMs` → rejects with `CommandLaneTaskTimeoutError` and releases the lane), but the maintenance lane never set it.\n2. **A timed-out maintenance worker was not fenced.** `taskTimeoutMs` rejects the enqueue promise and releases the lane, but it does not stop the still-running worker. A wedged worker could later call `runtimeContext.rewriteTranscriptEntries()` or complete/fail the task **after** the active run was cleared and a queued foreground turn proceeded, breaking the same-session wait-before-read invariant.\n3. **`session.stalled` had no log backoff.** `session.stuck` and `session.long_running` already throttle repeats; `session.stalled` did not.\n\n## User Impact\n\n- A wedged turn-maintenance run is now bounded in seconds (default `120000ms`, configurable via `agents.defaults.compaction.turnMaintenanceTaskTimeoutMs`) and the lane is released, so a queued user message proceeds at ~the timeout instead of waiting for the session-level abort.\n- After timeout, late maintenance side effects are **fenced**: the runtime-owned `rewriteTranscriptEntries` wrapper and the worker's terminal complete/fail/descriptor writes become no-ops, so a non-cooperative plugin cannot corrupt session state after the foreground turn has resumed.\n- A persistently stalled session no longer floods the logs; the first `session.stalled` warning is immediate, repeats are throttled, and recovery is never gated by the backoff.\n- No behavior change for healthy maintenance runs that finish under the timeout.\n\n### Changes\n\n- `command-queue`: add an optional `onTaskTimeout` hook fired synchronously when the per-task timeout rejects, before the lane is released.\n- `context-engine-maintenance`: pass `taskTimeoutMs` + `onTaskTimeout` to the deferred maintenance enqueue; trip a per-run fence on timeout (hook + defensive trip in the timeout catch); thread the fence into the worker and the runtime-context `rewriteTranscriptEntries` wrapper (checked at entry, inside the session-manager rewrite lock, and before the runtime-transcript write) and before the worker's `completeTaskRunByRunId` / `failTaskRunByRunId` / progress writes.\n- `session.stalled`: apply the existing `session.stuck`/`session.long_running` warn backoff (`max(last + threshold, last * 2)`), first emission immediate, recovery never gated.\n- New unit coverage: queue `onTaskTimeout` hook; late rewrite fenced after timeout; timed-out task not resurrected to succeeded/failed; checkpoint-after-timeout ordering; `session.stalled` backoff. Public docs updated for the new knob.\n\n## Evidence\n\nAI-assisted PR (implemented with an AI coding agent; author reviewed and understands the change).\n\n**Static / unit validation** (this branch):\n- `tsgo:core`, `tsgo:test:src` — clean\n- `command-queue.test.ts` — 34 passed; `context-engine-maintenance.test.ts` — 27 passed (incl. fence cases); `diagnostic.test.ts` — 73 passed\n- `oxfmt --check` + oxlint on touched files — clean\n- `CHANGELOG.md` not touched (left for maintainers at landing)\n\n**Real runtime reproduction (end-to-end, in a container).** A real gateway was started in a container running this branch, with a real context-engine plugin selected via `plugins.slots.contextEngine` whose `info.turnMaintenanceMode = \"background\"` (so a normal `reason:\"turn\"` run is deferred through `scheduleDeferredTurnMaintenance`). Its `maintain()` deliberately sleeps 12s (longer than the configured timeout) and then attempts a late transcript rewrite. Config: `agents.defaults.compaction.turnMaintenanceTaskTimeoutMs = 5000`. Two real agent turns were run on one session. Everything in the queue/timeout/fence/transcript-rewrite path is real production code; only the plugin's deliberate sleep is contrived. Logs redacted (provider/model/host/ids replaced with placeholders):\n\n```\n[T+0.00s] [context-engine] deferred turn maintenance queued taskId=<id-1> sessionKey=<session> lane=context-engine-turn-maintenance:<session>\n[T+0.00s] [wedge] maintain#1 START                       # deferred maintenance begins, will sleep 12s\n[T+2.87s] (queued) second turn is waiting behind the in-flight deferred maintenance on the session lane\n[T+5.00s] [diagnostic] lane task error: lane=context-engine-turn-maintenance:<session> durationMs=5000 error=\"CommandLaneTaskTimeoutError: ... task timed out after 5000ms\"\n[T+5.00s] [agent/embedded] deferred context engine maintenance timed out: sessionKey=<session> taskId=<id-1> taskTimeoutMs=5000\n[T+5.06s] [agent/embedded] embedded run start: <turn-2>   # queued turn RELEASED at the 5s timeout — NOT after the 12s wedge, NOT after the ~360s session abort\n[T+12.00s] [wedge] maintain#1 WOKE after 12000ms sleep, attempting late rewrite   # the wedged worker finally wakes, 7s after the lane was released\n[T+12.01s] [wedge] maintain#1 late rewrite result: {\"changed\":false,\"bytesFreed\":0,\"rewrittenEntries\":0,\"reason\":\"maintenance fenced after timeout\"}   # FENCED -> no-op\n```\n\nFence scope is correct: the second turn's **foreground** maintenance (not timed out) is **not** fenced (`reason: \"no replacements requested\"`); only the timed-out **deferred** runs are fenced. A scripted reproduction is available on request.\n\nCloses #96703\n",
-        "branch": "fix/turn-maintenance-per-task-timeout",
-        "head_sha": "c2bec2d33f53dd4fa4b75d4ec7744b1cabee9d98",
-        "author": "jerry-xin",
-        "labels": [
-          "docs",
-          "agents",
-          "size: L",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "docs/reference/session-management-compaction.md",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/context-engine-maintenance.test.ts",
-            "additions": 426,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
-            "additions": 142,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
-            "additions": 83,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/transcript-rewrite.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.help.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.labels.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.agent-defaults.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-defaults.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic-session-recovery-coordinator.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic-session-state.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic.test.ts",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.test.ts",
-            "additions": 40,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.types.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 16,
-        "additions": 823,
-        "deletions": 18,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97175",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97175.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 100,
-          "gatingTotal": 95,
-          "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:97175:4815983771:2026-06-27T08:01:01Z:re_review",
-      "comment_id": "4815983771",
-      "comment_version_key": "4815983771:2026-06-27T08:01:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97175#issuecomment-4815983771",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97175,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-27T08:01:01Z",
-      "comment_updated_at": "2026-06-27T08:01:01Z",
+      "comment_created_at": "2026-06-27T08:06:32Z",
+      "comment_updated_at": "2026-06-27T08:06:32Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -257,204 +73,84 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(context-engine): bound deferred turn maintenance with a per-task timeout (AI-assisted)",
-        "body": "## What Problem This Solves\n\nA post-turn context-engine **deferred turn maintenance** run can wedge (for example on plugin lock contention) with **no per-task timeout below the ~360s session-level abort**. While it is wedged it holds its maintenance lane, so a user message queued behind it on the same session can wait minutes before being processed, even though the model is healthy. `session.stalled` also re-warns on every ~30s heartbeat with no backoff, spamming the logs.\n\nThis matches the report in #96703: an interactive session effectively hangs until a manual stop.\n\n## Why This Change Was Made\n\nTwo concrete gaps in core code (independent of any specific context-engine plugin):\n\n1. **No per-task timeout on the maintenance enqueue.** `scheduleDeferredTurnMaintenance` enqueued the maintenance worker via `enqueueCommandInLane(...)` with no options. The command queue already supports a per-task timeout (`taskTimeoutMs` → rejects with `CommandLaneTaskTimeoutError` and releases the lane), but the maintenance lane never set it.\n2. **A timed-out maintenance worker was not fenced.** `taskTimeoutMs` rejects the enqueue promise and releases the lane, but it does not stop the still-running worker. A wedged worker could later call `runtimeContext.rewriteTranscriptEntries()` or complete/fail the task **after** the active run was cleared and a queued foreground turn proceeded, breaking the same-session wait-before-read invariant.\n3. **`session.stalled` had no log backoff.** `session.stuck` and `session.long_running` already throttle repeats; `session.stalled` did not.\n\n## User Impact\n\n- A wedged turn-maintenance run is now bounded in seconds (default `120000ms`, configurable via `agents.defaults.compaction.turnMaintenanceTaskTimeoutMs`) and the lane is released, so a queued user message proceeds at ~the timeout instead of waiting for the session-level abort.\n- After timeout, late maintenance side effects are **fenced**: the runtime-owned `rewriteTranscriptEntries` wrapper and the worker's terminal complete/fail/descriptor writes become no-ops, so a non-cooperative plugin cannot corrupt session state after the foreground turn has resumed.\n- A persistently stalled session no longer floods the logs; the first `session.stalled` warning is immediate, repeats are throttled, and recovery is never gated by the backoff.\n- No behavior change for healthy maintenance runs that finish under the timeout.\n\n### Changes\n\n- `command-queue`: add an optional `onTaskTimeout` hook fired synchronously when the per-task timeout rejects, before the lane is released.\n- `context-engine-maintenance`: pass `taskTimeoutMs` + `onTaskTimeout` to the deferred maintenance enqueue; trip a per-run fence on timeout (hook + defensive trip in the timeout catch); thread the fence into the worker and the runtime-context `rewriteTranscriptEntries` wrapper (checked at entry, inside the session-manager rewrite lock, and before the runtime-transcript write) and before the worker's `completeTaskRunByRunId` / `failTaskRunByRunId` / progress writes.\n- `session.stalled`: apply the existing `session.stuck`/`session.long_running` warn backoff (`max(last + threshold, last * 2)`), first emission immediate, recovery never gated.\n- New unit coverage: queue `onTaskTimeout` hook; late rewrite fenced after timeout; timed-out task not resurrected to succeeded/failed; checkpoint-after-timeout ordering; `session.stalled` backoff. Public docs updated for the new knob.\n\n## Evidence\n\nAI-assisted PR (implemented with an AI coding agent; author reviewed and understands the change).\n\n**Static / unit validation** (this branch):\n- `tsgo:core`, `tsgo:test:src` — clean\n- `command-queue.test.ts` — 34 passed; `context-engine-maintenance.test.ts` — 27 passed (incl. fence cases); `diagnostic.test.ts` — 73 passed\n- `oxfmt --check` + oxlint on touched files — clean\n- `CHANGELOG.md` not touched (left for maintainers at landing)\n\n**Real runtime reproduction (end-to-end, in a container).** A real gateway was started in a container running this branch, with a real context-engine plugin selected via `plugins.slots.contextEngine` whose `info.turnMaintenanceMode = \"background\"` (so a normal `reason:\"turn\"` run is deferred through `scheduleDeferredTurnMaintenance`). Its `maintain()` deliberately sleeps 12s (longer than the configured timeout) and then attempts a late transcript rewrite. Config: `agents.defaults.compaction.turnMaintenanceTaskTimeoutMs = 5000`. Two real agent turns were run on one session. Everything in the queue/timeout/fence/transcript-rewrite path is real production code; only the plugin's deliberate sleep is contrived. Logs redacted (provider/model/host/ids replaced with placeholders):\n\n```\n[T+0.00s] [context-engine] deferred turn maintenance queued taskId=<id-1> sessionKey=<session> lane=context-engine-turn-maintenance:<session>\n[T+0.00s] [wedge] maintain#1 START                       # deferred maintenance begins, will sleep 12s\n[T+2.87s] (queued) second turn is waiting behind the in-flight deferred maintenance on the session lane\n[T+5.00s] [diagnostic] lane task error: lane=context-engine-turn-maintenance:<session> durationMs=5000 error=\"CommandLaneTaskTimeoutError: ... task timed out after 5000ms\"\n[T+5.00s] [agent/embedded] deferred context engine maintenance timed out: sessionKey=<session> taskId=<id-1> taskTimeoutMs=5000\n[T+5.06s] [agent/embedded] embedded run start: <turn-2>   # queued turn RELEASED at the 5s timeout — NOT after the 12s wedge, NOT after the ~360s session abort\n[T+12.00s] [wedge] maintain#1 WOKE after 12000ms sleep, attempting late rewrite   # the wedged worker finally wakes, 7s after the lane was released\n[T+12.01s] [wedge] maintain#1 late rewrite result: {\"changed\":false,\"bytesFreed\":0,\"rewrittenEntries\":0,\"reason\":\"maintenance fenced after timeout\"}   # FENCED -> no-op\n```\n\nFence scope is correct: the second turn's **foreground** maintenance (not timed out) is **not** fenced (`reason: \"no replacements requested\"`); only the timed-out **deferred** runs are fenced. A scripted reproduction is available on request.\n\nCloses #96703\n",
-        "branch": "fix/turn-maintenance-per-task-timeout",
-        "head_sha": "c2bec2d33f53dd4fa4b75d4ec7744b1cabee9d98",
-        "author": "jerry-xin",
+        "title": "fix(openai-responses): bound SSE response reads via buildGuardedModelFetch",
+        "body": "## What Problem This Solves\n\nThe openai-responses provider creates an OpenAI SDK client without a custom `fetch` option, so all SSE streaming responses from the OpenAI API are read without any byte cap. A buggy or hostile endpoint returning `text/event-stream` with a large or never-ending body is fully buffered into memory by the SDK internal HTTP layer — an OOM / DoS vector.\n\nThis injects `buildGuardedModelFetch(model)` as the SDK `fetch` option at `src/llm/providers/openai-responses.ts:173`, matching the existing pattern used by the transport-stream path (`openai-transport-stream.ts:2016`). The shared `sanitizeOpenAISdkSseResponse` in `provider-transport-fetch.ts` now caps oversized SSE buffer boundaries (64 KiB per unterminated event) and oversized JSON bodies synthesized into SSE (16 MiB cumulative, merged in #96989), so oversized SSE streams error instead of accumulating memory.\n\n## Changes\n\nNo new abstraction — reuses the existing `buildGuardedModelFetch` helper from `src/agents/provider-transport-fetch.ts`.\n\n- `src/llm/providers/openai-responses.ts:176` — inject `fetch: buildGuardedModelFetch(model)` into the OpenAI SDK constructor, replacing the SDK default fetch with the guarded provider fetch pipeline (SSRF guard, timeout, retry limiting, SSE sanitization with byte caps).\n\n## Design Rationale\n\n**Why custom fetch injection?** The OpenAI SDK (openai v6.39.1) exposes `ClientOptions.fetch` and stores it for all HTTP calls. Passing `buildGuardedModelFetch(model)` there intercepts every SDK-originated request with SSRF guard, timeout, retry limiting, and SSE sanitization — the same protection the transport-stream path has (`openai-transport-stream.ts:2016`).\n\n**Why `buildGuardedModelFetch(model)` without resolved base URL?** Unlike the Azure provider, `openai-responses` does not have a multi-source URL resolution cascade — the SDK constructor gets `model.baseUrl` directly. The model’s own `baseUrl` is the correct origin for SSRF policy. Sibling providers with more complex resolution (Azure) use `{...model, baseUrl}` with the resolved URL; this provider follows the simpler pattern.\n\n**Why no non-OK body cap?** The shared `sanitizeOpenAISdkSseResponse` returns `!response.ok` bodies unchanged. For the openai-responses provider, the OpenAI API error responses are always small JSON objects (< 1 KiB). A follow-up shared-guard fix (tracked in azure-openai-responses PR #97146) will add a non-OK cap for all providers.\n\n## Real behavior proof\n\nReal-server proof (node:http on 127.0.0.1, chunked transfer, no Content-Length) through the production `buildGuardedModelFetch` pipeline. Covers 64 KiB SSE buffer cap, 16 MiB JSON synthesis cap, and happy path. Post-#96989 merge — all caps are active on main.\n\n```\n=== Real-server proof: openai-responses fetch pipeline ===\n\n  PASS  1/4 SSE buffer cap: thrown + pulled < total bytes -- serverSent=524288 B, cap=64 KiB\n  PASS  2/4 JSON synthesis cap: thrown on 17 MiB > 16 MiB cap -- 17 MiB > 16 MiB cap\n  PASS  3/4 negative control: unbounded read buffers PAST cap -- buffered=1048576 B >= 1 MiB\n  PASS  4/4 happy path: small SSE passes through -- bytes=39\n\n  Results: 4 passed, 0 failed ===\n```\n\nTest suite: 78/78 provider-transport-fetch tests pass (including new openai-responses-specific inline test).\n\n- **Behavior addressed**: The openai-responses provider now routes all HTTP requests through `buildGuardedModelFetch`, which provides SSRF guard, timeout, retry limiting, SSE buffer boundary cap (64 KiB), and JSON synthesis cap (16 MiB).\n- **Real environment tested**: Linux x86_64, Node 22, real node:http server on 127.0.0.1\n- **Exact steps or command run after this patch**:\n  ```bash\n  node --import tsx _proof_openai_responses_bounded.mts\n  ```\n- **Evidence after fix**: 4/4 assertions pass with quantified bytes: (1) 64 KiB SSE buffer cap fires, serverSent=524288 B, (2) 16 MiB JSON synthesis cap fires, (3) negative control: unbuffered 1 MiB past cap, (4) 39 B small SSE passes through.\n- **Observed result after fix**: All three protection layers active through `buildGuardedModelFetch` for openai-responses provider: (1) 64 KiB SSE buffer boundary cap (quantified: serverSent > cap), (2) 16 MiB JSON synthesis cap (quantified: 17 MiB > 16 MiB), (3) negative control: guard disabled = 1 MiB fully buffered, (4) SSRF guard, timeout, retry limiting. Small SSE (39 B) passes through correctly.\n- **What was not tested**: Live OpenAI API endpoint (proof exercises the same production fetch pipeline against the same attack shape).\n\n## Out of scope\n\nSymmetric PRs for azure-openai-responses (#97070) and openai-completions (#97071). The transport-stream path in `openai-transport-stream.ts` already uses `buildGuardedModelFetch`.\n\n## Risk checklist\n\n- User-visible behavior change? No — existing request flows continue to work. Non-OK API error bodies still bypass the SSE cap (tracked in #97146).\n- Config/env/migration change? No.\n- Security/auth/secrets/network/tool-execution change? Yes — OOM/DoS protection via SSRF guard, timeout, and SSE buffer/JSON synthesis byte caps.\n- Highest-risk area: SSRF policy enforcement from `buildGuardedModelFetch` could reject previously-allowed URLs. This is the same guard already active in the transport-stream path.",
+        "branch": "fix/sse-bounded-openai-responses",
+        "head_sha": "b699e491ea6fac39f9a2f06c60225825bb40caa0",
+        "author": "wangmiao0668000666",
         "labels": [
-          "docs",
           "agents",
-          "size: L",
+          "size: S",
           "proof: sufficient",
-          "P1",
+          "P2",
           "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "docs/reference/session-management-compaction.md",
-            "additions": 6,
+            "path": "src/agents/provider-transport-fetch.test.ts",
+            "additions": 52,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/context-engine-maintenance.test.ts",
-            "additions": 426,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
-            "additions": 142,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
-            "additions": 83,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/transcript-rewrite.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.help.ts",
+            "path": "src/llm/providers/openai-responses.ts",
             "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.labels.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.agent-defaults.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-defaults.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic-session-recovery-coordinator.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic-session-state.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic.test.ts",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.test.ts",
-            "additions": 40,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.types.ts",
-            "additions": 7,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 16,
-        "additions": 823,
-        "deletions": 18,
+        "changedFiles": 2,
+        "additions": 54,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97175",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97175.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97139",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97139.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 100,
-          "gatingTotal": 95,
+          "total": 96,
+          "gatingTotal": 91,
           "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 29,
+            "SUCCESS": 62,
+            "CANCELLED": 1,
+            "SKIPPED": 32,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "Scan changed paths (precise):CANCELLED"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "Scan changed paths (precise):CANCELLED"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
       "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:97175:4815745160:2026-06-27T07:04:23Z:re_review",
-      "comment_id": "4815745160",
-      "comment_version_key": "4815745160:2026-06-27T07:04:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97175#issuecomment-4815745160",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97175,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-27T07:04:23Z",
-      "comment_updated_at": "2026-06-27T07:04:23Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2538,
+    "total_ms": 5038,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 338
+        "ms": 2374
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1653
+        "ms": 2349
       },
       {
         "name": "classify_comment_commands",
@@ -470,7 +166,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 517
+        "ms": 301
       },
       {
         "name": "append_ledger",
