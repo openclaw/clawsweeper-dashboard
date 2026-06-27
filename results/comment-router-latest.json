@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-27T11:06:08.187Z",
+  "generated_at": "2026-06-27T11:07:09.412Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-27T08:06:07.844Z",
+  "since": "2026-06-27T08:07:06.659Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97237
+    97227
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,124 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97227:4816491709:2026-06-27T11:07:03Z:clawsweeper_needs_human",
+      "comment_id": "4816491709",
+      "comment_version_key": "4816491709:2026-06-27T11:07:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97227#issuecomment-4816491709",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97227,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-27T09:47:26Z",
+      "comment_updated_at": "2026-06-27T11:07:03Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Human review remains because the remaining blockers are contributor real behavior proof and maintainer scope judgment for the linked P1 issue, not a narrow automated code repair.; Cleared: The diff only changes cron runtime flag propagation and a unit test assertion, with no dependency, workflow, credential, package, or secret-handling changes. (sha=13d33c4481c4566f3f2e15c593bab6f2c98ae794)",
+      "review_summary": "The PR passes `cleanupCliLiveSessionOnRunEnd` to isolated cron CLI runs and extends the isolated session-key test to assert that propagation.\n\nPR surface: Source +1, Tests +2. Total +3 across 2 files.\n\nReproducibility: yes. at source level: current main and the latest release omit the existing live-session cleanup flag from the isolated cron CLI branch, and the linked issue reports worker accumulation under cron load. I did not run a live repeated-cron process-count reproduction in this read-only review.",
+      "review_followup": "- [P1] Human review remains because the remaining blockers are contributor real behavior proof and maintainer scope judgment for the linked P1 issue, not a narrow automated code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "13d33c4481c4566f3f2e15c593bab6f2c98ae794",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): propagate cleanupCliLiveSessionOnRunEnd to isolated cron CLI branch",
+        "body": "## What Problem This Solves\n\nIsolated cron CLI workers (`src/cron/isolated-agent/run-executor.ts` at line ~306) call `runCliAgent` without passing `cleanupCliLiveSessionOnRunEnd`, so worker processes spawned by CLI live sessions during cron runs are never cleaned up after the run completes. Over time, stale worker processes accumulate on the host, causing high load and slow responses.\n\nThe cleanup contract already exists in the CLI runner types and implementation (`cli-runner/types.ts`, `cli-runner.ts`), but was not wired for the isolated cron CLI code path.\n\nFixes #76171\n\n## Why This Change Was Made\n\nAdded `cleanupCliLiveSessionOnRunEnd: params.job.sessionTarget === \"isolated\"` to the `runCliAgent` call in `src/cron/isolated-agent/run-executor.ts`. This uses the existing session-target check (`\"isolated\"` when the job runs in isolated mode) to signal that the CLI live session should be cleaned up at run end — exactly the same pattern used elsewhere in the codebase.\n\nNo other changes are needed: the CLI runner already handles the cleanup when this flag is set.\n\n## User Impact\n\nUsers running cron jobs with isolated session targets (`sessionTarget: \"isolated\"`) would previously see growing process counts and degrading host performance after repeated cron cycles. After this fix, each isolated cron CLI worker cleans up its live sessions at run end, preventing stale process accumulation.\n\nNo impact on non-isolated cron jobs or other run modes.\n\n### Fix scope and issue relationship\n\n**This PR fully fixes #76171** — it addresses the canonical root cause identified by multiple contributors and confirmed by ClawSweeper source-level review. The only missing piece was `cleanupCliLiveSessionOnRunEnd` not being propagated to the isolated cron CLI branch in `runCliAgent`. This flag triggers `closeClaudeLiveSessionForContext` → `closeLiveSession` → `session.managedRun.cancel()` → worker subprocess exits cleanly.\n\nThe embedded cron branch already had its corresponding cleanup (`cleanupBundleMcpOnRunEnd` → `retireSessionMcpRuntimeForSessionKey`). The adjacent `cleanupBundleMcpOnRunEnd` (process-level `closeMcpLoopbackServer`) is intentionally NOT added to the CLI branch — it would over-close a shared loopback server and break concurrent cron runs' MCP tool calls. That's a separate concern tracked by PR #85241.\n\n## Evidence\n\n### Code-level proof: before (main) vs after (this fix)\n\n`src/cron/isolated-agent/run-executor.ts` — CLI branch:\n\n```\nBEFORE (main):  const result = await runCliAgent({\n                  sessionId: ...,\n                  sessionKey: ...,\n                  ...  // NO cleanup flag — workers never exit\n                });\n\nAFTER (fix):    const result = await runCliAgent({\n                  sessionId: ...,\n                  sessionKey: ...,\n                  cleanupCliLiveSessionOnRunEnd: params.job.sessionTarget === \"isolated\",\n                  ...  // cleanup flag present — workers exit cleanly\n                });\n```\n\n### Cleanup contract (already exists, now wired up)\n\n`src/agents/cli-runner/types.ts:144`: `cleanupCliLiveSessionOnRunEnd?: boolean`\n\n`src/agents/cli-runner.ts:467-474`:\n```typescript\nif (params.cleanupCliLiveSessionOnRunEnd === true) {\n  const { closeClaudeLiveSessionForContext } =\n    await import(\"./cli-runner/claude-live-session.js\");\n  await closeClaudeLiveSessionForContext(context);\n  // → closeLiveSession → session.managedRun.cancel() → worker subprocess exits\n}\n```\n\n### Test evidence: CLI branch now passes the cleanup flag\n\n```\n$ pnpm test src/cron/isolated-agent/run.session-key-isolation.test.ts --reporter=verbose\n\n ✓ uses a run-scoped key for embedded isolated cron execution\n ✓ keeps embedded isolated cron prompt-cache affinity stable across run sessions\n ✓ keeps explicit session-bound cron execution on the requested session key\n ✓ uses a run-scoped key for CLI isolated cron execution\n   → asserts runRequest.cleanupCliLiveSessionOnRunEnd === true  ← NEW\n ✓ runs externally sourced CLI hook turns\n\n Test Files  1 passed (1)\n      Tests  5 passed (5)\n```\n\n### Test evidence: `closeClaudeLiveSessionForContext` is actually invoked when flag is set\n\n```\n$ pnpm test src/agents/cli-runner.before-agent-reply-cron.test.ts --reporter=verbose\n\n ✓ can close temporary CLI live sessions after a run\n   → passes cleanupCliLiveSessionOnRunEnd: true to runCliAgent\n   → asserts closeClaudeLiveSessionForContextMock called exactly once\n ✓ can close temporary bundle MCP loopback resources after a run\n ✓ preserves confirmed delivery when bundle MCP cleanup fails\n ✓ surfaces bundle MCP cleanup failures when nothing was delivered\n ... (13 passed total)\n```\n\n### Type check and lint\n\n- `pnpm check:test-types` — passed\n- No lock file changes (`git diff --stat origin/main...HEAD | grep -E 'pnpm-lock|npm-shrinkwrap|package-lock'` → no output)\n\nBehavior addressed: Isolated cron CLI workers now set `cleanupCliLiveSessionOnRunEnd` when `sessionTarget === \"isolated\"`, ensuring Claude CLI subprocesses are terminated after each cron run.\n\nReal environment tested: Linux Node 24, local test suite with full mock isolation of CLI subprocess spawning.\n\nWhat was not tested: Full end-to-end process-count accumulation over multiple cron cycles would require a live deployment with real cron jobs firing. The unit-level proof covers the complete contract chain: parameter propagation → cleanup invocation → subprocess termination.\n",
+        "branch": "fix/issue-76171-cron-worker-cleanup",
+        "head_sha": "13d33c4481c4566f3f2e15c593bab6f2c98ae794",
+        "author": "xialonglee",
+        "labels": [
+          "size: XS",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cron/isolated-agent/run-executor.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.session-key-isolation.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 3,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97227",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97227.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 65,
+            "SKIPPED": 33,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 612,
+    "total_ms": 3265,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 332
+        "ms": 364
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2375
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -56,7 +154,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 268
+        "ms": 500
       },
       {
         "name": "append_ledger",
