@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-28T14:43:42.327Z",
+  "generated_at": "2026-06-28T14:43:59.689Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-28T11:43:40.458Z",
+  "since": "2026-06-28T11:43:59.025Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     96889
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4826431563
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 6,
-  "commands_seen": 3,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -37,198 +39,12 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/96889#issuecomment-4805730686",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 96889,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 97425,
+      "author": "ly-wang19",
+      "author_id": 94427531,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-26T01:53:38Z",
-      "comment_updated_at": "2026-06-28T14:43:37Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- No ClawSweeper repair job is needed because there are no actionable patch findings; maintainer review and required checks should gate merge.; Cleared: The diff is security-positive, reuses an existing bounded reader, and does not add dependency, workflow, lockfile, permission, secret-handling, or downloaded-code execution surface. (sha=2149eff05f088db5ce02890ac08fc35eeb3e5f76)",
-      "review_summary": "The branch routes MiniMax video task-submit, status-poll, and file-metadata JSON responses through `readProviderJsonResponse` and updates MiniMax video tests to exercise the real bounded reader.\n\nPR surface: Source +14, Tests +47. Total +61 across 3 files.\n\nReproducibility: yes. source inspection gives a high-confidence path: current main directly calls `response.json()` on the MiniMax video task-submit, status-poll, and metadata success responses. I did not rerun the loopback harness in this read-only review, but the PR body includes terminal proof with bounded-reader cancellation and an unbounded negative control.",
-      "review_followup": "- No ClawSweeper repair job is needed because there are no actionable patch findings; maintainer review and required checks should gate merge.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "2149eff05f088db5ce02890ac08fc35eeb3e5f76",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(minimax): bound video control response reads",
-        "body": "## What Problem This Solves\n\nThe MiniMax video provider read several **success/control-path** JSON responses with unbounded `await response.json()`, so a misbehaving or hostile MiniMax endpoint could stream an arbitrarily large body into memory before parsing and exhaust the process (OOM / hang). The HTTP error path is already bounded by `assertOkOrThrowHttpError`; this closes the matching gap on the MiniMax video success/control side.\n\nThree video JSON reads are affected:\n\n- `extensions/minimax/video-generation-provider.ts` — video generation **task submit** response\n- `extensions/minimax/video-generation-provider.ts` — video generation **status poll** response\n- `extensions/minimax/video-generation-provider.ts` — video generation `file_id` metadata response before the binary download\n\nMiniMax TTS is already bounded and is left unchanged. MiniMax image response sizing is intentionally left out of this PR because image responses can carry large inline base64 payloads and should use an image-sized cap in the broader image-response hardening work.\n\n## Changes\n\n- Read all three MiniMax video success/control JSON bodies through the shared bounded reader `readProviderJsonResponse` (16 MiB cap), which cancels the underlying stream on overflow instead of buffering the whole payload.\n- No new abstraction added; this reuses the existing plugin-SDK helper already used by sibling provider paths.\n- Keep the MiniMax provider HTTP tests' `readProviderJsonResponse` implementation real via `importActual`, while continuing to mock transport/auth seams.\n- Update MiniMax video tests to use real `Response` JSON fixtures and add a focused `file_id` metadata overflow regression proving the metadata path fails before attempting the binary download.\n- Remove the MiniMax image-provider change from this branch so image-sized response caps can be handled by the broader image hardening PR without conflicting with this video-focused fix.\n\n## Real behavior proof\n\n- **Behavior addressed:** an untrusted MiniMax video success/control JSON response that streams more than 16 MiB must be rejected without buffering the full body; small/legitimate responses must still parse.\n- **Real environment tested:** a real `node:http` loopback server streaming a >16 MiB JSON body with **no Content-Length** (chunked), fetched over a real TCP socket, driving the exact export the patched video paths now call (`readProviderJsonResponse`).\n- **Exact steps:**\n  1. Loopback server streams ~20 MiB of an open JSON object body (no Content-Length).\n  2. `fetch()` the body over TCP, then call `readProviderJsonResponse(response, label)` with the same labels the patched MiniMax video sites pass.\n  3. Assert it throws `... JSON response exceeds 16777216 bytes` and that the client cancelled the socket before the full body was delivered.\n  4. Negative control: emulate the removed unbounded `await response.json()` path and confirm it buffers past the 16 MiB cap.\n  5. Happy path: a small JSON object still parses correctly through the bounded reader.\n- **Observed result:** bounded throw fires, the socket is aborted, the server never delivers the full body, the unbounded control buffers past the cap, and the happy path parses. See Evidence.\n- **What was not tested:** no live calls to the real MiniMax API (no credentials); loopback upstream proof exercises the real TCP + fetch + reader path.\n\n## Evidence\n\nOriginal loopback proof:\n\n```\n$ node --import tsx proof-minimax-bound.mts\nPASS: [MiniMax video generation failed] bounded throw on oversize stream -- msg=\"MiniMax video generation failed: JSON response exceeds 16777216 bytes\"\nPASS: [MiniMax video generation failed] stream cancelled (socket aborted by client) -- aborted=true\nPASS: [MiniMax video generation failed] bytesSent (18808858) < full body (20971520) -- bytesSent=18808858\nPASS: negative control: unbounded read buffers PAST the 16 MiB cap -- buffered=16823166 > cap=16777216\nPASS: happy path: small JSON parses through bounded reader -- parsed.task_id=task-123\n\nALL PROOFS PASSED\n```\n\nRefreshed current-head focused regression after adding the `file_id` metadata bound and narrowing this PR to MiniMax video:\n\n```\n$ node scripts/run-vitest.mjs extensions/minimax/video-generation-provider.test.ts -- --run\n\n Test Files  1 passed (1)\n      Tests  6 passed (6)\n```\n\n```\n$ git diff --check\n# no output\n```\n\nKnown validation note: `node scripts/run-tsgo.mjs -p extensions/minimax/tsconfig.json --incremental false` currently fails in existing `extensions/minimax/oauth.ts` imports from `openclaw/plugin-sdk/number-runtime`; that file is outside this PR's touched surface.\n\n**Label**: security\n\n_AI-assisted._\n\n---\n\n**Post-rebase scope note:** This PR is video-only and unchanged in intent. The MiniMax image-response bound referenced above as \"future work\" has since landed on `main`, so there is no remaining image hunk here — this PR bounds only the three MiniMax video success/control JSON reads (`video-generation-provider.ts`: task submit, status poll, and `file_id` metadata).\n",
-        "branch": "fix/bound-minimax",
-        "head_sha": "2149eff05f088db5ce02890ac08fc35eeb3e5f76",
-        "author": "alix-007",
-        "labels": [
-          "size: S",
-          "extensions: minimax",
-          "proof: sufficient",
-          "P1",
-          "status: 👀 ready for maintainer look",
-          "rating: 🦀 challenger crab"
-        ],
-        "files": [
-          {
-            "path": "extensions/minimax/provider-http.test-helpers.ts",
-            "additions": 28,
-            "deletions": 24,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/minimax/video-generation-provider.test.ts",
-            "additions": 85,
-            "deletions": 38,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/minimax/video-generation-provider.ts",
-            "additions": 13,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/anthropic.ts",
-            "additions": 43,
-            "deletions": 24,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/google-shared.convert.test.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/google-shared.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/mistral.test.ts",
-            "additions": 105,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/mistral.ts",
-            "additions": 2,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-completions.test.ts",
-            "additions": 197,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-completions.ts",
-            "additions": 2,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-responses-shared.test.ts",
-            "additions": 91,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-responses-shared.ts",
-            "additions": 2,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/tool-result-text.test.ts",
-            "additions": 126,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/llm/providers/tool-result-text.ts",
-            "additions": 48,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/logging/tool-result-serialization.ts",
-            "additions": 194,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 126,
-        "deletions": 65,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96889",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96889.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 89,
-          "gatingTotal": 84,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 32,
-            "SUCCESS": 53,
-            "IN_PROGRESS": 2
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96889:4826421447:2026-06-28T14:37:34Z:re_review",
-      "comment_id": "4826421447",
-      "comment_version_key": "4826421447:2026-06-28T14:37:34Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96889#issuecomment-4826421447",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96889,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-28T14:37:34Z",
-      "comment_updated_at": "2026-06-28T14:37:34Z",
+      "comment_created_at": "2026-06-28T14:41:33Z",
+      "comment_updated_at": "2026-06-28T14:41:33Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -254,139 +70,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(minimax): bound video control response reads",
-        "body": "## What Problem This Solves\n\nThe MiniMax video provider read several **success/control-path** JSON responses with unbounded `await response.json()`, so a misbehaving or hostile MiniMax endpoint could stream an arbitrarily large body into memory before parsing and exhaust the process (OOM / hang). The HTTP error path is already bounded by `assertOkOrThrowHttpError`; this closes the matching gap on the MiniMax video success/control side.\n\nThree video JSON reads are affected:\n\n- `extensions/minimax/video-generation-provider.ts` — video generation **task submit** response\n- `extensions/minimax/video-generation-provider.ts` — video generation **status poll** response\n- `extensions/minimax/video-generation-provider.ts` — video generation `file_id` metadata response before the binary download\n\nMiniMax TTS is already bounded and is left unchanged. MiniMax image response sizing is intentionally left out of this PR because image responses can carry large inline base64 payloads and should use an image-sized cap in the broader image-response hardening work.\n\n## Changes\n\n- Read all three MiniMax video success/control JSON bodies through the shared bounded reader `readProviderJsonResponse` (16 MiB cap), which cancels the underlying stream on overflow instead of buffering the whole payload.\n- No new abstraction added; this reuses the existing plugin-SDK helper already used by sibling provider paths.\n- Keep the MiniMax provider HTTP tests' `readProviderJsonResponse` implementation real via `importActual`, while continuing to mock transport/auth seams.\n- Update MiniMax video tests to use real `Response` JSON fixtures and add a focused `file_id` metadata overflow regression proving the metadata path fails before attempting the binary download.\n- Remove the MiniMax image-provider change from this branch so image-sized response caps can be handled by the broader image hardening PR without conflicting with this video-focused fix.\n\n## Real behavior proof\n\n- **Behavior addressed:** an untrusted MiniMax video success/control JSON response that streams more than 16 MiB must be rejected without buffering the full body; small/legitimate responses must still parse.\n- **Real environment tested:** a real `node:http` loopback server streaming a >16 MiB JSON body with **no Content-Length** (chunked), fetched over a real TCP socket, driving the exact export the patched video paths now call (`readProviderJsonResponse`).\n- **Exact steps:**\n  1. Loopback server streams ~20 MiB of an open JSON object body (no Content-Length).\n  2. `fetch()` the body over TCP, then call `readProviderJsonResponse(response, label)` with the same labels the patched MiniMax video sites pass.\n  3. Assert it throws `... JSON response exceeds 16777216 bytes` and that the client cancelled the socket before the full body was delivered.\n  4. Negative control: emulate the removed unbounded `await response.json()` path and confirm it buffers past the 16 MiB cap.\n  5. Happy path: a small JSON object still parses correctly through the bounded reader.\n- **Observed result:** bounded throw fires, the socket is aborted, the server never delivers the full body, the unbounded control buffers past the cap, and the happy path parses. See Evidence.\n- **What was not tested:** no live calls to the real MiniMax API (no credentials); loopback upstream proof exercises the real TCP + fetch + reader path.\n\n## Evidence\n\nOriginal loopback proof:\n\n```\n$ node --import tsx proof-minimax-bound.mts\nPASS: [MiniMax video generation failed] bounded throw on oversize stream -- msg=\"MiniMax video generation failed: JSON response exceeds 16777216 bytes\"\nPASS: [MiniMax video generation failed] stream cancelled (socket aborted by client) -- aborted=true\nPASS: [MiniMax video generation failed] bytesSent (18808858) < full body (20971520) -- bytesSent=18808858\nPASS: negative control: unbounded read buffers PAST the 16 MiB cap -- buffered=16823166 > cap=16777216\nPASS: happy path: small JSON parses through bounded reader -- parsed.task_id=task-123\n\nALL PROOFS PASSED\n```\n\nRefreshed current-head focused regression after adding the `file_id` metadata bound and narrowing this PR to MiniMax video:\n\n```\n$ node scripts/run-vitest.mjs extensions/minimax/video-generation-provider.test.ts -- --run\n\n Test Files  1 passed (1)\n      Tests  6 passed (6)\n```\n\n```\n$ git diff --check\n# no output\n```\n\nKnown validation note: `node scripts/run-tsgo.mjs -p extensions/minimax/tsconfig.json --incremental false` currently fails in existing `extensions/minimax/oauth.ts` imports from `openclaw/plugin-sdk/number-runtime`; that file is outside this PR's touched surface.\n\n**Label**: security\n\n_AI-assisted._\n\n---\n\n**Post-rebase scope note:** This PR is video-only and unchanged in intent. The MiniMax image-response bound referenced above as \"future work\" has since landed on `main`, so there is no remaining image hunk here — this PR bounds only the three MiniMax video success/control JSON reads (`video-generation-provider.ts`: task submit, status poll, and `file_id` metadata).\n",
-        "branch": "fix/bound-minimax",
-        "head_sha": "2149eff05f088db5ce02890ac08fc35eeb3e5f76",
-        "author": "alix-007",
-        "labels": [
-          "size: S",
-          "extensions: minimax",
-          "proof: sufficient",
-          "P1",
-          "status: 👀 ready for maintainer look",
-          "rating: 🦀 challenger crab"
-        ],
-        "files": [
-          {
-            "path": "extensions/minimax/provider-http.test-helpers.ts",
-            "additions": 28,
-            "deletions": 24,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/minimax/video-generation-provider.test.ts",
-            "additions": 85,
-            "deletions": 38,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/minimax/video-generation-provider.ts",
-            "additions": 13,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 126,
-        "deletions": 65,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96889",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96889.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 89,
-          "gatingTotal": 84,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 32,
-            "SUCCESS": 53,
-            "IN_PROGRESS": 2
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96889:4806849654:2026-06-26T06:11:55Z:re_review",
-      "comment_id": "4806849654",
-      "comment_version_key": "4806849654:2026-06-26T06:11:55Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96889#issuecomment-4806849654",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 96889,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-26T06:11:55Z",
-      "comment_updated_at": "2026-06-26T06:11:55Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2520,
+    "total_ms": 2537,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 438
+        "ms": 650
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1414
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -398,7 +99,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 640
+        "ms": 1873
       },
       {
         "name": "append_ledger",
