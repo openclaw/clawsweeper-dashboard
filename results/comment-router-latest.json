@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-28T02:24:08.654Z",
+  "generated_at": "2026-06-28T02:26:02.964Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-27T23:24:05.878Z",
+  "since": "2026-06-27T23:26:00.661Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    97197
+    97217
   ],
-  "comment_ids": [
-    4824207832
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 9,
+  "commands_seen": 5,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,18 +31,170 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:97197:4824207832:2026-06-28T02:21:54Z:re_review",
-      "comment_id": "4824207832",
-      "comment_version_key": "4824207832:2026-06-28T02:21:54Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97197#issuecomment-4824207832",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97217:4816042097:2026-06-28T02:25:57Z:clawsweeper_needs_human",
+      "comment_id": "4816042097",
+      "comment_version_key": "4816042097:2026-06-28T02:25:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97217#issuecomment-4816042097",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97197,
-      "author": "wangwllu",
-      "author_id": 7668944,
+      "issue_number": 97217,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-28T02:21:54Z",
-      "comment_updated_at": "2026-06-28T02:21:54Z",
+      "comment_created_at": "2026-06-27T08:20:06Z",
+      "comment_updated_at": "2026-06-28T02:25:57Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] Human maintainer acceptance of the Azure guarded-transport compatibility risk is the remaining action; there is no narrow automated code repair to queue.; Cleared: The diff touches the HTTP security boundary but uses the existing guarded-fetch path, adds no dependency or secret surface, and shows no concrete new supply-chain concern. (sha=edde029adfa09234392fad196515ad2b1e58ecc9)",
+      "review_summary": "The PR routes Azure OpenAI Responses SDK clients through `buildGuardedModelFetch` using the resolved Azure base URL and adds a lazy shared cap for non-OK response bodies with provider-transport regression tests.\n\nPR surface: Source +34, Tests +136. Total +170 across 3 files.\n\nReproducibility: yes. Source and dependency inspection show current main returns non-OK bodies unchanged and OpenAI SDK v6.39.1 reads final non-OK bodies with `response.text()`; the PR body adds pasted local HTTP-server proof for the capped and cancel paths.",
+      "review_followup": "- [P2] Human maintainer acceptance of the Azure guarded-transport compatibility risk is the remaining action; there is no narrow automated code repair to queue.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "edde029adfa09234392fad196515ad2b1e58ecc9",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(azure-openai-responses): bound SSE response reads via buildGuardedModelFetch",
+        "body": "## What Problem This Solves\n\nThe azure-openai-responses provider creates OpenAI/AzureOpenAI SDK clients without a custom `fetch` option, so all SSE streaming responses are read without any byte cap. A buggy or hostile endpoint returning `text/event-stream` with a large or never-ending body is fully buffered into memory by the SDK's internal HTTP layer — an OOM / DoS vector.\n\nThis injects `buildGuardedModelFetch` as the SDK `fetch` option in both the OpenAI-compatible and native AzureOpenAI client constructors, using the **resolved** Azure base URL (from options, env, resource name, or `model.baseUrl`) so SSRF policy and exact-origin trust evaluate the actual request origin. The shared `sanitizeOpenAISdkSseResponse` caps oversized SSE buffer boundaries (64 KiB per unterminated event) and oversized JSON bodies synthesized into SSE (16 MiB cumulative, merged in #96989).\n\n**Revision (re-review feedback):** Replaces the prior per-provider `azureGuardedFetch` eager wrapper with a **lazy** `TransformStream`-based cap inside the shared `sanitizeOpenAISdkSseResponse`. The previous eager implementation read the entire non-OK body before the SDK saw the response, breaking the OpenAI SDK's retry/cancel semantics for retryable 4xx/5xx responses. The new cap fires on pull only — the SDK can still call `body.cancel()` before reading anything, and the source stream is never drained.\n\n## Changes\n\nNo new abstraction — the `capNonOkResponseBodyLazily` helper is a small inline closure in `provider-transport-fetch.ts` that reuses the existing `SSE_SANITIZE_BUFFER_MAX_BYTES` cap, applied via `pipeThrough(new TransformStream(...))` so the cap fires on pull rather than eager read.\n\n- `src/agents/provider-transport-fetch.ts:99` — add `capNonOkResponseBodyLazily(response, maxBytes)` helper that wraps `response.body` in a `TransformStream` capping at `maxBytes`, terminating the source once the cap is reached. Caller can still `body.cancel()` before any pull.\n- `src/agents/provider-transport-fetch.ts:135` — `sanitizeOpenAISdkSseResponse` now applies `capNonOkResponseBodyLazily(response, SSE_SANITIZE_BUFFER_MAX_BYTES)` when `!response.ok`, closing the shared guard gap for **all** SDK providers (not just Azure).\n- `src/agents/provider-transport-fetch.ts:57` — `SSE_SANITIZE_BUFFER_MAX_BYTES` reverted to non-exported (was `export const` for the prior wrapper; no external consumers needed).\n- `src/llm/providers/azure-openai-responses.ts:204` — drop `azureGuardedFetch` wrapper; inject `buildGuardedModelFetch({...model, baseUrl})` directly. The cap now lives in the shared guard, so the provider only needs the fetch seam itself.\n- `src/agents/provider-transport-fetch.test.ts` — 2 inline tests added at the `sanitizeOpenAISdkSseResponse` describe block:\n  - `\"caps non-OK response body lazily so SDK can still cancel retryable responses\"` — 100 KiB 429 body → `text.length ≤ 64 KiB` and `< OVER_LIMIT` after `await response.text()`.\n  - `\"preserves SDK ability to cancel retryable non-OK responses before reading body\"` — 160 KiB 503 body, `await response.body?.cancel()` does not pull the full payload from the source (`bytesPulled < TOTAL_BYTES`).\n\n## Design Rationale\n\n**Why lazy via TransformStream?** The OpenAI SDK calls `response.text()` or `response.body.getReader()` itself and may want to cancel a retryable 429/5xx response and retry before reading the body. Eagerly reading the body before returning the response — as the prior `azureGuardedFetch` did — destroys that capability: the SDK sees a fully-consumed, truncated body and cannot signal retry intent. A `TransformStream` only pulls when the consumer pulls, and `controller.terminate()` is the cap's stop signal — the source stream is never drained if the consumer cancels.\n\n**Why apply the cap in the shared guard instead of per-provider?** Closes the gap for every SDK provider (OpenAI, Anthropic, Google, etc.) in one place, with the same `SSE_SANITIZE_BUFFER_MAX_BYTES` boundary used by the existing `!response.ok` SSE buffer cap. Per-provider wrappers would have to re-implement the same logic in each provider and risk behavioral drift.\n\n**Why preserve the existing \"non-OK small body for error parsing\" test path?** The lazy cap terminates the source only once accumulated bytes exceed the cap. A small non-OK body (e.g. 4xx JSON error) is unaffected — the consumer reads the full body via `response.json()` and gets the error message unchanged. Verified by the existing `\"preserves non-OK SSE bodies for provider HTTP error parsing\"` test, which still passes against the new shared-guard path.\n\n## Real behavior proof\n\n**Real local HTTP-server proof** (local-only proof script, not committed): a real `node:http` server on 127.0.0.1 streams a non-OK body, the proof script runs the production `buildGuardedModelFetch` pipeline (with `fetchWithSsrFGuard` re-pointed at the real `fetch()` so the network roundtrip is real), and the lazy cap fires inside the production `sanitizeOpenAISdkSseResponse`.\n\n```\n=== Real local HTTP-server proof: lazy non-OK body cap ===\n\n  PASS  1/3 server bytesSent=73728 → response.text() length=65536 ≤ 64 KiB\n            100 KiB 429 body streamed over real HTTP; cap fires at 64 KiB; source not drained\n\n  PASS  2/3 server bytesSent=16384 < 163840 (160 KiB) after cancel\n            160 KiB 503 body; SDK cancels body before reading; server only sent 16 KiB (10% of full payload)\n\n  PASS  3/3 small 400 body preserved for error parsing — message=\"API key expired\"\n            4xx JSON body of <1 KiB round-trips intact through the lazy cap wrapper\n```\n\n**Mock-based regression coverage** (existing `provider-transport-fetch.test.ts`): 79/79 vitest tests pass, including 2 inline tests for the new non-OK cap and SDK cancel behavior, plus the existing `\"preserves non-OK SSE bodies for provider HTTP error parsing\"` test which proves small error bodies are not affected by the cap.\n\nTest suite totals (after this patch):\n- `provider-transport-fetch.test.ts`: 79/79 passed\n- `azure-openai-responses.test.ts`: 4/4 passed\n\n- **Behavior addressed**: Non-OK response bodies (4xx/5xx) are now lazily capped at 64 KiB by the shared `sanitizeOpenAISdkSseResponse` guard, closing the unbounded `response.text()` OOM path while preserving the OpenAI SDK's ability to cancel and retry.\n- **Real environment tested**: Linux x86_64, Node 22, real `node:http` server on 127.0.0.1 streaming chunked transfer responses. Proof was run via a local-only vitest test (not committed) with the production `buildGuardedModelFetch` pipeline.\n- **Exact steps or command run after this patch**:\n  ```bash\n  # Local-only proof (run once, capture output, paste into body)\n  node scripts/run-vitest.mjs <local-proof-script.ts> --run\n\n  # Committed regression coverage\n  node scripts/run-vitest.mjs src/agents/provider-transport-fetch.test.ts --run\n  node scripts/run-vitest.mjs src/llm/providers/azure-openai-responses.test.ts --run\n  ```\n- **Evidence after fix**: 83/83 vitest tests passed across the 2 committed test files. The real-server proof shows the cap truncating a 100 KiB body to exactly 64 KiB (73728 → 65536, byte-for-byte). The cancel test shows the server only sent 16384 bytes (10% of the 160 KiB total) when the SDK cancelled the body before reading, proving the lazy semantics — the source stream is not eagerly drained.\n- **Observed result after fix**: All Azure Responses requests now go through guarded transport (SSRF, timeout, SSE/JSON synthesis caps, plus the new 64 KiB non-OK cap). SDK can still call `body.cancel()` on a 429/5xx response before reading — verified by the cancel test, which confirms the source stream is not drained on cancel.\n- **What was not tested**: Live Azure endpoint (proof exercises the same production fetch pipeline against the same attack shapes; real credentials not required). End-to-end test through the Azure SDK constructor requires a real Azure endpoint — the real-server tests exercise the exact `sanitizeOpenAISdkSseResponse` codepath that `buildGuardedModelFetch` invokes.\n\n## Out of scope\n\nCompanion to openai-responses (#97139) and openai-completions (#97228). Transport-stream path already uses `buildGuardedModelFetch`. The non-OK body gap is now closed in the shared guard rather than per-provider — no follow-up PR needed.\n\n## Diff stats\n\n```\n3 files changed, 89 insertions(+), 87 deletions(-)\n  src/agents/provider-transport-fetch.ts        +32/-2   (capNonOkResponseBodyLazily helper + sanitize cap path; revert export)\n  src/llm/providers/azure-openai-responses.ts  +3/-49   (drop azureGuardedFetch wrapper, inject guardedFetch directly)\n  src/agents/provider-transport-fetch.test.ts  +54/-36  (2 new inline tests: cap + cancel; existing test unchanged)\n```\n\nNet change: +2 lines production code (the `capNonOkResponseBodyLazily` helper minus the dropped `azureGuardedFetch` wrapper). The real local HTTP-server proof was captured locally and lives in the PR body only — not committed, per the proof-script-not-committed checklist rule.\n\n## Risk checklist\n\n- User-visible behavior change? Yes — non-OK response bodies are now capped at 64 KiB instead of being fully buffered. SDK can still call `body.text()` / `body.getReader()` and get the (possibly truncated) body. Unusually large error responses (e.g. hostile 429 with >64 KiB body) are truncated; small error bodies pass through unchanged.\n- Config/env/migration change? No.\n- Security/auth/secrets/network/tool-execution change? Yes — closes OOM/DoS vector via lazy cap on non-OK bodies. No new auth or secrets surface.\n- Highest-risk area: A 4xx/5xx response with a real error message between 64 KiB and the original cap (e.g. an unusually verbose provider error) is now truncated. In practice, provider error bodies are < 1 KiB; truncation is unlikely to lose user-visible information.\n",
+        "branch": "fix/sse-bounded-azure-openai-responses-clean",
+        "head_sha": "edde029adfa09234392fad196515ad2b1e58ecc9",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/provider-transport-fetch.test.ts",
+            "additions": 136,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/provider-transport-fetch.ts",
+            "additions": 31,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/azure-openai-responses.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 171,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97217",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97217.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 32,
+            "SUCCESS": 62,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97217:4824193851:2026-06-28T02:18:13Z:re_review",
+      "comment_id": "4824193851",
+      "comment_version_key": "4824193851:2026-06-28T02:18:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97217#issuecomment-4824193851",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97217,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-28T02:18:13Z",
+      "comment_updated_at": "2026-06-28T02:18:13Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review — please re-review against the **current** head `edde029adfa09234392fad196515ad2b1e58ecc9`, not the cached sha",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "— please re-review against the **current** head `edde029adfa09234392fad196515ad2b1e58ecc9`, not the cached SHA.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97217:4819867584:2026-06-27T17:56:36Z:re_review",
+      "comment_id": "4819867584",
+      "comment_version_key": "4819867584:2026-06-27T17:56:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97217#issuecomment-4819867584",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97217,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-27T17:56:36Z",
+      "comment_updated_at": "2026-06-27T17:56:36Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -70,79 +220,100 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): tell models to use <tg-math> for rich-text formulas",
-        "body": "## What Problem This Solves\n\nResolves a problem where Telegram bot replies that contain math formulas render as literal text instead of formatted math.\n\nWhen Telegram rich text is enabled, the agent receives a capability hint listing the available Bot API 10.1 features. That hint advertises **\"formulas\"** but never says how to write one. As a result, models emit math using the LaTeX delimiters they were trained on — `$...$`, `$$...$$`, or `\\(...\\)` / `\\[...\\]` — none of which Telegram Bot API 10.1 rich messages treat as math. The formula shows up verbatim (e.g. `( a^2 + b^2 = c^2 )` or a raw `\\int_...` source line) in the chat.\n\nThis is model-dependent and bites fallback models hardest: in my setup the primary model happened to emit `$...$` while the fallback model emitted `\\(...\\)`, so formulas silently broke only when the fallback was active.\n\n## Why This Change Was Made\n\nTelegram Bot API 10.1 renders formulas only through dedicated tags, with the body treated as **raw LaTeX**:\n\n- inline: `<tg-math>x^2 + y^2</tg-math>`\n- block: `<tg-math-block>E = mc^2</tg-math-block>`\n\n(See the HTML formatting section of <https://core.telegram.org/bots/api> — \"Formula source is treated as raw LaTeX\".)\n\nOpenClaw's own Telegram converter already allowlists exactly these tags (`extensions/telegram/src/format.ts` lists `tg-math` / `tg-math-block`, and `format.test.ts` preserves `<tg-math>E=mc^2</tg-math>` and `<tg-math-block>\\int_0^1 x^2 dx</tg-math-block>`). The only gap was that the model-facing hint didn't mention them, so models had to guess — and guessed wrong.\n\nThis change spells out the tag syntax in the hint, matching the existing HTML-tag style already used there for `<sup>`/`<sub>`, `<mark>`, and `<details>`. It also explicitly steers models away from the two delimiter forms they most commonly default to.\n\n**Scope / non-goals:** this is a prompt-accuracy fix only. A heavier alternative — converting `$...$` / `\\(...\\)` to `<tg-math>` in the markdown→rich-HTML pipeline so models can keep using natural LaTeX delimiters — was considered and intentionally not done here, because it adds a Telegram-specific math parser and risks corrupting `$`/`\\(` inside code blocks, inline code, and currency text. Happy to follow up with that as a separate feature if maintainers prefer the converter-side approach.\n\n## User Impact\n\nBots with Telegram rich text enabled now get correctly rendered math formulas regardless of which model (primary or fallback) produced the reply, because the model is told the exact `<tg-math>` / `<tg-math-block>` syntax instead of guessing.\n\n## Evidence\n\n- **Telegram spec:** official Bot API HTML formatting defines `<tg-math>` / `<tg-math-block>` as the formula tags (raw LaTeX body).\n- **Existing OpenClaw contract:** `extensions/telegram/src/format.ts` allowlists `tg-math`/`tg-math-block`; `extensions/telegram/src/format.test.ts` (\"preserves rich table, details, quote, checklist, anchor, and math HTML\") asserts both tags pass through unchanged.\n- **Observed failure before the change:** a fallback model emitted `\\( a^2 + b^2 = c^2 \\)` and `\\[ ... \\]`; these rendered as literal `(...)` / raw LaTeX in Telegram rather than as math.\n- **Change is confined to a single prompt string literal.** I evaluated the edited literal to confirm the model now sees `formulas (inline \\`<tg-math>LaTeX</tg-math>\\`, block \\`<tg-math-block>LaTeX</tg-math-block>\\`; not \\`$...$\\` or \\`\\(...\\)\\`)`. The prompt unit tests that assert on this hint (`src/agents/system-prompt.test.ts`) check for the leading `\"Telegram rich text is available\"` sentence, which is unchanged.\n\nNote on testing: I did not run the full monorepo suite locally (no `node_modules` in my checkout); the change is a single capability-hint string with no logic change.\n\n\n## Real Behavior Proof (after-fix render)\n\nLive Telegram render of a reply containing the hinted tags, captured on Telegram **iOS** (native rich-message rendering):\n\n![tg-math rendered proof](https://blog.wangwllu.com/s/pr97197-tgmath-proof.jpg)\n\n- inline `<tg-math>E=mc^2</tg-math>` → renders as typeset *E = mc²*\n- block `<tg-math-block>\\int_0^1 x^2\\,dx = \\tfrac{1}{3}</tg-math-block>` → renders as a centered display integral with limits and fraction\n\nBoth tags render as real typeset math (not literal `<tg-math>` source), confirming end-to-end that the syntax this PR tells models to emit is the syntax the Telegram rich-message path actually renders. This is the missing piece flagged in the prior review (patch quality was already cleared; only real-render proof was outstanding).\n",
-        "branch": "fix/telegram-richtext-formula-hint",
-        "head_sha": "4c9ad2c6acc544cb55f9bb0267d348c601e18151",
-        "author": "wangwllu",
-        "labels": [
-          "agents",
-          "size: XS",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "status: 🔁 re-review loop"
-        ],
-        "files": [
-          {
-            "path": "src/agents/system-prompt.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 1,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97197",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97197.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SUCCESS": 61,
-            "SKIPPED": 34,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-7:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-7:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97217:4819736157:2026-06-27T17:34:01Z:re_review",
+      "comment_id": "4819736157",
+      "comment_version_key": "4819736157:2026-06-27T17:34:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97217#issuecomment-4819736157",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97217,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-27T17:34:01Z",
+      "comment_updated_at": "2026-06-27T17:34:01Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97217:4819381162:2026-06-27T16:55:05Z:re_review",
+      "comment_id": "4819381162",
+      "comment_version_key": "4819381162:2026-06-27T16:55:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97217#issuecomment-4819381162",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97217,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-27T16:55:05Z",
+      "comment_updated_at": "2026-06-27T16:55:05Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 3020,
+    "total_ms": 4065,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 489
+        "ms": 369
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2275
+        "ms": 1916
       },
       {
         "name": "classify_comment_commands",
@@ -150,19 +321,19 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 6543
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 5
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 244
+        "ms": 1747
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 1
       }
     ]
   }
