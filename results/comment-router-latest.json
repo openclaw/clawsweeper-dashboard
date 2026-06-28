@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-28T12:36:47.187Z",
+  "generated_at": "2026-06-28T12:36:58.916Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-28T09:36:45.701Z",
+  "since": "2026-06-28T09:36:58.234Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97431
+    97425
+  ],
+  "comment_ids": [
+    4826108342
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,240 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97431:4825167794:2026-06-28T12:36:42Z:clawsweeper_auto_repair",
-      "comment_id": "4825167794",
-      "comment_version_key": "4825167794:2026-06-28T12:36:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97431#issuecomment-4825167794",
+      "idempotency_key": "comment-router:openclaw/openclaw:97425:4826108342:2026-06-28T12:34:29Z:re_review",
+      "comment_id": "4826108342",
+      "comment_version_key": "4826108342:2026-06-28T12:34:29Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97425#issuecomment-4826108342",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97431,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-28T06:51:20Z",
-      "comment_updated_at": "2026-06-28T12:36:42Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=38e7f6d31a50999f17d88d0d30606775187c193a)",
-      "review_summary": "The PR adds Feishu 99991663/99991664 detection, a one-shot token invalidation retry hook, SDK send/media cache clearing with client re-resolution, streaming-card send hooks, and regression tests.\n\nPR surface: Source +170, Tests +232. Total +402 across 9 files.\n\nReproducibility: yes. at source level: current main retries Feishu rate-limit errors only, and PR head still has direct `getToken()` raw CardKit fetches that can receive 99991663/99991664 outside the new hook. No live Feishu stale-token run was provided.",
-      "review_followup": "- [P1] The PR needs author or maintainer changes for raw CardKit token recovery plus contributor-supplied real Feishu proof, so it should stay human-only rather than entering a repair lane.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "38e7f6d31a50999f17d88d0d30606775187c193a",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(feishu): invalidate cached token and retry on 99991663 / 99991664",
-        "body": "## What Problem This Solves\n\nCloses #97287.\n\nWhen Feishu returns business code `99991663` (Invalid access token) or `99991664` (token missing) — typically because the cached `tenant_access_token` expired, was revoked server-side, or drifted out of sync via host clock skew — the plugin cannot recover without a manual `openclaw channels login` + `openclaw gateway restart`. The retry loop in `requestFeishuApi` only knew about rate-limit codes (`230020`, `11232`, HTTP `429`), so a token-invalid error was thrown immediately, even though the next `getToken()` would have fetched a fresh token.\n\n## Why This Change Was Made\n\n- The proposed fix in the issue targets `requestFeishuApi`. I added an `onTokenInvalid?: () => void` option rather than hard-wiring a cache import, so `comment-shared.ts` stays free of any dependency on `streaming-card.ts` (which already imports from it — a hard import would be circular).\n- The hook is invoked once per call. Permanently revoked credentials still surface their error after one retry instead of spinning.\n- Callers that have no token cache to clear can omit the hook; in that case the error surfaces on the first attempt instead of wasting a retry on the same stale token.\n- The hook is best-effort: a buggy invalidator that throws cannot swallow the original token-invalid error — the `try/catch` around the call site ensures the retry still happens and the original error still surfaces if the retry fails too.\n- Architecture: `requestFeishuApi` is split into a thin outer wrapper (`requestFeishuApiWithTokenRefresh`) and the original rate-limit loop (`runFeishuRateLimitLoop`). Token-invalid errors propagate raw from the inner loop so the outer wrapper can refresh the token (via `options.onTokenInvalid`) and re-run the loop once. The \"at most one refresh\" semantic is encoded by the recursion parameter `allowTokenRefresh` rather than a mutable flag, which keeps `oxlint`'s `no-useless-assignment` rule happy without a disable directive.\n- Surfacing raw: token-invalid errors that aren't retried (no hook, or refresh already consumed) propagate as the raw AxiosError so callers can read `response.data.code` directly. The rate-limit loop continues to wrap non-token errors via `createFeishuApiError` for diagnostic consistency.\n\n## User Impact\n\n- Stale-token failures now self-heal on the next call, no manual intervention required.\n- For permanently revoked credentials, behavior is unchanged (error still surfaces).\n- SDK call sites without a token cache (`send.ts`, `media.ts`) are unchanged in this PR — they don't supply the hook, so their behavior is identical to before.\n\n## Evidence\n\nNew tests in `extensions/feishu/src/send.retry.test.ts` (21 added, all green):\n\n- `getFeishuTokenInvalidCode` — classifies `99991663` / `99991664`, ignores rate-limit codes and shapeless errors.\n- `requestFeishuApi — token-invalid retry`:\n  - invokes `onTokenInvalid` once and recovers on `99991663`\n  - does NOT call the hook on non-token errors\n  - only invalidates once when `99991663` persists (then surfaces the raw error with `response.data.code`)\n  - still applies rate-limit retries after a token retry was consumed (mixed-sequence recovery)\n  - ignores a throwing `onTokenInvalid` hook (best-effort)\n  - does NOT retry on `99991663` when no hook is supplied (raw error surfaces)\n\nLocal CI equivalent:\n- `pnpm test extensions/feishu/src/send.retry.test.ts` → 43 passed.\n- `pnpm test extensions/feishu/src/` → 974 passed, 1 pre-existing failure in `setup-surface.test.ts` (i18n string drift) unrelated to this change; reproduced on unpatched `main`.\n- `node scripts/run-oxlint.mjs extensions/feishu/src/comment-shared.ts` → clean (no `no-useless-assignment` finding).\n\n### Diffstat\n\n```\nextensions/feishu/src/comment-shared.ts  | 75 ++++++++++++++++++++------------\nextensions/feishu/src/send.retry.test.ts | 119 +++++++++++++++++++++++++++++++\nextensions/feishu/src/streaming-card.ts  | 14 ++++\n3 files changed, 187 insertions(+), 21 deletions(-)\n```",
-        "branch": "fix/feishu-token-invalid-retry-97287",
-        "head_sha": "38e7f6d31a50999f17d88d0d30606775187c193a",
-        "author": "ly-wang19",
-        "labels": [
-          "channel: feishu",
-          "size: M",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/feishu/src/comment-shared.ts",
-            "additions": 87,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/media.test.ts",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/media.ts",
-            "additions": 40,
-            "deletions": 17,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send-target.ts",
-            "additions": 13,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send.concurrent.test.ts",
-            "additions": 44,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send.reply-fallback.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send.retry.test.ts",
-            "additions": 141,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send.ts",
-            "additions": 48,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/streaming-card.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 9,
-        "additions": 435,
-        "deletions": 33,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97431",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97431.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 85,
-          "gatingTotal": 80,
-          "counts": {
-            "SUCCESS": 58,
-            "SKIPPED": 26,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:97431:4826084170:2026-06-28T12:25:13Z:re_review",
-      "comment_id": "4826084170",
-      "comment_version_key": "4826084170:2026-06-28T12:25:13Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97431#issuecomment-4826084170",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97431,
+      "issue_number": 97425,
       "author": "ly-wang19",
       "author_id": 94427531,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-28T12:25:13Z",
-      "comment_updated_at": "2026-06-28T12:25:13Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:97431:4825871329:2026-06-28T10:57:38Z:re_review",
-      "comment_id": "4825871329",
-      "comment_version_key": "4825871329:2026-06-28T10:57:38Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97431#issuecomment-4825871329",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97431,
-      "author": "ly-wang19",
-      "author_id": 94427531,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-28T10:57:38Z",
-      "comment_updated_at": "2026-06-28T10:57:38Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:97431:4825255670:2026-06-28T07:31:45Z:re_review",
-      "comment_id": "4825255670",
-      "comment_version_key": "4825255670:2026-06-28T07:31:45Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97431#issuecomment-4825255670",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97431,
-      "author": "ly-wang19",
-      "author_id": 94427531,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-28T07:31:45Z",
-      "comment_updated_at": "2026-06-28T07:31:45Z",
+      "comment_created_at": "2026-06-28T12:34:29Z",
+      "comment_updated_at": "2026-06-28T12:34:29Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -295,19 +76,19 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3867,
+    "total_ms": 2689,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 236
+        "ms": 669
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1234
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -319,7 +100,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2368
+        "ms": 2007
       },
       {
         "name": "append_ledger",
