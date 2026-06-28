@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-28T14:21:14.370Z",
+  "generated_at": "2026-06-28T14:21:36.183Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-28T11:21:12.277Z",
+  "since": "2026-06-28T11:21:34.294Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    97431
+    97500
   ],
   "comment_ids": [
     4826374622
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:97431:4826374622:2026-06-28T14:20:06Z:re_review",
-      "comment_id": "4826374622",
-      "comment_version_key": "4826374622:2026-06-28T14:20:06Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97431#issuecomment-4826374622",
+      "idempotency_key": "comment-router:openclaw/openclaw:97500:4826372224:2026-06-28T14:19:16Z:re_review",
+      "comment_id": "4826372224",
+      "comment_version_key": "4826372224:2026-06-28T14:19:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97500#issuecomment-4826372224",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 97431,
-      "author": "ly-wang19",
-      "author_id": 94427531,
+      "target_branch": null,
+      "issue_number": 97500,
+      "author": "giodl73-repo",
+      "author_id": 235387111,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-28T14:20:06Z",
-      "comment_updated_at": "2026-06-28T14:20:06Z",
-      "status_comment_id": 4826374743,
+      "comment_created_at": "2026-06-28T14:19:16Z",
+      "comment_updated_at": "2026-06-28T14:19:16Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,256 +68,89 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-28T14:21:15.197Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 97431
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-28T14:21:16.161Z",
-          "response_comment_id": "4826374743",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(feishu): invalidate cached token and retry on 99991663 / 99991664",
-        "body": "## What Problem This Solves\n\nCloses #97287.\n\nWhen Feishu returns business code `99991663` (Invalid access token) or `99991664` (token missing) — typically because the cached `tenant_access_token` expired, was revoked server-side, or drifted out of sync via host clock skew — the plugin cannot recover without a manual `openclaw channels login` + `openclaw gateway restart`. The retry loop in `requestFeishuApi` only knew about rate-limit codes (`230020`, `11232`, HTTP `429`), so a token-invalid error was thrown immediately, even though the next `getToken()` would have fetched a fresh token.\n\n## Why This Change Was Made\n\n- The proposed fix in the issue targets `requestFeishuApi`. I added an `onTokenInvalid?: () => void` option rather than hard-wiring a cache import, so `comment-shared.ts` stays free of any dependency on `streaming-card.ts` (which already imports from it — a hard import would be circular).\n- The hook is invoked once per call. Permanently revoked credentials still surface their error after one retry instead of spinning.\n- Callers that have no token cache to clear can omit the hook; in that case the error surfaces on the first attempt instead of wasting a retry on the same stale token.\n- The hook is best-effort: a buggy invalidator that throws cannot swallow the original token-invalid error — the `try/catch` around the call site ensures the retry still happens and the original error still surfaces if the retry fails too.\n- Architecture: `requestFeishuApi` is split into a thin outer wrapper (`requestFeishuApiWithTokenRefresh`) and the original rate-limit loop (`runFeishuRateLimitLoop`). Token-invalid errors propagate raw from the inner loop so the outer wrapper can refresh the token (via `options.onTokenInvalid`) and re-run the loop once. The \"at most one refresh\" semantic is encoded by the recursion parameter `allowTokenRefresh` rather than a mutable flag, which keeps `oxlint`'s `no-useless-assignment` rule happy without a disable directive.\n- Surfacing raw: token-invalid errors that aren't retried (no hook, or refresh already consumed) propagate as the raw AxiosError so callers can read `response.data.code` directly. The rate-limit loop continues to wrap non-token errors via `createFeishuApiError` for diagnostic consistency.\n\n## User Impact\n\n- Stale-token failures now self-heal on the next call, no manual intervention required.\n- For permanently revoked credentials, behavior is unchanged (error still surfaces).\n- SDK call sites without a token cache (`send.ts`, `media.ts`) are unchanged in this PR — they don't supply the hook, so their behavior is identical to before.\n\n## Evidence\n\nNew tests in `extensions/feishu/src/send.retry.test.ts` (21 added, all green):\n\n- `getFeishuTokenInvalidCode` — classifies `99991663` / `99991664`, ignores rate-limit codes and shapeless errors.\n- `requestFeishuApi — token-invalid retry`:\n  - invokes `onTokenInvalid` once and recovers on `99991663`\n  - does NOT call the hook on non-token errors\n  - only invalidates once when `99991663` persists (then surfaces the raw error with `response.data.code`)\n  - still applies rate-limit retries after a token retry was consumed (mixed-sequence recovery)\n  - ignores a throwing `onTokenInvalid` hook (best-effort)\n  - does NOT retry on `99991663` when no hook is supplied (raw error surfaces)\n\nLocal CI equivalent:\n- `pnpm test extensions/feishu/src/send.retry.test.ts` → 43 passed.\n- `pnpm test extensions/feishu/src/` → 974 passed, 1 pre-existing failure in `setup-surface.test.ts` (i18n string drift) unrelated to this change; reproduced on unpatched `main`.\n- `node scripts/run-oxlint.mjs extensions/feishu/src/comment-shared.ts` → clean (no `no-useless-assignment` finding).\n\n### Diffstat\n\n```\nextensions/feishu/src/comment-shared.ts  | 75 ++++++++++++++++++++------------\nextensions/feishu/src/send.retry.test.ts | 119 +++++++++++++++++++++++++++++++\nextensions/feishu/src/streaming-card.ts  | 14 ++++\n3 files changed, 187 insertions(+), 21 deletions(-)\n```",
-        "branch": "fix/feishu-token-invalid-retry-97287",
-        "head_sha": "d53808fbd5cb06aaad56a7d0594f08ca2cd26a37",
-        "author": "ly-wang19",
+        "title": "Doctor: expose tool result cap findings",
+        "body": "## Summary\n- add default-disabled structured lint findings for `core/doctor/tool-result-cap`\n- map existing toolResultMaxChars advice into warning findings with stable path/target/fixHint metadata\n- keep legacy `openclaw doctor` note output as the authority for normal Doctor runs\n\n## Public contract\n- No public SDK, plugin manifest, config schema, or persisted data-model contract changes.\n- The structured check is opt-in via `defaultEnabled: false`; default `doctor --lint` skips it while `--all` and `--only core/doctor/tool-result-cap` include it.\n- No repair path is added.\n\n## Validation\n- `node scripts/run-vitest.mjs run src/flows/doctor-tool-result-cap-advice.test.ts src/flows/doctor-health-contributions.test.ts --reporter=verbose` (56 tests)\n- `pnpm exec oxfmt --write src/flows/doctor-tool-result-cap-advice.ts src/flows/doctor-tool-result-cap-advice.test.ts src/flows/doctor-health-contributions.ts src/flows/doctor-health-contributions.test.ts`\n- `git diff --check`\n- `node scripts/run-oxlint.mjs src/flows/doctor-tool-result-cap-advice.ts src/flows/doctor-tool-result-cap-advice.test.ts src/flows/doctor-health-contributions.ts src/flows/doctor-health-contributions.test.ts`\n- `pnpm tsgo:core`\n- `OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 pnpm check:changed`\n- `node scripts/plugin-sdk-surface-report.mjs --check`\n- `node scripts/check-plugin-sdk-exports.mjs`\n\n## Real behavior proof\nSource CLI proof with isolated `OPENCLAW_CONFIG_PATH` containing `agents.defaults.contextLimits.toolResultMaxChars = 16000`:\n\n- default `pnpm --silent openclaw doctor --lint --json`: `checksRun: 25`, `checksSkipped: 8`, `toolResultCapFindings: 0`\n- explicit `pnpm --silent openclaw doctor --lint --json --only core/doctor/tool-result-cap`: `checksRun: 1`, `checksSkipped: 32`, finding path `agents.defaults.contextLimits.toolResultMaxChars`, target `agents.defaults`, severity `warning`\n\n## Notes\n`pnpm check:changed` first tried to delegate to Blacksmith Testbox and was blocked by the local Crabbox binary version (`0.15.0`, requires `>=0.22.0`), so I ran the documented local child path directly with `OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1`.\n",
+        "branch": "doctor-tool-result-cap-lint-findings",
+        "head_sha": "d15a1625e869e3b033d544289353571e3deba07b",
+        "author": "giodl73-repo",
         "labels": [
-          "channel: feishu",
-          "size: XL",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "maintainer",
+          "size: M"
         ],
         "files": [
           {
-            "path": "extensions/feishu/src/client.test.ts",
-            "additions": 73,
+            "path": "src/flows/doctor-health-contributions.test.ts",
+            "additions": 66,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/client.ts",
-            "additions": 96,
-            "deletions": 0,
+            "path": "src/flows/doctor-health-contributions.ts",
+            "additions": 113,
+            "deletions": 26,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/comment-shared.ts",
-            "additions": 102,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/media.test.ts",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/media.ts",
-            "additions": 40,
-            "deletions": 17,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/reply-dispatcher.test.ts",
-            "additions": 5,
+            "path": "src/flows/doctor-tool-result-cap-advice.test.ts",
+            "additions": 27,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/reply-dispatcher.ts",
-            "additions": 6,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send-target.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send-target.ts",
-            "additions": 13,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send.concurrent.test.ts",
-            "additions": 44,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send.reply-fallback.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send.retry.test.ts",
-            "additions": 176,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send.ts",
-            "additions": 48,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/streaming-card.test.ts",
-            "additions": 212,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/streaming-card.ts",
-            "additions": 98,
-            "deletions": 47,
+            "path": "src/flows/doctor-tool-result-cap-advice.ts",
+            "additions": 107,
+            "deletions": 24,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 16,
-        "additions": 966,
-        "deletions": 84,
+        "changedFiles": 4,
+        "additions": 313,
+        "deletions": 51,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97431",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97431.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97500",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97500.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 91,
-          "gatingTotal": 86,
+          "total": 53,
+          "gatingTotal": 48,
           "counts": {
-            "SUCCESS": 24,
-            "SKIPPED": 32,
-            "IN_PROGRESS": 33,
-            "QUEUED": 2
+            "SUCCESS": 8,
+            "SKIPPED": 45
           },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:QUEUED",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:QUEUED",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:QUEUED",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:QUEUED",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4437,
+    "total_ms": 2173,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 557
+        "ms": 515
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1522
+        "ms": 1361
       },
       {
         "name": "classify_comment_commands",
@@ -333,7 +166,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2333
+        "ms": 284
       },
       {
         "name": "append_ledger",
