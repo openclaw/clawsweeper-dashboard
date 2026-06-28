@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-28T06:28:45.755Z",
+  "generated_at": "2026-06-28T06:29:16.082Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-28T03:28:44.248Z",
+  "since": "2026-06-28T03:29:13.793Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    97302
+    97100
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4825120397
+  ],
+  "status_comment_id": 4825120480,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97302:4820134712:2026-06-28T06:28:40Z:clawsweeper_needs_human",
-      "comment_id": "4820134712",
-      "comment_version_key": "4820134712:2026-06-28T06:28:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97302#issuecomment-4820134712",
+      "idempotency_key": "comment-router:openclaw/openclaw:97100:4825120397:2026-06-28T06:28:04Z:re_review",
+      "comment_id": "4825120397",
+      "comment_version_key": "4825120397:2026-06-28T06:28:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97100#issuecomment-4825120397",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97302,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": "main",
+      "issue_number": 97100,
+      "author": "bek91",
+      "author_id": 66288351,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-27T18:33:29Z",
-      "comment_updated_at": "2026-06-28T06:28:40Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "comment_created_at": "2026-06-28T06:28:04Z",
+      "comment_updated_at": "2026-06-28T06:28:04Z",
+      "status_comment_id": 4825120480,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -66,100 +68,218 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-28T06:29:17.086Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 97100
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-28T06:29:18.269Z",
+          "response_comment_id": "4825120480",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(memory-core): recover primary embedding provider after fallback latch (#96534)",
-        "body": "## What Problem This Solves\n\nCloses #96534.\n\nWhen `agents.defaults.memorySearch` runs a remote primary embedding provider with `fallback: \"local\"`, a transient remote outage activates the fallback — and the in-gateway `memory_search` tool then **permanently latches** onto that fallback. Because the on-disk vector index is keyed by the original primary model identity, every subsequent search fails with `index was built for model <remote>, expected <local>` until the gateway process is fully restarted. SIGUSR1 in-process restarts and config soft-reloads do not clear the latch, because the singleton manager instance is reused.\n\n## Why This Change Was Made\n\nThe latch is the actual user-visible bug, not the fallback activation itself. Today the recovery story is \"restart the whole gateway\", which is exactly what #96534 reports.\n\nThis change adds a throttled primary-provider recovery probe on the search path:\n\n- A new pure helper `shouldAttemptPrimaryProviderRecovery` decides whether to probe, gated by `EMBEDDING_PROBE_CACHE_TTL_MS` (30s) so the network path runs at most once per window — not on every search call.\n- `MemoryIndexManager.attemptPrimaryProviderRecovery` reloads the configured primary, pings it with `embedBatch([\"ping\"])`, and only swaps it back in when the ping succeeds. On success it closes the previous fallback provider and clears the embedding-probe cache so the next sync reuses the restored primary.\n- The search path runs recovery **only when** `fallbackFrom` is set **and** the current index identity is mismatched (`status !== \"valid\"`). An explicit identity repair that already rebuilt the index for the fallback is left alone, so we don't trade one bad state for another.\n\nRecovery is best-effort: any probe failure is swallowed at debug log level and search continues against the fallback (which is the same behavior as before, just no longer permanent).\n\n## User Impact\n\nOperators running `memorySearch` with a remote primary + `fallback: \"local\"` recover automatically once the remote embedding provider is reachable again. No gateway restart needed. The change is internal to memory-core; no config, CLI, or persisted-state shape changes.\n\n## Evidence\n\n- `pnpm tsgo:extensions` — green.\n- `pnpm test extensions/memory-core/src/memory/manager.mistral-provider.test.ts` — 11 passed (4 new throttle-helper cases: skip when no fallback, allow first attempt, respect throttle window, force bypass).\n- `pnpm test extensions/memory-core/src/memory/index.test.ts` — 54 passed. The `rebuilds with fallback provider during explicit identity repair` test guards against over-eager recovery (index already valid for fallback → no recovery); the `activates configured fallback after probe-time local degradation` test was relaxed because its old assertions (`results = []`, `provider.id = \"fallback-provider\"`) were asserting the latch this PR removes.\n",
-        "branch": "fix/memory-search-fallback-recovery-96534",
-        "head_sha": "216ba749b9fc6bc8a2e2ba24657014f550186ee9",
-        "author": "ly-wang19",
+        "title": "fix: seed Slack thread context after reset",
+        "body": "## What Problem This Solves\n\nFixes #97073.\n\nSlack replies in an existing thread after a session reset could start a new OpenClaw session without re-seeding Slack thread context. The Slack prepare path treated any existing thread session row as an existing turn, while session initialization could later roll that same row to a new `sessionId` under the reset policy. With `channels.slack.thread.initialHistoryLimit=10` and `thread.inheritParent=true`, that meant the model could receive the new reply and route metadata, but not the prior Slack replies that the operator expected on the first turn of the reset session.\n\n## Why This Change Was Made\n\nThis change makes Slack prepare ask the session-store runtime whether the existing thread row should be considered fresh under the effective reset policy before deciding to suppress initial thread context. If the row exists but is stale, Slack prepare forces the initial Slack thread-history fetch and keeps the current fresh-existing-thread skip intact.\n\nThe session freshness helper centralizes the reset-policy comparison for plugin callers and preserves OpenClaw's provider-owned implicit-reset behavior, so provider-backed sessions are not unexpectedly treated as stale unless reset policy is explicitly configured.\n\n## User Impact\n\nAfter a Slack thread session rolls past a daily or idle reset boundary, the next reply in that same Slack thread now starts the new OpenClaw session with the configured initial thread context. Fresh existing Slack threads still avoid repeated history injection, and `initialHistoryLimit=0` still disables the Slack history fetch.\n\n## Evidence\n\n- `pnpm format -- src/plugin-sdk/session-store-runtime.ts src/plugin-sdk/session-store-runtime.test.ts extensions/slack/src/monitor/message-handler/prepare.test.ts`\n- `node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --write`\n- `pnpm format:check -- src/plugin-sdk/session-store-runtime.ts src/plugin-sdk/session-store-runtime.test.ts extensions/slack/src/monitor/config.runtime.ts extensions/slack/src/monitor/message-handler/prepare-thread-context.ts extensions/slack/src/monitor/message-handler/prepare.ts extensions/slack/src/monitor/message-handler/prepare.test.ts scripts/lib/plugin-sdk-doc-metadata.ts`\n- `node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check`\n- `node --max-old-space-size=8192 scripts/plugin-sdk-surface-report.mjs --check`\n- `node scripts/check-plugin-sdk-subpath-exports.mjs`\n- `node scripts/run-vitest.mjs src/plugin-sdk/session-store-runtime.test.ts extensions/slack/src/monitor/message-handler/prepare.test.ts extensions/slack/src/monitor/message-handler/prepare-thread-context.test.ts src/plugin-sdk/api-baseline.test.ts src/plugins/contracts/plugin-sdk-subpaths.test.ts`\n- `pnpm build`\n- `git diff --check`\n- `codex review --base origin/main` clean after the provider-owned session fix\n- `.agents/skills/autoreview/scripts/autoreview --mode local` clean\n\nNot run: full `pnpm check` and full test suite; this was validated with focused Slack/session-store/API-surface coverage plus build.\n\n## AI Assistance\n\nImplemented with Codex assistance. I reviewed the generated changes, ran the validation above, and addressed the initial review finding about provider-owned implicit-reset semantics before opening this draft PR.\n\nScreenshots: not applicable; this is Slack/session-context runtime behavior.",
+        "branch": "fix/slack-thread-seeding",
+        "head_sha": "1f8e6bf4f6629ff985c67909f7599581e3ff5cf3",
+        "author": "bek91",
         "labels": [
-          "extensions: memory-core",
-          "size: M",
+          "docs",
+          "channel: slack",
+          "scripts",
+          "agents",
+          "maintainer",
+          "size: L",
+          "proof: sufficient",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "extensions/memory-core/src/memory/index.test.ts",
-            "additions": 82,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-provider-state.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.mistral-provider.test.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.ts",
-            "additions": 145,
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
             "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/sdk-testing.md",
+            "additions": 5,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/config.runtime.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/context.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/message-handler/prepare-thread-context.ts",
+            "additions": 61,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/message-handler/prepare.test-helpers.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/message-handler/prepare.test.ts",
+            "additions": 258,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/message-handler/prepare.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/provider.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/plugin-sdk-doc-metadata.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-session.ts",
+            "additions": 2,
+            "deletions": 50,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/cli-session-binding.ts",
+            "additions": 55,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/config/sessions/entry-freshness.test.ts",
+            "additions": 268,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/config/sessions/entry-freshness.ts",
+            "additions": 110,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/plugin-sdk/plugin-test-runtime.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/session-store-runtime.test.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/test-helpers/plugin-runtime-mock.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/test-helpers/plugin-runtime-mock.ts",
+            "additions": 16,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/runtime/index.test.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/runtime/runtime-channel.ts",
+            "additions": 10,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/scripts/test-projects.test.ts",
+            "additions": 6,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 310,
-        "deletions": 12,
+        "changedFiles": 21,
+        "additions": 823,
+        "deletions": 96,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97302",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97302.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97100",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97100.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 90,
-          "gatingTotal": 85,
+          "total": 93,
+          "gatingTotal": 88,
           "counts": {
-            "SUCCESS": 58,
-            "SKIPPED": 30,
-            "IN_PROGRESS": 2
+            "SUCCESS": 70,
+            "SKIPPED": 22,
+            "NEUTRAL": 1
           },
-          "blockers": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1757,
+    "total_ms": 5209,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 287
+        "ms": 646
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1206
+        "ms": 1630
       },
       {
         "name": "classify_comment_commands",
@@ -175,7 +295,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 238
+        "ms": 2909
       },
       {
         "name": "append_ledger",
