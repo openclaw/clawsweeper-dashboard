@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-882"
 mode: "autonomous"
-run_id: "28316917318"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28316917318"
+run_id: "28318434984"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28318434984"
 head_sha: "ae63b16d6c7483773359acebfa114792a84ed5a4"
 workflow_conclusion: "failure"
 result_status: "blocked"
-published_at: "2026-06-28T08:50:54.330Z"
+published_at: "2026-06-28T09:55:21.226Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/882"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/882"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28316917318](https://github.com/openclaw/clawsweeper/actions/runs/28316917318)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28318434984](https://github.com/openclaw/clawsweeper/actions/runs/28318434984)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/882
 
 ## Summary
 
-Issue #882 is still open, non-security-sensitive, and valid on current main 87dc3dc79d7c3e9a844cdb2f09773735a76c4f18. Source inspection still shows no tray-side NO_REPLY suppression guard for live assistant chat events or chat.history assistant rows. Implementation and validation are blocked in this run because the worker filesystem is read-only, so no branch change or PR can be produced directly; a narrow fix artifact is emitted for the applicator/executor.
+Issue #882 is open, non-security-sensitive, and still valid on current main 87dc3dc79d7c3e9a844cdb2f09773735a76c4f18. Source inspection still shows no tray-side NO_REPLY suppression guard for live assistant chat events or chat.history assistant rows. Implementation and validation are blocked because this worker filesystem is read-only, so no branch change or PR can be produced directly; a narrow fix artifact is emitted for the applicator/executor.
 
 ## Impact
 
