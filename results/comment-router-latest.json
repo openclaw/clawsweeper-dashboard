@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-28T09:51:59.298Z",
+  "generated_at": "2026-06-28T09:52:15.532Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-28T06:51:58.676Z",
+  "since": "2026-06-28T06:52:11.315Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    97344
+    96979
   ],
   "comment_ids": [
-    4825622939
+    4825626241
   ],
-  "status_comment_id": 4825623285,
+  "status_comment_id": 4825626526,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:97344:4825614170:2026-06-28T09:49:31Z:re_review",
-      "comment_id": "4825614170",
-      "comment_version_key": "4825614170:2026-06-28T09:49:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97344#issuecomment-4825614170",
+      "idempotency_key": "comment-router:openclaw/openclaw:96979:4825626241:2026-06-28T09:51:03Z:re_review",
+      "comment_id": "4825626241",
+      "comment_version_key": "4825626241:2026-06-28T09:51:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96979#issuecomment-4825626241",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97344,
-      "author": "LZY3538",
-      "author_id": 293718838,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-28T09:49:31Z",
-      "comment_updated_at": "2026-06-28T09:49:31Z",
-      "status_comment_id": null,
+      "target_branch": "main",
+      "issue_number": 96979,
+      "author": "chenyangjun-xy",
+      "author_id": 294178215,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-28T09:51:03Z",
+      "comment_updated_at": "2026-06-28T09:51:03Z",
+      "status_comment_id": 4825626526,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,26 +68,113 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-28T09:52:16.302Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 96979
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-28T09:52:17.264Z",
+          "response_comment_id": "4825626526",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tui): suppress duplicate assistant message after sessions.changed event",
+        "body": "## What Problem This Solves\r\n\r\nWhen a `sessions.changed` \"new\" event fires while a chat run is streaming, `loadHistory()` clears the chat log and replays the message as a static entry. If the final chat event arrives **after** that replay, `finalizeAssistant` appends a duplicate — the streaming component was already removed but the late-arriving final event still renders.\r\n\r\nOn `origin/main`, this causes flickering duplicate messages in the TUI chat log when external session mutations (webhook deliveries, plugin thread updates, ACP session sync) coincide with an active streaming run.\r\n\r\nThe fix introduces a **surrendered runId tracker** that captures all in-flight runIds the moment `sessions.changed` \"new\" fires, then gates late-arriving events against three defense layers (proximity detection, TTL cleanup, mid-stream gating).\r\n\r\n## Why This Change Was Made\r\n\r\n### Race Condition (before fix)\r\n\r\n```\r\nTime →\r\n\r\nTUI                    Gateway                    External trigger\r\n │                        │                            │\r\n ├─ sendChat() ──────────►│                            │\r\n │                        ├─ delta ───────────────────►│ streaming renders\r\n │                        │                            │\r\n │                        │         sessions.changed \"new\"\r\n │                        │ ◄───────────────────────────┤ (webhook, plugin, etc.)\r\n │                        │                            │\r\n │                        │ ① loadHistory()            │\r\n │                        │    → clearAll()            │ ← streaming component removed\r\n │                        │    → rebuild from server   │ ← message replayed as static\r\n │                        │                            │\r\n │                        ├─ final ───────────────────►│\r\n │                        │                            │\r\n │                        │  WITHOUT FIX:              │\r\n │                        │  finalizeAssistant()       │ ← DUPLICATE rendered ❌\r\n │                        │                            │\r\n │                        │  WITH FIX:                 │\r\n │                        │  surrendered check → skip  │ ← suppressed ✅\r\n```\r\n\r\n## Solution: Three-Layer Defense\r\n\r\n### Layer 1 — Proximity Gating (`surrenderedToHistoryRunIds`)\r\n\r\nWhen `handleSessionsChangedEvent` receives a `\"new\"` event for the current session, **before** calling `loadHistory()`, it captures ALL tracked runIds into a `surrenderedToHistoryRunIds` Set:\r\n\r\n```\r\nactiveChatRunId → surrendered\r\npendingChatRunId → surrendered\r\nsessionRuns (all keys) → surrendered\r\nfinalizedRuns (all keys) → surrendered (defense against reconnect storms)\r\n```\r\n\r\n`handleChatEvent` checks this set on every incoming event. If the runId is surrendered **and** has no active streaming component (see Layer 3), the event is suppressed — the history replay already rendered it.\r\n\r\n### Layer 2 — TTL Cleanup (15s auto-expiry)\r\n\r\nThe surrendered set is automatically cleared after `SURRENDERED_TO_HISTORY_CLEANUP_MS` (15 seconds) via `scheduleSurrenderedRunIdsCleanup()`. This prevents permanently blocking legitimate late-arriving events during reconnect recovery or slow gateway delivery.\r\n\r\nAdditionally, the existing **streaming watchdog** (`DEFAULT_STREAMING_WATCHDOG_MS = 30_000`) provides a second timeout layer: if no delta arrives for 30 seconds on an active run, it prompts the user and prevents the run from indefinitely holding the activity slot. The watchdog is properly paused on disconnect and rearmed on reconnect.\r\n\r\n### Layer 3 — Mid-Stream Gating (`chatLog.hasStreamingRun()`)\r\n\r\nWhen a surrendered runId is detected, the handler checks whether `loadHistory()` restored the run as **in-flight** (has an active streaming component) or as a **static entry** (streaming component was removed by `clearAll()`):\r\n\r\n| `hasStreamingRun()` | Behavior |\r\n|---------------------|----------|\r\n| **true** | Run was restored as in-flight → remove from surrendered set, process events normally. The streaming component stays live and receives delta/final updates. |\r\n| **false** | Run was replayed as a static entry → suppress delta events, skip final/error render (but still clean up tracking state and activity indicator). No duplicate message. |\r\n\r\n## What Changed\r\n\r\n| File | Change |\r\n|------|--------|\r\n| `src/tui/tui-event-handlers.ts` | +97 lines: `surrenderedToHistoryRunIds` Set, `scheduleSurrenderedRunIdsCleanup()` timer, surrender gate in `handleChatEvent`, surrender capture in `handleSessionsChangedEvent`, `dispose()` cleanup |\r\n| `src/tui/components/chat-log.ts` | +4 lines: `hasStreamingRun()` method |\r\n| `src/tui/tui-event-handlers.test.ts` | +9 lines: `hasStreamingRun` type/mock additions |\r\n\r\n## Evidence\r\n\r\n- Environment: Windows x64, Node v24.17.0, Vitest v4.1.8\r\n\r\n### 1. Unit Test Coverage\r\n\r\n**Core change — TUI event handlers: 79/79 passed**\r\n\r\n```\r\n$ node node_modules/vitest/vitest.mjs run src/tui/tui-event-handlers.test.ts\r\n\r\n ✓ |ai/openclaw| tui-event-handlers.test.ts (79 tests) 3.11s\r\n Test Files  1 passed (1)\r\n      Tests  79 passed (79)\r\n```\r\n\r\nCovered scenarios:\r\n- `handleAgentEvent`: tool event routing (active/pending/unrelated runId), lifecycle phases (start/finishing/end/error), fallback model updates, system-injected run adoption, concurrent run non-interference, terminal lifecycle error deferred rendering + dedup\r\n- `handleChatEvent`: delta/final/aborted/error handling, cross-session filtering, global agent filtering, optimistic pending binding, local/gateway run distinction, BTW result isolation, streaming watchdog\r\n- `handleSessionsChangedEvent`: reset/new reason handling, session cleanup, cross-session filtering, global agent filtering\r\n- Streaming watchdog: timeout trigger, delta refresh, pause/reconnect, dispose cleanup, zero-disabled mode\r\n\r\n**Session-state and message-delivery regression suite — all passing:**\r\n\r\n| Test Suite | Tests | Result |\r\n|------------|-------|--------|\r\n| Gateway sessions create | 13 | ✅ |\r\n| Gateway chat (session-state) | 41 | ✅ |\r\n| Session reply lifecycle | 120 | ✅ |\r\n| Message hooks | 11 | ✅ |\r\n| Dispatch from config | 215 | ✅ |\r\n| Ingress queue | 12 | ✅ |\r\n| Agent loop (session lifecycle) | 15 | ✅ |\r\n| Sessions history tool | 8 | ✅ |\r\n| **Total** | **435** | **✅** |\r\n\r\n### 2. Gateway Event Timing Log (Race Condition Reproduction)\r\n\r\n```\r\n[gateway] chat:delta        runId=run-abc  sessionKey=agent:main:main  \"Hello, I'm...\"\r\n[gateway] sessions.changed  reason=new     sessionKey=agent:main:main  sessionId=sess-002\r\n  → tui: surrenderedToHistoryRunIds.add(\"run-abc\")     // Layer 1: capture active\r\n  → tui: surrenderedToHistoryRunIds.add(sessionRuns...) // Layer 1: capture all tracked\r\n  → tui: clearTrackedRunState()                        // clear state\r\n  → tui: loadHistory() → clearAll() → rebuild          // history replay\r\n[gateway] chat:final        runId=run-abc  sessionKey=agent:main:main  \"Hello, I'm Claude.\"\r\n  → tui: surrenderedToHistoryRunIds.has(\"run-abc\") = true              // Layer 1: hit\r\n  → tui: chatLog.hasStreamingRun(\"run-abc\") = false                    // Layer 3: no active stream\r\n  → tui: skip render, cleanup tracking state ✅                         // duplicate prevented\r\n[gateway] 15s later: surrenderedToHistoryRunIds.clear()                // Layer 2: TTL expiry\r\n```\r\n\r\nWithout fix (`origin/main`):\r\n```\r\n[gateway] chat:final → finalizeAssistant(\"Hello, I'm Claude.\")  // ❌ duplicate message\r\n```\r\n\r\n### 3. Code-Level Verification\r\n\r\n```\r\n# hasStreamingRun interface completeness\r\nsrc/tui/components/chat-log.ts:  hasStreamingRun(runId?: string) {\r\nsrc/tui/tui-event-handlers.ts:  hasStreamingRun: (runId: string) => boolean;\r\n\r\n# git diff --check\r\n(passes)\r\n\r\n# Diff scope — focused and minimal\r\n$ git diff origin/main..HEAD --stat\r\n src/tui/components/chat-log.ts     |  4 ++++\r\n src/tui/tui-event-handlers.test.ts |  9 ++++++\r\n src/tui/tui-event-handlers.ts      | 97 ++++++++++++++++++++++++++++++\r\n 3 files changed, 110 insertions(+)\r\n```\r\n",
+        "branch": "fix/tui-duplicate-message-sessions-changed",
+        "head_sha": "54d264483256c9b6682f6f38b9239692501e909f",
+        "author": "chenyangjun-xy",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/tui/components/chat-log.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tui/tui-event-handlers.test.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tui/tui-event-handlers.ts",
+            "additions": 113,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 120,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96979",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96979.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 92,
+          "gatingTotal": 87,
+          "counts": {
+            "SUCCESS": 64,
+            "SKIPPED": 26,
+            "IN_PROGRESS": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2450,
+    "total_ms": 6494,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 609
+        "ms": 2498
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1705
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -99,7 +186,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1829
+        "ms": 2266
       },
       {
         "name": "append_ledger",
