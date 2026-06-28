@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-28T23:43:52.603Z",
+  "generated_at": "2026-06-28T23:44:11.498Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-28T20:43:50.215Z",
+  "since": "2026-06-28T20:44:09.426Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    46303
+    92223
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 10,
+  "scanned_comments": 2,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:46303:4322676718:2026-06-28T23:43:46Z:clawsweeper_needs_human",
-      "comment_id": "4322676718",
-      "comment_version_key": "4322676718:2026-06-28T23:43:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/46303#issuecomment-4322676718",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92223:4683056941:2026-06-28T23:44:05Z:clawsweeper_needs_human",
+      "comment_id": "4683056941",
+      "comment_version_key": "4683056941:2026-06-28T23:44:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92223#issuecomment-4683056941",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 46303,
+      "issue_number": 92223,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-26T18:14:41Z",
-      "comment_updated_at": "2026-06-28T23:43:46Z",
+      "comment_created_at": "2026-06-11T17:09:22Z",
+      "comment_updated_at": "2026-06-28T23:44:05Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Human review is needed because one blocker is an SDK/API direction decision and the remaining real behavior proof must come from the contributor's exact-head setup.; Needs attention: The diff does not add dependencies or secret handling, but the plugin-visible drain bypass creates a concrete shutdown/availability control concern.; Review finding: [P1] Count dropped summaries before declaring followup drain co... (sha=e11fa8968bad55c0389d7ccfd0cfb0afeb47a310)",
-      "review_summary": "The PR adds SIGUSR1 restart drain plumbing for inbound debouncers, channel run queues, followup queues, gateway-drain bypass propagation, and related tests across core and bundled channel code.\n\nPR surface: Source +555, Tests +775. Total +1330 across 31 files.\n\nReproducibility: yes. at source level: current main lacks global debounce/followup drain helpers, and process-local buffers can be lost across SIGUSR1 restart. I did not run a live Signal, Discord, Slack, or Telegram restart roundtrip in this read-only review.",
-      "review_followup": "- [P1] Human review is needed because one blocker is an SDK/API direction decision and the remaining real behavior proof must come from the contributor's exact-head setup.",
+      "repair_reason": "- [P2] Human review is the right lane because the remaining blocker is accepting bounded config and persisted-state upgrade behavior, not a mechanical code repair.; Cleared: No concrete security or supply-chain regression found; the diff changes parser logic, existing config semantics, docs, and tests without new dependencies, workflows, permissions, or credential handling. (sha=6d5b0b6c905ef71229005bf7c79397377e938486)",
+      "review_summary": "The PR makes gateway and Control UI large attachment parsing stack-safe, routes inbound document extraction limits through existing media/PDF config, drops stale stack-overflow failed queue entries, and updates docs/tests.\n\nPR surface: Source +94, Tests +265, Docs 0. Total +359 across 18 files.\n\nReproducibility: yes. at source level, with supporting production comments. Current main and the latest release still contain the implicated regex paths, but I did not run a fresh live current-main reproduction in this read-only pass.",
+      "review_followup": "- [P2] Human review is the right lane because the remaining blocker is accepting bounded config and persisted-state upgrade behavior, not a mechanical code repair.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "e11fa8968bad55c0389d7ccfd0cfb0afeb47a310",
+      "expected_head_sha": "6d5b0b6c905ef71229005bf7c79397377e938486",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,263 +70,173 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix: drain inbound debounce buffer and followup queues before SIGUSR1 reload",
-        "body": "## Problem\n\nWhen `config.patch` triggers a SIGUSR1 restart, two in-memory message buffers are silently wiped, causing inbound messages to be permanently lost:\n\n1. **Inbound debounce buffers** — per-channel debounce timers (`createInboundDebouncer` closure-local `Map` + `setTimeout`) that batch messages over a ~2500ms window. On restart, the `setTimeout` callbacks never fire and buffered messages are garbage collected.\n\n2. **Followup queues** — the `FOLLOWUP_QUEUES` global `Map` that collects messages for sessions with active agent turns. Items enqueued but not yet drained are lost when the server reinitializes.\n\n### Reproduction\nSend a message on Signal → within 2.5s, trigger a config change (e.g. `config.patch`) → the message is silently dropped.\n\n## Fix\n\n### 1. Global debouncer registry (`src/auto-reply/inbound-debounce.ts`)\n- Each `createInboundDebouncer()` now auto-registers in a shared `Symbol.for('openclaw.inboundDebouncers')` global map\n- New `flushAll()` method on each debouncer instance that immediately processes all buffered items (clears timeouts, calls `onFlush` callbacks)\n- New exported `flushAllInboundDebouncers()` that iterates the registry, flushes all debouncers, and deregisters them\n\n### 2. Followup queue drain waiter (`src/auto-reply/reply/queue/drain-all.ts`)\n- New `waitForFollowupQueueDrain(timeoutMs)` that polls `FOLLOWUP_QUEUES` until all queues finish processing (or timeout)\n- Counts `draining: true` queues as having pending work even if `items.length` is momentarily 0\n\n### 3. SIGUSR1 restart integration (`src/cli/gateway-cli/run-loop.ts`)\nBefore `markGatewayDraining()`, the restart flow now:\n1. `await flushAllInboundDebouncers()` — pushes buffered messages into followup queues\n2. `await waitForFollowupQueueDrain(5000)` — gives the drain loops 5s to process newly flushed items\n3. Then proceeds with the existing `markGatewayDraining()` → task drain → server close flow\n\nThe ordering is critical: flush debouncers first (triggers `onFlush` callbacks that enqueue into followup queues), then wait for followup drain, then mark draining.\n\n## Tests\n\n- **`src/auto-reply/inbound.test.ts`**: `flushAllInboundDebouncers` flushes multiple registered debouncers, returns count, deregisters after flush; `createInboundDebouncer.flushAll` flushes all buffered keys\n- **`src/auto-reply/reply/queue/drain-all.test.ts`**: immediate return when empty, waits for drain completion, returns not-drained on timeout, counts actively draining queues as pending\n- **`src/cli/gateway-cli/run-loop.test.ts`**: SIGUSR1 restart calls flush before `markGatewayDraining`, skips followup wait when no debouncers had buffered messages, logs warning on followup drain timeout\n\nAll 118 tests pass across the 4 affected test files. No type errors introduced.\n\n## Files Changed\n- `src/auto-reply/inbound-debounce.ts` — global registry + `flushAll` + `flushAllInboundDebouncers()`\n- `src/auto-reply/reply/queue/drain-all.ts` — new `waitForFollowupQueueDrain()`\n- `src/auto-reply/reply/queue.ts` — barrel export\n- `src/cli/gateway-cli/run-loop.ts` — hook into restart flow\n- Test files for all of the above\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: When a SIGUSR1 restart fires within the inbound debounce window (~2.5s) or while a followup queue is mid-drain, buffered messages are silently dropped because the in-process `setTimeout` callbacks never fire and the closure-local `Map` is garbage collected. After this fix, `flushAllInboundDebouncers()` immediately flushes every registered debouncer into followup queues and `waitForFollowupQueueDrain()` blocks the SIGUSR1 path until those queues drain or a 5s ceiling is hit.\n- **Real environment tested**: Local OpenClaw checkout at HEAD `5d1e6592d02782361b871581c10a6b3c0329105f` of branch `fix/drain-queue-before-sigusr1`. Linux 6.12.67, Node v24.15.0, pnpm-driven monorepo. Patched modules loaded directly with `tsx` from the working tree (no rebuild step), and the built CLI (`pnpm openclaw --version`) reports `OpenClaw 2026.5.4 (5d1e659)` confirming the binary is built from the patched commit.\n- **Exact steps or command run after this patch**:\n  1. `pnpm openclaw --version` to confirm the live CLI is built from the patched HEAD.\n  2. `node_modules/.bin/tsx proof-pr46303.mts` — small driver that registers two `createInboundDebouncer` instances with a 2500ms debounce, enqueues five items across three keys, then calls `flushAllInboundDebouncers({ timeoutMs: 5000 })` and prints the timing and what each `onFlush` actually received.\n  3. `node_modules/.bin/tsx proof-pr46303-drain.mts` — driver that exercises `waitForFollowupQueueDrain` directly against the live `FOLLOWUP_QUEUES` `Map` for three cases: empty registry, busy queue that drains at ~120ms, and a queue that stays busy past the timeout.\n  4. `pnpm test src/auto-reply/inbound.test.ts src/auto-reply/reply/queue/drain-all.test.ts src/cli/gateway-cli/run-loop.test.ts` — full targeted suites for all three changed files.\n- **Evidence after fix**: Terminal capture from running the patched modules in this worktree.\n\n  Live CLI build proves the binary contains the patched code:\n\n  ```\n  $ pnpm openclaw --version\n  OpenClaw 2026.5.4 (5d1e659)\n  ```\n\n  `flushAllInboundDebouncers` console output — 5 enqueued items across 2 debouncers and 3 keys, flushed in 1ms instead of waiting 2500ms:\n\n  ```\n  [before flush] A delivered=0, B delivered=0 (still buffered)\n  [flushAllInboundDebouncers] flushedCount=3 elapsed=1ms (vs 2500ms debounce)\n  [after flush] A delivered groups=[[\"alice:hello\",\"alice:there\"],[\"bob:howdy\"]]\n  [after flush] B delivered groups=[[\"ping-1\",\"ping-2\"]]\n  ```\n\n  `waitForFollowupQueueDrain` console output — three live cases against the real `FOLLOWUP_QUEUES` map, including the timeout path that returns `drained:false` with the right `remaining` count:\n\n  ```\n  [empty]         {\"drained\":true,\"remaining\":0} elapsed=0ms\n  [busy->drained] {\"drained\":true,\"remaining\":0} elapsed=151ms\n  [timeout]       {\"drained\":false,\"remaining\":2} elapsed=200ms\n  ```\n\n  Real test runner output for the changed files (vitest reports the actual function counts; pnpm `test-projects.mjs` shards by project):\n\n  ```\n  [test] starting test/vitest/vitest.cli.config.ts\n   Test Files  1 passed (1)\n        Tests  24 passed (24)\n     Duration  2.21s\n  [test] starting test/vitest/vitest.auto-reply.config.ts\n   Test Files  2 passed (2)\n        Tests  71 passed (71)\n     Duration  4.05s\n  [test] passed 2 Vitest shards in 11.96s\n  ```\n\n- **Observed result after fix**: `flushAllInboundDebouncers` deterministically drains buffered Signal-style messages in 1 ms while the natural debounce window is 2500 ms, and reports the right buffer count (`flushedCount=3` for two keys in one debouncer plus one in another). `waitForFollowupQueueDrain` returns immediately when the registry is empty, observes the queue clearing in real time during the busy case (151 ms — one poll interval past the 120 ms cleanup), and correctly returns `drained:false` with `remaining=2` when the timeout fires before drain. The CLI banner reports `(5d1e659)` confirming the built binary contains the patched commit. With the SIGUSR1 hook in `src/cli/gateway-cli/run-loop.ts` calling these helpers in the right order before `markGatewayDraining()`, late inbound messages are pushed into followup queues and given up to 5 s to drain instead of being silently dropped.\n- **What was not tested**: An end-to-end real-Signal SIGUSR1 reproduction was not executed on this machine (no signal-cli account paired here); the production restart path is exercised through `src/cli/gateway-cli/run-loop.test.ts`, but a live Signal → `config.patch` → restart roundtrip on real `signal-cli` was not run. Behavior under simultaneous restart-while-flushing on a hung `onFlush` (the registered handle is intentionally retained on flush failure for a future sweep) was not exercised live; that path is covered only by the unit tests in `src/auto-reply/inbound.test.ts`.\n",
-        "branch": "fix/drain-queue-before-sigusr1",
-        "head_sha": "e11fa8968bad55c0389d7ccfd0cfb0afeb47a310",
+        "title": "Fix stack-safe large attachment handling",
+        "body": "## Summary\n\nThis is the canonical-source replacement for the closed #90111 approach, following amknight's review: it uses the existing media-understanding/file-extraction pipeline instead of adding a parallel inbound-PDF prompt-context subsystem.\n\n- Route inbound file/PDF extraction limits through existing config keys: `agents.defaults.mediaMaxMb`, `agents.defaults.pdfMaxBytesMb`, and `agents.defaults.pdfMaxPages`.\n- Keep explicit `gateway.http.endpoints.responses.files` limits authoritative.\n- Move `resolveChatAttachmentMaxBytes` into shared media config so the gateway accept path and media-understanding extraction path share the same cap.\n- Replace full-string data URL/base64 regex parsing in gateway and Control UI paths with stack-safe index/iterative parsing.\n- Drop stale Control UI queue items failed by the old `Maximum call stack size exceeded` bug.\n\nCloses #90098.\n\n## Deliberately Not Included\n\n- No new `inbound-pdf-context` subsystem, `MediaExtractedContext`, or prompt-string scanning.\n- No `chat.send` oversized managed-PDF pass-through. That is a separate sandbox/staging-boundary question and is not needed for the canonical extraction-limit fix.\n\n## Verification\n\n- Branch merged with latest `origin/main`; all checks rerun after the merge.\n- `pnpm test src/media-understanding/apply.file-limits.test.ts src/media-understanding/apply.test.ts src/gateway/chat-attachments.test.ts` — 55 passed\n- `pnpm test ui/src/ui/controllers/chat.test.ts ui/src/ui/chat/composer-persistence.test.ts ui/src/ui/views/chat.test.ts` — 236 passed\n- `pnpm tsgo:prod` and `pnpm check:test-types` — 0 errors\n- `oxfmt --check` clean on touched files\n\n## Real behavior proof\n\nBehavior addressed: Large inbound PDFs/files accepted by chat attachment handling no longer degrade to a marker-only prompt: media-understanding resolves inbound file limits from the same agent defaults the gateway accept path uses, so an accepted attachment is always extractable. Large Control UI/gateway data URLs no longer go through full-string regex captures that could throw `RangeError: Maximum call stack size exceeded`, and stale failed queue entries from the old parser are dropped.\n\nReal environment tested: Gateway built and run from this exact branch (`fix/90098-canonical-media-limits`, after merging `origin/main`) on Linux, Node v24.15.0, with an isolated `OPENCLAW_STATE_DIR`/`OPENCLAW_CONFIG_PATH` profile (default config: no `responses.files` override, no `mediaMaxMb`/`pdfMaxBytesMb`/`pdfMaxPages` set, model `anthropic/claude-sonnet-4-6`). The Control UI was driven by a real Chrome browser (Playwright, `/bin/google-chrome` headless) against `http://127.0.0.1:19711`.\n\nExact steps or command run after this patch:\n1. Generated an 8-page, 9.18 MB PDF (`reportlab`; real text on every page plus a unique bold marker per page, e.g. page 6 = `MARKER-PAGE-6: OCPROOF-6-FOXTROT`; incompressible noise JPEG per page for size). 9.18 MB exceeds the old `DEFAULT_INPUT_FILE_MAX_BYTES` (5 MB) and page 6 exceeds the old `DEFAULT_INPUT_PDF_MAX_PAGES` (4), so on `main` extraction is skipped entirely and the model sees only `[media attached: ...]`.\n2. `OPENCLAW_STATE_DIR=/tmp/ocproof/state OPENCLAW_CONFIG_PATH=/tmp/ocproof/openclaw.json pnpm openclaw gateway run --port 19711 --allow-unconfigured --verbose`\n3. Playwright: opened Control UI with the gateway token, `setInputFiles(\".agent-chat__file-input\", proof-large.pdf)` (exercises the new index-based `dataUrlToBase64` path on a ~12 MB base64 data URL), typed `What is the exact MARKER-PAGE-6 text in the attached PDF? Reply with only the marker string.`, pressed Enter.\n4. Inspected the gateway log, the persisted session transcript, and the model-call trajectory record.\n\nEvidence after fix:\n\nGateway log — the 9.18 MB PDF is accepted and offloaded with no `RangeError` anywhere in the log:\n\n```text\n2026-06-11T18:33:21.483-04:00 [gateway] Offloaded attachment (application/pdf). Saved: media://inbound/proof-large---22c3744e-74de-4da8-89ae-ed3c4d0bf2fd.pdf\n2026-06-11T18:33:21.488-04:00 [ws] ⇄ res ✓ chat.send 18018ms runId=f1356572-70fa-4e69-a5e9-944290a1eb43 id=07dfcc1a…fe01\n2026-06-11T18:33:33.050-04:00 [agent/embedded] Native image: detected 1 image refs in prompt\n2026-06-11T18:33:33.063-04:00 [agent/embedded] Native image: failed to load media://inbound/proof-large---22c3744e-74de-4da8-89ae-ed3c4d0bf2fd.pdf: Media exceeds 6MB limit (got 9.18MB)\n```\n\n(The `Native image` lines show the PDF was not delivered to the model natively — the only path that could carry page content was canonical extraction.)\n\nTrajectory record for the model call — the prompt contains the extracted document wrapped as untrusted content, with all 8 pages present (`MARKER-PAGE-1` … `MARKER-PAGE-8` all found; pages 5–8 are beyond the old 4-page cap):\n\n```text\n\"prompt\": \"[media attached: media://inbound/proof-large---22c3744e-….pdf (application/pdf)]\nWhat is the exact MARKER-PAGE-6 text in the attached PDF? Reply with only the marker string.\n\n<file name=\"proof-large---22c3744e-….pdf\" mime=\"application/pdf\">\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"399f0a7252b3549f\">>>\nSource: External\n---\nOpenClaw PR 92223 proof document - page 1 of 8\nMARKER-PAGE-1: OCPROOF-1-ALPHA\n…\n```\n\n```text\n$ grep -ao \"MARKER-PAGE-[0-9]\" trajectory.jsonl | sort | uniq -c\n  5 MARKER-PAGE-1 … 5 MARKER-PAGE-5, 10 MARKER-PAGE-6, 5 MARKER-PAGE-7, 5 MARKER-PAGE-8\n```\n\nAssistant reply in the session transcript and rendered in Control UI:\n\n```text\nASSISTANT: OCPROOF-6-FOXTROT\n```\n\nObserved result after fix: A real browser upload of a 9.18 MB, 8-page PDF through Control UI reaches gateway acceptance (`chat.send` ✓, attachment offloaded), the canonical media-understanding pipeline extracts all 8 pages into an `EXTERNAL_UNTRUSTED_CONTENT`-wrapped file block, and the agent answers the page-6 question with the exact marker string — content that sits beyond both old defaults (5 MB byte cap, 4-page cap) and therefore could not have reached the model on `main`. No stack overflow occurred at any point in the UI or gateway.\n\nWhat was not tested: The `gateway.http.endpoints.responses.files` explicit-override precedence and the stale-queue cleanup were verified by the unit tests in this PR rather than live. The before/fix failure mode on `main` (extraction skip at >5 MB) was verified from source (`src/media/input-files.ts` defaults) rather than by running a second gateway from `main`.\n\nGenerated with Claude Code.\n",
+        "branch": "fix/90098-canonical-media-limits",
+        "head_sha": "6d5b0b6c905ef71229005bf7c79397377e938486",
         "author": "joeykrug",
         "labels": [
-          "channel: bluebubbles",
-          "channel: discord",
-          "channel: msteams",
-          "channel: slack",
+          "docs",
+          "app: web-ui",
           "gateway",
-          "cli",
-          "agents",
-          "channel: feishu",
-          "size: XL",
-          "triage: dirty-candidate",
+          "size: M",
           "proof: supplied",
-          "mantis: telegram-visible-proof",
+          "proof: sufficient",
           "P1",
-          "rating: 🧂 unranked krab",
+          "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 session-state",
           "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/discord/src/monitor/message-handler.ts",
-            "additions": 17,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-run-queue.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/monitor.reaction.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/test-support/lifecycle-test-support.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/monitor-handler.feedback-authz.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/monitor-handler.file-consent.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/message-handler.app-mention-race.test.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 10,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/params.ts",
+            "path": "docs/gateway/config-agents.md",
             "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/sandbox-skills.ts",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/workspace-mounts.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/inbound-debounce.ts",
-            "additions": 202,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/inbound.test.ts",
-            "additions": 473,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/abort.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue.ts",
-            "additions": 3,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/queue/drain-all.test.ts",
-            "additions": 96,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "src/config/schema.help.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/queue/drain-all.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "src/config/types.agent-defaults.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/queue/drain.ts",
-            "additions": 110,
+            "path": "src/gateway/chat-attachments.test.ts",
+            "additions": 36,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-attachments.ts",
+            "additions": 41,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.ts",
+            "additions": 2,
             "deletions": 5,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/queue/enqueue.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/lifecycle.runtime.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.test.ts",
-            "additions": 136,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.single-row-cache.test.ts",
-            "additions": 2,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-lifecycle.core.ts",
-            "additions": 100,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-lifecycle.queue.test.ts",
-            "additions": 39,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.test.ts",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.ts",
-            "additions": 26,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.types.ts",
+            "path": "src/gateway/server-methods/chat.ts",
             "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-node-events.runtime.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media-understanding/apply.test.ts",
+            "additions": 90,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/skills/loading/workspace.ts",
-            "additions": 7,
-            "deletions": 7,
+            "path": "src/media-understanding/file-extraction-limits.test.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media-understanding/file-extraction-limits.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media/configured-max-bytes.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/composer-persistence.test.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/composer-persistence.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.test.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.ts",
+            "additions": 13,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/views/chat.test.ts",
+            "additions": 49,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/views/chat.ts",
+            "additions": 40,
+            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 31,
-        "additions": 1405,
-        "deletions": 75,
+        "changedFiles": 18,
+        "additions": 403,
+        "deletions": 44,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-46303",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-46303.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92223",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92223.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 94,
-          "gatingTotal": 89,
+          "total": 92,
+          "gatingTotal": 87,
           "counts": {
-            "IN_PROGRESS": 4,
-            "SUCCESS": 66,
-            "SKIPPED": 19,
-            "FAILURE": 4,
+            "SUCCESS": 63,
+            "SKIPPED": 23,
+            "IN_PROGRESS": 2,
+            "FAILURE": 3,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Scan changed paths (precise):IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-1:FAILURE",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
             "check-lint:FAILURE",
-            "check-test-types:FAILURE",
             "check-additional-extension-bundled:FAILURE"
           ],
           "pending": [
-            "Scan changed paths (precise):IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS"
           ],
           "terminalBlockers": [
             "checks-node-compact-small-1:FAILURE",
             "check-lint:FAILURE",
-            "check-test-types:FAILURE",
             "check-additional-extension-bundled:FAILURE"
           ],
           "externalBlockers": []
@@ -339,15 +249,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2721,
+    "total_ms": 2371,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 481
+        "ms": 454
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1893
+        "ms": 1603
       },
       {
         "name": "classify_comment_commands",
@@ -363,11 +273,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 323
+        "ms": 288
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
