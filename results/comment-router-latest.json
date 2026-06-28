@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-28T14:38:40.961Z",
+  "generated_at": "2026-06-28T14:38:42.423Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-28T11:38:38.903Z",
+  "since": "2026-06-28T11:38:38.747Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    96905
+    96889
   ],
   "comment_ids": [
-    4826421421
+    4826421447
   ],
-  "status_comment_id": 4826421576,
+  "status_comment_id": 4826421578,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96905:4826421421:2026-06-28T14:37:34Z:re_review",
-      "comment_id": "4826421421",
-      "comment_version_key": "4826421421:2026-06-28T14:37:34Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96905#issuecomment-4826421421",
+      "idempotency_key": "comment-router:openclaw/openclaw:96889:4826421447:2026-06-28T14:37:34Z:re_review",
+      "comment_id": "4826421447",
+      "comment_version_key": "4826421447:2026-06-28T14:37:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96889#issuecomment-4826421447",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 96905,
+      "issue_number": 96889,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-28T14:37:34Z",
       "comment_updated_at": "2026-06-28T14:37:34Z",
-      "status_comment_id": 4826421576,
+      "status_comment_id": 4826421578,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -74,60 +74,65 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-06-28T14:38:41.729Z",
+          "dispatched_at": "2026-06-28T14:38:43.144Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 96905
+          "item_number": 96889
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-06-28T14:38:42.807Z",
-          "response_comment_id": "4826421576",
+          "commented_at": "2026-06-28T14:38:44.020Z",
+          "response_comment_id": "4826421578",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(openai): bound video create-submit response reads",
-        "body": "## What Problem This Solves\n\nThe OpenAI video create-submit success path read the control JSON with an unbounded `await response.json()`, so a hostile, misconfigured, or SSRF-reachable endpoint could stream a no-`Content-Length` body indefinitely and force OpenClaw to buffer the whole payload before parsing, causing OOM pressure or a hang on the video generation path.\n\nThe poll path already goes through the bounded `pollProviderOperationJson` helper and the download path already uses `readResponseWithLimit`, so the create-submit JSON read at `extensions/openai/video-generation-provider.ts` was the one remaining unbounded success-path read. This is a defense-in-depth fix and a sibling-consistency cleanup: in practice the OpenAI submit response is a small control JSON (`{ id, model, status, ... }`), but the read was not bounded the way the rest of this provider and the already-merged byteplus/google/qwen video bounds are.\n\n## Changes\n\n- Replace the create-submit `(await response.json()) as OpenAIVideoResponse` with the shared `readProviderJsonResponse` helper from `openclaw/plugin-sdk/provider-http`, reusing the existing 16 MiB provider JSON cap; no new abstraction.\n- Preserve the existing `assertOkOrThrowHttpError` behavior, the `submitted.id` / status extraction, the poll and download paths, and the `release()` cleanup.\n- Keep the shared `provider-http` test mock's `readProviderJsonResponse` reader real (via `importActual`) so the streaming size cap is exercised under test instead of stubbed, and update the focused OpenAI video tests to stream their submit/poll JSON through real `Response` bodies.\n\n## Real behavior proof\n\n- **Behavior addressed**: An untrusted OpenAI video create-submit JSON body must not be buffered whole on the success path. An oversized no-`Content-Length` body must stop at the 16 MiB cap, cancel the stream, and throw a bounded `...exceeds 16777216 bytes` error. Small valid JSON must continue to parse and the full poll + download path must keep working.\n- **Real environment tested**: A real `node:http` server (`createServer`) bound to `127.0.0.1`, streaming JSON in 64 KiB chunks with no `Content-Length` header and a would-stream size of about 64 MiB. The script drove the real exported `buildOpenAIVideoGenerationProvider().generateVideo()` over a real loopback socket through the real `postJsonRequest`, guarded fetch path, and `readProviderJsonResponse`, using the provider's request-level `allowPrivateNetwork` opt-in for the loopback target. Node v22.22.0.\n- **Exact steps**: `node --import tsx <scratchpad>/proof.mts` — start the streaming server → call the real provider create-submit against the streaming route and assert a bounded throw plus a server-side socket abort near the cap → run a negative control using the old unbounded `fetch().arrayBuffer()` against the same body → call the real provider against a small valid submit JSON and drive the full poll + download path.\n- **Observed result**: the create-submit read threw `OpenAI video generation failed: JSON response exceeds 16777216 bytes` and the server aborted after 17,825,799 bytes (just past the cap, far below the ~64 MiB it would have streamed). The negative control buffered the full 67,108,871 bytes, proving the cap is load-bearing. The small happy path parsed the submit JSON and returned the generated video through the real poll + download path.\n- **What was not tested**: I did not hit the live OpenAI Sora endpoint; a live endpoint would not reproduce a hostile oversized body. This OpenAI submit response is normally a small control JSON, so this is a defense-in-depth bound rather than a fix for an observed live OOM. The real socket proof covers the transport, the cap, and the cancellation behavior; the provider-wiring is also covered by the focused in-repo Vitest regressions using the same shared reader and error text. The proof script is not committed.\n\n## Evidence\n\nReal `node:http` terminal proof (real loopback socket, real exported OpenAI provider, real bounded reader):\n\n```\n[proof] real node:http server on http://127.0.0.1:42387/v1, cap=16777216 bytes, would-stream≈67108864 bytes on overflow route\n\nPASS  create-submit JSON: overflow throws bounded error :: threw=true msg=\"OpenAI video generation failed: JSON response exceeds 16777216 bytes\"\nPASS  create-submit JSON: stream cancelled near 16MiB :: aborted=true bytesSent=17825799 (<33554432)\nPASS  negative control: OLD unbounded read buffers PAST the 16MiB cap :: buffered=67108871 bytes (> 16777216)\nPASS  negative control consumed far more than the bounded read :: unbounded buffered=67108871 vs bounded submit sent≈17825799\nPASS  happy path: small submit JSON parses and full poll+download works :: err=undefined bytes=15 status=completed\n\n[proof] 5 PASS / 0 FAIL\n[proof] ALL PASS\n```\n\nFocused Vitest:\n\n```\nnode scripts/test-projects.mjs extensions/openai/video-generation-provider.test.ts\n\nTest Files  1 passed (1)\nTests  14 passed (14)\n```\n\nType checks:\n\n```\nnode scripts/run-tsgo.mjs -p tsconfig.extensions.json ...                       # extensions source: 0 errors\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json ...    # extensions tests: 0 errors\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json ...          # core tests (shared mock): 0 errors\n```\n\nLint and format:\n\n```\noxlint extensions/openai/video-generation-provider.ts extensions/openai/video-generation-provider.test.ts src/plugin-sdk/test-helpers/provider-http-mocks.ts   # 0 problems\noxfmt --write ...   # formatted\ngit diff --check     # clean\n```\n\nNote: the repo autoreview step could not run because its review LLM gateway returned `503 Service Unavailable` during this session; the checks above were run locally instead.\n\n**Label**: security\n\n_AI-assisted._\n",
-        "branch": "fix/bound-openai-video",
-        "head_sha": "503810a6a01d795883e8c528bb18705009c4a660",
+        "title": "fix(minimax): bound video control response reads",
+        "body": "## What Problem This Solves\n\nThe MiniMax video provider read several **success/control-path** JSON responses with unbounded `await response.json()`, so a misbehaving or hostile MiniMax endpoint could stream an arbitrarily large body into memory before parsing and exhaust the process (OOM / hang). The HTTP error path is already bounded by `assertOkOrThrowHttpError`; this closes the matching gap on the MiniMax video success/control side.\n\nThree video JSON reads are affected:\n\n- `extensions/minimax/video-generation-provider.ts` — video generation **task submit** response\n- `extensions/minimax/video-generation-provider.ts` — video generation **status poll** response\n- `extensions/minimax/video-generation-provider.ts` — video generation `file_id` metadata response before the binary download\n\nMiniMax TTS is already bounded and is left unchanged. MiniMax image response sizing is intentionally left out of this PR because image responses can carry large inline base64 payloads and should use an image-sized cap in the broader image-response hardening work.\n\n## Changes\n\n- Read all three MiniMax video success/control JSON bodies through the shared bounded reader `readProviderJsonResponse` (16 MiB cap), which cancels the underlying stream on overflow instead of buffering the whole payload.\n- No new abstraction added; this reuses the existing plugin-SDK helper already used by sibling provider paths.\n- Keep the MiniMax provider HTTP tests' `readProviderJsonResponse` implementation real via `importActual`, while continuing to mock transport/auth seams.\n- Update MiniMax video tests to use real `Response` JSON fixtures and add a focused `file_id` metadata overflow regression proving the metadata path fails before attempting the binary download.\n- Remove the MiniMax image-provider change from this branch so image-sized response caps can be handled by the broader image hardening PR without conflicting with this video-focused fix.\n\n## Real behavior proof\n\n- **Behavior addressed:** an untrusted MiniMax video success/control JSON response that streams more than 16 MiB must be rejected without buffering the full body; small/legitimate responses must still parse.\n- **Real environment tested:** a real `node:http` loopback server streaming a >16 MiB JSON body with **no Content-Length** (chunked), fetched over a real TCP socket, driving the exact export the patched video paths now call (`readProviderJsonResponse`).\n- **Exact steps:**\n  1. Loopback server streams ~20 MiB of an open JSON object body (no Content-Length).\n  2. `fetch()` the body over TCP, then call `readProviderJsonResponse(response, label)` with the same labels the patched MiniMax video sites pass.\n  3. Assert it throws `... JSON response exceeds 16777216 bytes` and that the client cancelled the socket before the full body was delivered.\n  4. Negative control: emulate the removed unbounded `await response.json()` path and confirm it buffers past the 16 MiB cap.\n  5. Happy path: a small JSON object still parses correctly through the bounded reader.\n- **Observed result:** bounded throw fires, the socket is aborted, the server never delivers the full body, the unbounded control buffers past the cap, and the happy path parses. See Evidence.\n- **What was not tested:** no live calls to the real MiniMax API (no credentials); loopback upstream proof exercises the real TCP + fetch + reader path.\n\n## Evidence\n\nOriginal loopback proof:\n\n```\n$ node --import tsx proof-minimax-bound.mts\nPASS: [MiniMax video generation failed] bounded throw on oversize stream -- msg=\"MiniMax video generation failed: JSON response exceeds 16777216 bytes\"\nPASS: [MiniMax video generation failed] stream cancelled (socket aborted by client) -- aborted=true\nPASS: [MiniMax video generation failed] bytesSent (18808858) < full body (20971520) -- bytesSent=18808858\nPASS: negative control: unbounded read buffers PAST the 16 MiB cap -- buffered=16823166 > cap=16777216\nPASS: happy path: small JSON parses through bounded reader -- parsed.task_id=task-123\n\nALL PROOFS PASSED\n```\n\nRefreshed current-head focused regression after adding the `file_id` metadata bound and narrowing this PR to MiniMax video:\n\n```\n$ node scripts/run-vitest.mjs extensions/minimax/video-generation-provider.test.ts -- --run\n\n Test Files  1 passed (1)\n      Tests  6 passed (6)\n```\n\n```\n$ git diff --check\n# no output\n```\n\nKnown validation note: `node scripts/run-tsgo.mjs -p extensions/minimax/tsconfig.json --incremental false` currently fails in existing `extensions/minimax/oauth.ts` imports from `openclaw/plugin-sdk/number-runtime`; that file is outside this PR's touched surface.\n\n**Label**: security\n\n_AI-assisted._\n\n---\n\n**Post-rebase scope note:** This PR is video-only and unchanged in intent. The MiniMax image-response bound referenced above as \"future work\" has since landed on `main`, so there is no remaining image hunk here — this PR bounds only the three MiniMax video success/control JSON reads (`video-generation-provider.ts`: task submit, status poll, and `file_id` metadata).\n",
+        "branch": "fix/bound-minimax",
+        "head_sha": "2149eff05f088db5ce02890ac08fc35eeb3e5f76",
         "author": "alix-007",
         "labels": [
           "size: S",
-          "extensions: openai",
+          "extensions: minimax",
           "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
+          "P1",
+          "rating: 🦞 diamond lobster",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/openai/video-generation-provider.test.ts",
-            "additions": 53,
-            "deletions": 63,
+            "path": "extensions/minimax/provider-http.test-helpers.ts",
+            "additions": 28,
+            "deletions": 24,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/openai/video-generation-provider.ts",
-            "additions": 5,
-            "deletions": 1,
+            "path": "extensions/minimax/video-generation-provider.test.ts",
+            "additions": 85,
+            "deletions": 38,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/minimax/video-generation-provider.ts",
+            "additions": 13,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 58,
-        "deletions": 64,
+        "changedFiles": 3,
+        "additions": 126,
+        "deletions": 65,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96905",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96905.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-96889",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96889.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -136,18 +141,13 @@
           "total": 83,
           "gatingTotal": 78,
           "counts": {
-            "SUCCESS": 17,
+            "SUCCESS": 27,
             "SKIPPED": 25,
-            "IN_PROGRESS": 41
+            "IN_PROGRESS": 31
           },
           "blockers": [
-            "pnpm-store-warmup:IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
             "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
@@ -155,7 +155,6 @@
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
@@ -174,23 +173,14 @@
             "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
-            "pnpm-store-warmup:IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
             "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
@@ -198,7 +188,6 @@
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
@@ -217,14 +206,10 @@
             "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -236,19 +221,19 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4446,
+    "total_ms": 5733,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 568
+        "ms": 2259
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1475
+        "ms": 1403
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -260,7 +245,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2376
+        "ms": 2046
       },
       {
         "name": "append_ledger",
