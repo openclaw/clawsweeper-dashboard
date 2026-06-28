@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-28T19:43:34.566Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-28T19:44:36.510Z",
+  "repo": "openclaw/Peekaboo",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-28T16:43:32.887Z",
+  "since": "2026-06-28T16:44:35.054Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    96158
+    204
   ],
-  "comment_ids": [
-    4827185726
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 4,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,18 +31,117 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96158:4827185726:2026-06-28T19:41:20Z:re_review",
-      "comment_id": "4827185726",
-      "comment_version_key": "4827185726:2026-06-28T19:41:20Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96158#issuecomment-4827185726",
-      "repo": "openclaw/openclaw",
+      "idempotency_key": "clawsweeper-repair:openclaw/Peekaboo:204:4826526781:2026-06-28T19:44:32Z:clawsweeper_auto_repair",
+      "comment_id": "4826526781",
+      "comment_version_key": "4826526781:2026-06-28T19:44:32Z",
+      "comment_url": "https://github.com/openclaw/Peekaboo/pull/204#issuecomment-4826526781",
+      "repo": "openclaw/Peekaboo",
       "target_branch": null,
-      "issue_number": 96158,
-      "author": "giodl73-repo",
-      "author_id": 235387111,
+      "issue_number": 204,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-28T15:18:05Z",
+      "comment_updated_at": "2026-06-28T19:44:32Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=d9d092c8db2abf5ffeaf6a1756a800955ffa6625)",
+      "review_summary": "The PR stores and cancels the Whisper recorder observer task, adds a cancellation guard to the speech recorder polling loop, and adds a standalone Swift proof script.\n\nReproducibility: yes. for the source-level cancellation gap: current main has an unowned Speech.swift polling task with swallowed sleep cancellation. I did not reproduce a live microphone or view-dismissal path on macOS.",
+      "review_followup": "- [P1] The remaining blocker is lifecycle/proof adequacy and maintainer preference on the standalone script, not a safe automated repair lane.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "d9d092c8db2abf5ffeaf6a1756a800955ffa6625",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(speech): honor task cancellation in recorder poll loop",
+        "body": "## Summary\n\nThe `observeRecorderState()` poll loop in `Speech.swift` uses `try? await Task.sleep(nanoseconds:)` to throttle polling. The `try?` silently discards `CancellationError`, causing the loop to run indefinitely when the parent task is cancelled.\n\nAdditionally, the observer task handle was discarded (fire-and-forget `Task { }`), so `stopListening()` had no way to cancel the poll loop. The `Task.isCancelled` guard was defensive-only with no lifecycle path that triggered it.\n\n## Problem\n\nWhen the speech recognizer's parent task is cancelled (e.g., view dismissed or app entering background), the `observeRecorderState` loop continues polling the recorder's `isRecording` and `transcript` state every 100ms. The loop only exits when `self.isListening` becomes false or `recorder.isRecording` becomes false, but neither is set by task cancellation.\n\nThe `try? await Task.sleep` pattern swallows `CancellationError` along with other errors. Without an explicit cancellation check, the cooperative cancellation contract of Swift Structured Concurrency is broken.\n\n## Fix\n\nTwo changes:\n\n1. **Store the observer task handle** in `recorderObserverTask` (was fire-and-forget `Task { }`). Cancel it in `stopListening()` before stopping the recorder. This connects the cancellation guard to a real lifecycle path.\n\n2. **Add `guard !Task.isCancelled else { break }`** after the `try? await Task.sleep` call. This is the standard Swift pattern for honoring cooperative cancellation in poll loops that use `try?`.\n\n## Origin\n\nThe poll loop was introduced in commit `babc87d58` (2025-07-30, Peter Steinberger) as part of the original speech recognizer implementation, approximately 11 months ago.\n\n## Real behavior proof\n\n- **Behavior addressed:** The `observeRecorderState()` poll loop in `Speech.swift` ignores task cancellation because `try? await Task.sleep` silently discards `CancellationError`. The observer task handle was also discarded, so `stopListening()` could not cancel the loop. Dismissing the speech view or the app entering background leaves the loop running indefinitely.\n- **Real environment tested:** macOS 26, Swift 6.3.3 (swiftlang-6.3.3.1.3), built from patched source on `fix/speech-poll-cancellation` branch.\n- **Exact steps or command run after this patch:**\n\n  ```bash\n  cd /Users/sebastientardif/Peekaboo\n  git checkout fix/speech-poll-cancellation\n\n  # Step 1. Compile standalone proof script\n  swiftc -parse-as-library -o /tmp/prove-speech \\\n    scripts/prove-speech-poll-cancellation.swift\n\n  # Step 2. Run proof\n  /tmp/prove-speech\n\n  # Step 3. Verify guard placement and task handle storage\n  grep -n 'Task.isCancelled\\|recorderObserverTask' Apps/Mac/Peekaboo/Core/Speech.swift\n  ```\n\n- **Evidence after fix:** terminal output from the standalone cancellation proof:\n\n  ```console\n  $ swiftc -parse-as-library -o /tmp/prove-speech scripts/prove-speech-poll-cancellation.swift && /tmp/prove-speech\n  === Speech poll-loop cancellation proof ===\n\n  Test 1: Unfixed pattern (try? swallows CancellationError)\n    Loops executed: 20 (expected: all 20, cancellation ignored)\n    Elapsed: 160ms\n\n  Test 2: Fixed pattern (Task.isCancelled guard after sleep)\n    Loops executed: 2 (expected: ~2, exits on cancellation)\n    Elapsed: 158ms\n\n  ✅ PASS: Unfixed loop ran 20 iterations (ignores cancel)\n  ✅ PASS: Fixed loop ran 2 iterations (respects cancel)\n  ✅ The Task.isCancelled guard stops the poll loop promptly on cancellation.\n  ```\n\n  Task handle storage and cancellation path verified:\n\n  ```console\n  $ grep -n 'Task.isCancelled\\|recorderObserverTask' Apps/Mac/Peekaboo/Core/Speech.swift\n  107:    private var recorderObserverTask: Task<Void, Never>?\n  199:            self.recorderObserverTask?.cancel()\n  200:            self.recorderObserverTask = nil\n  283:        self.recorderObserverTask = Task {\n  304:            guard !Task.isCancelled else { break }\n  ```\n\n- **Observed result after fix:** The unfixed pattern runs all 20 iterations (ignoring cancellation) because `try?` causes `Task.sleep` to return instantly on a cancelled task without throwing. The fixed pattern exits after 2 iterations because `Task.isCancelled` catches the cancellation state. The stored task handle ensures `stopListening()` can cancel the observer through a real lifecycle path.\n- **What was not tested:** Live cancellation with active speech recognition (requires microphone access and SFSpeechRecognizer authorization). The standalone proof reproduces the exact poll-loop pattern from observeRecorderState().\n\n## Related\n\n- Same bug class fixed in #193 (merged): `fix(capture): honor stop during watch transient backoff`\n- Cancellation guards in `waitForImage`: commits `dd6d47fd`, `dc75fe4f`\n\n",
+        "branch": "fix/speech-poll-cancellation",
+        "head_sha": "d9d092c8db2abf5ffeaf6a1756a800955ffa6625",
+        "author": "sebtardif",
+        "labels": [
+          "status: 📣 needs proof",
+          "P2",
+          "rating: 🧂 unranked krab"
+        ],
+        "files": [
+          {
+            "path": "Apps/Mac/Peekaboo/Core/Speech.swift",
+            "additions": 8,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/prove-speech-poll-cancellation.swift",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 88,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-peekaboo-204",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-peekaboo-204.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 4,
+          "gatingTotal": 4,
+          "counts": {
+            "SUCCESS": 3,
+            "IN_PROGRESS": 1
+          },
+          "blockers": [
+            "Peekaboo CLI build & tests:IN_PROGRESS"
+          ],
+          "pending": [
+            "Peekaboo CLI build & tests:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/Peekaboo:204:4827167540:2026-06-28T19:34:00Z:re_review",
+      "comment_id": "4827167540",
+      "comment_version_key": "4827167540:2026-06-28T19:34:00Z",
+      "comment_url": "https://github.com/openclaw/Peekaboo/pull/204#issuecomment-4827167540",
+      "repo": "openclaw/Peekaboo",
+      "target_branch": null,
+      "issue_number": 204,
+      "author": "SebTardif",
+      "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-28T19:41:20Z",
-      "comment_updated_at": "2026-06-28T19:41:20Z",
+      "comment_created_at": "2026-06-28T19:34:00Z",
+      "comment_updated_at": "2026-06-28T19:34:00Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -70,132 +167,180 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "write",
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "Add marketplace feed entries command",
-        "body": "<!-- hosted-feed-stack:start -->\r\n## Hosted Marketplace Feed Stack\r\n\r\nThis is PR8 in the hosted marketplace feed stack. The stack should land in order, with maintainer review at each step before later PRs wire hosted marketplace data into broader user flows.\r\n\r\n1. #95846: refactor the bundled external plugin catalog toward the feed-shaped data model.\r\n2. #95868: add the lazy hosted marketplace feed loader for the configured public feed URL, with guarded HTTPS fetch, checksum, schema, size, timeout, and bundled fallback behavior.\r\n3. #95877: add accepted hosted snapshot fallback so a failed or unchanged hosted fetch can reuse the last valid feed payload.\r\n4. #95964: persist hosted marketplace feed snapshots in OpenClaw state.\r\n5. #95969: add marketplace source profile validation for hosted feed install candidates.\r\n6. #95981: add configurable `marketplaces.feeds` and `marketplaces.sources` profiles.\r\n7. #96155: add `openclaw plugins marketplace refresh` as the explicit manual snapshot refresh path.\r\n8. #96158: add `openclaw plugins marketplace entries` as the explicit manual read path over hosted, snapshot, or bundled fallback entries.\r\n9. #96194: add marketplace feed telemetry.\r\n<!-- hosted-feed-stack:end -->\r\n\r\n## Summary\r\n\r\nAdds `openclaw plugins marketplace entries`, an explicit read path over the configured OpenClaw marketplace feed. The command lists normalized entries and reports whether they came from a fresh hosted payload, an accepted hosted snapshot, or bundled fallback data.\r\n\r\n## What Changed\r\n\r\n- Adds `plugins marketplace entries` with `--feed-profile`, `--feed-url`, `--offline`, and `--json`.\r\n- Normalizes listed entries into id, label, kind, package/version, and install metadata.\r\n- Reuses the hosted catalog loader offline mode so callers can read the latest accepted snapshot without fetching the feed.\r\n- Updates plugin CLI docs and lazy CLI dispatch coverage.\r\n- Adds focused entries-command tests for parser dispatch, JSON output, redacted feed URLs, bundled fallback output, and offline snapshot behavior.\r\n\r\n## Validation\r\n\r\nPrepared head: `fd69293cd9` rebased onto current `main` after #96155 merged; includes the ClawSweeper-requested docs coverage for entries `--feed-profile` and `--feed-url`.\r\n\r\n- `pnpm exec oxfmt docs/cli/plugins.md src/cli/plugins-cli.ts src/cli/plugins-cli.runtime.ts src/cli/plugins-cli.lazy.test.ts src/cli/plugins-cli.marketplace-entries.test.ts`\r\n- `pnpm exec oxlint --deny-warnings src/cli/plugins-cli.ts src/cli/plugins-cli.runtime.ts src/cli/plugins-cli.lazy.test.ts src/cli/plugins-cli.marketplace-entries.test.ts`\r\n- `CI=1 node scripts/test-projects.mjs src/cli/plugins-cli.lazy.test.ts src/cli/plugins-cli.marketplace-refresh.test.ts src/cli/plugins-cli.marketplace-entries.test.ts src/plugins/official-external-plugin-catalog.test.ts`\r\n- `pnpm tsgo:core:test`\r\n- `pnpm docs:check-mdx`\r\n- `git diff --check`\r\n- `codex review --base origin/main`\r\n\r\nCodex review reported no actionable correctness issues.\r\n\r\n## Real Behavior Proof\r\n\r\nBehavior tested at `fd69293cd9`: offline entries reads through the runtime command without a hosted fetch and renders normalized bundled fallback entries.\r\n\r\nReal environment: Windows checkout `C:\\src\\openclaw-prflow\\.worktrees\\pr-96158`, isolated `OPENCLAW_HOME=%TEMP%\\openclaw-pr96158-proof`, source runtime via `node --import tsx`.\r\n\r\nCommand:\r\n\r\n```bash\r\nnode --import tsx -e \"const runtime = await import('./src/cli/plugins-cli.runtime.ts'); await runtime.runPluginMarketplaceEntriesCommand({ offline: true, json: true });\"\r\n```\r\n\r\nObserved excerpt:\r\n\r\n```json\r\n{\r\n  \"source\": \"bundled-fallback\",\r\n  \"error\": \"hosted catalog feed offline mode\",\r\n  \"entryCount\": 74,\r\n  \"entries\": [\r\n    {\r\n      \"label\": \"WeCom\",\r\n      \"id\": \"wecom-openclaw-plugin\",\r\n      \"kind\": \"channel\",\r\n      \"name\": \"@wecom/wecom-openclaw-plugin\",\r\n      \"install\": { \"npmSpec\": \"@wecom/wecom-openclaw-plugin@2026.5.7\" }\r\n    }\r\n  ]\r\n}\r\n```\r\n\r\nWhat was not tested: this proof intentionally uses offline bundled fallback mode, not a fresh hosted request. Fresh hosted refresh is covered by #96155.\r\n\r\n",
-        "branch": "feeds-hosted-catalog-marketplace-entries",
-        "head_sha": "fd69293cd9846deab3ca68f6f06c2f2f089098bf",
-        "author": "giodl73-repo",
+        "title": "fix(speech): honor task cancellation in recorder poll loop",
+        "body": "## Summary\n\nThe `observeRecorderState()` poll loop in `Speech.swift` uses `try? await Task.sleep(nanoseconds:)` to throttle polling. The `try?` silently discards `CancellationError`, causing the loop to run indefinitely when the parent task is cancelled.\n\nAdditionally, the observer task handle was discarded (fire-and-forget `Task { }`), so `stopListening()` had no way to cancel the poll loop. The `Task.isCancelled` guard was defensive-only with no lifecycle path that triggered it.\n\n## Problem\n\nWhen the speech recognizer's parent task is cancelled (e.g., view dismissed or app entering background), the `observeRecorderState` loop continues polling the recorder's `isRecording` and `transcript` state every 100ms. The loop only exits when `self.isListening` becomes false or `recorder.isRecording` becomes false, but neither is set by task cancellation.\n\nThe `try? await Task.sleep` pattern swallows `CancellationError` along with other errors. Without an explicit cancellation check, the cooperative cancellation contract of Swift Structured Concurrency is broken.\n\n## Fix\n\nTwo changes:\n\n1. **Store the observer task handle** in `recorderObserverTask` (was fire-and-forget `Task { }`). Cancel it in `stopListening()` before stopping the recorder. This connects the cancellation guard to a real lifecycle path.\n\n2. **Add `guard !Task.isCancelled else { break }`** after the `try? await Task.sleep` call. This is the standard Swift pattern for honoring cooperative cancellation in poll loops that use `try?`.\n\n## Origin\n\nThe poll loop was introduced in commit `babc87d58` (2025-07-30, Peter Steinberger) as part of the original speech recognizer implementation, approximately 11 months ago.\n\n## Real behavior proof\n\n- **Behavior addressed:** The `observeRecorderState()` poll loop in `Speech.swift` ignores task cancellation because `try? await Task.sleep` silently discards `CancellationError`. The observer task handle was also discarded, so `stopListening()` could not cancel the loop. Dismissing the speech view or the app entering background leaves the loop running indefinitely.\n- **Real environment tested:** macOS 26, Swift 6.3.3 (swiftlang-6.3.3.1.3), built from patched source on `fix/speech-poll-cancellation` branch.\n- **Exact steps or command run after this patch:**\n\n  ```bash\n  cd /Users/sebastientardif/Peekaboo\n  git checkout fix/speech-poll-cancellation\n\n  # Step 1. Compile standalone proof script\n  swiftc -parse-as-library -o /tmp/prove-speech \\\n    scripts/prove-speech-poll-cancellation.swift\n\n  # Step 2. Run proof\n  /tmp/prove-speech\n\n  # Step 3. Verify guard placement and task handle storage\n  grep -n 'Task.isCancelled\\|recorderObserverTask' Apps/Mac/Peekaboo/Core/Speech.swift\n  ```\n\n- **Evidence after fix:** terminal output from the standalone cancellation proof:\n\n  ```console\n  $ swiftc -parse-as-library -o /tmp/prove-speech scripts/prove-speech-poll-cancellation.swift && /tmp/prove-speech\n  === Speech poll-loop cancellation proof ===\n\n  Test 1: Unfixed pattern (try? swallows CancellationError)\n    Loops executed: 20 (expected: all 20, cancellation ignored)\n    Elapsed: 160ms\n\n  Test 2: Fixed pattern (Task.isCancelled guard after sleep)\n    Loops executed: 2 (expected: ~2, exits on cancellation)\n    Elapsed: 158ms\n\n  ✅ PASS: Unfixed loop ran 20 iterations (ignores cancel)\n  ✅ PASS: Fixed loop ran 2 iterations (respects cancel)\n  ✅ The Task.isCancelled guard stops the poll loop promptly on cancellation.\n  ```\n\n  Task handle storage and cancellation path verified:\n\n  ```console\n  $ grep -n 'Task.isCancelled\\|recorderObserverTask' Apps/Mac/Peekaboo/Core/Speech.swift\n  107:    private var recorderObserverTask: Task<Void, Never>?\n  199:            self.recorderObserverTask?.cancel()\n  200:            self.recorderObserverTask = nil\n  283:        self.recorderObserverTask = Task {\n  304:            guard !Task.isCancelled else { break }\n  ```\n\n- **Observed result after fix:** The unfixed pattern runs all 20 iterations (ignoring cancellation) because `try?` causes `Task.sleep` to return instantly on a cancelled task without throwing. The fixed pattern exits after 2 iterations because `Task.isCancelled` catches the cancellation state. The stored task handle ensures `stopListening()` can cancel the observer through a real lifecycle path.\n- **What was not tested:** Live cancellation with active speech recognition (requires microphone access and SFSpeechRecognizer authorization). The standalone proof reproduces the exact poll-loop pattern from observeRecorderState().\n\n## Related\n\n- Same bug class fixed in #193 (merged): `fix(capture): honor stop during watch transient backoff`\n- Cancellation guards in `waitForImage`: commits `dd6d47fd`, `dc75fe4f`\n\n",
+        "branch": "fix/speech-poll-cancellation",
+        "head_sha": "d9d092c8db2abf5ffeaf6a1756a800955ffa6625",
+        "author": "sebtardif",
         "labels": [
-          "docs",
-          "cli",
-          "maintainer",
-          "size: M",
-          "proof: sufficient",
+          "status: 📣 needs proof",
           "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "rating: 🧂 unranked krab"
         ],
         "files": [
           {
-            "path": "docs/cli/plugins.md",
-            "additions": 13,
-            "deletions": 1,
+            "path": "Apps/Mac/Peekaboo/Core/Speech.swift",
+            "additions": 8,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/plugins-cli.lazy.test.ts",
-            "additions": 30,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/plugins-cli.marketplace-entries.test.ts",
-            "additions": 194,
+            "path": "scripts/prove-speech-poll-cancellation.swift",
+            "additions": 80,
             "deletions": 0,
             "changeType": "ADDED"
-          },
-          {
-            "path": "src/cli/plugins-cli.runtime.ts",
-            "additions": 106,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/plugins-cli.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 362,
-        "deletions": 1,
+        "changedFiles": 2,
+        "additions": 88,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96158",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96158.md",
+        "automerge_cluster_id": "automerge-openclaw-peekaboo-204",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-peekaboo-204.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 92,
-          "gatingTotal": 87,
+          "total": 4,
+          "gatingTotal": 4,
           "counts": {
-            "SUCCESS": 51,
-            "SKIPPED": 26,
-            "IN_PROGRESS": 14,
-            "NEUTRAL": 1
+            "SUCCESS": 3,
+            "IN_PROGRESS": 1
           },
           "blockers": [
-            "pnpm-store-warmup:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
+            "Peekaboo CLI build & tests:IN_PROGRESS"
           ],
           "pending": [
-            "pnpm-store-warmup:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
+            "Peekaboo CLI build & tests:IN_PROGRESS"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false,
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
       "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/Peekaboo:204:4826804384:2026-06-28T17:09:06Z:freeform_assist",
+      "comment_id": "4826804384",
+      "comment_version_key": "4826804384:2026-06-28T17:09:06Z",
+      "comment_url": "https://github.com/openclaw/Peekaboo/pull/204#issuecomment-4826804384",
+      "repo": "openclaw/Peekaboo",
+      "target_branch": null,
+      "issue_number": 204,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-28T17:09:06Z",
+      "comment_updated_at": "2026-06-28T17:09:06Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "> canonical path: close this pr as superseded by https://github.com/openclaw/peekaboo/pull/193. this pr is not superseded by #193. they fix the same bug class (`try? await task.sleep` swallowing `cancellationerror`) but in completely different files: - **#193** (merged) fixed `watchcapturesession+loop.swift` - **#204** fixes `speech.swift` there is zero code overlap between the two prs. > the proposed guard is not connected to a cancellable observation task fair point. the `task { }` at line 279 discards the handle, so `stoplistening()` currently exits the loop via the `while self.islistening` condition rather than task cancellation. the guard is defensive coding that costs nothing (one boolean check) and matches the pattern established by #193. it protects against future refactoring that stores the task handle, and is correct behavior if the enclosing structured concurrency scope is ever cancelled.",
+      "intent": "freeform_assist",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "> Canonical path: Close this PR as superseded by https://github.com/openclaw/Peekaboo/pull/193. This PR is not superseded by #193. They fix the same bug class (`try? await Task.sleep` swallowing `CancellationError`) but in completely different files: - **#193** (merged) fixed `WatchCaptureSession+Loop.swift` - **#204** fixes `Speech.swift` There is zero code overlap between the two PRs. > the proposed guard is not connected to a cancellable observation task Fair point. The `Task { }` at line 279 discards the handle, so `stopListening()` currently exits the loop via the `while self.isListening` condition rather than task cancellation. The guard is defensive coding that costs nothing (one boolean check) and matches the pattern established by #193. It protects against future refactoring that stores the task handle, and is correct behavior if the enclosing structured concurrency scope is ever cancelled.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(speech): honor task cancellation in recorder poll loop",
+        "body": "## Summary\n\nThe `observeRecorderState()` poll loop in `Speech.swift` uses `try? await Task.sleep(nanoseconds:)` to throttle polling. The `try?` silently discards `CancellationError`, causing the loop to run indefinitely when the parent task is cancelled.\n\nAdditionally, the observer task handle was discarded (fire-and-forget `Task { }`), so `stopListening()` had no way to cancel the poll loop. The `Task.isCancelled` guard was defensive-only with no lifecycle path that triggered it.\n\n## Problem\n\nWhen the speech recognizer's parent task is cancelled (e.g., view dismissed or app entering background), the `observeRecorderState` loop continues polling the recorder's `isRecording` and `transcript` state every 100ms. The loop only exits when `self.isListening` becomes false or `recorder.isRecording` becomes false, but neither is set by task cancellation.\n\nThe `try? await Task.sleep` pattern swallows `CancellationError` along with other errors. Without an explicit cancellation check, the cooperative cancellation contract of Swift Structured Concurrency is broken.\n\n## Fix\n\nTwo changes:\n\n1. **Store the observer task handle** in `recorderObserverTask` (was fire-and-forget `Task { }`). Cancel it in `stopListening()` before stopping the recorder. This connects the cancellation guard to a real lifecycle path.\n\n2. **Add `guard !Task.isCancelled else { break }`** after the `try? await Task.sleep` call. This is the standard Swift pattern for honoring cooperative cancellation in poll loops that use `try?`.\n\n## Origin\n\nThe poll loop was introduced in commit `babc87d58` (2025-07-30, Peter Steinberger) as part of the original speech recognizer implementation, approximately 11 months ago.\n\n## Real behavior proof\n\n- **Behavior addressed:** The `observeRecorderState()` poll loop in `Speech.swift` ignores task cancellation because `try? await Task.sleep` silently discards `CancellationError`. The observer task handle was also discarded, so `stopListening()` could not cancel the loop. Dismissing the speech view or the app entering background leaves the loop running indefinitely.\n- **Real environment tested:** macOS 26, Swift 6.3.3 (swiftlang-6.3.3.1.3), built from patched source on `fix/speech-poll-cancellation` branch.\n- **Exact steps or command run after this patch:**\n\n  ```bash\n  cd /Users/sebastientardif/Peekaboo\n  git checkout fix/speech-poll-cancellation\n\n  # Step 1. Compile standalone proof script\n  swiftc -parse-as-library -o /tmp/prove-speech \\\n    scripts/prove-speech-poll-cancellation.swift\n\n  # Step 2. Run proof\n  /tmp/prove-speech\n\n  # Step 3. Verify guard placement and task handle storage\n  grep -n 'Task.isCancelled\\|recorderObserverTask' Apps/Mac/Peekaboo/Core/Speech.swift\n  ```\n\n- **Evidence after fix:** terminal output from the standalone cancellation proof:\n\n  ```console\n  $ swiftc -parse-as-library -o /tmp/prove-speech scripts/prove-speech-poll-cancellation.swift && /tmp/prove-speech\n  === Speech poll-loop cancellation proof ===\n\n  Test 1: Unfixed pattern (try? swallows CancellationError)\n    Loops executed: 20 (expected: all 20, cancellation ignored)\n    Elapsed: 160ms\n\n  Test 2: Fixed pattern (Task.isCancelled guard after sleep)\n    Loops executed: 2 (expected: ~2, exits on cancellation)\n    Elapsed: 158ms\n\n  ✅ PASS: Unfixed loop ran 20 iterations (ignores cancel)\n  ✅ PASS: Fixed loop ran 2 iterations (respects cancel)\n  ✅ The Task.isCancelled guard stops the poll loop promptly on cancellation.\n  ```\n\n  Task handle storage and cancellation path verified:\n\n  ```console\n  $ grep -n 'Task.isCancelled\\|recorderObserverTask' Apps/Mac/Peekaboo/Core/Speech.swift\n  107:    private var recorderObserverTask: Task<Void, Never>?\n  199:            self.recorderObserverTask?.cancel()\n  200:            self.recorderObserverTask = nil\n  283:        self.recorderObserverTask = Task {\n  304:            guard !Task.isCancelled else { break }\n  ```\n\n- **Observed result after fix:** The unfixed pattern runs all 20 iterations (ignoring cancellation) because `try?` causes `Task.sleep` to return instantly on a cancelled task without throwing. The fixed pattern exits after 2 iterations because `Task.isCancelled` catches the cancellation state. The stored task handle ensures `stopListening()` can cancel the observer through a real lifecycle path.\n- **What was not tested:** Live cancellation with active speech recognition (requires microphone access and SFSpeechRecognizer authorization). The standalone proof reproduces the exact poll-loop pattern from observeRecorderState().\n\n## Related\n\n- Same bug class fixed in #193 (merged): `fix(capture): honor stop during watch transient backoff`\n- Cancellation guards in `waitForImage`: commits `dd6d47fd`, `dc75fe4f`\n\n",
+        "branch": "fix/speech-poll-cancellation",
+        "head_sha": "d9d092c8db2abf5ffeaf6a1756a800955ffa6625",
+        "author": "sebtardif",
+        "labels": [
+          "status: 📣 needs proof",
+          "P2",
+          "rating: 🧂 unranked krab"
+        ],
+        "files": [
+          {
+            "path": "Apps/Mac/Peekaboo/Core/Speech.swift",
+            "additions": 8,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/prove-speech-poll-cancellation.swift",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 88,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-peekaboo-204",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-peekaboo-204.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 4,
+          "gatingTotal": 4,
+          "counts": {
+            "SUCCESS": 3,
+            "IN_PROGRESS": 1
+          },
+          "blockers": [
+            "Peekaboo CLI build & tests:IN_PROGRESS"
+          ],
+          "pending": [
+            "Peekaboo CLI build & tests:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1866,
+    "total_ms": 1791,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 482
+        "ms": 370
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1185
+        "ms": 1072
       },
       {
         "name": "classify_comment_commands",
@@ -211,11 +356,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 187
+        "ms": 324
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
