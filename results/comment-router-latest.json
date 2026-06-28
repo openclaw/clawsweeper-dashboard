@@ -1,27 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-28T00:17:42.944Z",
+  "generated_at": "2026-06-28T00:17:55.099Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-27T21:17:42.422Z",
+  "since": "2026-06-27T21:17:52.120Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    90942
+    97265
   ],
   "comment_ids": [
-    4823262219
+    4823266732
   ],
-  "comment_ids": [
-    4823262251
-  ],
-  "status_comment_id": null,
+  "status_comment_id": 4823266867,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -36,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:90942:4823262219:2026-06-28T00:15:21Z:re_review",
-      "comment_id": "4823262219",
-      "comment_version_key": "4823262219:2026-06-28T00:15:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90942#issuecomment-4823262219",
+      "idempotency_key": "comment-router:openclaw/openclaw:97265:4823266732:2026-06-28T00:16:44Z:re_review",
+      "comment_id": "4823266732",
+      "comment_version_key": "4823266732:2026-06-28T00:16:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97265#issuecomment-4823266732",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 53821,
-      "author": "sasan1200",
-      "author_id": 28139727,
+      "target_branch": "main",
+      "issue_number": 97265,
+      "author": "Pick-cat",
+      "author_id": 266665499,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-28T00:15:22Z",
-      "comment_updated_at": "2026-06-28T00:15:22Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-28T00:16:44Z",
+      "comment_updated_at": "2026-06-28T00:16:44Z",
+      "status_comment_id": 4823266867,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -71,22 +68,166 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-28T00:17:56.105Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 97265
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-28T00:17:57.299Z",
+          "response_comment_id": "4823266867",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): tools.effective fails for global sessions on non-default agents",
+        "body": "## What Problem This Solves\n\nFixes an issue where operators viewing the Control UI tools panel for a **global** session on a **non-default agent** would get `agent id \"<requested>\" does not match session agent \"<default>\"` and see no effective tool list.\n\nRepro: call `tools.effective` with `{ sessionKey: \"global\", agentId: \"work\" }` while `work` is a configured agent and the default agent is `main`.\n\n## Why This Change Was Made\n\nTwo wiring gaps caused the false mismatch on global sessions:\n\n1. `resolveTrustedToolsEffectiveContext` called `loadSessionEntry(sessionKey)` without forwarding the validated `requestedAgentId`, so `global` loaded the default agent store.\n2. `resolveSessionAgentId` was not given the requested agent, so a loaded `global` row still resolved to the default agent id before the match guard ran.\n\nThe fix mirrors sibling gateway RPCs: forward `{ agentId: requestedAgentId }` into `loadSessionEntry`, and supply the same agent to `resolveSessionAgentId` **only for canonical `global` keys**.\n\n### Ownership guard (security-boundary correctness)\n\n`resolveSessionAgentId` prefers an explicit `agentId` over the session key. Forwarding `requestedAgentId` for *every* key would let a client override the persisted owner of a **non-global** session — e.g. `tools.effective({ sessionKey: \"agent:main:abc\", agentId: \"work\" })` would resolve under `work` and silently pass the mismatch guard, exposing another agent's effective inventory/model context.\n\nThe override is therefore scoped to canonical `global` keys only (global stores are shared, so the requested agent legitimately selects which agent's global store to read). Non-global keys keep deriving their owner from the session key, so the existing mismatch guard rejects a mismatched agent. This matches the sibling ownership checks in `chat.send` / `sessions.send` (`src/gateway/server-methods/chat.ts`).\n\n## User Impact\n\nOperators can open the effective tools inventory for global sessions scoped to any configured agent (not only the default agent). Non-global sessions remain owner-scoped: a client cannot read another agent's effective tools by passing a mismatched `agentId`. No config or protocol changes.\n\n## Evidence\n\n### Focused unit + integration tests (real session store, real `resolveSessionAgentId`)\n\n```bash\nCI=true OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/gateway/server-methods/tools-effective.test.ts \\\n  src/gateway/server-methods/tools-effective.global-agent.integration.test.ts\n\n# Test Files  4 passed (4)\n# Tests       48 passed (48)\n```\n\nPositive integration proof (`tools-effective.global-agent.integration.test.ts`): seeds separate on-disk `main` and `work` global stores (`session.scope=global`, `{agentId}` template), calls the real `tools.effective` handler with `{ sessionKey: \"global\", agentId: \"work\" }`, and asserts success with inventory resolved under `agentId: \"work\"` / `modelId: \"work-model\"` (the **work** store, not the default).\n\nNegative integration proof (new): seeds a non-global `agent:main:abc` session owned by `main` and calls `{ sessionKey: \"agent:main:abc\", agentId: \"work\" }`; asserts the handler responds `agent id \"work\" does not match session agent \"main\"` and never resolves an inventory. This runs the **real** `loadSessionEntry` + `resolveSessionAgentId`, so it exercises the actual ownership path.\n\nUnit regression (new): for a non-global key, asserts `resolveSessionAgentId` is called **without** the requested-agent override and the request rejects with the mismatch error.\n\n### Negative control (proves the guard is load-bearing)\n\nReverting only the override-narrowing in `tools-effective.ts` to the previous unconditional form and re-running the new mismatch tests:\n\n```\n× rejects a mismatched configured agent for a non-global session key   (integration, real resolver)\n× does not let a requested agent override ownership of a non-global session key   (unit)\n```\n\nBoth fail without the fix (the request succeeds under `work`) and pass with it — confirming the tests catch the ownership bypass rather than incidental behavior.\n\n### Before/after behavior\n\n| Request | Before fix | After fix |\n| --- | --- | --- |\n| `{ sessionKey: \"global\", agentId: \"work\" }` | `agent id \"work\" does not match session agent \"main\"` | `ok: true`, inventory scoped to `work` |\n| `{ sessionKey: \"agent:main:abc\", agentId: \"work\" }` | resolves under `work` (ownership bypass) | rejects: `agent id \"work\" does not match session agent \"main\"` |\n\n### Lint + types\n\n```\nnode scripts/run-oxlint.mjs src/gateway/server-methods/tools-effective.ts \\\n  src/gateway/server-methods/tools-effective.test.ts \\\n  src/gateway/server-methods/tools-effective.global-agent.integration.test.ts   # exit 0\npnpm tsgo --noEmit -p tsconfig.json   # exit 0\npnpm check:test-types                 # exit 0\n```\n\n### Diff scope\n\n- `src/gateway/server-methods/tools-effective.ts` (+9 net): forward requested agent to `loadSessionEntry`; scope the `resolveSessionAgentId` override to canonical `global` keys.\n- `src/gateway/server-methods/tools-effective.test.ts`: add the non-global ownership regression; fix a pre-existing test that queued an unused `loadSessionEntry` mock (it rejected at the unknown-agent check first), which otherwise leaked into sibling tests.\n- `src/gateway/server-methods/tools-effective.global-agent.integration.test.ts`: add the real-path negative (mismatch) case.\n\n🤖 AI-assisted (Claude Code).\n",
+        "branch": "fix/tools-effective-global-agent-id",
+        "head_sha": "6fdf2500f4de696d025bc7d5ab3e0f6076e57c7a",
+        "author": "pick-cat",
+        "labels": [
+          "gateway",
+          "size: M",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-methods/tools-effective.global-agent.integration.test.ts",
+            "additions": 188,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-methods/tools-effective.test.ts",
+            "additions": 69,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/tools-effective.ts",
+            "additions": 14,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 271,
+        "deletions": 9,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97265",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97265.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "gatingTotal": 91,
+          "counts": {
+            "SUCCESS": 36,
+            "SKIPPED": 30,
+            "IN_PROGRESS": 29,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1770,
+    "total_ms": 5879,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 510
+        "ms": 663
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2303
       },
       {
         "name": "classify_comment_commands",
@@ -102,7 +243,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1248
+        "ms": 2888
       },
       {
         "name": "append_ledger",
