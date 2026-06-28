@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-28T00:40:49.091Z",
+  "generated_at": "2026-06-28T00:40:51.830Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-27T21:40:47.188Z",
+  "since": "2026-06-27T21:40:51.324Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     97265
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4823405843
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 7,
-  "commands_seen": 4,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -37,295 +39,12 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/97265#issuecomment-4818801034",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97265,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 90239,
+      "author": "simplyclever914",
+      "author_id": 280986376,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-27T15:31:24Z",
-      "comment_updated_at": "2026-06-28T00:40:43Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- No ClawSweeper repair lane is needed; the remaining action is ordinary maintainer review and required-check completion.; Cleared: Cleared: the diff narrows a security-sensitive requested-agent override and adds negative ownership coverage without changing dependencies, workflows, secrets, package scripts, or generated supply-chain files. (sha=d0dd4f94ed9d54693505f5116ca4094f9b71a3dc)",
-      "review_summary": "The PR changes `tools.effective` to load global session stores with the requested agent id, limits requested-agent ownership override to canonical `global` keys, and adds unit, handler-integration, and Gateway coverage.\n\nPR surface: Source +12, Tests +336. Total +348 across 4 files.\n\nReproducibility: yes. at source level: current main validates the requested agent but then loads and resolves `global` without that agent, so a non-default requested agent can mismatch the default session agent. I did not run tests locally because this review is read-only.",
-      "review_followup": "- No ClawSweeper repair lane is needed; the remaining action is ordinary maintainer review and required-check completion.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "d0dd4f94ed9d54693505f5116ca4094f9b71a3dc",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): tools.effective fails for global sessions on non-default agents",
-        "body": "## What Problem This Solves\n\nFixes an issue where operators viewing the Control UI tools panel for a **global** session on a **non-default agent** would get `agent id \"<requested>\" does not match session agent \"<default>\"` and see no effective tool list.\n\nRepro: call `tools.effective` with `{ sessionKey: \"global\", agentId: \"work\" }` while `work` is a configured agent and the default agent is `main`.\n\n## Why This Change Was Made\n\nTwo wiring gaps caused the false mismatch on global sessions:\n\n1. `resolveTrustedToolsEffectiveContext` called `loadSessionEntry(sessionKey)` without forwarding the validated `requestedAgentId`, so `global` loaded the default agent store.\n2. `resolveSessionAgentId` was not given the requested agent, so a loaded `global` row still resolved to the default agent id before the match guard ran.\n\nThe fix mirrors sibling gateway RPCs: forward `{ agentId: requestedAgentId }` into `loadSessionEntry`, and supply the same agent to `resolveSessionAgentId` **only for canonical `global` keys**.\n\n### Ownership guard (security-boundary correctness)\n\n`resolveSessionAgentId` prefers an explicit `agentId` over the session key. Forwarding `requestedAgentId` for *every* key would let a client override the persisted owner of a **non-global** session — e.g. `tools.effective({ sessionKey: \"agent:main:abc\", agentId: \"work\" })` would resolve under `work` and silently pass the mismatch guard, exposing another agent's effective inventory/model context.\n\nThe override is therefore scoped to canonical `global` keys only (global stores are shared, so the requested agent legitimately selects which agent's global store to read). Non-global keys keep deriving their owner from the session key, so the existing mismatch guard rejects a mismatched agent. This matches the sibling ownership checks in `chat.send` / `sessions.send` (`src/gateway/server-methods/chat.ts`).\n\n## User Impact\n\nOperators can open the effective tools inventory for global sessions scoped to any configured agent (not only the default agent). Non-global sessions remain owner-scoped: a client cannot read another agent's effective tools by passing a mismatched `agentId`. No config or protocol changes.\n\n## Evidence\n\n### Live Gateway proof — real WebSocket RPC against a running Gateway\n\n```\nCI=true OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/gateway/server.tools-effective.global-agent-gateway.test.ts\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n```\n\n`server.tools-effective.global-agent-gateway.test.ts` boots the real Gateway, writes a real config (`agents: [main(default), work]`) plus an on-disk `agent:main:abc` session owned by `main`, connects a real WebSocket client, and sends `tools.effective` RPC with `{ sessionKey: \"agent:main:abc\", agentId: \"work\" }`. The Gateway responds `INVALID_REQUEST` with `agent id \"work\" does not match session agent \"main\"` — the ownership guard rejects over the real RPC path.\n\n**Negative control (same live test on the pre-fix code):** the request gets *past* the ownership guard (it resolves under `work`) and proceeds into inventory resolution, so it no longer returns the mismatch error. This proves the guard is load-bearing on the real Gateway path, not incidental.\n\n### Handler integration proof — real session store + real `resolveSessionAgentId`\n\n```\nCI=true OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/gateway/server-methods/tools-effective.test.ts \\\n  src/gateway/server-methods/tools-effective.global-agent.integration.test.ts\n\n Test Files  4 passed (4)\n      Tests  48 passed (48)\n```\n\nPositive (`tools-effective.global-agent.integration.test.ts`): seeds separate on-disk `main` and `work` global stores (`session.scope=global`, `{agentId}` template) and calls the real `tools.effective` handler with `{ sessionKey: \"global\", agentId: \"work\" }`; asserts success with inventory resolved under `agentId: \"work\"` / `modelId: \"work-model\"` (the **work** store, not the default). The bundled MCP inventory runtime is stubbed here so the inventory resolves without materializing bundled plugin runtime — the live sessions harness stubs the same module, which is why the successful-inventory case lives at this layer.\n\nNegative (new): seeds a non-global `agent:main:abc` session and calls `{ sessionKey: \"agent:main:abc\", agentId: \"work\" }`; asserts the handler rejects with the mismatch error and never resolves an inventory. Runs the **real** `loadSessionEntry` + `resolveSessionAgentId`.\n\nUnit regression (new): for a non-global key, asserts `resolveSessionAgentId` is called **without** the requested-agent override and the request rejects with the mismatch error.\n\n**Negative control (handler + unit):** reverting only the override-narrowing to the previous unconditional form makes both new mismatch tests fail (the request succeeds under `work`); they pass with the fix.\n\n### Before/after behavior\n\n| Request | Before fix | After fix |\n| --- | --- | --- |\n| `{ sessionKey: \"global\", agentId: \"work\" }` | `agent id \"work\" does not match session agent \"main\"` | `ok: true`, inventory scoped to `work` |\n| `{ sessionKey: \"agent:main:abc\", agentId: \"work\" }` | resolves under `work` (ownership bypass) | rejects: `agent id \"work\" does not match session agent \"main\"` |\n\n### Lint + types\n\n```\nnode scripts/run-oxlint.mjs <changed files>   # exit 0\npnpm tsgo --noEmit -p tsconfig.json           # exit 0\npnpm check:test-types                         # exit 0\n```\n\n### Diff scope\n\n- `src/gateway/server-methods/tools-effective.ts` (+9 net): forward requested agent to `loadSessionEntry`; scope the `resolveSessionAgentId` override to canonical `global` keys.\n- `src/gateway/server-methods/tools-effective.test.ts`: add the non-global ownership unit regression; fix a pre-existing test that queued an unused `loadSessionEntry` mock (it rejected at the unknown-agent check first), which otherwise leaked into sibling tests.\n- `src/gateway/server-methods/tools-effective.global-agent.integration.test.ts`: add the real-path negative (mismatch) case.\n- `src/gateway/server.tools-effective.global-agent-gateway.test.ts` (new): live Gateway WebSocket proof of the ownership guard.\n\n🤖 AI-assisted (Claude Code).\n",
-        "branch": "fix/tools-effective-global-agent-id",
-        "head_sha": "d0dd4f94ed9d54693505f5116ca4094f9b71a3dc",
-        "author": "pick-cat",
-        "labels": [
-          "gateway",
-          "size: M",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-methods/tools-effective.global-agent.integration.test.ts",
-            "additions": 188,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-methods/tools-effective.test.ts",
-            "additions": 69,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/tools-effective.ts",
-            "additions": 14,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.tools-effective.global-agent-gateway.test.ts",
-            "additions": 86,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 357,
-        "deletions": 9,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97265",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97265.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 61,
-            "SKIPPED": 31,
-            "IN_PROGRESS": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:97265:4823383747:2026-06-28T00:36:15Z:re_review",
-      "comment_id": "4823383747",
-      "comment_version_key": "4823383747:2026-06-28T00:36:15Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97265#issuecomment-4823383747",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97265,
-      "author": "Pick-cat",
-      "author_id": 266665499,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-28T00:36:15Z",
-      "comment_updated_at": "2026-06-28T00:36:15Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): tools.effective fails for global sessions on non-default agents",
-        "body": "## What Problem This Solves\n\nFixes an issue where operators viewing the Control UI tools panel for a **global** session on a **non-default agent** would get `agent id \"<requested>\" does not match session agent \"<default>\"` and see no effective tool list.\n\nRepro: call `tools.effective` with `{ sessionKey: \"global\", agentId: \"work\" }` while `work` is a configured agent and the default agent is `main`.\n\n## Why This Change Was Made\n\nTwo wiring gaps caused the false mismatch on global sessions:\n\n1. `resolveTrustedToolsEffectiveContext` called `loadSessionEntry(sessionKey)` without forwarding the validated `requestedAgentId`, so `global` loaded the default agent store.\n2. `resolveSessionAgentId` was not given the requested agent, so a loaded `global` row still resolved to the default agent id before the match guard ran.\n\nThe fix mirrors sibling gateway RPCs: forward `{ agentId: requestedAgentId }` into `loadSessionEntry`, and supply the same agent to `resolveSessionAgentId` **only for canonical `global` keys**.\n\n### Ownership guard (security-boundary correctness)\n\n`resolveSessionAgentId` prefers an explicit `agentId` over the session key. Forwarding `requestedAgentId` for *every* key would let a client override the persisted owner of a **non-global** session — e.g. `tools.effective({ sessionKey: \"agent:main:abc\", agentId: \"work\" })` would resolve under `work` and silently pass the mismatch guard, exposing another agent's effective inventory/model context.\n\nThe override is therefore scoped to canonical `global` keys only (global stores are shared, so the requested agent legitimately selects which agent's global store to read). Non-global keys keep deriving their owner from the session key, so the existing mismatch guard rejects a mismatched agent. This matches the sibling ownership checks in `chat.send` / `sessions.send` (`src/gateway/server-methods/chat.ts`).\n\n## User Impact\n\nOperators can open the effective tools inventory for global sessions scoped to any configured agent (not only the default agent). Non-global sessions remain owner-scoped: a client cannot read another agent's effective tools by passing a mismatched `agentId`. No config or protocol changes.\n\n## Evidence\n\n### Live Gateway proof — real WebSocket RPC against a running Gateway\n\n```\nCI=true OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/gateway/server.tools-effective.global-agent-gateway.test.ts\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n```\n\n`server.tools-effective.global-agent-gateway.test.ts` boots the real Gateway, writes a real config (`agents: [main(default), work]`) plus an on-disk `agent:main:abc` session owned by `main`, connects a real WebSocket client, and sends `tools.effective` RPC with `{ sessionKey: \"agent:main:abc\", agentId: \"work\" }`. The Gateway responds `INVALID_REQUEST` with `agent id \"work\" does not match session agent \"main\"` — the ownership guard rejects over the real RPC path.\n\n**Negative control (same live test on the pre-fix code):** the request gets *past* the ownership guard (it resolves under `work`) and proceeds into inventory resolution, so it no longer returns the mismatch error. This proves the guard is load-bearing on the real Gateway path, not incidental.\n\n### Handler integration proof — real session store + real `resolveSessionAgentId`\n\n```\nCI=true OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/gateway/server-methods/tools-effective.test.ts \\\n  src/gateway/server-methods/tools-effective.global-agent.integration.test.ts\n\n Test Files  4 passed (4)\n      Tests  48 passed (48)\n```\n\nPositive (`tools-effective.global-agent.integration.test.ts`): seeds separate on-disk `main` and `work` global stores (`session.scope=global`, `{agentId}` template) and calls the real `tools.effective` handler with `{ sessionKey: \"global\", agentId: \"work\" }`; asserts success with inventory resolved under `agentId: \"work\"` / `modelId: \"work-model\"` (the **work** store, not the default). The bundled MCP inventory runtime is stubbed here so the inventory resolves without materializing bundled plugin runtime — the live sessions harness stubs the same module, which is why the successful-inventory case lives at this layer.\n\nNegative (new): seeds a non-global `agent:main:abc` session and calls `{ sessionKey: \"agent:main:abc\", agentId: \"work\" }`; asserts the handler rejects with the mismatch error and never resolves an inventory. Runs the **real** `loadSessionEntry` + `resolveSessionAgentId`.\n\nUnit regression (new): for a non-global key, asserts `resolveSessionAgentId` is called **without** the requested-agent override and the request rejects with the mismatch error.\n\n**Negative control (handler + unit):** reverting only the override-narrowing to the previous unconditional form makes both new mismatch tests fail (the request succeeds under `work`); they pass with the fix.\n\n### Before/after behavior\n\n| Request | Before fix | After fix |\n| --- | --- | --- |\n| `{ sessionKey: \"global\", agentId: \"work\" }` | `agent id \"work\" does not match session agent \"main\"` | `ok: true`, inventory scoped to `work` |\n| `{ sessionKey: \"agent:main:abc\", agentId: \"work\" }` | resolves under `work` (ownership bypass) | rejects: `agent id \"work\" does not match session agent \"main\"` |\n\n### Lint + types\n\n```\nnode scripts/run-oxlint.mjs <changed files>   # exit 0\npnpm tsgo --noEmit -p tsconfig.json           # exit 0\npnpm check:test-types                         # exit 0\n```\n\n### Diff scope\n\n- `src/gateway/server-methods/tools-effective.ts` (+9 net): forward requested agent to `loadSessionEntry`; scope the `resolveSessionAgentId` override to canonical `global` keys.\n- `src/gateway/server-methods/tools-effective.test.ts`: add the non-global ownership unit regression; fix a pre-existing test that queued an unused `loadSessionEntry` mock (it rejected at the unknown-agent check first), which otherwise leaked into sibling tests.\n- `src/gateway/server-methods/tools-effective.global-agent.integration.test.ts`: add the real-path negative (mismatch) case.\n- `src/gateway/server.tools-effective.global-agent-gateway.test.ts` (new): live Gateway WebSocket proof of the ownership guard.\n\n🤖 AI-assisted (Claude Code).\n",
-        "branch": "fix/tools-effective-global-agent-id",
-        "head_sha": "d0dd4f94ed9d54693505f5116ca4094f9b71a3dc",
-        "author": "pick-cat",
-        "labels": [
-          "gateway",
-          "size: M",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-methods/tools-effective.global-agent.integration.test.ts",
-            "additions": 188,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-methods/tools-effective.test.ts",
-            "additions": 69,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/tools-effective.ts",
-            "additions": 14,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.tools-effective.global-agent-gateway.test.ts",
-            "additions": 86,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 357,
-        "deletions": 9,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97265",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97265.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 61,
-            "SKIPPED": 31,
-            "IN_PROGRESS": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:97265:4823266732:2026-06-28T00:16:44Z:re_review",
-      "comment_id": "4823266732",
-      "comment_version_key": "4823266732:2026-06-28T00:16:44Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97265#issuecomment-4823266732",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97265,
-      "author": "Pick-cat",
-      "author_id": 266665499,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-28T00:16:44Z",
-      "comment_updated_at": "2026-06-28T00:16:44Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:97265:4819001642:2026-06-27T16:06:17Z:re_review",
-      "comment_id": "4819001642",
-      "comment_version_key": "4819001642:2026-06-27T16:06:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97265#issuecomment-4819001642",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97265,
-      "author": "Pick-cat",
-      "author_id": 266665499,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-27T16:06:17Z",
-      "comment_updated_at": "2026-06-27T16:06:17Z",
+      "comment_created_at": "2026-06-28T00:38:41Z",
+      "comment_updated_at": "2026-06-28T00:38:41Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -354,21 +73,21 @@
       "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3687,
+    "total_ms": 1745,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 241
+        "ms": 493
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1650
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -380,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1774
+        "ms": 1240
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
