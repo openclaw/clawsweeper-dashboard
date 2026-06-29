@@ -1,22 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T04:35:39.679Z",
+  "generated_at": "2026-06-29T04:35:55.450Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T01:35:39.157Z",
+  "since": "2026-06-29T01:35:53.562Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    97642
+    97656
   ],
-  "comment_ids": [
-    4828689314
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
+  "scanned_comments": 2,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -33,34 +31,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:97642:4828689314:2026-06-29T04:34:08Z:re_review",
-      "comment_id": "4828689314",
-      "comment_version_key": "4828689314:2026-06-29T04:34:08Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97642#issuecomment-4828689314",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97656:4828991375:2026-06-29T04:35:29Z:clawsweeper_needs_human",
+      "comment_id": "4828991375",
+      "comment_version_key": "4828991375:2026-06-29T04:35:29Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97656#issuecomment-4828991375",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 94106,
-      "author": "yetval",
-      "author_id": 102706514,
+      "issue_number": 97656,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T04:33:27Z",
-      "comment_updated_at": "2026-06-29T04:33:27Z",
+      "comment_created_at": "2026-06-29T04:25:00Z",
+      "comment_updated_at": "2026-06-29T04:35:29Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review 794ee30138629605eb7759dc1e5a26b3f67dcf2a",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=bb4ccbe16fe44a32ed140d611795d43959acd75c)",
       "review_summary": null,
       "review_followup": null,
-      "freeform_prompt": "794ee30138629605eb7759dc1e5a26b3f67dcf2a",
+      "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "bb4ccbe16fe44a32ed140d611795d43959acd75c",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,24 +68,83 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(google): rotate GEMINI_API_KEY on rate-limit errors in LLM streaming path",
+        "body": "## What Problem This Solves\n\nWhen multiple Gemini API keys are configured via `GEMINI_API_KEY_1`/`GEMINI_API_KEY_2`/`GEMINI_API_KEY_3` or `GEMINI_API_KEYS`, the LLM streaming path only used the first key (`GEMINI_API_KEY`) and never rotated on 429 rate-limit errors. The embedding path correctly called `executeWithApiKeyRotation` but the LLM streaming path did not, causing permanent failures once the first key hit its rate limit.\n\nFixes #97314\n\n## Why This Change Was Made\n\n**Root cause**: The LLM streaming path in `streamGoogle` (google.ts) called `getEnvApiKey(model.provider)` which returns only the first key. The Google SDK errors on 429 were caught generically inside `runGoogleGenerateContentLifecycle` (google-shared.ts), pushing an error event to the stream without giving callers a chance to rotate keys.\n\n**Fix (two files):**\n\n1. **`google-shared.ts`**: Added a re-throw guard for Google API errors with `status === 429` in `runGoogleGenerateContentLifecycle`. Rate-limit errors now propagate to the caller so key rotation can occur. Other errors continue to be handled with the existing stream-error path.\n\n2. **`google.ts`**: Replaced the direct `getEnvApiKey` call with `collectProviderApiKeysForExecution` (which collects from `GEMINI_API_KEY`, `GEMINI_API_KEY_1/2/3`, `GEMINI_API_KEYS`, and `GOOGLE_API_KEY`), then wrapped the lifecycle call in `executeWithApiKeyRotation` with `shouldRetry` checking `isApiKeyRateLimitError`. If all keys are exhausted, a final error is pushed to the stream.\n\n## Evidence\n\n### Test Results\n```\n✓ src/llm/providers/google-shared.test.ts        5 passed\n✓ src/agents/api-key-rotation.test.ts           38 passed (2 files)\n✓ src/llm/providers/stream-wrappers/google.test.ts  11 passed\n```\n\n### How Key Rotation Works After Fix\n1. `streamGoogle` collects all configured Gemini API keys\n2. First key is tried → if Google returns 429, the error re-throws (not pushed to stream)\n3. `executeWithApiKeyRotation` rotates to the next key and retries\n4. If all keys fail, a final error is pushed to the stream\n5. Non-rate-limit errors continue to use the existing error handling (pushed to stream immediately)\n\n## Merge Risk\n\nLow. The google-shared.ts change only re-throws 429 errors — all other error handling is unchanged. The google.ts change uses the same key-rotation pattern already present in the embedding path (`media-understanding/runner.entries.ts`). Both the google-generative-ai and google-vertex providers call `runGoogleGenerateContentLifecycle`, and the re-throw guard only fires on `status === 429` (a Google SDK-specific `ApiError` property), so google-vertex (which uses ADC, not API keys) is unaffected.",
+        "branch": "issue-97314",
+        "head_sha": "bb4ccbe16fe44a32ed140d611795d43959acd75c",
+        "author": "krissding",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/llm/providers/google-shared.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/google.ts",
+            "additions": 40,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 44,
+        "deletions": 10,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97656",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97656.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 17,
+          "gatingTotal": 12,
+          "counts": {
+            "SUCCESS": 7,
+            "SKIPPED": 10
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1955,
+    "total_ms": 2105,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 512
+        "ms": 321
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1551
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -99,11 +156,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1433
+        "ms": 206
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
