@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T06:42:28.718Z",
+  "generated_at": "2026-06-29T06:42:46.656Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T03:42:28.261Z",
+  "since": "2026-06-29T03:42:44.639Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97686
+    97687
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,134 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97687:4829682183:2026-06-29T06:42:41Z:clawsweeper_needs_human",
+      "comment_id": "4829682183",
+      "comment_version_key": "4829682183:2026-06-29T06:42:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97687#issuecomment-4829682183",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97687,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-29T06:38:26Z",
+      "comment_updated_at": "2026-06-29T06:42:41Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Contributor repair and updated real behavior proof are needed because the patch changes streaming semantics and the external PR proof misses the open-stream delivery path.; Needs attention: The patch is security-motivated, but the current implementation creates a concrete channel availability and delivery regression on the live SSE path.; Review finding: [P1] Keep SSE event dispatch incremental — extensions/t... (sha=245c30d5ca929d820834bdbfeb7a8d6cc51777e2)",
+      "review_summary": "The PR adds a 16 MiB bounded read to `UrbitSSEClient.processStream` and adds loopback tests for oversized and finite normal SSE bodies.\n\nPR surface: Source +10, Tests +112. Total +122 across 2 files.\n\nReproducibility: yes. Current main’s unbounded accumulation is source-reproducible in `processStream`, and the PR regression is also source-reproducible because `readByteStreamWithLimit` returns only after the stream ends.",
+      "review_followup": "- [P1] Contributor repair and updated real behavior proof are needed because the patch changes streaming semantics and the external PR proof misses the open-stream delivery path.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "245c30d5ca929d820834bdbfeb7a8d6cc51777e2",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tlon): bound Urbit SSE stream reads at 16 MiB",
+        "body": "## What Problem This Solves\n\n`extensions/tlon/src/urbit/sse-client.ts:237` (the `UrbitSSEClient.processStream` body) reads the Urbit `/~/channel/<id>` SSE response in an unbounded `for await (const chunk of stream)` loop, accumulating `chunk.toString()` into a single `buffer` until the stream completes. A hostile or malfunctioning Urbit node can return an SSE body of arbitrary size — the runtime has no upper bound on memory consumption for this read path. There is no fallback reader that enforces a cap before the consumer sees the bytes.\n\nThis is the same class of bug closed for core LLM SSE providers in #96701, #96723, #96972, #96989, #96772, #97628, and #97648. This PR closes it for the Tlon Urbit channel's SSE client.\n\n## Why This Change Was Made\n\nThe bounded-read helper `readByteStreamWithLimit` is already exported from `openclaw/plugin-sdk/response-limit-runtime` (re-exported from `@openclaw/media-core/read-byte-stream-with-limit`). It accepts an `AsyncIterable<unknown>` (both Node `ReadableStream` and the result of `Readable.fromWeb(webStream)` qualify), tracks accumulated bytes against a hard cap, throws a labeled error on overflow, and `destroy()`s the underlying stream so producers stop sending. The tlon extension already imports other helpers from `openclaw/plugin-sdk/*` (`ssrf-runtime`, `number-runtime`) — using `response-limit-runtime` here is consistent with the established plugin boundary (no core internals, no relative outside-package imports).\n\nThe existing chunk-parse loop's `\\n\\n` boundary scan is preserved verbatim after the bounded read — only the data source changes from \"streamed chunks\" to \"bounded Buffer\". Event dispatch semantics are identical.\n\nThe cap of 16 MiB matches the shared `PROVIDER_TEXT_RESPONSE_MAX_BYTES` / `PROVIDER_JSON_RESPONSE_MAX_BYTES` convention used in `src/agents/provider-http-errors.ts` and the cap used in the OAuth bounded-read PRs (#97628, mine).\n\n## User Impact\n\n- Existing successful Tlon/Urbit sessions keep working unchanged — same event dispatch, same ack tracking, same reconnection behavior.\n- New failure mode: `tlon Urbit SSE: body exceeds 16777216 bytes (got <size>)` if the SSE body exceeds 16 MiB. This is the desired safety behavior — the channel does not silently buffer gigabytes before the caller sees the error.\n- Single-file change in the production code (`extensions/tlon/src/urbit/sse-client.ts`); no API, config, migration, or `docs/**` change.\n\n## Changes\n\n- `extensions/tlon/src/urbit/sse-client.ts:8` — add `import { readByteStreamWithLimit } from \"openclaw/plugin-sdk/response-limit-runtime\";` (alphabetical position).\n- `extensions/tlon/src/urbit/sse-client.ts:11` — add `const TLON_SSE_BODY_MAX_BYTES = 16 * 1024 * 1024;` with WHY-comment naming the cap.\n- `extensions/tlon/src/urbit/sse-client.ts:228-272` — replace `processStream`'s `for await (chunk)` unbounded accumulator with `readByteStreamWithLimit(stream, {maxBytes: TLON_SSE_BODY_MAX_BYTES, onOverflow: ...})` followed by the existing `\\n\\n` boundary scan on `buffer.toString(\"utf8\")`. WHY-comment explains the 16 MiB cap rationale and points to the sibling bounded-read PRs.\n- `extensions/tlon/src/urbit/sse-client.bounded.test.ts` — new file, 2 inline tests via loopback `http.createServer` (see `## Evidence` for breakdown).\n\nNo SDK barrel change, no API/config/migration change, no `docs/**` change, no `package.json` change, no sibling-file change.\n\n## Evidence\n\nThis section is a structured, verifiable proof that the change works. All commands and outputs are reproducible from a clean clone of `fix/tlon-sse-bound` at the head SHA below.\n\n### Pre-flight gate\n\n| # | Check | Result |\n| - | ----- | ------ |\n| 0 | Sibling PR check: `gh search prs --repo openclaw/openclaw --state open \"tlon\"` | Only #97558 (NarahariRaghava) which covers JSON reads via `readProviderJsonResponse` in `tlon-api.ts` / `channel-ops.ts` — **does NOT touch `sse-client.ts`** (verified via `gh pr view 97558 --json files`). No SSE overlap. |\n| 1 | Diff scope: `git diff --numstat HEAD~1` | `extensions/tlon/src/urbit/sse-client.ts +22/-12`, new file `sse-client.bounded.test.ts +116/-0`. **Prod LoC +10 / Test LoC +116**. |\n| 2 | PR-template dry-run | (run after PR creation) |\n\n### Two-layer proof (per `loopback-proof-required-bounded-read.md` memory)\n\n#### Layer 1: Real-wire loopback proof — oversized body cap fires\n\nA real `http.createServer` listening on `127.0.0.1:0` streams 18 × 1 MiB chunks via `setInterval(..., 1)` with `Content-Type: text/event-stream`. Real global `fetch()` is consumed by `UrbitSSEClient.processStream`. Cap firing is observed end-to-end on actual TCP framing.\n\n```text\nstdout | UrbitSSEClient processStream bounded-read real wire proof > caps an oversized body streamed chunked over real wire\n[tlon SSE bounded-read proof] oversized path: cap=16777216 reported=16829788 server_total=18874368\n ✓ |extension-messaging| UrbitSSEClient processStream bounded-read real wire proof > caps an oversized body streamed chunked over real wire 272ms\n```\n\n#### Layer 2: Real-wire loopback proof — normal-size body events dispatch\n\nSame loopback pattern with a small SSE-shaped body containing 2 events. Events fire through the registered handler correctly.\n\n```text\nstdout | UrbitSSEClient processStream bounded-read real wire proof > returns and dispatches events for normal-size SSE body on real wire\n[tlon SSE bounded-read proof] normal path: events received=2\n ✓ |extension-messaging| UrbitSSEClient processStream bounded-read real wire proof > returns and dispatches events for normal-size SSE body on real wire 10ms\n```\n\n### Quantitative read of Layer 1\n\n| metric | value | interpretation |\n| ------ | ----- | -------------- |\n| configured cap (MAX) | 16 777 216 bytes (16 MiB) | matches `TLON_SSE_BODY_MAX_BYTES` |\n| reported at throw (loopback, run shown) | 16 829 788 bytes | cap (16 777 216) + 52 572 bytes of TCP-coalesced packet after cap — proves cap fired (got > MAX) and we did not buffer beyond the next available read (got < TOTAL) |\n| server full body (TOTAL) | 18 874 368 bytes (18 MiB) | confirms server emitted the full 18 MiB (cap was not triggered by upstream truncation) |\n| test invariant | `MAX < got < TOTAL` | holds across runs; TCP coalescing on `127.0.0.1` produces a fixed-but-non-deterministic reported size after cap |\n| normal path | 2 events received, exact dispatch match | the existing `\\n\\n` boundary scan consumes the bounded Buffer correctly; event handlers fire as before |\n\n### Combined evidence\n\n- `node scripts/run-vitest.mjs run extensions/tlon/src/urbit/sse-client.test.ts extensions/tlon/src/urbit/sse-client.bounded.test.ts` — **18/18 tests pass** (16 existing + 2 new bounded-read tests) in 3.35s.\n- `node scripts/run-tsgo.mjs -p tsconfig.extensions.json` — exit 0 (no type errors).\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/tlon/src/urbit/sse-client.ts extensions/tlon/src/urbit/sse-client.bounded.test.ts` — exit 0 (no lint errors, no floating-promise warnings).\n\n**Reproduce locally**:\n\n```bash\ngit checkout fix/tlon-sse-bound\nnode scripts/run-vitest.mjs run extensions/tlon/src/urbit/sse-client.bounded.test.ts --reporter=verbose   # 2/2 pass with loopback proof stdout\nnode scripts/run-tsgo.mjs -p tsconfig.extensions.json   # exit 0\nnode scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json \\\n  extensions/tlon/src/urbit/sse-client.ts extensions/tlon/src/urbit/sse-client.bounded.test.ts   # exit 0\n```\n\n**Layer 1 wire details** (so reviewers can re-derive the byte counts):\n\n1. `http.createServer` listens on `127.0.0.1:0` (random port) and chunks 18 × 1 MiB = 18 874 368 bytes via `setInterval(..., 1)` with `Content-Type: text/event-stream`.\n2. Real `fetch(\"http://127.0.0.1:<port>/\")` returns a `Response` whose `body` is a `ReadableStream<Uint8Array>` from the underlying undici socket.\n3. `client.processStream(body)` calls `Readable.fromWeb(body)` (Node Readable) and hands it to `readByteStreamWithLimit(stream, {maxBytes: 16 777 216, onOverflow: ({size}) => Error(...)})`.\n4. `readByteStreamWithLimit` accumulates chunks via for-await. After `total + nextChunk.byteLength > 16 MiB`, the helper calls `destroy()` on the Readable and throws the labeled error. **The exact reported `size` depends on TCP coalescing at moment-of-throw** — hence the invariant `MAX < got < TOTAL` rather than an exact byte assertion.\n5. The error propagates up through `processStream` to the caller's `.catch(...)` (line 213 in `sse-client.ts`); the existing `streamRelease` finally-block still runs, the `streamController` is nulled, and auto-reconnect logic is preserved.\n\n## Related\n\n- #96701 (✅ merged) — `fix(anthropic): bound SSE stream reads at 16 MiB`. Established the `createSseByteGuard` helper pattern for core LLM providers.\n- #96723 (✅ merged) — `fix(anthropic): bound streaming 200 success-body SSE reads at 16 MiB (provider path)`. Same pattern, alternative wiring for the Anthropic-Messages legacy path.\n- #96989 (✅ merged) — `fix(provider-transport-fetch): bound SSE buffer to prevent OOM`. Core transport-level cap.\n- #97648 (✅ merged) — `fix(mistral): bound SSE response reads via buildGuardedModelFetch`. Most recent SSE bounded-read; closest sibling to this PR in shape (SDK fetcher injection → bounded stream), but in a core provider, not an extension.\n- #97628 (OPEN 🦞👀) — `fix(google OAuth): bound arrayBuffer reads`. Same `openclaw/plugin-sdk/response-limit-runtime` import pattern, but for OAuth response bodies (`readResponseWithLimit`, not `readByteStreamWithLimit`).\n- `openclaw/plugin-sdk/response-limit-runtime` — re-exports `readByteStreamWithLimit` from `@openclaw/media-core/read-byte-stream-with-limit`. The helper used in this PR. 20+ existing extensions already import from this SDK subpath.\n- `extensions/tlon/runtime-api.ts` — tlon extension's local SDK facade; existing pattern for re-exporting SDK helpers when multiple local files use them (no re-export added here since only one caller).\n\n**Label**: security\n\n_AI-assisted._",
+        "branch": "fix/tlon-sse-bound",
+        "head_sha": "245c30d5ca929d820834bdbfeb7a8d6cc51777e2",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "channel: tlon",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/tlon/src/urbit/sse-client.bounded.test.ts",
+            "additions": 112,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/tlon/src/urbit/sse-client.ts",
+            "additions": 22,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 134,
+        "deletions": 12,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97687",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97687.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 92,
+          "gatingTotal": 87,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 33,
+            "SUCCESS": 54,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 812,
+    "total_ms": 2235,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 444
+        "ms": 351
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1653
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +168,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 356
+        "ms": 191
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
