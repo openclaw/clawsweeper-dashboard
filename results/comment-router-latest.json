@@ -1,18 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T09:27:30.881Z",
+  "generated_at": "2026-06-29T09:27:31.447Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T06:27:28.821Z",
+  "since": "2026-06-29T06:27:26.955Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97731
+    97679
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4830922710
+  ],
+  "status_comment_id": 4830923137,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97731:4830748742:2026-06-29T09:27:25Z:clawsweeper_auto_repair",
-      "comment_id": "4830748742",
-      "comment_version_key": "4830748742:2026-06-29T09:27:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97731#issuecomment-4830748742",
+      "idempotency_key": "comment-router:openclaw/openclaw:97679:4830922710:2026-06-29T09:26:22Z:re_review",
+      "comment_id": "4830922710",
+      "comment_version_key": "4830922710:2026-06-29T09:26:22Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97679#issuecomment-4830922710",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97731,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": "main",
+      "issue_number": 97679,
+      "author": "wm0018",
+      "author_id": 13618944,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T09:06:43Z",
-      "comment_updated_at": "2026-06-29T09:27:25Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "comment_created_at": "2026-06-29T09:26:22Z",
+      "comment_updated_at": "2026-06-29T09:26:22Z",
+      "status_comment_id": 4830923137,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -66,75 +68,115 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-29T09:27:32.077Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 97679
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-29T09:27:33.144Z",
+          "response_comment_id": "4830923137",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(process): add zombie reaper to prevent child process leak",
-        "body": "## What Problem This Solves\n\nLong-running openclaw gateway processes in Docker accumulate zombie processes over time. One user reported 800+ zombie processes (openclaw-hooks, bash, codex, chrome-headless) after running openclaw 2026.6.10 for several months. Each zombie consumes a PID slot and kernel resources, eventually causing fork failures.\n\n**Root cause**: When openclaw kills a process tree (via `kill(-pid, SIGKILL)`), the grandchildren may exit and become zombies **before** the process group leader (openclaw's direct child) is killed. When the group leader dies, the zombie grandchildren are reparented to PID 1 (or the subreaper), but **no new SIGCHLD is sent** because the grandchildren already exited. The zombies remain permanently unreaped.\n\nlibuv already calls `waitpid(-1, WNOHANG)` in a loop inside its SIGCHLD handler, which would reap these zombies. But the SIGCHLD never fires for processes that exited before being reparented.\n\n## Why This Change Was Made\n\nThe fix adds a lightweight zombie reaper module (`src/process/zombie-reaper.ts`) with two mechanisms:\n\n1. **Post-kill reaping**: After every process-tree kill (in `process/exec.ts` and `process/supervisor/supervisor.ts`), send `SIGCHLD` to ourselves via `process.kill(process.pid, 'SIGCHLD')`. This triggers libuv's `waitpid(-1, WNOHANG)` loop, which reaps any zombie children — including reparented grandchildren.\n\n2. **Periodic fallback** (every 30s): A background timer in the gateway server triggers the same SIGCHLD sweep, catching any zombies that accumulated outside kill-tree paths.\n\nThis approach is pure Node.js — no native addons, no external dependencies, no Python helpers. It leverages libuv's existing waitpid loop by sending SIGCHLD to the current process.\n\n## Evidence\n\n### Before fix — zombie accumulation scenario\n```bash\n# In a Docker container running openclaw as PID 1 (no tini):\n$ ps aux | grep -c defunct\n# 0 initially\n# After 24 hours of usage with exec/browser commands:\n$ ps aux | grep defunct | wc -l\n83\n# After 7 days:\n$ ps aux | grep defunct | wc -l  \n547\n```\n\n### After fix — zombie reaping\n```bash\n# Same Docker setup with the zombie reaper active:\n$ ps aux | grep defunct | wc -l\n0\n# The periodic reaper (30s) and post-kill reaping keep the count at 0.\n```\n\n### Test coverage\n- `src/process/zombie-reaper.test.ts`: 6 unit tests covering reapZombies, start/stop lifecycle, idempotency, and platform no-ops.\n\n## Merge Risk\n\n**Low**. The change:\n- Only sends SIGCHLD to the current process, which libuv already handles safely\n- Is a no-op on Windows (SIGCHLD doesn't exist)\n- Catches all errors silently (seccomp/SELinux restrictions are non-fatal)\n- The periodic timer is `.unref()`'d so it doesn't keep the event loop alive\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/zombie-reaper-97616",
-        "head_sha": "dc415c5e77127199eb330a732911493c49380116",
-        "author": "krissding",
+        "title": "feat(node): add --context-path flag to node run/install for reverse-p…",
+        "body": "## What Problem This Solves\r\n\r\nWhen an OpenClaw gateway is exposed through a reverse proxy (nginx, Caddy, Cloudflare Tunnel, etc.), the WebSocket endpoint often lives at a path like `wss://gateway.example.com/openclaw-gw`. Currently `openclaw node run` only accepts `--host` and `--port`, assembling the URL as `ws://host:port` with no path component. Remote nodes cannot connect to gateways behind path-routed proxies.\r\n\r\nCloses #97678\r\n\r\n## Evidence\r\n\r\n### Problem — URL assembly before this change\r\n\r\n`src/node-host/runner.ts:264` (before):\r\n\r\n```ts\r\nconst url = `${scheme}://${host}:${port}`;\r\n```\r\n\r\nNo way to add a path prefix.\r\n\r\n### Solution — `--context-path` flag on `node run` and `node install`\r\n\r\n```bash\r\n# Gateway at wss://gateway.example.com:18789/openclaw-gw\r\nopenclaw node run --host gateway.example.com --port 18789 --tls --context-path /openclaw-gw\r\n\r\n# Gateway at ws://192.168.1.100:18789/gw\r\nopenclaw node run --host 192.168.1.100 --port 18789 --context-path /gw\r\n```\r\n\r\n### URL assembly — after\r\n\r\n`src/node-host/runner.ts`:\r\n\r\n```ts\r\nconst contextPath = gateway.contextPath\r\n  ? (gateway.contextPath.startsWith(\"/\") ? gateway.contextPath : `/${gateway.contextPath}`)\r\n  : \"\";\r\nconst url = `${scheme}://${host}:${port}${contextPath}`;\r\n```\r\n\r\n- Missing leading `/` is auto-prepended (user-friendly)\r\n- Trailing slashes preserved as-is (full user control)\r\n- `undefined` / `\"\"` → no path (backward compatible)\r\n\r\n### Persistence — `node.json`\r\n\r\n`src/node-host/config.ts`:\r\n\r\n```ts\r\nexport type NodeHostGatewayConfig = {\r\n  host?: string;\r\n  port?: number;\r\n  tls?: boolean;\r\n  tlsFingerprint?: string;\r\n  contextPath?: string;  // ← new, persisted\r\n};\r\n```\r\n\r\n- `node run --context-path /gws` saves to `node.json`, subsequent runs reuse it\r\n- CLI flag overrides saved value\r\n- `node install --context-path /gws` includes it in daemon CLI args\r\n\r\n### Live run — `node run` with `--context-path`\r\n\r\n```text\r\n$ export OPENCLAW_GATEWAY_TOKEN=<token>\r\n$ node openclaw.mjs node run --host 127.0.0.1 --port 8999 \\\r\n    --context-path \"/openclaw-gw/\" --display-name \"my-test\"\r\n\r\nOpenClaw 2026.6.10 (dfb3581) — ...\r\n\r\n16:15:11 [state-migrations] Legacy state migration warnings:\r\n- Left legacy config health state in place because 1 entry conflicts with\r\n  shared SQLite state: /home/cat/.openclaw/logs/config-health.json\r\n\r\n◇  Doctor warnings ──────────────────────────────────────────────╮\r\n│  - Left legacy config health state in place because 1 entry    │\r\n│    conflicts with shared SQLite state: .../config-health.json  │\r\n├────────────────────────────────────────────────────────────────╯\r\n\r\nnode host gateway connected: ws://127.0.0.1:8999/openclaw-gw/\r\n```\r\n<img width=\"1159\" height=\"274\" alt=\"image\" src=\"https://github.com/user-attachments/assets/9359b9ec-db95-481b-95a3-f9875f825e54\" />\r\n<img width=\"1620\" height=\"223\" alt=\"image\" src=\"https://github.com/user-attachments/assets/888d5ddc-2de8-4ff9-8e5f-e647ce6a9666\" />\r\n\r\n\r\nNode host starts cleanly with context path. The WebSocket URL assembled is `ws://127.0.0.1:8999/openclaw-gw/`. Gateway server log confirms end-to-end connectivity through the context path:\r\n\r\n\r\nConnection reached the gateway at `127.0.0.1:18789` through the reverse proxy's context-path route, confirming the feature works end-to-end.\r\n\r\n### Unit tests — 5 new test cases\r\n\r\n`src/node-host/runner.test.ts`:\r\n\r\n```\r\n✓ appends context path to the Gateway WebSocket URL\r\n✓ preserves trailing slash in context path as-is\r\n✓ prepends leading slash when context path is missing one\r\n✓ omits context path when empty or undefined\r\n✓ reads context path from saved node.json when not passed via CLI\r\n✓ CLI context path overrides saved node.json value\r\n```\r\n\r\nAll 8 tests pass (3 existing + 5 new).\r\n\r\n### Files changed\r\n\r\n| File | Change |\r\n|------|--------|\r\n| `src/node-host/runner.ts` | URL assembly + persistence |\r\n| `src/node-host/config.ts` | `NodeHostGatewayConfig` type |\r\n| `src/cli/node-cli/register.ts` | `--context-path` flag on `run` + `install` |\r\n| `src/cli/node-cli/daemon.ts` | Daemon install resolves contextPath |\r\n| `src/daemon/program-args.ts` | Daemon CLI arg persistence |\r\n| `src/commands/node-daemon-install-helpers.ts` | Pass contextPath through install plan |\r\n| `src/node-host/runner.test.ts` | 5 new tests |\r\n| `docs/cli/node.md` | Document flag on `run` + `install` |\r\n\r\n### CLI help output — `--context-path` visible on both commands\r\n\r\n```text\r\n$ node openclaw.mjs node run --help\r\n\r\nOpenClaw 2026.6.10 (dfb3581) — All your chats, one OpenClaw.\r\n\r\nUsage: openclaw node run [options]\r\n\r\nRun the headless node host (foreground)\r\n\r\nOptions:\r\n  --context-path <path>       Gateway WebSocket context path (e.g. /openclaw-gw)\r\n  --display-name <name>       Override node display name\r\n  -h, --help                  Display help for command\r\n  --host <host>               Gateway host\r\n  --node-id <id>              Override node id (clears pairing token)\r\n  --port <port>               Gateway port\r\n  --tls                       Use TLS for the gateway connection\r\n  --tls-fingerprint <sha256>  Expected TLS certificate fingerprint (sha256)\r\n```\r\n\r\n```text\r\n$ node openclaw.mjs node install --help\r\n\r\nOpenClaw 2026.6.10 (dfb3581) — All your chats, one OpenClaw.\r\n\r\nUsage: openclaw node install [options]\r\n\r\nInstall the node host service (launchd/systemd/schtasks)\r\n\r\nOptions:\r\n  --context-path <path>       Gateway WebSocket context path (e.g. /openclaw-gw)\r\n  ...\r\n```\r\n\r\n### Unit tests — 5 new test cases\r\n\r\n`src/node-host/runner.test.ts`:\r\n\r\n```\r\n✓ appends context path to the Gateway WebSocket URL\r\n✓ preserves trailing slash in context path as-is\r\n✓ prepends leading slash when context path is missing one\r\n✓ omits context path when empty or undefined\r\n✓ reads context path from saved node.json when not passed via CLI\r\n✓ CLI context path overrides saved node.json value\r\n```\r\n\r\nAll 8 tests pass (3 existing + 5 new).\r\n\r\n## User Impact\r\n\r\nNodes can now connect to gateways behind path-routed reverse proxies. Backward compatible — existing `node run` invocations without `--context-path` behave identically.\r\n",
+        "branch": "feat/node-context-path",
+        "head_sha": "f27a9cdc2fd87fb2dac3a9ef09992900c51bf387",
+        "author": "wm0018",
         "labels": [
+          "docs",
           "gateway",
+          "cli",
+          "commands",
           "size: S",
-          "P1",
+          "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
+          "merge-risk: 🚨 compatibility",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 5,
+            "path": "docs/cli/node.md",
+            "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/process/exec.ts",
-            "additions": 7,
+            "path": "src/cli/node-cli/daemon.ts",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/node-cli/register.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/node-daemon-install-helpers.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/program-args.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/node-host/config.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/node-host/runner.test.ts",
+            "additions": 88,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/node-host/runner.ts",
+            "additions": 12,
             "deletions": 1,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/supervisor/supervisor.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/zombie-reaper.test.ts",
-            "additions": 70,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/process/zombie-reaper.ts",
-            "additions": 82,
-            "deletions": 0,
-            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 170,
-        "deletions": 1,
+        "changedFiles": 8,
+        "additions": 118,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97731",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97731.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97679",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97679.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 17,
-          "gatingTotal": 12,
+          "total": 94,
+          "gatingTotal": 89,
           "counts": {
-            "SUCCESS": 7,
-            "SKIPPED": 10
+            "SUCCESS": 67,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
@@ -149,19 +191,19 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2387,
+    "total_ms": 6670,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 429
+        "ms": 584
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1619
+        "ms": 3894
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -173,11 +215,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 318
+        "ms": 2166
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
