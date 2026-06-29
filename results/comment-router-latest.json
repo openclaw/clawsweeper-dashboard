@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T14:46:53.179Z",
+  "generated_at": "2026-06-29T14:46:59.389Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T11:46:49.996Z",
+  "since": "2026-06-29T11:46:59.001Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    97808
+    97816
   ],
-  "comment_ids": [
-    4833821461
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,127 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:97808:4833821461:2026-06-29T14:44:09Z:re_review",
-      "comment_id": "4833821461",
-      "comment_version_key": "4833821461:2026-06-29T14:44:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97808#issuecomment-4833821461",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97808,
-      "author": "Pick-cat",
-      "author_id": 266665499,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T14:44:09Z",
-      "comment_updated_at": "2026-06-29T14:44:09Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(chutes): bound OAuth token error response reads",
-        "body": "## What Problem This Solves\n\nChutes OAuth token **exchange** and **refresh** failures read the error body with an unbounded `await response.text()`. On a hostile or misconfigured token endpoint (`https://api.chutes.ai/idp/token`) that streams a large body with no `Content-Length`, the gateway buffers the **entire** payload into memory before surfacing the error — a memory-pressure / OOM vector during auth setup and token refresh.\n\nAffected surface: `src/agents/chutes-oauth.ts` — `exchangeChutesCodeForTokens` and `refreshChutesTokens` error paths.\n\n## Why This Change Was Made\n\nSuccessful Chutes JSON token responses are already bounded via `readProviderJsonResponse`, but the two `!response.ok` branches still called `response.text()` directly. This change routes those reads through the existing shared bounded reader `readResponseTextLimited` with an 8 KiB cap (`CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES`), matching the MiniMax OAuth error-handling pattern. The reader stops pulling and cancels the upstream stream once the diagnostic budget is full, so the surfaced error snippet stays useful while the body can no longer grow without bound.\n\nNo new abstraction — reuses the existing `readResponseTextLimited` helper. One concern, two call sites; `chutes-oauth.ts` does not touch fs-safe or any other surface.\n\n## User Impact\n\nOperators configuring or refreshing Chutes OAuth credentials still get the same actionable error snippet on token failures, but the gateway can no longer be driven to buffer an arbitrarily large error body into memory by a hostile or broken token endpoint.\n\n## Evidence\n\n**1. Real-behavior proof with a negative control.** A harness drives the **real exported** `exchangeChutesCodeForTokens` / `refreshChutesTokens` against a real `node:http` server on `127.0.0.1` that streams a **25 MiB** error body in chunks with **no `Content-Length`**, and measures bytes actually flushed on the wire before the socket closes. The negative control runs the pre-fix `await response.text()` against the same server.\n\n```\n$ tsx chutes-proof.mts\nCHUTES_TOKEN_ENDPOINT = https://api.chutes.ai/idp/token\nHostile error body = 25.00 MiB, streamed with NO Content-Length\n\n[WITH FIX] exchangeChutesCodeForTokens\nPASS: error surfaced — \"Chutes token exchange failed: chutes error body chutes error...\"\nPASS: error snippet bounded — error message = 8222 bytes\nPASS: upstream stopped early (cap load-bearing) — server flushed only 0.21 MiB before socket closed\n\n[WITH FIX] refreshChutesTokens\nPASS: error surfaced — \"Chutes token refresh failed: chutes error body chutes error ...\"\nPASS: upstream stopped early (cap load-bearing) — server flushed only 0.21 MiB before socket closed\n\n[NEGATIVE CONTROL] old `await response.text()` on same server\nPASS: old path buffers entire body — response.text() returned 25.03 MiB (server sent 25.03 MiB)\n\nALL PROOF ASSERTIONS PASSED\n```\n\nWithout the fix the error read returns the full **25.03 MiB** body; with the fix the surfaced snippet is capped at **8222 bytes** and the server flushes only **0.21 MiB** before the client cancels the stream and the socket closes — proving the cap is load-bearing, not incidental. The residual ~0.21 MiB is in-flight TCP/socket buffering, not buffered by the reader.\n\n**2. Committed regression tests** (`src/agents/chutes-oauth.flow.test.ts`) cover both call sites: they stream an oversized error body through a tracked `ReadableStream`, spy on `response.text()` to assert it is never called, and assert the stream is canceled after the bounded read.\n\n```\n$ node scripts/run-vitest.mjs src/agents/chutes-oauth.flow.test.ts\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n```\n\n**3. Lint + types on the changed file:**\n\n```\n$ node scripts/run-oxlint.mjs src/agents/chutes-oauth.ts   # exit 0\n$ pnpm tsgo                                                 # no chutes type errors\n```\n\n**What was NOT tested:** I did not hit the live Chutes endpoint and did not drive the process to an actual OOM. The cap is proven by bytes-on-wire + early socket close against a local server reproducing the unbounded-stream condition, plus the negative control showing the old path buffering the full body.\n\nAI-assisted: implementation, tests, and the proof harness were drafted with agent assistance; all commands above were run locally.\n\nFixes the unbounded Chutes OAuth error-body read.\n",
-        "branch": "fix/chutes-bound-oauth-error-reads",
-        "head_sha": "00af8032d3fe3b1d18c301acd47b6968668a45ce",
-        "author": "pick-cat",
-        "labels": [
-          "agents",
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/chutes-oauth.flow.test.ts",
-            "additions": 78,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/chutes-oauth.ts",
-            "additions": 5,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 83,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97808",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97808.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 98,
-          "gatingTotal": 93,
-          "counts": {
-            "SUCCESS": 64,
-            "SKIPPED": 32,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-2:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-large-2:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3413,
+    "total_ms": 706,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 569
+        "ms": 377
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2601
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -163,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 230
+        "ms": 319
       },
       {
         "name": "append_ledger",
