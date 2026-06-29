@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T00:00:38.500Z",
+  "generated_at": "2026-06-29T00:00:40.151Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-28T21:00:37.922Z",
+  "since": "2026-06-28T21:00:38.591Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97540
+    97551
   ],
   "comment_ids": [
     4827809387
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97540:4826855188:2026-06-29T00:00:25Z:clawsweeper_needs_human",
-      "comment_id": "4826855188",
-      "comment_version_key": "4826855188:2026-06-29T00:00:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97540#issuecomment-4826855188",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97551:4826995825:2026-06-29T00:00:35Z:clawsweeper_needs_human",
+      "comment_id": "4826995825",
+      "comment_version_key": "4826995825:2026-06-29T00:00:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97551#issuecomment-4826995825",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97558,
-      "author": "NarahariRaghava",
-      "author_id": 70995755,
+      "issue_number": 97551,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-28T23:58:29Z",
-      "comment_updated_at": "2026-06-28T23:58:29Z",
+      "comment_created_at": "2026-06-28T18:24:43Z",
+      "comment_updated_at": "2026-06-29T00:00:35Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -55,12 +55,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- No automated repair is indicated; the remaining action is ordinary maintainer review plus exact-head CI completion.; Cleared: Cleared: the diff bounds an untrusted provider response read and adds no dependency, workflow, secret, persistence, permission, or code-execution surface. (sha=bbe6e32ef5498ae4deecf50ab9787a5e68bb58d3)",
-      "review_summary": "The PR bounds Z.AI endpoint-probe non-2xx error body parsing with `readResponseWithLimit` and adds focused detection regression tests for small, malformed, and oversized responses.\n\nPR surface: Source +8, Tests +151. Total +159 across 2 files.\n\nReproducibility: yes. source-reproducible: current main and v2026.6.10 read Z.AI probe error bodies with `res.json()`, and the PR body provides a concrete loopback oversized-stream proof path with negative and mutation controls. I did not run tests in this read-only review because the checkout must remain unchanged.",
-      "review_followup": "- No automated repair is indicated; the remaining action is ordinary maintainer review plus exact-head CI completion.",
+      "repair_reason": "- No automated repair is needed; maintainers should decide whether the 16 MiB metadata-only cutoff is acceptable and then rely on normal merge gates.; Cleared: The diff is security-positive OOM/DoS hardening and does not change dependencies, workflows, permissions, package resolution, or secret handling. (sha=10a3db1e23e4efbb42b8cf8f9e1f5f7cf0688a6b)",
+      "review_summary": "The PR adds a 16 MiB cap to debug proxy response-body capture, records oversized bodies as metadata-only, and extends proxy-capture runtime tests.\n\nPR surface: Source +86, Tests +159. Total +245 across 2 files.\n\nReproducibility: yes. Source inspection shows current main and v2026.6.10 call `response.clone().arrayBuffer()` without a byte cap during debug proxy response capture; I did not run an OOM repro in this read-only review.",
+      "review_followup": "- No automated repair is needed; maintainers should decide whether the 16 MiB metadata-only cutoff is acceptable and then rely on normal merge gates.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "bbe6e32ef5498ae4deecf50ab9787a5e68bb58d3",
+      "expected_head_sha": "10a3db1e23e4efbb42b8cf8f9e1f5f7cf0688a6b",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,40 +70,112 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(proxy-capture): bound captured response bodies to prevent OOM",
+        "body": "## What Problem This Solves\n\nResolves a problem where enabling debug proxy capture could exhaust process memory and crash the agent when a captured outbound request returns a very large (or hostile, effectively endless) HTTP response.\n\nWhen debug proxy capture is enabled it patches global `fetch` and tees every outbound response through `response.clone().arrayBuffer()` purely to record it. `arrayBuffer()` buffers the *entire* body into memory with no upper bound, so a single multi-GB download, a streaming/chunked endpoint, or a malicious provider that streams forever turns \"observe traffic\" into an out-of-memory denial of service. This affects anyone running with debug proxy capture turned on (diagnostics / `openclaw` debug proxy sessions).\n\n## Why This Change Was Made\n\nCaptured response bodies are now bounded to 16 MiB. The exchange is still always recorded (status, headers, metadata); only the body buffering is capped:\n\n- Fast path: if the provider declares a `Content-Length` larger than the cap, the body is skipped entirely (no read) and recorded as metadata with `bodyCapture: \"too-large\"`.\n- Missing / chunked length: the cloned body is read as a stream and accumulated up to the cap; on overflow the read fails closed — the clone is cancelled, the partial buffer is discarded, and the response is recorded as metadata-only (`bodyCapture: \"too-large\"`).\n- Bodies under the cap are captured exactly as before (unchanged behavior).\n\nDesign note / non-goal: I deliberately did **not** reuse `@openclaw/media-core` `readResponseWithLimit` here even though it is the usual bounded-read helper. That helper `await`s `reader.cancel()`, but the body in this path is one branch of a `Response.clone()` tee whose sibling (the caller-facing response) is still live; cancelling such a branch never settles (it only resolves once *both* branches cancel — verified empirically), which would hang the capture pipeline and retain the buffered prefix forever. The local reader therefore cancels fire-and-forget, mirroring the existing pattern in `src/agents/tools/web-shared.ts#readResponseText` (which documents the same non-settling-cancel caveat). The 16 MiB cap matches the existing `OPENROUTER_MODELS_BODY_MAX_BYTES` precedent in `src/agents/model-scan.ts`.\n\n## User Impact\n\n- Operators running debug proxy capture no longer risk an OOM crash from a single large or unbounded captured response.\n- Captured exchanges remain fully observable: status, (redacted) headers, and a `bodyCapture: \"too-large\"` marker are recorded when a body is skipped, so nothing silently disappears from the capture log — only the oversized body bytes are omitted.\n- No change for normal-sized responses; their bodies are captured exactly as before.\n\n## Evidence\n\n### Real behavior proof (real debug-proxy session, SQLite read back from disk)\n\nI drove the **real** capture pipeline end to end — a real `node:http` server (`createServer` bound to `127.0.0.1`) → the **real** patched global `fetch` installed by `initializeDebugProxyCapture` → the **real** `captureHttpExchange` + bounded reader → the **real** shared SQLite capture store — then read the persisted events/blobs **back from disk** and asserted what was recorded. Node v22.22.0, `OPENCLAW_STATE_DIR` pointed at a throwaway temp dir.\n\nScenarios on one live session:\n1. `GET /huge-chunked` streams **20 MiB** in 64 KiB chunks with **no** `Content-Length`.\n2. `GET /huge-declared` streams **20 MiB** with `Content-Length: 20 MiB` (> cap).\n3. `GET /small` streams **64 KiB** (under cap).\n4. Negative control (mirrors the canonical #96495 proof): run the **OLD** unbounded path `clone().arrayBuffer()` against the same 20 MiB body and measure how much it buffers.\n\n```\nREAL debug-proxy capture session against a real node:http server\n  ok: global fetch patch installed by capture init\nfetched /huge-chunked: status=200 caller-read=20971520 bytes\nfetched /huge-declared: status=200 caller-read=20971520 bytes\nfetched /small:        status=200 caller-read=65536 bytes\n\n[case 1] 20 MiB chunked, NO content-length -> bounded streaming read fails closed\n  ok: response event recorded (status=200)\n  ok: metadata marks bodyCapture=too-large ({\"captureOrigin\":\"global-fetch\",\"source\":\"openclaw\",\"bodyCapture\":\"too-large\"})\n  ok: no body blob persisted to SQLite (dataBlobId=null)\n  ok: no inline body preview persisted\n  ok: no error event emitted for this flow\n\n[case 2] 20 MiB WITH content-length=20MiB -> fast path skips body read\n  ok: response event recorded (status=200)\n  ok: metadata marks bodyCapture=too-large\n  ok: no body blob persisted to SQLite\n\n[case 3] 64 KiB chunked under cap -> captured normally (regression guard)\n  ok: response event recorded (status=200)\n  ok: NO too-large marker (normal capture)\n  ok: body blob persisted (dataBlobId=bf718b6f653b…)\n  ok: persisted blob holds the full 64 KiB body (blob=65536)\n\n[negative control] OLD path clone().arrayBuffer() on the SAME 20 MiB body\n  ok: unbounded read pulls the FULL 20 MiB body (proves the cap is load-bearing) (buffered=20971520 vs cap=16777216)\n\nALL PROOF ASSERTIONS PASSED: 14 passed, 0 failed\n```\n\nThe load-bearing signal is what the **capture side persisted to the real SQLite store**: **0 body bytes** for both oversized responses (recorded `bodyCapture: \"too-large\"`, `data_blob_id` NULL) versus the full 64 KiB blob for the under-cap response — while the negative control shows the old unbounded path would have buffered the entire 20 MiB. (Process RSS is not used as the assertion: the *caller* branch reads the full 20 MiB itself, so RSS is not the capture-side signal; this mirrors #96495, which measured persistence/bytes-on-wire rather than driving the heap to OOM.)\n\n### Mutation test (proof the tests are load-bearing)\n\nTemporarily setting `MAX_CAPTURED_RESPONSE_BODY_BYTES = Number.MAX_SAFE_INTEGER` (i.e. fail-open) makes exactly the two fail-closed unit tests go red, then green again once reverted:\n\n```\n × skips capturing the body when Content-Length exceeds the cap\n × fails closed on chunked responses that stream past the cap\n Tests  2 failed | 4 passed (6)     ← with cap removed\n Tests  8 passed (8)                ← restored\n```\n\n<details>\n<summary><b>Validation Evidence</b> (focused unit tests drive the real function)</summary>\n\n5 added tests in `src/proxy-capture/runtime.test.ts` using the test file's own local store/deps mock (no shared `provider-http-test-mocks.ts` touched, so zero blast radius):\n\n- `skips capturing the body when Content-Length exceeds the cap` — declares 32 MiB `Content-Length` → records `bodyCapture: \"too-large\"`, never buffers/persists, no error.\n- `fails closed on chunked responses that stream past the cap` — streams 20 MiB with no `Content-Length` → bounded reader caps at 16 MiB, cancels the clone, discards the prefix, records `bodyCapture: \"too-large\"`.\n- `captures small chunked bodies normally (under the cap)` — 64 KiB chunked body persisted normally (regression guard).\n- `captures empty chunked bodies normally (zero-length edge)` — a stream that closes immediately is not mistaken for overflow.\n- `records metadata-only for non-cloneable Response-like objects` — exercises the shared `recordResponseMetadataOnly` path and the `\"unavailable\"` vs `\"too-large\"` distinction.\n\n```\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts src/proxy-capture/runtime.test.ts\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts src/proxy-capture/\n Test Files  6 passed (6)\n      Tests  33 passed (33)\n```\n\n`tsc --noEmit` clean for the changed file; `oxlint src/proxy-capture/runtime.ts src/proxy-capture/runtime.test.ts` exit 0.\n\n**What was not tested:** No live cloud provider with real keys was hit (a real hostile/oversized body cannot be reproduced against a real provider). The proof instead drives a real local server + the real capture pipeline + real SQLite persistence, which is the load-bearing path the fix changes.\n</details>\n\n<details>\n<summary><b>Security &amp; Privacy</b></summary>\n\n- Hardening fix: removes an unbounded-memory (OOM/DoS) vector reachable via any captured large/streamed/hostile response while debug proxy capture is enabled. Fail-closed on overflow (drop body, keep metadata).\n- No change to the existing sensitive-header redaction path; over-cap responses are recorded as metadata only, so no additional body bytes are persisted.\n- No new logging of secrets; no new network calls; no new persisted data beyond the existing `bodyCapture` metadata marker (new value `\"too-large\"` alongside the existing `\"unavailable\"`).\n</details>\n\n<details>\n<summary><b>Compatibility</b></summary>\n\n- Behavior for under-cap responses is unchanged (same persisted blob + event shape) — covered by the under-cap, empty-body, and non-cloneable regression tests.\n- Single-file runtime change plus its sibling test; no public API, config, schema, or plugin-SDK surface changes. Blast radius is **low**: one runtime file + its own test, no shared mocks/infra touched.\n- The `bodyCapture` metadata field already exists (`\"unavailable\"`); this adds one new enum value `\"too-large\"`. No migration needed.\n- 16 MiB cap is a module constant consistent with the existing `OPENROUTER_MODELS_BODY_MAX_BYTES` precedent. This is the proxy-capture analogue of the merged provider response-limit work (#96495 image-generation, #96873 video-generation): same 16 MiB ceiling, same fail-closed-on-overflow shape, applied to the capture tee instead of provider JSON readers.\n</details>\n\n---\n\nAI disclosure: AI-assisted with **Claude Code** (Claude Opus). Scope: Claude read the surrounding runtime + existing repo bounded-read helpers (`media-core/read-response-with-limit`, `web-shared#readResponseText`, `model-scan`), wrote the bounded reader + Content-Length fast path + the unit/edge tests, built the real-server end-to-end proof harness, and empirically verified both the teed-clone cancel hang (design rationale) and the mutation/negative-control results above. I reviewed every line, ran the tests/typecheck/lint/proof locally, and can explain the full rationale.\n",
+        "branch": "fix/proxy-capture-bound-body",
+        "head_sha": "10a3db1e23e4efbb42b8cf8f9e1f5f7cf0688a6b",
+        "author": "alix-007",
+        "labels": [
+          "size: M",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/proxy-capture/runtime.test.ts",
+            "additions": 159,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/proxy-capture/runtime.ts",
+            "additions": 99,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 258,
+        "deletions": 13,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97551",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97551.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 90,
+          "gatingTotal": 85,
+          "counts": {
+            "SUCCESS": 59,
+            "SKIPPED": 25,
+            "IN_PROGRESS": 5,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1911,
+    "total_ms": 1839,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 566
+        "ms": 260
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1286
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 4
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1333
+        "ms": 267
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
