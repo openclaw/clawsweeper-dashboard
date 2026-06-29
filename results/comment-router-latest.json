@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T20:48:33.475Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-29T20:50:59.352Z",
+  "repo": "openclaw/kitchen-sink",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T17:48:30.979Z",
+  "since": "2026-06-29T17:50:58.932Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97922
+    54
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 0,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,137 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97922:4836768513:2026-06-29T20:48:27Z:clawsweeper_auto_repair",
-      "comment_id": "4836768513",
-      "comment_version_key": "4836768513:2026-06-29T20:48:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97922#issuecomment-4836768513",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97922,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T20:33:03Z",
-      "comment_updated_at": "2026-06-29T20:48:27Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=6a55b3956cd35084080cccc5a7ff68b3e3aad2ac)",
-      "review_summary": "The PR preserves selected expected subagent completion payloads on retry/expiry give-up by marking delivery suspended with a new `escalated` flag and adding lifecycle tests.\n\nPR surface: Source +43, Tests +60. Total +103 across 3 files.\n\nReproducibility: yes. at source level: current main has a terminal failed-cleanup fallback for non-suspendable give-up, while the PR helper can requeue captured timeout/failure text because timeout outcomes still freeze captured replies. I did not run tests in this read-only review.",
-      "review_followup": "- [P1] Needs contributor or maintainer follow-up for the success guard, regression coverage, and real behavior proof; automation should not take over while proof is missing.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "6a55b3956cd35084080cccc5a7ff68b3e3aad2ac",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(subagents): escalate expected completions on delivery give-up instead of dropping them",
-        "body": "## What\n\nOn delivery give-up (retry-limit / expiry), an *expected* subagent completion that already produced a result is no longer silently dropped. It is escalated — preserved for user-visible delivery — instead of being cleared.\n\nThe retry/expiry decision and the existing suspend path are unchanged; only the non-suspendable give-up fallback changes, at both give-up sites.\n\n## Why\n\nThe give-up handling in `subagent-registry-lifecycle.ts` has two branches:\n\n- **suspend** — preserves the payload (`status: suspended`) so the steering queue can still deliver it to the requester.\n- **fallback** — calls `clearPendingFinalDelivery` and marks the run `failed`.\n\nThe fallback runs whenever the completion is not suspendable (e.g. `cleanup: \"delete\"`, or a non-`COMPLETE` ended reason) even though the subagent *succeeded and produced a result*. In that case the result is dropped with only a log line, so a parent/user that was waiting receives nothing. This is the silent-loss path behind a cluster of open reports.\n\n```mermaid\nflowchart TD\n  A[completion ready, delivery to parent fails] --> B{retry/expiry exhausted?}\n  B -- no --> R[retry / defer]\n  B -- \"yes (give-up)\" --> C{suspendable?<br/>ok outcome + cleanup keep}\n  C -- yes --> S[suspend: payload kept, delivered by steering queue]\n  C -- no --> D{expected completion +<br/>captured result?}\n  D -- \"yes (this PR)\" --> E[escalate: preserve and surface to user<br/>status suspended, escalated flag]\n  D -- no --> X[clear + failed<br/>nothing to deliver]\n```\n\n## Change\n\n- New shared helper `escalateExpectedCompletionOnGiveUp`: when a completion was expected and a result was captured, preserve it (reusing the suspend path, tagged `escalated`) instead of clearing the payload.\n- Applied to **both** give-up sites (`finalizeResumedAnnounceGiveUp` and the resume cleanup handler) so neither drops silently.\n- Adds an `escalated` flag to `SubagentCompletionDeliveryState`.\n- Tests for the escalate path and the no-expected-completion regression.\n\n## Scope\n\nDeliberately minimal. Does **not** touch the cleanup decision, the suspend path, wake scheduling, session locking, or announce dedup — those are separate concerns in the same cluster and are better handled as their own changes. Core direction for the broader substrate is for the maintainers to steer; this is one contained, safe slice.\n\n## Open question for reviewers\n\nThe escalation reuses the existing pending-final-delivery path (the steering queue delivers `suspended` entries to `payload.requesterSessionKey`). That stops the silent clear and preserves the result, but final delivery still depends on the requester session being processed. Would you prefer a dedicated root/user escalation notice for the case where the requester chain is fully gone, or is preserving-via-the-existing-path the right first step?\n\n## Validation\n\n- `pnpm tsgo:core`, `tsgo:core:test`, `tsgo:test:src` — clean (exit 0, no type errors)\n- `oxlint` on the changed files — 0 warnings / 0 errors\n- `vitest run src/agents/subagent-registry-lifecycle.test.ts` — 64 passed, incl. the new escalate + regression cases\n\nAddresses #92433, #67777\nRefs #90944, #92116\n",
-        "branch": "feat/subagent-give-up-escalate",
-        "head_sha": "6a55b3956cd35084080cccc5a7ff68b3e3aad2ac",
-        "author": "mertbasar0",
-        "labels": [
-          "agents",
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "src/agents/subagent-registry-lifecycle.test.ts",
-            "additions": 60,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-registry-lifecycle.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-registry.types.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 103,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97922",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97922.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 100,
-          "gatingTotal": 95,
-          "counts": {
-            "FAILURE": 2,
-            "SUCCESS": 63,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-compact-large-3:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-compact-large-3:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2832,
+    "total_ms": 743,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 345
+        "ms": 411
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2137
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -171,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 325
+        "ms": 322
       },
       {
         "name": "append_ledger",
