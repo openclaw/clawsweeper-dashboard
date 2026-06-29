@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T12:48:23.484Z",
+  "generated_at": "2026-06-29T12:48:31.655Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T09:48:21.197Z",
+  "since": "2026-06-29T09:48:29.307Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97770
+    97106
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 7,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97770:4832696669:2026-06-29T12:48:17Z:clawsweeper_auto_repair",
-      "comment_id": "4832696669",
-      "comment_version_key": "4832696669:2026-06-29T12:48:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97770#issuecomment-4832696669",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97106:4813720979:2026-06-29T12:48:25Z:clawsweeper_auto_repair",
+      "comment_id": "4813720979",
+      "comment_version_key": "4813720979:2026-06-29T12:48:25Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97106#issuecomment-4813720979",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97770,
+      "issue_number": 97106,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T12:42:04Z",
-      "comment_updated_at": "2026-06-29T12:48:17Z",
+      "comment_created_at": "2026-06-26T22:00:53Z",
+      "comment_updated_at": "2026-06-29T12:48:25Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=a1946258a68775e1049c4bbf43ebdfcda7d1d5d3)",
-      "review_summary": "The PR adds a rate-limit reset timestamp parser, threads raw provider error text into some auth-profile failure calls, and uses parsed reset durations to extend profile cooldowns.\n\nPR surface: Source +171, Tests +78. Total +249 across 4 files.\n\nReproducibility: yes. at source level: current main computes non-disabled profile cooldowns from local stepped backoff with no raw provider error input, and the PR's assistant-stage rotation path still drops rawError before cooldown parsing. I did not run a live exhausted provider account.",
-      "review_followup": "- [P1] Manual review is required because an external PR is missing real behavior proof and the remaining decision changes auth-provider cooldown defaults; no repair marker should be queued until contributor proof is supplied.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=8c87cdb83b92934f098894d72ec39975c0156612)",
+      "review_summary": "The PR adds `getAllowAlwaysUnavailableReason`, uses it in exec approval reply and forwarder prompt rendering, and adds reply tests for ask=always, one-shot, and missing-ask cases.\n\nPR surface: Source +30, Tests +56. Total +86 across 4 files.\n\nReproducibility: yes. The linked issue gives concrete redirected-command steps, and source inspection shows current main collapses ask=always and one-shot persistence while the latest PR head still loses the reason for callers without `ask`.",
+      "review_followup": "- [P1] A repair worker can finish the concrete reason-plumbing and test gap on this branch, but maintainers still need to select one canonical PR before landing overlapping fixes.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "a1946258a68775e1049c4bbf43ebdfcda7d1d5d3",
+      "expected_head_sha": "8c87cdb83b92934f098894d72ec39975c0156612",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,87 +70,79 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix: parse provider rate-limit reset timestamps for smarter cooldowns",
-        "body": "# Fix: Parse provider rate-limit reset timestamps for smarter cooldowns\n\n## Summary\n\nWhen a provider returns a rate-limit error containing an explicit reset\ntimestamp (e.g. `\"Weekly/Monthly Limit Exhausted. Your limit will reset at\n2026-07-02 17:39:49\"`), OpenClaw now parses that timestamp and sets the\nauth-profile cooldown to the exact reset time instead of using generic\nexponential backoff (30s → 60s → 5min cap).\n\nThis eliminates wasteful retry cycles where a weekly-quota-exhausted key is\nprobed every few minutes for 3+ days, each probe wasting an API call and\nadding latency before falling back to the next profile or model.\n\nFixes #97764.\n\n## Problem\n\nWith two ZAI API keys configured via `auth.order.zai`, when the primary key\nhits a weekly/monthly quota limit:\n\n1. Primary key → 429 `\"Your limit will reset at 2026-07-02 17:39:49\"`\n2. OpenClaw gives it a 30-second cooldown (exponential backoff step 1)\n3. After 30s, primary is probed again → same 429 → 60s cooldown\n4. After 60s, probed again → same 429 → 5min cooldown\n5. Repeat every 5 minutes for 3 days until the quota actually resets\n\nEach probe wastes an API call, adds ~3-5s latency, and triggers an\nunnecessary profile rotation on every turn.\n\n## Solution\n\n### New module: `rate-limit-reset-parser.ts`\n\nA pure parser that extracts reset timestamps from provider error messages\nin these formats:\n\n- `reset(s) at YYYY-MM-DD HH:MM:SS` (ZAI/ZhipuAI)\n- `reset(s) at YYYY-MM-DDTHH:MM:SSZ` (ISO 8601)\n- `Retry-After: N` / `retry after N seconds`\n- JSON fields: `reset_at`, `reset_after_seconds`\n\nThe returned duration (ms relative to now) is clamped to\n`[30s, 7 days]`. Durations below 30s are ignored — exponential backoff\nis more appropriate for short windows.\n\n### `usage.ts` — `computeNextProfileUsageStats`\n\nWhen `rawError` is provided and a reset timestamp is parsed, the cooldown\nis set to `max(parsed_reset, exponential_backoff)`. This ensures we never\nshorten a backoff window, only extend it when the provider tells us the\nexact reset time.\n\n### `run.ts` — Propagate `rawError`\n\nThe `maybeMarkAuthProfileFailure` helper now accepts and forwards\n`rawError` (the provider error text) to `markAuthProfileFailure`. This\nis wired up at all four call sites where profile failures are recorded.\n\n## Testing\n\n10 unit tests covering:\n- ZAI/ZhipuAI datetime format\n- ISO 8601 with timezone\n- `Retry-After: N` header-style\n- JSON `reset_after_seconds` and `reset_at` fields\n- Negative cases (no reset info, empty input, short durations)\n- 7-day max clamp\n- `isPeriodicQuotaError` classifier\n\nAll tests pass:\n```\nℹ tests 10\nℹ pass 10\nℹ fail 0\n```\n\n## Limitations / Future work\n\n- The parser treats datetimes without an explicit timezone as UTC. This is\n  imperfect if the provider's server timezone differs, but covers the common\n  case where the API returns UTC or the server/client share a timezone.\n- `rateLimitedProfileRotations` is still error-class-unaware. A future\n  enhancement could give transient overload errors more rotations than\n  quota-exhaustion errors. This PR focuses on the cooldown-duration fix,\n  which provides the most immediate value.\n",
-        "branch": "fix/parse-rate-limit-reset-timestamp",
-        "head_sha": "a1946258a68775e1049c4bbf43ebdfcda7d1d5d3",
-        "author": "mathias15010",
+        "title": "fix(exec): distinguish one-shot from ask=always in approval prompt",
+        "body": "## What Problem This Solves\n\nWhen a command includes shell redirection (e.g. `openclaw --version 2>&1`), Allow Always is excluded because the command is one-shot. But the approval prompt shows \"The effective approval policy requires approval every time\" — falsely blaming the policy when the real reason is the command itself.\n\n## Root Cause\n\nTwo approval renderers (`exec-approval-reply.ts`, `exec-approval-forwarder.ts`) check `if (!allowedDecisions.includes(\"allow-always\"))` and always output the same policy message, regardless of whether allow-always is excluded due to `ask=always` or `kind=one-shot`.\n\n## Fix\n\nUse the `ask` field (already available in both renderers' params) to distinguish:\n- `ask=always` → policy message (unchanged)\n- Other known `ask` → one-shot message (new)\n- `ask` absent → policy message (safe default)\n\nCloses #97069\n\n## Change Type\n\n- [x] Bug fix\n\n## Scope\n\n- [x] Infrastructure (exec approval reply + forwarder)\n\n## Evidence\n\n**Real production function proof** (`node --import tsx`):\n\n```\n=== ask=always ===\nThe effective approval policy requires approval every time, so Allow Always is unavailable.\n✅ correct policy message\n\n=== one-shot (shell redirect) ===\nAllow Always is unavailable because this command cannot be saved for future use\n(e.g., shell redirection or one-shot arguments).\n✅ correct one-shot message\n```\n\n**Test coverage**:\n- ask=always → policy message preserved\n- ask=on-miss with no allow-always → one-shot reason shown\n- ask absent/null → safe fallback to policy message\n\n## Security Impact\n\n- New permissions? No\n- Secrets handling changed? No\n- New network calls? No\n",
+        "branch": "fix/97069-approval-prompt-one-shot-message",
+        "head_sha": "8c87cdb83b92934f098894d72ec39975c0156612",
+        "author": "zoowh",
         "labels": [
-          "agents",
-          "size: M",
+          "size: S",
+          "mantis: telegram-visible-proof",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
           "status: 📣 needs proof",
-          "triage: needs-pr-context"
+          "proof: 📸 screenshot",
+          "merge-risk: 🚨 other"
         ],
         "files": [
           {
-            "path": "src/agents/auth-profiles/usage.ts",
-            "additions": 19,
+            "path": "src/infra/exec-approval-forwarder.ts",
+            "additions": 5,
             "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-helpers/rate-limit-reset-parser.test.ts",
-            "additions": 78,
+            "path": "src/infra/exec-approval-reply.test.ts",
+            "additions": 56,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-helpers/rate-limit-reset-parser.ts",
-            "additions": 149,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
+            "path": "src/infra/exec-approval-reply.ts",
             "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/exec-approvals.ts",
+            "additions": 23,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 4,
-        "additions": 252,
-        "deletions": 3,
+        "additions": 90,
+        "deletions": 4,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97770",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97770.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97106",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97106.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 99,
-          "gatingTotal": 94,
+          "total": 96,
+          "gatingTotal": 91,
           "counts": {
             "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 61,
-            "IN_PROGRESS": 2,
-            "FAILURE": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 63,
+            "FAILURE": 1,
             "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:CANCELLED",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE"
+            "checks-node-compact-small-whole-2:FAILURE"
           ],
           "pending": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "Real behavior proof:CANCELLED"
           ],
           "terminalBlockers": [
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE"
+            "checks-node-compact-small-whole-2:FAILURE"
           ],
           "externalBlockers": []
         }
@@ -158,19 +150,99 @@
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97106:4832464848:2026-06-29T12:20:42Z:re_review",
+      "comment_id": "4832464848",
+      "comment_version_key": "4832464848:2026-06-29T12:20:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97106#issuecomment-4832464848",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97106,
+      "author": "ZOOWH",
+      "author_id": 265460861,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-29T12:20:42Z",
+      "comment_updated_at": "2026-06-29T12:20:42Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97106:4832198194:2026-06-29T11:52:29Z:re_review",
+      "comment_id": "4832198194",
+      "comment_version_key": "4832198194:2026-06-29T11:52:29Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97106#issuecomment-4832198194",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97106,
+      "author": "ZOOWH",
+      "author_id": 265460861,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-29T11:52:29Z",
+      "comment_updated_at": "2026-06-29T11:52:29Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2531,
+    "total_ms": 4521,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 328
+        "ms": 390
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1943
+        "ms": 1942
       },
       {
         "name": "classify_comment_commands",
@@ -178,7 +250,7 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -186,7 +258,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 233
+        "ms": 2161
       },
       {
         "name": "append_ledger",
