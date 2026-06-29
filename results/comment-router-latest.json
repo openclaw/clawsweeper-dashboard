@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T15:38:21.219Z",
+  "generated_at": "2026-06-29T15:39:04.065Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T12:38:20.738Z",
+  "since": "2026-06-29T12:38:59.375Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97850
+    97851
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,126 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97851:4834276705:2026-06-29T15:38:53Z:clawsweeper_needs_human",
+      "comment_id": "4834276705",
+      "comment_version_key": "4834276705:2026-06-29T15:38:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97851#issuecomment-4834276705",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97851,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-29T15:33:17Z",
+      "comment_updated_at": "2026-06-29T15:38:53Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] No automated code repair is indicated; the remaining blocker is contributor proof or maintainer acceptance of the proof gap.; Cleared: No supply-chain or security regression was found; the diff removes an alternate native reader path in Mattermost client code and adds focused tests without dependency, workflow, or secret-handling changes. (sha=cca9f191a93649d20f5179cd09d41ed2411848a7)",
+      "review_summary": "The PR removes the Mattermost error parser's `!res.body` native `json()`/`text()` fallback so error reads use the existing 8 KiB bounded text helper, with regression tests.\n\nPR surface: Source -10, Tests +56. Total +46 across 2 files.\n\nReproducibility: yes. for the source condition: current main calls native `json()`/`text()` when `readMattermostError()` sees a null body, and a Node `Response(null)` probe exercises that state. The claimed unbounded network-buffering impact is not proven beyond mocked tests.",
+      "review_followup": "- [P1] No automated code repair is indicated; the remaining blocker is contributor proof or maintainer acceptance of the proof gap.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "cca9f191a93649d20f5179cd09d41ed2411848a7",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(mattermost): bound null-body error response reads",
+        "body": "## What Problem This Solves\n\n`readMattermostError()` had a `!res.body` fallback that bypassed the bounded reader and called native `res.json()` / `res.text()` directly. For a null-body error response with a JSON content-type (a 401/503 with `content-type: application/json` and an empty body — common from reverse proxies and gateways), `await res.json()` throws `SyntaxError: Unexpected end of JSON input`. That rejection propagates out of `readMattermostError()`, so the caller's intended `Mattermost API <status>: unknown error` is replaced by a confusing JSON-parse crash. It was also the last remaining unbounded `json()` / `text()` read in this error path after #96033 bounded the success path.\n\nAffected surface: `extensions/mattermost/src/mattermost/client.ts` — `readMattermostError()`, reached by `client.request()`, the file-upload path, and `probe.ts`.\n\n## Why This Change Was Made\n\nThe `!res.body` special-case is removed entirely, so every error read goes through the existing bounded `readResponseTextLimited` (8 KiB) and the JSON `message` is parsed from that bounded text. `readResponseTextLimited` returns `\"\"` when there is no readable body, so a null-body response now yields an empty detail instead of throwing — and all three callers already coalesce that to a clean message (`detail || \"unknown error\"` / `detail || res.statusText`). One canonical read path, no second buffering strategy.\n\nNet change is a deletion (`client.ts` +0/−10): removes the divergent branch rather than adding code.\n\n## User Impact\n\nOperators and agents talking to self-hosted or misbehaving Mattermost servers get a clean, accurate API error (`Mattermost API 503 Service Unavailable: unknown error`) on null-body JSON error responses, instead of an internal `Unexpected end of JSON input` crash — and every error read now goes through the bounded reader.\n\n## Evidence\n\n**1. Real-behavior proof with a negative control (real HTTP).** A harness drives the **real exported** `readMattermostError` and the **real** `createMattermostClient().request()` (through the real `fetchWithSsrFGuard` SSRF path, `allowPrivateNetwork: true` for localhost) against a real `node:http` server returning `503 Service Unavailable` with `content-type: application/json` and **no body**. The negative control runs the deleted branch's exact logic (`await res.json()`) on the same response.\n\n```\n$ tsx mm-proof.mts\nServer returns 503 Service Unavailable, content-type application/json, NO body\n\n[NEGATIVE CONTROL] old `!res.body` json branch: await res.json()\nPASS: old branch crashes on null-body JSON error — THREW SyntaxError: Unexpected end of JSON input\n\n[WITH FIX] readMattermostError(real null-body 503 json response)\nPASS: returns empty string, no throw — detail=\"\"\n\n[WITH FIX] createMattermostClient().request() against null-body 503\nPASS: clean bounded API error (no JSON crash) — \"Mattermost API 503 Service Unavailable: unknown error\"\n\nALL PROOF ASSERTIONS PASSED\n```\n\nWithout the fix the null-body JSON error path throws `SyntaxError: Unexpected end of JSON input`; with the fix `readMattermostError` returns `\"\"` and the client surfaces the clean `... 503 Service Unavailable: unknown error`.\n\n**2. Committed regression tests** (`extensions/mattermost/src/mattermost/client.test.ts`) cover: null-body JSON errors never call `response.json()` / `response.text()`; bounded JSON `message` fields still parse from normal bodies; and a guarded null-body failure surfaced end-to-end through `createMattermostClient().request()`.\n\n```\n$ node scripts/run-vitest.mjs extensions/mattermost/src/mattermost/client.test.ts\n Test Files  1 passed (1)\n      Tests  27 passed (27)\n```\n\n**3. Lint on the changed file:**\n\n```\n$ node scripts/run-oxlint.mjs extensions/mattermost/src/mattermost/client.ts   # exit 0\n```\n\n**What was NOT tested:** I did not run against a live production Mattermost server. The null-body JSON error condition is reproduced with a real local HTTP server over the real SSRF-guarded fetch path, including the negative control showing the pre-fix crash.\n\nAI-assisted: implementation, tests, and the proof harness were drafted with agent assistance; all commands above were run locally.\n",
+        "branch": "fix/mattermost-bound-error-null-body-reads",
+        "head_sha": "cca9f191a93649d20f5179cd09d41ed2411848a7",
+        "author": "pick-cat",
+        "labels": [
+          "channel: mattermost",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/mattermost/src/mattermost/client.test.ts",
+            "additions": 56,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/mattermost/src/mattermost/client.ts",
+            "additions": 0,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 56,
+        "deletions": 10,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97851",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97851.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "CANCELLED": 2,
+            "SUCCESS": 58,
+            "SKIPPED": 33,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 834,
+    "total_ms": 5129,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 469
+        "ms": 530
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 4143
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 4
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +160,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 353
+        "ms": 427
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
