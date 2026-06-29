@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T02:26:32.123Z",
+  "generated_at": "2026-06-29T02:26:56.911Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-28T23:26:31.871Z",
+  "since": "2026-06-28T23:26:54.873Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97625
+    97627
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,132 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97627:4828409201:2026-06-29T02:26:51Z:clawsweeper_needs_human",
+      "comment_id": "4828409201",
+      "comment_version_key": "4828409201:2026-06-29T02:26:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97627#issuecomment-4828409201",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97627,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-29T02:21:10Z",
+      "comment_updated_at": "2026-06-29T02:26:51Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The branch needs contributor real behavior proof and maintainer selection of the canonical retry-cap PR; no narrow automated repair is currently identified.; Cleared: The diff changes only Codex plugin TypeScript retry logic and a colocated test, with no dependency, workflow, permission, script, network, or secret-handling changes. (sha=8f5f1ca94c0a9483819711ca27a808d5e227f05c)",
+      "review_summary": "The PR adds a failed terminal state after the Codex native subagent completion retry schedule is exhausted and adds a regression test for permanently non-durable delivery.\n\nPR surface: Source +21, Tests +61. Total +82 across 2 files.\n\nReproducibility: yes. The current-main source path is clear: every non-durable delivery remains pending, clears the in-flight key in finally, and schedules another delivery attempt with no cap or deadline.",
+      "review_followup": "- [P1] The branch needs contributor real behavior proof and maintainer selection of the canonical retry-cap PR; no narrow automated repair is currently identified.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "8f5f1ca94c0a9483819711ca27a808d5e227f05c",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(codex): cap native subagent completion delivery retries",
+        "body": "## Summary\n\n**Problem**: When a Codex native subagent (`spawn_agent`) completes and the parent handoff is permanently non-durable (e.g. silent subagent completion in a `message_tool_only` session), `scheduleCompletionDeliveryRetry` in `extensions/codex/src/app-server/native-subagent-monitor.ts` retries delivery indefinitely. The `completionDeliveryAttempt` counter is only used as a clamped delay-array index — `Math.min(attempt, delays.length - 1)` pins at the last entry (300 s) — and is never compared to a maximum. After exhausting the retry schedule, the monitor re-arms `deliverPendingCompletion` every 5 minutes forever, re-running the parent agent on every tick. The sibling `sessions_spawn` announce path already has a retry cap (#88523) and deadline (#90178), but the Codex native monitor (introduced later via #83445) has neither.\n\n**Solution**: Add a bounded give-up in `scheduleCompletionDeliveryRetry`: when `completionDeliveryAttempt` exceeds `completionDeliveryRetryDelaysMs.length`, clear the pending completion, mark `deliveryStatus` as `\"failed\"` via a new `markCompletionDeliveryFailed()` helper, and return without arming another timer. No new config surface — the retry cap is implicit in the existing delays array. A typical 6-entry schedule covers ~8.5 minutes of retries before giving up.\n\n**What changed**:\n- `extensions/codex/src/app-server/native-subagent-monitor.ts`: +21 — new `markCompletionDeliveryFailed()` method (mirrors existing `markCompletionDeliveryDelivered`/`markCompletionDeliveryPending` pattern) + give-up check in `scheduleCompletionDeliveryRetry` after incrementing `completionDeliveryAttempt`\n- `extensions/codex/src/app-server/native-subagent-monitor.test.ts`: +61 — new test: \"stops retrying after exhausting the retry schedule on permanently non-durable delivery\" with a 2-entry schedule [10ms, 20ms], verifying cap at 3 total attempts and `deliveryStatus: \"failed\"`\n\n**What did NOT change**: `completionDeliveryRetryDelaysMs` defaults, `deliverPendingCompletion` logic, `isDurableAgentHarnessCompletionDelivery`, the durable delivery success path, any other Codex module, config, auth, protocol, or SDK surface.\n\nFixes #97593\n\n## Real behavior proof\n\n**Behavior addressed**: Codex native subagent completion delivery retries forever with no attempt cap or deadline on a permanently non-durable parent handoff, re-waking the parent agent every 5 minutes indefinitely.\n\n**Real setup tested**: Node 24.13, Linux x86_64, branch `fix/issue-97593-codex-subagent-retry-cap` at `8f5f1ca94c`, Vitest 4.1.8 via `node scripts/run-vitest.mjs`\n\n**Root cause**: `scheduleCompletionDeliveryRetry` (line 617) uses `completionDeliveryAttempt` only as a clamped delay-array index and never compares it to a maximum. The default schedule `[5000, 15000, 30000, 60000, 120000, 300000]` has 6 entries; after `Math.min(attempt, 5)` pins at index 5, the timer re-fires every 300 s with no limit. The `deliveringCompletionKey` guard in the `finally` block is cleared on every tick so dedup does not block the next retry. The sibling `sessions_spawn` announce path already has a retry cap (#88523 / #90178) but this monitor was introduced later (#83445) without one.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs run extensions/codex/src/app-server/native-subagent-monitor.test.ts`\n\n**After-fix evidence**:\n```\n[test] starting test/vitest/vitest.extension-codex.config.ts\nTest Files  1 passed (1)\n     Tests  34 passed (34)  ← 33 existing + 1 new give-up test\n[test] passed 1 Vitest shard in 34.43s\n```\n\nNew test \"stops retrying after exhausting the retry schedule on permanently non-durable delivery (#97593)\" verifies:\n- Initial delivery: 1 call\n- Retry 1 (10ms): 2 calls\n- Retry 2 (20ms): 3 calls\n- Exhausted (1000ms after): still 3 calls — no more retries\n- `setDetachedTaskDeliveryStatusByRunId` called with `deliveryStatus: \"failed\"`\n\n**Observed result after the fix**: Delivery stops after `delays.length` retries. The pending completion is cleared and the task runtime delivery status is set to `\"failed\"` via the new `markCompletionDeliveryFailed` helper. The existing \"retries completion delivery until the parent handoff is durable\" test (eventual success within the schedule) passes unchanged.\n\n**What was not tested**: Live Codex provider with a real permanently non-durable channel state. The fix is validated at the monitor unit-test level with a 2-entry schedule simulating permanent failure. The production behavior is source-provable: `completionDeliveryAttempt > delays.length` gate fires once.\n\n**Evidence provenance**: `node scripts/run-vitest.mjs` terminal output on the PR head at Node 24.13 / Linux x86_64, 2026-06-29.\n\n## Tests and validation\n\n| Test Type | Result | Details |\n|-----------|--------|---------|\n| Existing tests | 33/33 passed | All pre-existing, including \"retries until durable\" |\n| New give-up test | ✅ 1/1 | Cap at delays.length, deliveryStatus: \"failed\" |\n| Total | 34/34 passed | Zero regressions |\n\n## Design decisions\n\n**Why cap at delays.length instead of adding a separate maxRetries config?** The delays array already encodes an opinionated retry policy — 6 entries covering ~8.5 minutes. Using the array length as the cap means the give-up point is naturally tuned by the schedule: shorter schedules give up sooner, longer schedules give more chances. Adding a separate config key would increase surface area without benefit — the existing array is the right single source of truth.\n\n**Why \"failed\" instead of \"pending\" as the terminal state?** \"pending\" means \"still trying\" — the monitor would keep reconciling it. \"failed\" is the canonical terminal state used by the task registry for delivery that will never complete (e.g. task-registry.ts line 1401: `deliveryStatus: \"failed\"` for missing-owner tasks).\n\n**Why a new markCompletionDeliveryFailed helper instead of inlining?** The existing code already has `markCompletionDeliveryPending` and `markCompletionDeliveryDelivered` helpers that follow the same pattern (get taskRuntime → call `setDetachedTaskDeliveryStatusByRunId`). Adding a third helper is consistent and keeps `scheduleCompletionDeliveryRetry` at the right level of abstraction.\n\n## Risk checklist\n\n**What is the highest-risk area of this change?** Premature give-up in a scenario where the delays array is unusually short (e.g. tests using `[10, 20]`). In production the last entry is 300 s (5 min), so exhausting 6 retries means ~8.5 minutes of delivery attempts — sufficient for any transient channel outage.\n\n**Risk level**: Low — the give-up path only fires after exhausting the full retry schedule. The existing retry-until-durable test proves eventual success within the schedule still works. No new config, no new public API, no behavior change on the success path.\n\n**Merge risk declaration**: No merge risk. Pure additive guard in a single file's retry scheduler. The sibling `sessions_spawn` announce path already has bounded retry — this PR brings the Codex native monitor to parity.\n\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [x] No documentation changes required\n- [x] No breaking changes\n- [x] Risk level: Low — the give-up gate fires only after exhausting the full retry schedule (~8.5 minutes in default config). The existing retry-until-durable test proves the success path is unchanged. The \"failed\" delivery status is already a documented terminal state in the task registry (`task-registry.types.ts:16-22`). If a maintainer prefers a longer or shorter retry window, adjusting `completionDeliveryRetryDelaysMs` is sufficient — no new config key or migration is needed.\n\n## Architecture context\n\nThe Codex native subagent monitor (`native-subagent-monitor.ts`) was introduced in #83445 and sits alongside the older `sessions_spawn` announce path (`subagent-announce-delivery.ts`). Both paths deliver subagent completions to the parent session, but they use independent retry schedulers:\n\n| Path | File | Retry Cap | Deadline |\n|------|------|-----------|----------|\n| sessions_spawn announce | `subagent-announce-delivery.ts` | ✅ #88523 | ✅ #90178 |\n| Codex native monitor | `native-subagent-monitor.ts` | ❌ (this PR) | ❌ |\n\nThis PR brings the native monitor to parity with the announce path by adding a bounded retry count. A deadline (wall-clock give-up) could be added in a follow-up if needed.\n\n## Code walkthrough\n\nThe fix touches two methods in `CodexNativeSubagentMonitor`:\n\n**`markCompletionDeliveryFailed`** (new):\n```typescript\nprivate markCompletionDeliveryFailed(completion: CodexNativeSubagentCompletion): void {\n    const taskRuntime = this.getTaskRuntimeForChild(completion.childThreadId);\n    if (!taskRuntime) return;\n    taskRuntime.setDetachedTaskDeliveryStatusByRunId({\n      runId: codexNativeSubagentRunId(completion.childThreadId),\n      deliveryStatus: \"failed\",\n    });\n}\n```\nFollows the exact pattern of `markCompletionDeliveryDelivered` (line 606) and `markCompletionDeliveryPending` (line 591) — get task runtime, set delivery status. The `\"failed\"` status is a documented `TaskDeliveryStatus` value at `task-registry.types.ts:20`.\n\n**`scheduleCompletionDeliveryRetry`** (give-up gate at line 627-632):\n```typescript\nchildState.completionDeliveryAttempt += 1;\nif (childState.completionDeliveryAttempt > this.completionDeliveryRetryDelaysMs.length) {\n    const completion = childState.pendingCompletion;\n    childState.pendingCompletion = undefined;\n    childState.pendingCompletionEventAt = undefined;\n    this.markCompletionDeliveryFailed(completion);\n    return; // no timer armed\n}\n```\nThe gate runs after incrementing `completionDeliveryAttempt` and before `setTimeout`. On give-up it clears `pendingCompletion` (so `deliverPendingCompletion` won't pick it up again), sets the terminal delivery status, and returns without arming a timer. The `finally` block in `deliverPendingCompletion` that clears `deliveringCompletionKey` is harmless — it runs on the last retry's completion, but with `pendingCompletion` already cleared, `scheduleCompletionDeliveryRetry` would have returned early at the `!childState.pendingCompletion` guard anyway.\n\n## Test coverage\n\nThe new test \"stops retrying after exhausting the retry schedule on permanently non-durable delivery (#97593)\" directly exercises the production `CodexNativeSubagentMonitor` with a short 2-entry schedule `[10, 20]`:\n\n1. Registers a parent in the monitor and delivers a native subagent completion notification\n2. All `deliverAgentHarnessTaskCompletion` mock calls return `{ delivered: false }` — simulating a permanently non-durable handoff\n3. Verifies exactly 3 delivery attempts (1 initial + 2 retries for the 2-entry schedule)\n4. Advances 1000ms past the last retry and confirms no additional calls — the cap works\n5. Asserts `deliveryStatus: \"failed\"` is set via the runtime seam\n\nThe existing test \"retries completion delivery until the parent handoff is durable\" (line 1233) verifies that eventual success within the schedule still works: first call returns `delivered: false`, retry returns `delivered: true`, and `deliveryStatus: \"delivered\"` is set. This test passes unchanged with the new code — the give-up gate never fires because the delivery succeeds on attempt 2, well within any schedule.\n\n## Why not a wall-clock deadline?\n\nThe `sessions_spawn` announce path added both an attempt cap (#88523) and a wall-clock deadline (#90178). For the native monitor, an attempt cap alone is sufficient because the delays array already provides a time window: with the default 6-entry schedule `[5s, 15s, 30s, 60s, 120s, 300s]`, exhausting all retries covers approximately 530 seconds (8.8 minutes) of total elapsed time. Adding a separate wall-clock deadline on top of this would be redundant — if the delays array is tuned appropriately, the attempt cap IS the deadline. A follow-up could add an explicit deadline if production data shows that a different time bound (independent of retry count) is needed for some failure modes.\n",
+        "branch": "fix/issue-97593-codex-subagent-retry-cap",
+        "head_sha": "8f5f1ca94c0a9483819711ca27a808d5e227f05c",
+        "author": "zhangqueping",
+        "labels": [
+          "size: S",
+          "extensions: codex",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/codex/src/app-server/native-subagent-monitor.test.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/native-subagent-monitor.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 82,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97627",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97627.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 89,
+          "gatingTotal": 84,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 33,
+            "SUCCESS": 52,
+            "IN_PROGRESS": 2
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 478,
+    "total_ms": 2286,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 241
+        "ms": 258
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1764
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +166,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 226
+        "ms": 233
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
