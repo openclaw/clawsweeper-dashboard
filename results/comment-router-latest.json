@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T11:49:56.732Z",
+  "generated_at": "2026-06-29T11:51:12.080Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T08:49:53.890Z",
+  "since": "2026-06-29T08:51:11.536Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     96645
   ],
   "comment_ids": [
     4832146796
   ],
-  "status_comment_id": 4832147587,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -38,29 +38,29 @@
       "comment_version_key": "4832146796:2026-06-29T11:48:40Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/96645#issuecomment-4832146796",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 96645,
       "author": "iloveleon19",
       "author_id": 37945260,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-29T11:48:40Z",
       "comment_updated_at": "2026-06-29T11:48:40Z",
-      "status_comment_id": 4832147587,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=99b678778d759287060682a69bba2f0261493105)",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "99b678778d759287060682a69bba2f0261493105",
+      "expected_head_sha": null,
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -68,171 +68,26 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-29T11:49:57.807Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96645
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-29T11:49:59.053Z",
-          "response_comment_id": "4832147587",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(mattermost): key private channels as group on outbound routing",
-        "body": "## What Problem This Solves\n\nResolves #95646.\n\nThe `chat_type` OpenClaw uses for a Mattermost **private channel** is non-deterministic across code paths:\n\n- **Inbound** classifies by channel *type* — `P`/`G` → `group` (authoritative, correct).\n- **Outbound / session reconstruction** re-derives it from the delivery *target string* `channel:<id>` (a private channel is addressed with the *same prefix* as a public channel) → `channel`.\n\nSo one private-channel conversation is keyed under two session namespaces — `…:mattermost:group:<id>:thread:<root>` (inbound) and a phantom `…:channel:<id>:thread:<root>` (delivery). Threaded/scheduled deliveries (e.g. a recheck cron) then split the thread across namespaces, and on a cold restart the delivery rebuilds as `channel:` and thread recovery fails.\n\nRoot cause: nothing on the outbound path could represent `group`, and the **isolated cron delivery path** resolved the route from the ephemeral run key rather than the job's bound conversation identity.\n\n## Fix\n\nThree coordinated changes, all sourcing the authoritative type **without a channel-type cache**:\n\n1. **`extensions/mattermost/src/session-route.ts`** — `resolveMattermostOutboundSessionRoute` keys a conversation as `group` from an authoritative signal: the resolved target kind, an explicit `group:` prefix, or the inbound `currentSessionKey`'s peer kind.\n2. **`extensions/mattermost/src/mattermost/target-resolution.ts`** — `resolveMattermostOpaqueTarget` classifies a bare channel id by its real channel type (`P`/`G` → group), cached per id.\n3. **`src/cron/isolated-agent/delivery-dispatch.ts`** — isolated cron deliveries now resolve the outbound route from the job's **bound** conversation session key (when it is a real conversation key), not the isolated run key, so the namespace survives (new `selectCronRouteCurrentSessionKey` helper). This is the path that was forking the phantom `channel:` session.\n\nThe **wire target stays `channel:<id>`** for non-DMs — Mattermost posts to the channel id regardless, and `parseMattermostTarget` only accepts `channel:`/`user:`. The `group` distinction lives in the session key (`peer.kind`), which is the namespace that was mismatching.\n\n## Scope & why this design\n\nThis targets the routing/session half of the Mattermost `group` overload (the prompt-intro half landed separately in #96244). It deliberately uses **`currentSessionKey` identity, not a channel-kind cache**: a sibling PR (#96521) that added a 30‑minute channel-kind cache documented two correctness issues with that approach — a **cold-restart regression** (empty cache rebuilds `channel:` routes and thread recovery fails) and a **cache-TTL mismatch** vs the 5‑minute authoritative lookup. Keying off the bound session identity avoids both: it is correct cold, with no extra cache.\n\n## What changed\n\n- `extensions/mattermost/src/session-route.ts` (+ test) — honor a `group` signal; never declare a `chat_type` from the lossy prefix.\n- `extensions/mattermost/src/mattermost/target-resolution.ts` (+ test) — classify `P`/`G` channels as `group` via channel-type lookup (cached).\n- `src/cron/isolated-agent/delivery-dispatch.ts` (+ test) — prefer the job's bound conversation key for cron delivery route resolution.\n\n## Evidence\n\n**Unit tests (added):** session-route group keying (resolved-kind / `group:` prefix / inbound `currentSessionKey`), resolver `P`→group, and `selectCronRouteCurrentSessionKey` (bound conversation key preferred, isolated/cron keys ignored). All green; `tsgo`/`check:test-types` clean.\n\n**Live Mattermost proof (deployed build, private channel type `P`, redacted ids):** a scheduled **announce** delivery into a private-channel thread, observing the session store before/after:\n\n| build | thread | before | after |\n|---|---|---|---|\n| **without the cron fix** | `…mofm…` | `group:<id>:thread` only | a phantom `channel:<id>:thread` is **created** (the #95646 split) |\n| **with the cron fix** | `…5x48…` | `group:<id>:thread` only | **no `channel:` session** — the delivery reuses `group:<id>:thread` |\n\nIn both cases the message was delivered into the thread (root matched). With the fix the outbound delivery **reuses the inbound `group:<id>` namespace** instead of forking `channel:<id>`. The same split is observable in untouched production data: existing private-channel threads carry both `group:<id>:thread:<root>` and a phantom `channel:<id>:thread:<root>` for the same root.\n",
-        "branch": "fix/mattermost-infer-target-chat-type",
-        "head_sha": "1d0e840d4f7058d33eca0d290db77c341c640db4",
-        "author": "iloveleon19",
-        "labels": [
-          "channel: mattermost",
-          "size: M",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/mattermost/src/mattermost/target-resolution.test.ts",
-            "additions": 53,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/target-resolution.ts",
-            "additions": 32,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/session-route.test.ts",
-            "additions": 55,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/session-route.ts",
-            "additions": 37,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/delivery-dispatch.test.ts",
-            "additions": 36,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/isolated-agent/delivery-dispatch.ts",
-            "additions": 31,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 244,
-        "deletions": 13,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96645",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96645.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SUCCESS": 45,
-            "SKIPPED": 31,
-            "IN_PROGRESS": 20,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5957,
+    "total_ms": 1910,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 618
+        "ms": 531
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2212
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -244,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3104
+        "ms": 1366
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
