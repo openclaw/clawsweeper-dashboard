@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T03:27:47.862Z",
+  "generated_at": "2026-06-29T03:28:20.655Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T00:27:43.510Z",
+  "since": "2026-06-29T00:28:20.375Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    96903
+    97645
   ],
-  "comment_ids": [
-    4828690175
-  ],
-  "status_comment_id": 4828690726,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,208 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:96903:4828690175:2026-06-29T03:26:31Z:re_review",
-      "comment_id": "4828690175",
-      "comment_version_key": "4828690175:2026-06-29T03:26:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96903#issuecomment-4828690175",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 96903,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T03:26:31Z",
-      "comment_updated_at": "2026-06-29T03:26:31Z",
-      "status_comment_id": 4828690726,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-29T03:27:48.946Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 96903
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-29T03:27:50.131Z",
-          "response_comment_id": "4828690726",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(xai): bound video response reads",
-        "body": "## What Problem This Solves\n\nOn the success path, the xAI video generation provider read the create and poll JSON responses with an unbounded `await response.json()`. The response body comes from an external, untrusted endpoint, so a hostile or buggy server that streams a very large body with no `Content-Length` could force the runtime to buffer the entire payload into memory before parsing it — an OOM / hang vector. This mirrors the sibling provider hardening landed in #96604–#96608 and #96875.\n\n## Changes\n\n- `extensions/xai/video-generation-provider.ts`: `readXaiVideoJson` (used by both the create and poll paths) now reads the body through the shared bounded reader `readResponseWithLimit` (16 MiB cap) and parses the resulting bytes, instead of `await response.json()`. On overflow it throws `xAI video generation response exceeds 16777216 bytes` and cancels the stream; malformed/non-object payloads keep the existing `xAI video generation response malformed` behavior. The binary video download path already used `readResponseWithLimit` and is unchanged.\n- `extensions/xai/video-generation-provider.test.ts`: existing mocks switched to real streamed `Response` bodies, plus two new regressions that drive an unbounded create/poll body and assert the bounded throw and stream cancellation.\n\n## Real behavior proof\n\n- **Behavior addressed**: The xAI video create and poll control JSON from an untrusted external endpoint must not be buffered whole on the success path. An oversized no-`Content-Length` body must stop at the 16 MiB cap, cancel the stream, and throw a bounded `...exceeds 16777216 bytes` error. Small valid JSON must continue to parse normally.\n- **Real environment tested**: A real `node:http` server (`createServer`) bound to `127.0.0.1`, streaming JSON in 64 KiB chunks with no `Content-Length` and a would-stream size of ≈64 MiB. The script drove the provider's exact success-path wrapper `readXaiVideoJson` — reproduced byte-for-byte, calling the same exported bounded reader `readResponseWithLimit` from `openclaw/plugin-sdk/response-limit-runtime` with the identical 16 MiB cap and overflow error text — over a real loopback fetch + socket, for both the create and poll routes. Node v22.22.0.\n- **Exact steps**: `node --import tsx scratchpad/xai-bound-proof.mts` — start the streaming server → call the create-path JSON reader and assert bounded throw + server-side socket abort near the cap → call the poll-path JSON reader and assert the same → run a negative control using old unbounded `fetch().arrayBuffer()` against the same streaming body → call the reader against a small valid JSON response.\n- **Observed result after fix**: create JSON threw `xAI video generation response exceeds 16777216 bytes` and aborted after 19,464,207 bytes; poll JSON threw the same and aborted after 19,136,527 bytes. The negative control buffered the full 67,108,879 bytes, proving the cap is load-bearing. The small happy path parsed `request_id=req_happy status=done`. Focused Vitest: 15 passed.\n- **What was not tested**: I did not hit the live xAI service; a live endpoint would not reproduce a hostile oversized body. Because the xAI video provider hard-codes `allowPrivateNetwork: false` and does not expose a per-request SSRF policy, the full exported provider cannot be driven over a loopback socket (the SSRF guard rejects 127.0.0.1); the TCP proof therefore drives the provider's exact success-path JSON wrapper and the real shared bounded reader over a real socket, and the create/poll provider wiring is covered by the focused in-repo Vitest regressions using the same reader and error text. In practice the control JSON is small; this is defense-in-depth. The proof script is not committed.\n\n## Evidence\n\nReal `node:http` terminal proof (real loopback socket, exact provider success-path wrapper, real shared bounded reader):\n\n```\n[proof] real node:http server on http://127.0.0.1:43519, cap=16777216 bytes, would-stream≈67108864 bytes per overflow route\nPASS  create JSON: overflow throws bounded error :: threw=true msg=\"xAI video generation response exceeds 16777216 bytes\"\nPASS  create JSON: stream cancelled near 16MiB :: aborted=true bytesSent=19464207 (<33554432)\nPASS  poll JSON: overflow throws bounded error :: threw=true msg=\"xAI video generation response exceeds 16777216 bytes\"\nPASS  poll JSON: stream cancelled near 16MiB :: aborted=true bytesSent=19136527 (<33554432)\nPASS  negative control: OLD unbounded read buffers PAST the 16MiB cap :: buffered=67108879 bytes (> 16777216)\nPASS  negative control consumed far more than bounded reads :: unbounded buffered=67108879 vs create sent≈19464207\nPASS  happy path: small create JSON still parses :: request_id=req_happy status=done\n\n[proof] 7 PASS / 0 FAIL\n[proof] ALL PASS\n```\n\nFocused Vitest:\n\n```\nnode scripts/run-vitest.mjs run extensions/xai/video-generation-provider.test.ts\n\nTest Files  1 passed (1)\n      Tests  15 passed (15)\n```\n\nType checks:\n\n```\npnpm tsgo:extensions        # exit 0\npnpm tsgo:extensions:test   # exit 0\n```\n\n**Label**: security\n\n_AI-assisted._\n",
-        "branch": "fix/bound-xai-video",
-        "head_sha": "c36fe24f0ad3ab111e3e009dcad68fd9ec5371a0",
-        "author": "alix-007",
-        "labels": [
-          "size: S",
-          "proof: sufficient",
-          "extensions: xai",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/xai/video-generation-provider.test.ts",
-            "additions": 95,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/xai/video-generation-provider.ts",
-            "additions": 5,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 100,
-        "deletions": 14,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96903",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96903.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 83,
-          "gatingTotal": 78,
-          "counts": {
-            "SUCCESS": 24,
-            "SKIPPED": 26,
-            "IN_PROGRESS": 33
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7337,
+    "total_ms": 480,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2790
+        "ms": 269
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1545
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -240,11 +52,11 @@
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2975
+        "ms": 200
       },
       {
         "name": "append_ledger",
