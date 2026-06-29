@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T02:29:49.814Z",
+  "generated_at": "2026-06-29T02:29:52.157Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-28T23:29:49.407Z",
+  "since": "2026-06-28T23:29:50.043Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97626
+    97631
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +29,128 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97631:4828426240:2026-06-29T02:29:36Z:clawsweeper_needs_human",
+      "comment_id": "4828426240",
+      "comment_version_key": "4828426240:2026-06-29T02:29:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97631#issuecomment-4828426240",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97631,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-29T02:25:14Z",
+      "comment_updated_at": "2026-06-29T02:29:36Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=947237eb0f7f922d4ac4f0e8046cddf4de91ca47)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "947237eb0f7f922d4ac4f0e8046cddf4de91ca47",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(failover): treat model_not_found as failover-eligible when fallback is configured",
+        "body": "## What Problem This Solves\n\nWhen a configured primary model is decommissioned by the provider, `model_not_found` should cascade to the user's configured `model.fallbacks` chain instead of returning a terminal error.\n\nCurrently `shouldEscalateRetryLimit` explicitly excludes `model_not_found`, so the retry-limit stage short-circuits to `return_error_payload` even when valid fallbacks exist and are waiting to be tried.\n\n## Why This Change Was Made\n\nThe exclusion was meant to surface model-not-found errors loudly for typos. But the `fallbackConfigured` guard at the caller site already handles this distinction: when no fallback is configured, `return_error_payload` is still the terminal outcome. With fallbacks present, the model should cascade.\n\nThe fix removes `model_not_found` from the `shouldEscalateRetryLimit` exclusion list. This is the same caller-guard pattern used by the prompt and assistant stages, which already allow `model_not_found` through their failover paths.\n\n## User Impact\n\nUsers with `model.fallbacks` configured for their primary model will now automatically fall back to the next model in the chain when the provider decommissions the primary model. Previously the turn would hard-error without trying any fallback.\n\nNo impact for users without fallbacks configured — `model_not_found` still surfaces as a terminal error.\n\n## Evidence\n\n### Before/after behavior matrix\n\n| Scenario | Before | After |\n|-----------|--------|-------|\n| model_not_found + fallback configured | `return_error_payload` | `fallback_model` ✅ |\n| model_not_found + no fallback | `return_error_payload` | `return_error_payload` (unchanged) |\n| model_not_found at prompt stage | `rotate_profile` then `fallback_model` | unchanged ✅ |\n| model_not_found at assistant stage | `rotate_profile` then `fallback_model` | unchanged ✅ |\n| timeout + fallback configured | `return_error_payload` | unchanged ✅ |\n| rate_limit + fallback configured | `fallback_model` | unchanged ✅ |\n\n### Test output (36 tests, all passing)\n\n```\n$ npx vitest run src/agents/embedded-agent-runner/run/failover-policy.test.ts\n\n✓ resolveRunFailoverDecision > escalates retry-limit exhaustion for replay-safe failover reasons\n✓ resolveRunFailoverDecision > escalates retry-limit exhaustion for model_not_found when fallback is configured\n✓ resolveRunFailoverDecision > surfaces model_not_found as terminal when no fallback is configured\n✓ resolveRunFailoverDecision > keeps retry-limit as a local error for non-escalating reasons\n... (36 tests, all passed)\n Test Files  1 passed (1)\n      Tests  36 passed (36)\n```\n\n### Regressions (452 tests across 5 files)\n\n```\n$ npx vitest run failover-policy.test.ts model-fallback.test.ts failover-error.test.ts ... \n\n Test Files  5 passed (5)\n      Tests  452 passed (452)\n```\n\n### Code-level proof\n\nThe entire source change is one line removed:\n\n```diff\n function shouldEscalateRetryLimit(reason) {\n   return Boolean(\n     reason &&\n     reason !== \"timeout\" &&\n-    reason !== \"model_not_found\" &&\n     reason !== \"format\" &&\n     reason !== \"session_expired\",\n   );\n }\n``'\n\nThe `fallbackConfigured` guard at the caller ensures safety:\n\n- fallbackConfigured=true, model_not_found → fallback_model (new)\n- fallbackConfigured=false, model_not_found → return_error_payload (unchanged)\n\n## AI Assistance\n- **AI-assisted**: Yes\n- **Co-Authored-By**: Claude <noreply@anthropic.com>\n",
+        "branch": "fix/issue-97564-model-not-found-failover",
+        "head_sha": "947237eb0f7f922d4ac4f0e8046cddf4de91ca47",
+        "author": "zw-xysk",
+        "labels": [
+          "agents",
+          "size: XS",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/failover-policy.test.ts",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/failover-policy.ts",
+            "additions": 1,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 32,
+        "deletions": 5,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97631",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97631.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "gatingTotal": 91,
+          "counts": {
+            "SUCCESS": 60,
+            "SKIPPED": 32,
+            "IN_PROGRESS": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 717,
+    "total_ms": 2366,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 398
+        "ms": 343
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1756
       },
       {
         "name": "classify_comment_commands",
@@ -56,7 +166,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 310
+        "ms": 241
       },
       {
         "name": "append_ledger",
