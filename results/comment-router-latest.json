@@ -1,24 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T16:10:23.509Z",
+  "generated_at": "2026-06-29T16:11:11.892Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T13:10:22.846Z",
+  "since": "2026-06-29T13:11:09.224Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88992
-  ],
-  "comment_ids": [
-    4834602950
+    97861
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -32,22 +29,132 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97861:4834563194:2026-06-29T16:11:06Z:clawsweeper_needs_human",
+      "comment_id": "4834563194",
+      "comment_version_key": "4834563194:2026-06-29T16:11:06Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97861#issuecomment-4834563194",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97861,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-29T16:05:20Z",
+      "comment_updated_at": "2026-06-29T16:11:06Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] No repair lane needed; this focused PR has no concrete automated follow-up beyond normal review and CI gates.; Cleared: The diff only changes internal TypeScript token estimation logic plus colocated tests, with no dependency, workflow, secret, or supply-chain surface added. (sha=c68993e94656e901ec390d4ebdb040fe9addf8e3)",
+      "review_summary": "The PR updates preemptive compaction token estimation to count `bashExecution`, `branchSummary`, and `compactionSummary` provider-rendered text, and adds focused regression tests for bash and summary overflow routing.\n\nPR surface: Source +31, Tests +85. Total +116 across 2 files.\n\nReproducibility: yes. source-reproducible: current main estimates non-tool/non-assistant records from `record.content`, while bash and summary records render provider-visible text from `command`/`output` or `summary`. I did not run tests because this review is read-only, but the PR body includes before/after live output from the relevant exported functions.",
+      "review_followup": "- [P2] No repair lane needed; this focused PR has no concrete automated follow-up beyond normal review and CI gates.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "c68993e94656e901ec390d4ebdb040fe9addf8e3",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(compaction): count bashExecution and summary turns in pre-prompt overflow precheck",
+        "body": "## What Problem This Solves\n\nThe pre-prompt overflow precheck silently under-counts `bashExecution` turns, so a context that holds large `!`-bash output (a `!cat` of a big file, build logs, test output) is scored as nearly empty. `shouldPreemptivelyCompactBeforePrompt` returns `route: \"fits\"`, `shouldCompact: false`, and the oversized prompt is submitted to the provider, which then rejects it as a context overflow. Bash-heavy sessions skip the very gate meant to keep them under the model limit.\n\nThe same under-count corrupts the persisted `SessionContextBudgetStatus` (`remainingPromptBudgetTokens`) and the mid-turn tool-result guard, which both consume the same estimate, so the budget a user sees for these sessions is wildly wrong.\n\n## Why This Change Was Made\n\nRoot cause is `estimateMessageTokenPressure` in `src/agents/embedded-agent-runner/run/preemptive-compaction.ts`. It special-cases `toolResult`/`tool`/`assistant` and otherwise falls through to `tokens += estimateContentTokenPressure(record.content)`.\n\nA `BashExecutionMessage` stores its payload in `command`/`output` and has no `content` field (`packages/agent-core/src/types.ts`), so `record.content` is `undefined` and the estimator returns `0`. The whole turn scores as just the boundary overhead (about 29 tokens after the safety margin) no matter how large the output.\n\nThe precheck runs on `normalizeMessagesForLlmBoundary(...)`, which does not call `convertToLlm`, so `bashExecution` reaches the gate raw. The actual provider request does expand it via `convertToLlm` -> `bashExecutionToText` into `command` plus the full output as real user text, so the provider sees the tokens the gate scored as ~29.\n\n`branchSummary` and `compactionSummary` hit the same defect at lower magnitude: their payload is in a `summary` field, not `content`, so they too scored as bare overhead.\n\nbefore:\n\n```ts\n  tokens += estimateContentTokenPressure(record.content);\n  return tokens;\n```\n\n## User Impact\n\nBash-heavy and summary-bearing sessions no longer skip preflight compaction and submit an oversized prompt. The precheck now scores these turns at their true provider-rendered size, so it routes to compaction or tool-result truncation before the request instead of relying on post-overflow recovery (a failed provider round-trip plus latency). The reported `remainingPromptBudgetTokens` is now correct for these sessions.\n\n## Evidence\n\nFix: estimate each affected role from the exact text `convertToLlm` renders for the provider.\n\nafter:\n\n```ts\n  if (record.role === \"bashExecution\") {\n    if (record.excludeFromContext === true) {\n      return 0;\n    }\n    tokens += estimateStringTokenPressure(\n      bashExecutionToText(record as unknown as BashExecutionMessage),\n    );\n    return tokens;\n  }\n\n  if (record.role === \"branchSummary\") {\n    const summary = typeof record.summary === \"string\" ? record.summary : \"\";\n    tokens += estimateStringTokenPressure(BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX);\n    return tokens;\n  }\n\n  if (record.role === \"compactionSummary\") {\n    const summary = typeof record.summary === \"string\" ? record.summary : \"\";\n    tokens += estimateStringTokenPressure(\n      COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX,\n    );\n    return tokens;\n  }\n```\n\n`excludeFromContext` bash records return `0` because `convertToLlm` drops them from the provider request entirely.\n\n### Why this is the right boundary\n\nThe estimate must reflect what the provider actually receives. `convertToLlm` is the single function that renders these roles into provider text, so the estimator now reuses its exact renderers (`bashExecutionToText`, the summary prefix/suffix constants) rather than re-deriving sizes. All three affected roles are fixed in the same change; the remaining roles already route through the existing `content`/`toolResult`/`assistant` branches and are unaffected.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/preemptive-compaction.bashexec.test.ts` - 4 passed with the patch; the bash and summary cases fail on pristine main (estimate 29, route `fits`).\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/preemptive-compaction.test.ts` - 16 passed (adjacent suite, no regression).\n- `node scripts/run-oxlint.mjs <changed files>` - clean.\n- `oxfmt --check <changed files>` - clean.\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json` - both clean.\n\n## Real behavior proof\nBehavior addressed: a session holding a large bash turn is scored as nearly empty by the pre-prompt overflow precheck, so it routes \"fits\" and submits an oversized prompt instead of compacting first.\nReal environment tested: drove the real exported `estimateLlmBoundaryTokenPressure`, `shouldPreemptivelyCompactBeforePrompt`, and `convertToLlm` on pristine main 1052652a71 and on the patched tree with an identical two-message session (one user message plus one `bashExecution` turn whose output renders to 337,507 provider tokens), under a 128000 context budget with a 16384 reserve. Nothing was mocked; the real estimator, router, and provider-text renderer all ran.\nExact steps or command run after this patch: built the session, called `convertToLlm` to measure the provider-rendered token size, then called `estimateLlmBoundaryTokenPressure` and `shouldPreemptivelyCompactBeforePrompt` on the same session and printed their fields.\nEvidence after fix:\n```\n# BEFORE (pristine main 1052652a71)\nprovider_tokens_in_request    = 337507\nprecheck_estimated_tokens     = 59\ndecision.route                = fits\ndecision.shouldCompact        = false\ndecision.overflowTokens       = 0\ndecision.estimatedPromptTokens= 59\n# AFTER (this patch, identical inputs)\nprovider_tokens_in_request    = 337507\nprecheck_estimated_tokens     = 405068\ndecision.route                = compact_only\ndecision.shouldCompact        = true\ndecision.overflowTokens       = 293452\ndecision.estimatedPromptTokens= 405068\n```\nObserved result after fix: the same 337507-token bash turn that was scored at 59 and waved through as \"fits\" is now scored at its real rendered size, so the gate reports an overflow of 293452 and routes to compaction before the prompt is submitted.\nWhat was not tested: no live provider request was issued (the provider-side overflow is the documented downstream consequence); the full build was not run because no module/packaging boundary changed.\n",
+        "branch": "fix/preemptive-compaction-bashexec-undercount",
+        "head_sha": "c68993e94656e901ec390d4ebdb040fe9addf8e3",
+        "author": "yetval",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/preemptive-compaction.bashexec.test.ts",
+            "additions": 85,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/preemptive-compaction.ts",
+            "additions": 32,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 117,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97861",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97861.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 62,
+            "SKIPPED": 32,
+            "IN_PROGRESS": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 991,
+    "total_ms": 2964,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 653
+        "ms": 342
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2111
+        "ms": 2309
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -59,7 +166,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 329
+        "ms": 260
       },
       {
         "name": "append_ledger",
