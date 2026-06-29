@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T12:47:58.509Z",
+  "generated_at": "2026-06-29T12:48:23.484Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T09:47:56.249Z",
+  "since": "2026-06-29T09:48:21.197Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97771
+    97770
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,34 +31,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97771:4832700592:2026-06-29T12:47:49Z:clawsweeper_needs_human",
-      "comment_id": "4832700592",
-      "comment_version_key": "4832700592:2026-06-29T12:47:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97771#issuecomment-4832700592",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97770:4832696669:2026-06-29T12:48:17Z:clawsweeper_auto_repair",
+      "comment_id": "4832696669",
+      "comment_version_key": "4832696669:2026-06-29T12:48:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97770#issuecomment-4832696669",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97771,
+      "issue_number": 97770,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T12:42:23Z",
-      "comment_updated_at": "2026-06-29T12:47:49Z",
+      "comment_created_at": "2026-06-29T12:42:04Z",
+      "comment_updated_at": "2026-06-29T12:48:17Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=494191eb3959caf58a54dbed2a8d4537619cc0c7)",
-      "review_summary": null,
-      "review_followup": null,
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=a1946258a68775e1049c4bbf43ebdfcda7d1d5d3)",
+      "review_summary": "The PR adds a rate-limit reset timestamp parser, threads raw provider error text into some auth-profile failure calls, and uses parsed reset durations to extend profile cooldowns.\n\nPR surface: Source +171, Tests +78. Total +249 across 4 files.\n\nReproducibility: yes. at source level: current main computes non-disabled profile cooldowns from local stepped backoff with no raw provider error input, and the PR's assistant-stage rotation path still drops rawError before cooldown parsing. I did not run a live exhausted provider account.",
+      "review_followup": "- [P1] Manual review is required because an external PR is missing real behavior proof and the remaining decision changes auth-provider cooldown defaults; no repair marker should be queued until contributor proof is supplied.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "494191eb3959caf58a54dbed2a8d4537619cc0c7",
+      "expected_head_sha": "a1946258a68775e1049c4bbf43ebdfcda7d1d5d3",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,95 +70,107 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(embedded-agent): acquire compaction session lock reentrantly",
-        "body": "## What Problem This Solves\n\nFixes #97747.\n\nWhen an embedded agent attempt triggers overflow-recovery auto-compaction, the compaction path re-acquires the same session's write lock inside the same process. `acquireSessionWriteLock` defaults `allowReentrant` to `false`, so the nested acquire blocks for 60s and then fails with `SessionWriteLockTimeoutError: pid=<self> alive=true`. Each model in the fallback chain repeats the same 180s timeout, producing an ~18-minute recovery window during which every new webchat message surfaces as `Embedded agent failed before reply: session file locked`. The overflow path's own compactions all fail — only a manual `/compact` ends the cycle.\n\n## Why This Change Was Made\n\n`createEmbeddedAttemptSessionLockController` (in `run/attempt.session-lock.ts:1158-1164`) acquires the session write lock at attempt start and holds it for the run's lifetime. The overflow recovery path in `run.ts:2707` invokes `compactContextEngineWithSafetyTimeout` → `compactEmbeddedAgentSessionDirect` → `compactEmbeddedAgentSessionDirectOnce` → `acquireSessionWriteLock` at `compact.ts:1180`, which did not pass `allowReentrant`. The underlying `@openclaw/fs-safe` lock manager supports in-process reentrancy when `allowReentrant: true` is passed (incrementing the refcount), and two sibling writers (`config/sessions/transcript-append.ts:619` and `config/sessions/session-accessor.ts:2327`) already use this exact pattern. The compaction path was simply missing the same flag.\n\n## User Impact\n\n- Long-running webchat sessions that hit context overflow on the primary model recover in seconds instead of stalling for ~18 minutes per overflow event.\n- Concurrent messages during overflow recovery are processed normally instead of being rejected with `Embedded agent failed before reply: session file locked`.\n- Affected deployments: anyone using a primary + fallback model chain where the primary drives the session into overflow (the repro uses `minimax/MiniMax-M3` with M2.7, GLM-5.1, Kimi-K2.5, Gemini-3.1 as fallbacks).\n\n## Evidence\n\n- Local tests: `node scripts/run-vitest.mjs run src/agents/embedded-agent-runner/compact.hooks.test.ts` → 70 passed (70), including the new `acquires the session write lock reentrantly so overflow recovery does not self-deadlock` regression.\n- Local tests: `node scripts/run-vitest.mjs run src/agents/session-write-lock.test.ts` → 53 passed (53) — reentrancy contract for the underlying lock still holds.\n- Typecheck: `pnpm check:test-types` (covers core + extensions test configs).\n- Lint: `node scripts/run-oxlint.mjs` on the three touched files.\n- Source proof: `acquireSessionWriteLock` at `src/agents/session-write-lock.ts:895` reads `params.allowReentrant ?? false`; the manager honors the flag (`allowReentrant` branch in `node_modules/@openclaw/fs-safe/dist/sidecar-lock.js:204` increments `held.count`). Sibling reentrant writers at `src/config/sessions/transcript-append.ts:619` and `src/config/sessions/session-accessor.ts:2327` confirm the pattern.\n",
-        "branch": "fix/embedded-compaction-reentrant-lock-97747",
-        "head_sha": "494191eb3959caf58a54dbed2a8d4537619cc0c7",
-        "author": "ly-wang19",
+        "title": "fix: parse provider rate-limit reset timestamps for smarter cooldowns",
+        "body": "# Fix: Parse provider rate-limit reset timestamps for smarter cooldowns\n\n## Summary\n\nWhen a provider returns a rate-limit error containing an explicit reset\ntimestamp (e.g. `\"Weekly/Monthly Limit Exhausted. Your limit will reset at\n2026-07-02 17:39:49\"`), OpenClaw now parses that timestamp and sets the\nauth-profile cooldown to the exact reset time instead of using generic\nexponential backoff (30s → 60s → 5min cap).\n\nThis eliminates wasteful retry cycles where a weekly-quota-exhausted key is\nprobed every few minutes for 3+ days, each probe wasting an API call and\nadding latency before falling back to the next profile or model.\n\nFixes #97764.\n\n## Problem\n\nWith two ZAI API keys configured via `auth.order.zai`, when the primary key\nhits a weekly/monthly quota limit:\n\n1. Primary key → 429 `\"Your limit will reset at 2026-07-02 17:39:49\"`\n2. OpenClaw gives it a 30-second cooldown (exponential backoff step 1)\n3. After 30s, primary is probed again → same 429 → 60s cooldown\n4. After 60s, probed again → same 429 → 5min cooldown\n5. Repeat every 5 minutes for 3 days until the quota actually resets\n\nEach probe wastes an API call, adds ~3-5s latency, and triggers an\nunnecessary profile rotation on every turn.\n\n## Solution\n\n### New module: `rate-limit-reset-parser.ts`\n\nA pure parser that extracts reset timestamps from provider error messages\nin these formats:\n\n- `reset(s) at YYYY-MM-DD HH:MM:SS` (ZAI/ZhipuAI)\n- `reset(s) at YYYY-MM-DDTHH:MM:SSZ` (ISO 8601)\n- `Retry-After: N` / `retry after N seconds`\n- JSON fields: `reset_at`, `reset_after_seconds`\n\nThe returned duration (ms relative to now) is clamped to\n`[30s, 7 days]`. Durations below 30s are ignored — exponential backoff\nis more appropriate for short windows.\n\n### `usage.ts` — `computeNextProfileUsageStats`\n\nWhen `rawError` is provided and a reset timestamp is parsed, the cooldown\nis set to `max(parsed_reset, exponential_backoff)`. This ensures we never\nshorten a backoff window, only extend it when the provider tells us the\nexact reset time.\n\n### `run.ts` — Propagate `rawError`\n\nThe `maybeMarkAuthProfileFailure` helper now accepts and forwards\n`rawError` (the provider error text) to `markAuthProfileFailure`. This\nis wired up at all four call sites where profile failures are recorded.\n\n## Testing\n\n10 unit tests covering:\n- ZAI/ZhipuAI datetime format\n- ISO 8601 with timezone\n- `Retry-After: N` header-style\n- JSON `reset_after_seconds` and `reset_at` fields\n- Negative cases (no reset info, empty input, short durations)\n- 7-day max clamp\n- `isPeriodicQuotaError` classifier\n\nAll tests pass:\n```\nℹ tests 10\nℹ pass 10\nℹ fail 0\n```\n\n## Limitations / Future work\n\n- The parser treats datetimes without an explicit timezone as UTC. This is\n  imperfect if the provider's server timezone differs, but covers the common\n  case where the API returns UTC or the server/client share a timezone.\n- `rateLimitedProfileRotations` is still error-class-unaware. A future\n  enhancement could give transient overload errors more rotations than\n  quota-exhaustion errors. This PR focuses on the cooldown-duration fix,\n  which provides the most immediate value.\n",
+        "branch": "fix/parse-rate-limit-reset-timestamp",
+        "head_sha": "a1946258a68775e1049c4bbf43ebdfcda7d1d5d3",
+        "author": "mathias15010",
         "labels": [
           "agents",
-          "size: XS",
-          "P1",
+          "size: M",
+          "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/compact.hooks.harness.ts",
-            "additions": 6,
-            "deletions": 1,
+            "path": "src/agents/auth-profiles/usage.ts",
+            "additions": 19,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/compact.hooks.test.ts",
-            "additions": 17,
+            "path": "src/agents/embedded-agent-helpers/rate-limit-reset-parser.test.ts",
+            "additions": 78,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/compact.ts",
-            "additions": 9,
+            "path": "src/agents/embedded-agent-helpers/rate-limit-reset-parser.ts",
+            "additions": 149,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 6,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 32,
-        "deletions": 1,
+        "changedFiles": 4,
+        "additions": 252,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97771",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97771.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97770",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97770.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 99,
+          "gatingTotal": 94,
           "counts": {
             "CANCELLED": 2,
-            "SKIPPED": 32,
-            "SUCCESS": 59,
-            "IN_PROGRESS": 3,
+            "SKIPPED": 31,
+            "SUCCESS": 61,
+            "IN_PROGRESS": 2,
+            "FAILURE": 2,
             "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE"
           ],
           "pending": [
             "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS"
           ],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2489,
+    "total_ms": 2531,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 332
+        "ms": 328
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1912
+        "ms": 1943
       },
       {
         "name": "classify_comment_commands",
@@ -166,7 +178,7 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -174,7 +186,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 216
+        "ms": 233
       },
       {
         "name": "append_ledger",
