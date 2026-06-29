@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T22:24:25.192Z",
+  "generated_at": "2026-06-29T22:25:30.323Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T19:24:22.681Z",
+  "since": "2026-06-29T19:25:30.114Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97931
+    97934
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,128 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97931:4837513900:2026-06-29T22:24:18Z:clawsweeper_needs_human",
-      "comment_id": "4837513900",
-      "comment_version_key": "4837513900:2026-06-29T22:24:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97931#issuecomment-4837513900",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 97931,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T21:56:12Z",
-      "comment_updated_at": "2026-06-29T22:24:18Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- No ClawSweeper repair lane is needed because there are no actionable review findings; maintainer review and merge decision are the remaining path.; Cleared: The diff reuses an existing session predicate in gateway runtime code and adds a colocated test; it does not change dependencies, CI, secrets, install scripts, package execution, or authorization boundaries. (sha=498fd8d8425ab01c42357f0a288463de51817926)",
-      "review_summary": "The PR exports the existing provider-owned session predicate, applies it to both gateway `agent.run` freshness checks, and adds a gateway regression test for preserving CLI bindings across the implicit daily reset boundary.\n\nPR surface: Source +10, Tests +55. Total +65 across 3 files.\n\nReproducibility: yes. Source inspection shows current main and the documented contract diverge: docs and the inbound helper exempt provider-owned CLI sessions, while gateway `agent.run` still evaluates freshness directly and can rotate/clear bindings.",
-      "review_followup": "- No ClawSweeper repair lane is needed because there are no actionable review findings; maintainer review and merge decision are the remaining path.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "498fd8d8425ab01c42357f0a288463de51817926",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): keep provider-owned CLI sessions across the daily default reset",
-        "body": "Related: #70106\n\n## What Problem This Solves\n\nFixes an issue where users with an active provider-owned CLI session (claude-cli, and likewise codex and gemini-cli) under the default reset configuration lose their conversation after the daily 4am boundary whenever the turn is driven through the gateway, that is dashboard webchat, the `openclaw agent` CLI, ACP, the control UI, and cron or heartbeat runs. The provider-side conversation binding is dropped and the transcript rotates even though the user never requested a reset.\n\nThe documented contract is that these sessions are exempt from the implicit daily default:\n\n- docs/concepts/session.md: \"Sessions with an active provider-owned CLI session are not cut by the implicit daily default.\"\n- docs/gateway/cli-backends.md: \"The implicit daily session reset does not cut them; /reset and explicit session.reset policies still do.\"\n\nThe inbound auto-reply path already honors this exemption. Only the gateway path violated it, so the same session would survive on an inbound message but rotate when the next turn came through the gateway.\n\n## Why This Change Was Made\n\nThe provider-owned skip exists in the canonical helper (`src/config/sessions/entry-freshness.ts`) and is mirrored by the inbound path (`src/auto-reply/reply/session.ts`), but the gateway `agent.run` handler called `evaluateSessionFreshness` directly at both of its freshness decision sites with no provider-owned guard. When freshness resolved to stale, the gateway minted a new session id, set the rotation flag, and cleared all CLI session bindings. This change routes both gateway freshness decisions through the same `resetPolicy.configured !== true && hasProviderOwnedSession(entry)` skip the inbound path uses, reusing the canonical predicate (now exported) rather than adding a third copy. Explicit `session.reset` policies and `/reset` are unaffected because the skip only applies when reset is not explicitly configured.\n\n## User Impact\n\nProvider-owned CLI sessions are no longer silently rotated at the daily boundary when a turn arrives through the gateway. The provider-side conversation binding and transcript are preserved, matching the inbound path and the documented behavior. Users who want timed expiry of these sessions still get it by configuring `session.reset` or by running `/reset`.\n\n## Evidence\n\n- New colocated regression test in `src/gateway/server-methods/agent.test.ts` drives the real `agentHandlers.agent` handler with a provider-owned entry under the default reset config past the daily boundary; it fails on pristine main (session rotated, binding dropped) and passes with this patch.\n- Local gates on the changed files: oxlint clean, oxfmt clean, tsgo core and core-test clean.\n- Real before/after runtime output captured below.\n\n## Root cause\n\n`src/gateway/server-methods/agent.ts` resolved freshness directly at both decision sites with no provider-owned guard (before):\n\n```ts\nlet freshness = entry\n  ? evaluateSessionFreshness({\n      updatedAt: entry.updatedAt,\n      ...lifecycleTimestamps,\n      now,\n      policy: resetPolicy,\n    })\n  : undefined;\n```\n\n```ts\nconst freshFreshness = freshEntry\n  ? evaluateSessionFreshness({\n      updatedAt: freshEntry.updatedAt,\n      ...freshLifecycleTimestamps,\n      now,\n      policy: resetPolicy,\n    })\n  : undefined;\n```\n\nOnce `freshness.fresh` is false the handler sets `canReuseSession = false`, mints a new session id, flags the rotation, and clears all CLI session bindings.\n\n## Fix\n\nBoth sites gate the freshness call with the same skip the inbound path applies (after):\n\n```ts\nconst skipImplicitExpiry =\n  resetPolicy.configured !== true && hasProviderOwnedSession(entry);\nlet freshness = entry\n  ? skipImplicitExpiry\n    ? ({ fresh: true } satisfies SessionFreshness)\n    : evaluateSessionFreshness({ ... })\n  : undefined;\n```\n\n`hasProviderOwnedSession` is exported from `src/config/sessions/entry-freshness.ts` and reused, so the predicate has one shared definition rather than a third duplicate.\n\n## Why this is the right boundary\n\nThe gateway is the surface that diverged from the canonical helper and the inbound mirror. Routing both gateway freshness decisions through the same predicate restores a single behavior across surfaces. Both gateway call sites are fixed consistently (initial freshness and the post-build `freshFreshness`). The inbound path (`session.ts`) already had the skip and is unchanged. Explicit `session.reset` and `/reset` paths keep cutting these sessions because the skip is gated on `resetPolicy.configured !== true`.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/gateway/server-methods/agent.test.ts -t \"provider-owned CLI session across the daily default boundary\"`: passes with the patch, fails on pristine main.\n- `node scripts/run-oxlint.mjs <changed files>`: clean.\n- `oxfmt --check <changed files>`: clean.\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json`: clean.\n\n## Real behavior proof\nBehavior addressed: a provider-owned claude-cli session under the default reset config is rotated and its CLI binding dropped after the daily 4am boundary when the turn is driven through the gateway agent.run handler, despite the documented provider-owned exemption.\nReal environment tested: drove the real `agentHandlers.agent` gateway handler (src/gateway/server-methods/agent.ts) on pristine main 843ad14364 and on the patched tree with identical inputs; the real freshness resolver, reset-policy resolver, provider-owned predicate, and CLI-session-binding lookup all stayed real; only the session store writer and the downstream agent command were stubbed to capture the resolved session identity and lifecycle hook.\nExact steps or command run after this patch: invoked the gateway agent handler with a provider-owned entry (modelProvider claude-cli, cliSessionBindings claude-cli to a conversation id) whose session started 25 hours before a fixed now of 2026-04-25T12:00:00Z, under the default reset config, then recorded the resolved run session id, the persisted cliSessionBindings, the lifecycle end hook, and the persisted sessionStartedAt.\nEvidence after fix:\n```\n# BEFORE (pristine main 843ad14364)\nstoredSessionId=provider-owned-session-id\nresolvedRunSessionId=51375be8-8727-4841-b302-df350fc23946\nsessionRotated=true\ncliBindingClaudeCli=DROPPED\nsessionEndHookFired=true\nstoredSessionStartedAt=1777118400000 originalStartedAt=1777028400000\n\n# AFTER (this patch, identical inputs)\nstoredSessionId=provider-owned-session-id\nresolvedRunSessionId=provider-owned-session-id\nsessionRotated=false\ncliBindingClaudeCli=claude-cli-conversation-123\nsessionEndHookFired=false\nstoredSessionStartedAt=1777028400000 originalStartedAt=1777028400000\n```\nObserved result after fix: the gateway now resolves the run to the existing session id, preserves the claude-cli conversation binding, fires no session-end lifecycle hook, and leaves the original session start time intact, so the provider-owned session is no longer cut by the implicit daily default.\nWhat was not tested: no live claude-cli provider request was issued; the persistence writer and downstream agent command were stubbed; full build was not run.\n",
-        "branch": "fix/gateway-providerowned-daily-reset",
-        "head_sha": "498fd8d8425ab01c42357f0a288463de51817926",
-        "author": "yetval",
-        "labels": [
-          "gateway",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/config/sessions/entry-freshness.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent.test.ts",
-            "additions": 55,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent.ts",
-            "additions": 22,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 78,
-        "deletions": 13,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97931",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97931.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 94,
-          "gatingTotal": 89,
-          "counts": {
-            "SUCCESS": 68,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2870,
+    "total_ms": 325,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 438
+        "ms": 197
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2059
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -162,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 348
+        "ms": 117
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
