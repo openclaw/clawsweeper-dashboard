@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T09:12:24.899Z",
+  "generated_at": "2026-06-29T09:13:28.002Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T06:12:18.633Z",
+  "since": "2026-06-29T06:13:23.430Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97731
+    97634
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 8,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,34 +31,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97731:4830748742:2026-06-29T09:12:13Z:clawsweeper_auto_repair",
-      "comment_id": "4830748742",
-      "comment_version_key": "4830748742:2026-06-29T09:12:13Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97731#issuecomment-4830748742",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97634:4828499772:2026-06-29T09:13:20Z:clawsweeper_needs_human",
+      "comment_id": "4828499772",
+      "comment_version_key": "4828499772:2026-06-29T09:13:20Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97634#issuecomment-4828499772",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97731,
+      "issue_number": 97634,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T09:06:43Z",
-      "comment_updated_at": "2026-06-29T09:12:13Z",
+      "comment_created_at": "2026-06-29T02:45:12Z",
+      "comment_updated_at": "2026-06-29T09:13:20Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=dc415c5e77127199eb330a732911493c49380116)",
-      "review_summary": "The PR adds a new process zombie-reaper module, starts a periodic gateway SIGCHLD timer, and schedules SIGCHLD nudges after process-tree kills in exec and supervisor paths.\n\nPR surface: Source +99, Tests +70. Total +169 across 5 files.\n\nReproducibility: yes. for the PR defect: libuv v1.52.1 source shows the SIGCHLD path waits tracked uv_process_t PIDs, not arbitrary orphaned grandchildren. The linked production issue itself still lacks a small current-main synthetic reproduction in this review.",
-      "review_followup": "- [P1] Maintainers need a revised process-lifecycle design or contributor update because the proposed mechanism is not a safe mechanical fix and the real behavior proof is insufficient.",
+      "repair_reason": "- No automated repair is needed; the remaining action is maintainer compatibility review and merge judgment.; Cleared: No concrete security or supply-chain regression was found; the diff does not touch dependencies or CI, and local avatar reads remain bounded by the workspace/root-safe file-open path. (sha=0598c7f291aff5d0099eb355ad8b0166d5e72b6e)",
+      "review_summary": "This PR centralizes agent avatar projection in the avatar owner module, reuses it from identity RPC, agent listing, bootstrap config, and Quick Settings rendering, and adds focused avatar regression coverage.\n\nPR surface: Source +46, Tests +252. Total +298 across 11 files.\n\nReproducibility: yes. Source inspection of current main and v2026.6.10 shows agent.identity.get can return /avatar/<agentId> while agents.list can inline the same local avatar as a data URI, and the avatar route requires Control UI read auth.",
+      "review_followup": "- No automated repair is needed; the remaining action is maintainer compatibility review and merge judgment.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "dc415c5e77127199eb330a732911493c49380116",
+      "expected_head_sha": "0598c7f291aff5d0099eb355ad8b0166d5e72b6e",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,71 +70,111 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(process): add zombie reaper to prevent child process leak",
-        "body": "## What Problem This Solves\n\nLong-running openclaw gateway processes in Docker accumulate zombie processes over time. One user reported 800+ zombie processes (openclaw-hooks, bash, codex, chrome-headless) after running openclaw 2026.6.10 for several months. Each zombie consumes a PID slot and kernel resources, eventually causing fork failures.\n\n**Root cause**: When openclaw kills a process tree (via `kill(-pid, SIGKILL)`), the grandchildren may exit and become zombies **before** the process group leader (openclaw's direct child) is killed. When the group leader dies, the zombie grandchildren are reparented to PID 1 (or the subreaper), but **no new SIGCHLD is sent** because the grandchildren already exited. The zombies remain permanently unreaped.\n\nlibuv already calls `waitpid(-1, WNOHANG)` in a loop inside its SIGCHLD handler, which would reap these zombies. But the SIGCHLD never fires for processes that exited before being reparented.\n\n## Why This Change Was Made\n\nThe fix adds a lightweight zombie reaper module (`src/process/zombie-reaper.ts`) with two mechanisms:\n\n1. **Post-kill reaping**: After every process-tree kill (in `process/exec.ts` and `process/supervisor/supervisor.ts`), send `SIGCHLD` to ourselves via `process.kill(process.pid, 'SIGCHLD')`. This triggers libuv's `waitpid(-1, WNOHANG)` loop, which reaps any zombie children — including reparented grandchildren.\n\n2. **Periodic fallback** (every 30s): A background timer in the gateway server triggers the same SIGCHLD sweep, catching any zombies that accumulated outside kill-tree paths.\n\nThis approach is pure Node.js — no native addons, no external dependencies, no Python helpers. It leverages libuv's existing waitpid loop by sending SIGCHLD to the current process.\n\n## Evidence\n\n### Before fix — zombie accumulation scenario\n```bash\n# In a Docker container running openclaw as PID 1 (no tini):\n$ ps aux | grep -c defunct\n# 0 initially\n# After 24 hours of usage with exec/browser commands:\n$ ps aux | grep defunct | wc -l\n83\n# After 7 days:\n$ ps aux | grep defunct | wc -l  \n547\n```\n\n### After fix — zombie reaping\n```bash\n# Same Docker setup with the zombie reaper active:\n$ ps aux | grep defunct | wc -l\n0\n# The periodic reaper (30s) and post-kill reaping keep the count at 0.\n```\n\n### Test coverage\n- `src/process/zombie-reaper.test.ts`: 6 unit tests covering reapZombies, start/stop lifecycle, idempotency, and platform no-ops.\n\n## Merge Risk\n\n**Low**. The change:\n- Only sends SIGCHLD to the current process, which libuv already handles safely\n- Is a no-op on Windows (SIGCHLD doesn't exist)\n- Catches all errors silently (seccomp/SELinux restrictions are non-fatal)\n- The periodic timer is `.unref()`'d so it doesn't keep the event loop alive\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/zombie-reaper-97616",
-        "head_sha": "dc415c5e77127199eb330a732911493c49380116",
-        "author": "krissding",
+        "title": "fix: render workspace avatars in identity card",
+        "body": "﻿Closes #97602\n\n## What Problem This Solves\n\nFixes an issue where workspace-relative agent avatars could appear broken in the Control UI Personal card because identity/bootstrap payloads could hand the browser an auth-gated `/avatar/<agentId>` URL that plain image elements cannot load with Bearer auth.\n\n## Why This Change Was Made\n\nAvatar URL projection now lives with the existing agent avatar owner code in `src/agents/identity-avatar.ts` instead of duplicating workspace file handling in gateway session projection. `agent.identity.get`, `listAgentsForGateway`, and the Control UI bootstrap config reuse that owner-level projection.\n\nThe shared local-file projection keeps the workspace file-read boundary on `openRootFileSync` and carries the resolved workspace root with local avatar resolutions, so data URI reads still happen through the root-safe opened-fd path. Rejected local avatar sources return `avatarStatus: \"none\"` plus a reason without handing the UI a stale `/avatar/<agentId>` route. Short non-path text avatars such as `PS` remain renderable even when there is no image URL.\n\nUnsupported local avatar extensions are intentionally blocked by the existing local avatar policy. The supported local avatar set is image-only (`png`, `jpg/jpeg`, `gif`, `webp`, `svg`); files such as `notes.txt` are reported as `unsupported_extension` and are not inlined.\n\nAI-assisted with Codex.\n\n## User Impact\n\nControl UI can render valid workspace-relative Personal card avatars consistently across bootstrap, identity refresh, agent list, and chat-adjacent identity surfaces, without making unauthenticated `/avatar/<agentId>` image requests. Missing, outside-workspace, too-large, or unsupported local avatar image files fall back to the product logo/text presentation and keep their source/status/reason visible for repair. Existing short text avatar fallbacks remain visible.\n\n## Evidence\n\n- Identity RPC and symlink boundary coverage: `node scripts/run-vitest.mjs src/gateway/server-methods/agent.test.ts -- -t \"agent.identity.get|symlinks that escape\"` -> 10 passed, 326 skipped\n- Bootstrap config coverage: `node scripts/run-vitest.mjs src/gateway/control-ui.http.test.ts -- -t \"bootstrap config\"` -> 44 passed, 192 skipped\n- Avatar projection/list coverage: `node scripts/run-vitest.mjs src/gateway/session-utils.test.ts -- -t \"avatar\"` -> 8 passed, 424 skipped\n- UI render coverage, including rejected-route suppression and short text avatar preservation: `node scripts/run-vitest.mjs ui/src/ui/views/config-quick.test.ts ui/src/ui/app-render.assistant-avatar.test.ts` -> 39 passed\n- Whitespace check: `git diff --check`\n\nAdditional red/green checks run while building this PR:\n- `node scripts/run-vitest.mjs src/gateway/server-methods/agent.test.ts -- -t \"returns workspace-relative avatars as data URLs\"`\n- `node scripts/run-vitest.mjs src/gateway/server-methods/agent.test.ts -- -t \"does not inline unsupported workspace avatar files\"`\n- `node scripts/run-vitest.mjs ui/src/ui/app-render.assistant-avatar.test.ts -- -t \"keeps identity data URLs renderable\"`\n- `node scripts/run-vitest.mjs ui/src/ui/app-render.assistant-avatar.test.ts -- -t \"does not render stale route avatars\"`\n\nNotes:\n- Full `src/gateway/session-utils.test.ts` on this Windows checkout still has unrelated pre-existing failures around SQLite temp cleanup `EBUSY` and `/tmp` path normalization, so focused avatar coverage was used for this PR.\n- Local autoreview was attempted after the final refactor, but the autoreview wrapper failed before engine review with `WinError 267` while resolving `git` from this Windows checkout path. Earlier post-fix autoreview also hit the Codex account usage limit, so there is no successful fresh autoreview result to claim.\r\n",
+        "branch": "codex/fix-agent-identity-avatar-data-uri",
+        "head_sha": "0598c7f291aff5d0099eb355ad8b0166d5e72b6e",
+        "author": "lzy3538",
         "labels": [
+          "app: web-ui",
           "gateway",
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
+          "agents",
+          "size: L",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 5,
-            "deletions": 0,
+            "path": "src/agents/identity-avatar.ts",
+            "additions": 101,
+            "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/process/exec.ts",
-            "additions": 7,
+            "path": "src/gateway/control-ui-contract.ts",
+            "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/process/supervisor/supervisor.ts",
-            "additions": 6,
+            "path": "src/gateway/control-ui.http.test.ts",
+            "additions": 68,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/control-ui.ts",
+            "additions": 13,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.test.ts",
+            "additions": 111,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/process/zombie-reaper.test.ts",
-            "additions": 70,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "src/gateway/server-methods/agent.ts",
+            "additions": 2,
+            "deletions": 7,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/process/zombie-reaper.ts",
-            "additions": 82,
+            "path": "src/gateway/session-utils.ts",
+            "additions": 2,
+            "deletions": 68,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-render.assistant-avatar.test.ts",
+            "additions": 51,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-render.ts",
+            "additions": 26,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/views/config-quick.test.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/views/config-quick.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 170,
-        "deletions": 1,
+        "changedFiles": 11,
+        "additions": 401,
+        "deletions": 103,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97731",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97731.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97634",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97634.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 17,
-          "gatingTotal": 12,
+          "total": 19,
+          "gatingTotal": 14,
           "counts": {
             "CANCELLED": 2,
             "SKIPPED": 10,
-            "SUCCESS": 5
+            "SUCCESS": 7
           },
           "blockers": [
             "Real behavior proof:CANCELLED"
@@ -148,20 +188,261 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97634:4830726006:2026-06-29T09:03:48Z:re_review",
+      "comment_id": "4830726006",
+      "comment_version_key": "4830726006:2026-06-29T09:03:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97634#issuecomment-4830726006",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97634,
+      "author": "LZY3538",
+      "author_id": 293718838,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-29T09:03:48Z",
+      "comment_updated_at": "2026-06-29T09:03:48Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: render workspace avatars in identity card",
+        "body": "﻿Closes #97602\n\n## What Problem This Solves\n\nFixes an issue where workspace-relative agent avatars could appear broken in the Control UI Personal card because identity/bootstrap payloads could hand the browser an auth-gated `/avatar/<agentId>` URL that plain image elements cannot load with Bearer auth.\n\n## Why This Change Was Made\n\nAvatar URL projection now lives with the existing agent avatar owner code in `src/agents/identity-avatar.ts` instead of duplicating workspace file handling in gateway session projection. `agent.identity.get`, `listAgentsForGateway`, and the Control UI bootstrap config reuse that owner-level projection.\n\nThe shared local-file projection keeps the workspace file-read boundary on `openRootFileSync` and carries the resolved workspace root with local avatar resolutions, so data URI reads still happen through the root-safe opened-fd path. Rejected local avatar sources return `avatarStatus: \"none\"` plus a reason without handing the UI a stale `/avatar/<agentId>` route. Short non-path text avatars such as `PS` remain renderable even when there is no image URL.\n\nUnsupported local avatar extensions are intentionally blocked by the existing local avatar policy. The supported local avatar set is image-only (`png`, `jpg/jpeg`, `gif`, `webp`, `svg`); files such as `notes.txt` are reported as `unsupported_extension` and are not inlined.\n\nAI-assisted with Codex.\n\n## User Impact\n\nControl UI can render valid workspace-relative Personal card avatars consistently across bootstrap, identity refresh, agent list, and chat-adjacent identity surfaces, without making unauthenticated `/avatar/<agentId>` image requests. Missing, outside-workspace, too-large, or unsupported local avatar image files fall back to the product logo/text presentation and keep their source/status/reason visible for repair. Existing short text avatar fallbacks remain visible.\n\n## Evidence\n\n- Identity RPC and symlink boundary coverage: `node scripts/run-vitest.mjs src/gateway/server-methods/agent.test.ts -- -t \"agent.identity.get|symlinks that escape\"` -> 10 passed, 326 skipped\n- Bootstrap config coverage: `node scripts/run-vitest.mjs src/gateway/control-ui.http.test.ts -- -t \"bootstrap config\"` -> 44 passed, 192 skipped\n- Avatar projection/list coverage: `node scripts/run-vitest.mjs src/gateway/session-utils.test.ts -- -t \"avatar\"` -> 8 passed, 424 skipped\n- UI render coverage, including rejected-route suppression and short text avatar preservation: `node scripts/run-vitest.mjs ui/src/ui/views/config-quick.test.ts ui/src/ui/app-render.assistant-avatar.test.ts` -> 39 passed\n- Whitespace check: `git diff --check`\n\nAdditional red/green checks run while building this PR:\n- `node scripts/run-vitest.mjs src/gateway/server-methods/agent.test.ts -- -t \"returns workspace-relative avatars as data URLs\"`\n- `node scripts/run-vitest.mjs src/gateway/server-methods/agent.test.ts -- -t \"does not inline unsupported workspace avatar files\"`\n- `node scripts/run-vitest.mjs ui/src/ui/app-render.assistant-avatar.test.ts -- -t \"keeps identity data URLs renderable\"`\n- `node scripts/run-vitest.mjs ui/src/ui/app-render.assistant-avatar.test.ts -- -t \"does not render stale route avatars\"`\n\nNotes:\n- Full `src/gateway/session-utils.test.ts` on this Windows checkout still has unrelated pre-existing failures around SQLite temp cleanup `EBUSY` and `/tmp` path normalization, so focused avatar coverage was used for this PR.\n- Local autoreview was attempted after the final refactor, but the autoreview wrapper failed before engine review with `WinError 267` while resolving `git` from this Windows checkout path. Earlier post-fix autoreview also hit the Codex account usage limit, so there is no successful fresh autoreview result to claim.\r\n",
+        "branch": "codex/fix-agent-identity-avatar-data-uri",
+        "head_sha": "0598c7f291aff5d0099eb355ad8b0166d5e72b6e",
+        "author": "lzy3538",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "agents",
+          "size: L",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/identity-avatar.ts",
+            "additions": 101,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/control-ui-contract.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/control-ui.http.test.ts",
+            "additions": 68,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/control-ui.ts",
+            "additions": 13,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.test.ts",
+            "additions": 111,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.ts",
+            "additions": 2,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 2,
+            "deletions": 68,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-render.assistant-avatar.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-render.ts",
+            "additions": 26,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/views/config-quick.test.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/views/config-quick.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 11,
+        "additions": 401,
+        "deletions": 103,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97634",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97634.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 19,
+          "gatingTotal": 14,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 10,
+            "SUCCESS": 7
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97634:4830613220:2026-06-29T08:48:49Z:re_review",
+      "comment_id": "4830613220",
+      "comment_version_key": "4830613220:2026-06-29T08:48:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97634#issuecomment-4830613220",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97634,
+      "author": "LZY3538",
+      "author_id": 293718838,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-29T08:48:49Z",
+      "comment_updated_at": "2026-06-29T08:48:49Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97634:4830428076:2026-06-29T08:24:51Z:re_review",
+      "comment_id": "4830428076",
+      "comment_version_key": "4830428076:2026-06-29T08:24:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97634#issuecomment-4830428076",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97634,
+      "author": "LZY3538",
+      "author_id": 293718838,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-29T08:24:51Z",
+      "comment_updated_at": "2026-06-29T08:24:51Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6616,
+    "total_ms": 6021,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 487
+        "ms": 350
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 5763
+        "ms": 4204
       },
       {
         "name": "classify_comment_commands",
@@ -177,7 +458,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 338
+        "ms": 1437
       },
       {
         "name": "append_ledger",
