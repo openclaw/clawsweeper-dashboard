@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T03:44:30.235Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-29T03:44:35.513Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T00:44:28.646Z",
+  "since": "2026-06-29T00:44:34.299Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    94527
+    1782
   ],
   "comment_ids": [
-    4828782963
+    4828787267
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4828787462,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,22 +31,141 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:steipete/CodexBar:1782:4828787267:2026-06-29T03:43:29Z:re_review",
+      "comment_id": "4828787267",
+      "comment_version_key": "4828787267:2026-06-29T03:43:29Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1782#issuecomment-4828787267",
+      "repo": "steipete/CodexBar",
+      "target_branch": "main",
+      "issue_number": 1782,
+      "author": "junmo-kim",
+      "author_id": 1617368,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-29T03:43:29Z",
+      "comment_updated_at": "2026-06-29T03:43:29Z",
+      "status_comment_id": 4828787462,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-29T03:44:36.079Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 1782
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-29T03:44:36.966Z",
+          "response_comment_id": "4828787462",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(antigravity): reuse a running agy language server for CLI usage",
+        "body": "## Problem\n\n`codexbar usage --provider antigravity --source cli` spawns a fresh `agy` language\nserver on every one-shot invocation. A fresh server binds its port quickly, but\n`GetUserStatus` returns transient initialization failures for the first few seconds,\nand the readiness deadline is 5s. A one-shot CLI fetch therefore sits right at that\n5s boundary with little margin — under load or on slower Linux hosts it can tip over\ninto \"endpoint not ready\".\n\nWhen CodexBar runs long-lived (the app, or `codexbar serve`), the warm session is\nreused and this margin problem disappears. The gap is specific to the one-shot CLI path.\n\n## Solution\n\nBefore spawning, discover an already-running authenticated `agy` CLI language server\nvia the existing `detectProcessInfos(.ideAndCLI)` and reuse its listening ports through\nthe token-less `cliHTTPS` endpoint. If no warm server is found — or none answers with\nparseable usage — fall through to the existing spawn path unchanged.\n\n- IDE/app servers require a CSRF token and are excluded; only the `agy` CLI's\n  token-less server is reused.\n- CodexBar's own session-managed `agy` (tracked via `AntigravityCLISession.shared.pid`)\n  is excluded from the warm scan, so reuse never bypasses `beginProbe`/`finishProbe`.\n- \"Warm if present, otherwise current behavior\" — it never assumes a warm server exists.\n\nThe 5s deadline and the spawn path are unchanged; the spawn body was pulled into\n`fetchBySpawning` in a separate refactor commit so the feature commit is purely additive.\n\n## Real-world measurement (Linux)\n\nBuilt `CodexBarCLI` for Linux (Swift 6.2, Ubuntu 24.04, x86_64) and measured against a\nlive authenticated `agy` language server, 10 runs each:\n\n| | success | latency |\n|---|---|---|\n| **warm reuse** (this PR, warm `agy` present) | 10/10 | **~2.3s** |\n| **spawn fresh** (warm absent → existing path) | 10/10 | ~5.0s (4.6–5.6s) |\n\nReuse log: `Antigravity CLI HTTPS reusing warm agy pid=… ports=…` → `Gemini Models: 99% left`.\n\nHonest caveat: in this environment the spawn path did not actually *fail* (10/10), so I\ncan't claim a hard failure-rate reduction. What the data shows is that spawn-fresh\nlatency sits right against the 5s readiness deadline (4.6–5.6s) with essentially no\nmargin, while warm reuse completes in ~2.3s — roughly halving latency and restoring the\ndeadline margin that one-shot CLI calls otherwise lack, which is the mechanism behind\nthe intermittent \"endpoint not ready\" reports on busier/slower hosts.\n\n## Tests\n\n`Tests/CodexBarTests/AntigravityWarmAgyReuseTests.swift` (9 cases): warm reused without\nspawning, IDE excluded, CodexBar-owned pid excluded (managed session untouched),\nno-warm/fetch-failure → spawn fallback, and `fetchUsingWarmSession` via the `spawnFetch`\nseam. `swift test --filter Antigravity` (210 pass), `make check` clean.\n",
+        "branch": "feat/antigravity-cli-reuse-warm-agy",
+        "head_sha": "ed9f79d7964db5f8aab50e8f5b12f882c403c761",
+        "author": "junmo-kim",
+        "labels": [
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof",
+          "P2",
+          "merge-risk: 🚨 availability"
+        ],
+        "files": [
+          {
+            "path": "Sources/CodexBarCore/Providers/Antigravity/AntigravityProviderDescriptor.swift",
+            "additions": 158,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Sources/CodexBarCore/Providers/Antigravity/AntigravityStatusProbe.swift",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Tests/CodexBarTests/AntigravityWarmAgyReuseTests.swift",
+            "additions": 276,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 437,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-steipete-codexbar-1782",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1782.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 1,
+          "gatingTotal": 1,
+          "counts": {
+            "SUCCESS": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1868,
+    "total_ms": 3136,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1579
+        "ms": 601
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 600
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -58,7 +177,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 279
+        "ms": 1911
       },
       {
         "name": "append_ledger",
