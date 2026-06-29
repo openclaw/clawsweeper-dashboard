@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T03:28:51.144Z",
+  "generated_at": "2026-06-29T03:28:54.521Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T00:28:49.272Z",
+  "since": "2026-06-29T00:28:50.784Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97549
+    97547
   ],
   "comment_ids": [
-    4828690174
+    4828690178
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,13 +33,13 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:97549:4828690174:2026-06-29T03:26:31Z:re_review",
-      "comment_id": "4828690174",
-      "comment_version_key": "4828690174:2026-06-29T03:26:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97549#issuecomment-4828690174",
+      "idempotency_key": "comment-router:openclaw/openclaw:97547:4828690178:2026-06-29T03:26:31Z:re_review",
+      "comment_id": "4828690178",
+      "comment_version_key": "4828690178:2026-06-29T03:26:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97547#issuecomment-4828690178",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97549,
+      "issue_number": 97547,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
@@ -73,45 +73,55 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cli): bound in-memory video download from provider URLs",
-        "body": "<!-- Related: the #95103 / #95108 / #95218 / #96495 / #96873 response-limit campaign -->\n\n## What Problem This Solves\n\nFixes an issue where running `openclaw capability video generate` **without** `--output` could exhaust process memory when a provider returns a video URL instead of inline bytes. In that fallback path the CLI downloaded the provider-supplied (untrusted, external) URL with a single unbounded `Buffer.from(await response.arrayBuffer())`. Generated videos routinely run to tens of MiB, so a large — or hostile/buggy — response would be buffered whole into memory, risking an OOM crash of the CLI/agent process.\n\nThe `--output` branch is unaffected: it already streams straight to disk and is the safe path.\n\n## Why This Change Was Made\n\nThe buffered fallback now reads under a byte cap using the project's existing shared helper `readResponseWithLimit` (`@openclaw/media-core/read-response-with-limit`), the same bounded-read primitive already used for generated video/audio/image downloads (e.g. `src/video-generation/dashscope-compatible.ts`, `src/music-generation/provider-assets.ts`). The cap comes from `resolveGeneratedMediaMaxBytes(cfg, \"video\")` — the per-kind default `MAX_VIDEO_BYTES` (16 MiB), overridable by the user via `agents.defaults.mediaMaxMb`. The read is **fail-closed**: on overflow the helper cancels the body stream and throws, rather than silently truncating a partial/corrupt video.\n\nThe overflow error reports **only the provider label and the byte cap** — it never echoes the raw `video.url`, which may be a signed/tokenized download URL carrying access material. This matches the sibling generated-media downloaders (`vydra generated video download exceeds <N> bytes; pass --output to stream large videos to disk`). No public API, flag, config schema, or default behavior changes for normal-sized downloads.\n\n## User Impact\n\n- **CLI users**: an oversized or malicious provider video URL can no longer OOM the process on the no-`--output` path; they get a clear, actionable error (which points to `--output`) instead. Videos at or under the cap (default 16 MiB) behave exactly as before. For larger legitimate videos, `--output` streams to disk with no in-memory limit.\n- **Operators running agents**: removes an unbounded-allocation vector driven by external response size; the cap is tunable via `agents.defaults.mediaMaxMb`.\n\n## Evidence\n\n### Real behavior proof (not mock-only)\n\nDriven against a **real `node:http` server** bound to `127.0.0.1` that streams the body in 1 MiB chunks with **no `Content-Length`**, exercising the **real exported** `readResponseWithLimit` helper (the exact primitive this fix calls) on Node v22.22.0. Includes a **negative control** (the OLD unbounded path) measuring bytes-on-wire:\n\n```\n=== REAL-BEHAVIOR PROOF (PR #97549) — Node v22.22.0 ===\n  ok: default video cap is 16 MiB (got 16777216)\n  ok: mediaMaxMb=2 override resolves to 2 MiB (got 2097152)\n  ok: bounded read rejected oversized body\n  ok: overflow error is provider+cap, URL-free (got: vydra generated video download exceeds 16777216 bytes)\n  ok: bounded read pulled near the 16 MiB cap, not the full 64 MiB (wire=19922944)\n  ok: negative control: OLD unbounded read pulled the FULL ~64 MiB (buffered=67108864, wire=67108864)\n  ok: cap is load-bearing: unbounded read >> bounded read (67108864 vs 19922944)\n  ok: small under-cap body returned intact (got: small-video-bytes)\n\nALL PROOF ASSERTIONS PASSED\n```\n\nThe bounded read cancels the stream after ~19.9 MiB (just past the 16 MiB cap) while the OLD unbounded `arrayBuffer()` path drains the **full 67,108,864 bytes** — a **3.4x gap** proving the cap is load-bearing.\n\n### Focused tests\n\nAdded to `src/cli/capability-cli.test.ts` using **only that file's existing local mocks** — the shared `provider-http-test-mocks.ts` was intentionally **NOT** touched. Four tests drive the real `runVideoGenerate` via `registerCapabilityCli`:\n\n1. **fails closed when an url-only generated video exceeds the in-memory byte cap** — a test-local `ReadableStream` would emit 64 MiB if drained; the command exits 1 with `vydra generated video download exceeds 16777216 bytes`, the stream's `cancel()` hook fires (`canceled === true`), and `enqueued <= 18` of 64 proves the body was never fully buffered. **Security regression guard**: asserts the error does **NOT** contain the URL or its `?sig=secret-presigned-token` query.\n2. **buffers an url-only generated video that stays under the byte cap** — a small response on the same no-`--output` path returns normally (`outputs.length === 1`), no overflow error.\n3. **honors a smaller configured mediaMaxMb cap** — with `agents.defaults.mediaMaxMb = 2`, the cap resolves to 2 MiB (`2097152`) and the reader cancels even earlier (`enqueued <= 4`), proving the cap is config-driven.\n4. **buffers an empty-body url-only generated video without error** — 0-byte boundary returns cleanly.\n\n```\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.cli.config.ts src/cli/capability-cli.test.ts\n Test Files  1 passed (1)\n      Tests  103 passed (103)\n```\n\n`oxlint src/cli/capability-cli.ts src/cli/capability-cli.test.ts` → clean (exit 0).\n\n**Mutation check (tests are load-bearing):** temporarily reverting the guard back to `Buffer.from(await response.arrayBuffer())` makes both fail-closed tests fail (`.rejects.toThrow` receives `undefined` because the unbounded path buffers all 64 MiB and succeeds). Restoring the fix → 103/103 pass.\n\n<details>\n<summary>Security &amp; Privacy</summary>\n\n- Hardening change: bounds an unbounded in-memory read of an untrusted external response (provider-controlled video URL), closing a memory-exhaustion / DoS vector on the CLI/agent process.\n- **No URL leak**: the overflow error reports only the provider label and byte cap — it never interpolates the raw provider URL, which may be signed/tokenized. A dedicated test asserts the error contains neither the URL nor its query token. This matches the sibling generated-media downloaders.\n- Fail-closed: overflow cancels the stream and throws; no partial/truncated media is returned and no data is silently dropped.\n- No new network calls, no new data persisted, no logging of response bodies or secrets.\n- Touches `src/cli/**` only; no `CODEOWNERS` security-owned paths and no shared test mocks were modified.\n</details>\n\n<details>\n<summary>Compatibility — maintainer acceptance requested</summary>\n\n- Backward compatible for normal use: downloads at or under the cap (default 16 MiB, raisable via `agents.defaults.mediaMaxMb`) behave identically; only oversized buffered downloads now error instead of risking OOM.\n- **Behavior change requiring maintainer sign-off**: the no-`--output` URL fallback now *fails closed* for videos over the configured cap instead of best-effort buffering them when memory happens to allow it. `--output` remains the streaming route for arbitrarily large videos. Please confirm you accept this fail-closed default for the buffered path.\n- No changes to CLI flags, output schema, config schema, or public APIs. No dependency changes; reuses the in-repo `readResponseWithLimit` helper and existing `resolveGeneratedMediaMaxBytes` cap resolver.\n- Blast radius: **low** — one source file (`src/cli/capability-cli.ts`, +21/-1) plus self-contained tests using local mocks.\n</details>\n\n<details>\n<summary>Relation to prior merged work</summary>\n\nThis is the CLI buffered-fallback companion to the response-limit campaign: image generation (#96495), OpenRouter video submit (#96873), and the broader #95103 / #95108 / #95218 bounded-read series. Same primitive, same fail-closed convention, same URL-free error style.\n</details>\n\n---\n\nAI disclosure: implemented with Claude Code (Claude Opus). Scope of assistance: the model located the existing bounded-read convention and the URL-free sibling error style, wrote the one-call guard replacement and the four focused tests, authored a standalone real-`node:http` proof harness with a negative control, and ran a mutation check; a human author reviews and owns the change and understands what the code does.\n",
-        "branch": "fix/cli-bound-video-download",
-        "head_sha": "0613c910c01a6308d54367237b4c9786db838e48",
+        "title": "fix(qa-matrix): bound Matrix homeserver response reads to prevent OOM",
+        "body": "## What Problem This Solves\n\nResolves a problem where the Matrix QA runner (`@openclaw/qa-matrix`) reads responses from a Matrix homeserver without any size limit. The QA substrate has **two** outbound paths that buffer a homeserver response whole:\n\n- `requestMatrixJson` — the shared HTTP helper for whoami, sync, room/event, login, and registration calls — buffered the entire body via `await response.json()`.\n- `uploadMatrixQaContent` (in `client.ts`, the `/_matrix/media/v3/upload` media path reached by every media QA scenario via `sendMediaMessage`) buffered its body via `await response.json().catch(() => ({}))`.\n\nA hostile, compromised, or misbehaving homeserver (or a man-in-the-middle on the QA target, including a self-hosted `baseUrl` override) could return an arbitrarily large or never-ending body on either path and drive the QA runner process to OOM. This is defense-in-depth hardening of an internal QA/lab tool's outbound HTTP read paths, not a fix for a user-reported crash.\n\n## Why This Change Was Made\n\nBoth read paths now read the body under a **16 MiB cap** using the shared `readResponseWithLimit` helper from `openclaw/plugin-sdk/response-limit-runtime`, then parse the bounded bytes with `JSON.parse(new TextDecoder().decode(bytes))`. The cap (`MATRIX_QA_JSON_MAX_BYTES`) is defined once in `request.ts` and reused by `client.ts` so the substrate has a single source of truth. This is the same pattern already shipped across the response-limit campaign (e.g. the exa provider and `#96495`/`#96873` image/video providers — identical helper, 16 MiB cap, identical decode shape), so the change reuses existing, reviewed infrastructure rather than introducing a new mechanism.\n\nKey design decision (**fail-closed**): the `readResponseWithLimit` call is placed **outside** the existing parse `try/catch` on both paths. The pre-existing `catch { body = {} }` only exists to tolerate malformed-but-in-bounds JSON. If the overflow error were caught there it would be silently swallowed into `body = {}`, defeating the bound entirely — so the overflow error is deliberately allowed to propagate. Malformed in-bounds JSON still falls back to `{}` exactly as before.\n\nThis revision closes the sibling coverage gap flagged on the previous push (media-upload responses were still unbounded): both Matrix homeserver JSON read surfaces in the QA substrate are now bounded. Non-goal: this PR does not change request construction, timeouts, status handling, or the public `MatrixQaRequestResult` shape.\n\n## User Impact\n\nOperators running the Matrix QA harness against an untrusted or flaky homeserver are now protected on **both** the request and the media-upload paths: an oversized response is rejected with a clear `Matrix homeserver response exceeds 16777216 bytes` error and the underlying stream is canceled, instead of the runner exhausting memory. Normal, in-bounds responses are unaffected; behavior for malformed in-bounds JSON is unchanged (`{}` fallback). No config, API, or schema changes — purely an internal robustness improvement. Blast radius is **low**: two functions inside a single extension (`extensions/qa-matrix`), each covered by its own local-mock test suite; no shared mock or plugin-SDK infrastructure is touched.\n\n## Evidence\n\nFocused tests added to each file's own local-mock suite. The shared `provider-http-test-mocks.ts` and the `response-limit-runtime` infra are intentionally **not** touched (avoids cross-suite coupling). Tests drive the real `requestMatrixJson` and `sendMediaMessage` → `uploadMatrixQaContent` code paths.\n\n```\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts \\\n  extensions/qa-matrix/src/substrate/request.test.ts \\\n  extensions/qa-matrix/src/substrate/client.test.ts\n\n ✓ requestMatrixJson > caps oversized request timeouts before creating the abort signal\n ✓ requestMatrixJson > fails closed when the homeserver streams an over-cap response body\n ✓ requestMatrixJson > rejects an oversized error-status body instead of buffering it whole\n ✓ requestMatrixJson > still falls back to an empty body for malformed in-bounds JSON\n ✓ requestMatrixJson > treats an empty in-bounds body as an empty object\n ✓ requestMatrixJson > reads a normal in-bounds JSON body unchanged\n ✓ requestMatrixJson > reads an in-bounds body just under the cap without tripping the bound\n ✓ matrix driver client > uploads Matrix media before sending the room event\n ✓ matrix driver client > fails closed when the media upload response streams an over-cap body\n ✓ matrix driver client > still tolerates malformed in-bounds media upload JSON\n\n Test Files  2 passed (2)\n      Tests  23 passed (23)\n```\n\n### Real behavior proof (real streaming HTTP server, not a mock)\n\nA real `node:http` server bound to `127.0.0.1` streams a JSON body in 64 KiB chunks with **no `Content-Length`**, driving the **real exported** `readResponseWithLimit` helper (the exact helper both call sites wrap, with the same 16 MiB cap and same overflow message) on Node v22.22.0. A negative control runs the OLD `await response.json()` path against the same body.\n\n```\n[case 1] oversized homeserver JSON, cap=16 MiB, NO content-length\n  ok: readResponseWithLimit rejected on oversized body\n  ok: bounded error message matches production (got: Matrix homeserver response exceeds 16777216 bytes)\n  ok: server stopped near the cap, not the full 64 MiB (pushed 18284544 bytes)\n  ok: server socket closed early (stream cancelled)\n[negative control] OLD unbounded `await response.json()` buffers the whole body\n  ok: unbounded read pulled the FULL ~64 MiB body (data length 67108864), proving the cap is load-bearing\n  ok: unbounded path pushed far more than the bounded path (67108864 vs 18284544)\n[case 3] normal small in-bounds JSON still parses unchanged\n  ok: small body parsed intact (content_uri)\n  ok: small body parsed intact (user_id)\n\nALL PROOF ASSERTIONS PASSED\n```\n\nOver a real TCP socket the bounded read stops the server at ~18 MiB (16 MiB cap + in-flight socket buffer) and closes the socket early, while the unbounded path drains the full 64 MiB — proving the cap is load-bearing on real streaming I/O, not just on an in-memory fixture.\n\n### Mutation / negative-control (test is load-bearing)\n\nTemporarily moving the bounded read **inside** the parse `try/catch` (fail-open) makes exactly the two fail-closed tests fail (`Tests 2 failed | 5 passed`), confirming the assertions actually guard the fail-closed boundary. Reverted; all 23 green.\n\n**Validation Evidence:** real `node:http` streaming-server proof above (real helper exercised, fail-closed boundary + early socket close proven, negative control + mutation test), plus the focused Vitest suite (23/23) driving the real `requestMatrixJson` and `uploadMatrixQaContent` paths. `oxlint` is clean (exit 0) on all four changed files.\n\n**Security & Privacy:** This is the security-relevant change — it removes two unbounded-read OOM vectors on data received from an external Matrix homeserver (request JSON + media-upload JSON). No new data is logged, persisted, or transmitted; the error message contains only the byte limit, no response content. Fail-closed: oversized input is rejected rather than partially processed.\n\n**Compatibility:** No public API, config, or schema changes. `MatrixQaRequestResult` and `requestMatrixJson`'s signature are unchanged; `uploadMatrixQaContent` is module-private. Happy-path, empty-body, and malformed-in-bounds-JSON behavior are preserved (covered by tests). The 16 MiB cap matches the existing exa/image/video provider precedent and is far above any legitimate Matrix client/v3 or media-upload JSON response.\n\n---\n\nAI disclosure: AI-assisted with Claude Code (Anthropic Claude Opus). Degree: the agent located the existing `readResponseWithLimit` precedent and the sibling unbounded media-upload path, wrote the fix and the tests, built and ran the real `node:http` streaming-server proof + negative control + mutation test + focused Vitest suite + oxlint locally. I reviewed the diff, understand the fail-closed rationale, and verified each claim against real output before submitting.\n",
+        "branch": "fix/qa-matrix-bound-request",
+        "head_sha": "315bc9c6b2e9bff15bd3140da60e3e6bf26daae1",
         "author": "alix-007",
         "labels": [
-          "cli",
           "size: M",
           "proof: sufficient",
           "P2",
           "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/cli/capability-cli.test.ts",
-            "additions": 191,
+            "path": "extensions/qa-matrix/src/substrate/client.test.ts",
+            "additions": 78,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/capability-cli.ts",
-            "additions": 20,
+            "path": "extensions/qa-matrix/src/substrate/client.ts",
+            "additions": 18,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-matrix/src/substrate/request.test.ts",
+            "additions": 164,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-matrix/src/substrate/request.ts",
+            "additions": 14,
             "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 211,
-        "deletions": 1,
+        "changedFiles": 4,
+        "additions": 274,
+        "deletions": 6,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97549",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97549.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97547",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97547.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -120,28 +130,27 @@
           "total": 90,
           "gatingTotal": 85,
           "counts": {
-            "SUCCESS": 43,
+            "SUCCESS": 35,
             "SKIPPED": 26,
-            "IN_PROGRESS": 20,
-            "NEUTRAL": 1
+            "IN_PROGRESS": 22
           },
           "blockers": [
             "build-artifacts:IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
             "checks-node-compact-small-5:IN_PROGRESS",
             "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
@@ -150,20 +159,20 @@
           "pending": [
             "build-artifacts:IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
             "checks-node-compact-small-5:IN_PROGRESS",
             "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
@@ -180,15 +189,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2060,
+    "total_ms": 4008,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 560
+        "ms": 2487
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1298
+        "ms": 1234
       },
       {
         "name": "classify_comment_commands",
@@ -204,7 +213,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 189
+        "ms": 272
       },
       {
         "name": "append_ledger",
