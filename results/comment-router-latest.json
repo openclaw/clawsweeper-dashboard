@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T16:19:38.136Z",
+  "generated_at": "2026-06-29T16:19:39.886Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T13:19:35.404Z",
+  "since": "2026-06-29T13:19:37.454Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97861
+    97864
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97861:4834563194:2026-06-29T16:19:31Z:clawsweeper_needs_human",
-      "comment_id": "4834563194",
-      "comment_version_key": "4834563194:2026-06-29T16:19:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97861#issuecomment-4834563194",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97864:4834641105:2026-06-29T16:19:31Z:clawsweeper_needs_human",
+      "comment_id": "4834641105",
+      "comment_version_key": "4834641105:2026-06-29T16:19:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97864#issuecomment-4834641105",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97861,
+      "issue_number": 97864,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T16:05:20Z",
+      "comment_created_at": "2026-06-29T16:12:36Z",
       "comment_updated_at": "2026-06-29T16:19:31Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- No repair lane is needed; the PR has no concrete automated follow-up beyond normal maintainer review and CI gates.; Cleared: The diff only changes internal TypeScript token-estimation logic plus colocated tests, with no dependency, workflow, secret, or supply-chain surface added. (sha=c68993e94656e901ec390d4ebdb040fe9addf8e3)",
-      "review_summary": "The PR updates preemptive compaction token estimation to count `bashExecution`, `branchSummary`, and `compactionSummary` provider-rendered text, and adds focused regression tests.\n\nPR surface: Source +31, Tests +85. Total +116 across 2 files.\n\nReproducibility: yes. Source inspection shows current main estimates these roles from `record.content` while provider conversion renders `command`/`output` and `summary`; the PR body also includes before/after live output from the real exported helpers.",
-      "review_followup": "- No repair lane is needed; the PR has no concrete automated follow-up beyond normal maintainer review and CI gates.",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=f0c66f0096f26a8f895bb1396c35ca3f1e7ee548)",
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "c68993e94656e901ec390d4ebdb040fe9addf8e3",
+      "expected_head_sha": "f0c66f0096f26a8f895bb1396c35ca3f1e7ee548",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,57 +70,93 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(compaction): count bashExecution and summary turns in pre-prompt overflow precheck",
-        "body": "## What Problem This Solves\n\nThe pre-prompt overflow precheck silently under-counts `bashExecution` turns, so a context that holds large `!`-bash output (a `!cat` of a big file, build logs, test output) is scored as nearly empty. `shouldPreemptivelyCompactBeforePrompt` returns `route: \"fits\"`, `shouldCompact: false`, and the oversized prompt is submitted to the provider, which then rejects it as a context overflow. Bash-heavy sessions skip the very gate meant to keep them under the model limit.\n\nThe same under-count corrupts the persisted `SessionContextBudgetStatus` (`remainingPromptBudgetTokens`) and the mid-turn tool-result guard, which both consume the same estimate, so the budget a user sees for these sessions is wildly wrong.\n\n## Why This Change Was Made\n\nRoot cause is `estimateMessageTokenPressure` in `src/agents/embedded-agent-runner/run/preemptive-compaction.ts`. It special-cases `toolResult`/`tool`/`assistant` and otherwise falls through to `tokens += estimateContentTokenPressure(record.content)`.\n\nA `BashExecutionMessage` stores its payload in `command`/`output` and has no `content` field (`packages/agent-core/src/types.ts`), so `record.content` is `undefined` and the estimator returns `0`. The whole turn scores as just the boundary overhead (about 29 tokens after the safety margin) no matter how large the output.\n\nThe precheck runs on `normalizeMessagesForLlmBoundary(...)`, which does not call `convertToLlm`, so `bashExecution` reaches the gate raw. The actual provider request does expand it via `convertToLlm` -> `bashExecutionToText` into `command` plus the full output as real user text, so the provider sees the tokens the gate scored as ~29.\n\n`branchSummary` and `compactionSummary` hit the same defect at lower magnitude: their payload is in a `summary` field, not `content`, so they too scored as bare overhead.\n\nbefore:\n\n```ts\n  tokens += estimateContentTokenPressure(record.content);\n  return tokens;\n```\n\n## User Impact\n\nBash-heavy and summary-bearing sessions no longer skip preflight compaction and submit an oversized prompt. The precheck now scores these turns at their true provider-rendered size, so it routes to compaction or tool-result truncation before the request instead of relying on post-overflow recovery (a failed provider round-trip plus latency). The reported `remainingPromptBudgetTokens` is now correct for these sessions.\n\n## Evidence\n\nFix: estimate each affected role from the exact text `convertToLlm` renders for the provider.\n\nafter:\n\n```ts\n  if (record.role === \"bashExecution\") {\n    if (record.excludeFromContext === true) {\n      return 0;\n    }\n    tokens += estimateStringTokenPressure(\n      bashExecutionToText(record as unknown as BashExecutionMessage),\n    );\n    return tokens;\n  }\n\n  if (record.role === \"branchSummary\") {\n    const summary = typeof record.summary === \"string\" ? record.summary : \"\";\n    tokens += estimateStringTokenPressure(BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX);\n    return tokens;\n  }\n\n  if (record.role === \"compactionSummary\") {\n    const summary = typeof record.summary === \"string\" ? record.summary : \"\";\n    tokens += estimateStringTokenPressure(\n      COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX,\n    );\n    return tokens;\n  }\n```\n\n`excludeFromContext` bash records return `0` because `convertToLlm` drops them from the provider request entirely.\n\n### Why this is the right boundary\n\nThe estimate must reflect what the provider actually receives. `convertToLlm` is the single function that renders these roles into provider text, so the estimator now reuses its exact renderers (`bashExecutionToText`, the summary prefix/suffix constants) rather than re-deriving sizes. All three affected roles are fixed in the same change; the remaining roles already route through the existing `content`/`toolResult`/`assistant` branches and are unaffected.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/preemptive-compaction.bashexec.test.ts` - 4 passed with the patch; the bash and summary cases fail on pristine main (estimate 29, route `fits`).\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/preemptive-compaction.test.ts` - 16 passed (adjacent suite, no regression).\n- `node scripts/run-oxlint.mjs <changed files>` - clean.\n- `oxfmt --check <changed files>` - clean.\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json` - both clean.\n\n## Real behavior proof\nBehavior addressed: a session holding a large bash turn is scored as nearly empty by the pre-prompt overflow precheck, so it routes \"fits\" and submits an oversized prompt instead of compacting first.\nReal environment tested: drove the real exported `estimateLlmBoundaryTokenPressure`, `shouldPreemptivelyCompactBeforePrompt`, and `convertToLlm` on pristine main 1052652a71 and on the patched tree with an identical two-message session (one user message plus one `bashExecution` turn whose output renders to 337,507 provider tokens), under a 128000 context budget with a 16384 reserve. Nothing was mocked; the real estimator, router, and provider-text renderer all ran.\nExact steps or command run after this patch: built the session, called `convertToLlm` to measure the provider-rendered token size, then called `estimateLlmBoundaryTokenPressure` and `shouldPreemptivelyCompactBeforePrompt` on the same session and printed their fields.\nEvidence after fix:\n```\n# BEFORE (pristine main 1052652a71)\nprovider_tokens_in_request    = 337507\nprecheck_estimated_tokens     = 59\ndecision.route                = fits\ndecision.shouldCompact        = false\ndecision.overflowTokens       = 0\ndecision.estimatedPromptTokens= 59\n# AFTER (this patch, identical inputs)\nprovider_tokens_in_request    = 337507\nprecheck_estimated_tokens     = 405068\ndecision.route                = compact_only\ndecision.shouldCompact        = true\ndecision.overflowTokens       = 293452\ndecision.estimatedPromptTokens= 405068\n```\nObserved result after fix: the same 337507-token bash turn that was scored at 59 and waved through as \"fits\" is now scored at its real rendered size, so the gate reports an overflow of 293452 and routes to compaction before the prompt is submitted.\nWhat was not tested: no live provider request was issued (the provider-side overflow is the documented downstream consequence); the full build was not run because no module/packaging boundary changed.\n",
-        "branch": "fix/preemptive-compaction-bashexec-undercount",
-        "head_sha": "c68993e94656e901ec390d4ebdb040fe9addf8e3",
-        "author": "yetval",
+        "title": "fix(runtime): type non-exiting runtime exits",
+        "body": "## What Problem This Solves\n\nFixes https://github.com/openclaw/openclaw/issues/97796.\n\n`createNonExitingRuntime()` used a generic `Error` to simulate process exit control flow. Generic errors are hard for callers to distinguish from real runtime failures, which can cause exit control flow to be swallowed or reported as an unexpected crash.\n\n## Why This Change Was Made\n\nThis adds `RuntimeExitError`, throws it from `createNonExitingRuntime().exit(code)`, and exposes it through the public runtime SDK subpaths so callers can explicitly detect simulated runtime exits.\n\n## User Impact\n\nCallers can now safely distinguish non-exiting runtime exit control flow from ordinary runtime errors while preserving the existing `\"exit <code>\"` message shape.\n\n## Real behavior proof\n\nThe regression test exercises the actual runtime helper: `createNonExitingRuntime().exit(42)` now throws `RuntimeExitError` with `name: \"RuntimeExitError\"`, `code: 42`, and `message: \"exit 42\"`.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs src/runtime.test.ts test/scripts/plugin-sdk-surface-report.test.ts` passed\n- `node scripts/plugin-sdk-surface-report.mjs --check` passed\n- `pnpm plugin-sdk:api:check` passed\n- `git diff --check` passed\n- `autoreview` clean, no actionable findings\n",
+        "branch": "codex/typed-runtime-exit-97796",
+        "head_sha": "f0c66f0096f26a8f895bb1396c35ca3f1e7ee548",
+        "author": "wuqxuan",
         "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
+          "docs",
+          "scripts",
+          "size: XS",
+          "P3",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/run/preemptive-compaction.bashexec.test.ts",
-            "additions": 85,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "docs/plugins/sdk-migration.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/preemptive-compaction.ts",
-            "additions": 32,
+            "path": "docs/plugins/sdk-subpaths.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/plugin-sdk-surface-report.mjs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/runtime-env.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/runtime.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/runtime.test.ts",
+            "additions": 16,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/runtime.ts",
+            "additions": 11,
             "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 117,
-        "deletions": 1,
+        "changedFiles": 7,
+        "additions": 34,
+        "deletions": 11,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97861",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97861.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97864",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97864.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 100,
-          "gatingTotal": 95,
+          "total": 99,
+          "gatingTotal": 94,
           "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 33,
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 65,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -132,15 +168,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3065,
+    "total_ms": 2710,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 440
+        "ms": 395
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2276
+        "ms": 2021
       },
       {
         "name": "classify_comment_commands",
@@ -156,7 +192,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 321
+        "ms": 264
       },
       {
         "name": "append_ledger",
