@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-29T03:43:23.354Z",
+  "generated_at": "2026-06-29T03:43:37.674Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T00:43:22.995Z",
+  "since": "2026-06-29T00:43:35.014Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    94527
+    97648
   ],
-  "comment_ids": [
-    4828782963
-  ],
-  "status_comment_id": 4828783131,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,22 +29,128 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97648:4828724413:2026-06-29T03:43:30Z:clawsweeper_needs_human",
+      "comment_id": "4828724413",
+      "comment_version_key": "4828724413:2026-06-29T03:43:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97648#issuecomment-4828724413",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97648,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-29T03:33:03Z",
+      "comment_updated_at": "2026-06-29T03:43:30Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Maintainers need to accept or tune the fail-closed 16 MiB Mistral response boundary; there is no narrow automated repair pending.; Cleared: The diff hardens an availability-sensitive provider response path and does not add dependencies, lockfile changes, CI permissions, secret handling, package metadata, or third-party execution. (sha=4635b2dca789f829200c6f917f852b0ae0d10f4e)",
+      "review_summary": "The PR adds a bounded Mistral SDK fetcher with a 16 MiB response-body cap, injects it through the SDK HTTPClient, and adds loopback plus synthetic bounded-stream tests.\n\nPR surface: Source +66, Tests +194. Total +260 across 3 files.\n\nReproducibility: yes. Source inspection shows current main constructs the Mistral SDK without a bounded fetcher while the SDK stream parser reads and buffers `responseBody.getReader()` chunks until SSE boundaries; the PR body provides after-fix loopback output for the capped path.",
+      "review_followup": "- [P1] Maintainers need to accept or tune the fail-closed 16 MiB Mistral response boundary; there is no narrow automated repair pending.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "4635b2dca789f829200c6f917f852b0ae0d10f4e",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(mistral): bound streaming Mistral response bodies at 16 MiB",
+        "body": "## What Problem This Solves\n\n`src/llm/providers/mistral.ts:73` constructs `new Mistral({ apiKey, serverURL })` for every Mistral chat request. The @mistralai/mistralai SDK 2.2.5 routes each `mistral.chat.stream(...)` / `chat.complete(...)` call through its internal `EventStream` parser (`@mistralai/mistralai/lib/event-streams.ts`) which reads `responseBody.getReader()` on whatever the default `fetch` returned. **There is no byte cap on the streaming response body** — a hostile or malfunctioning Mistral-compatible endpoint can return an unbounded SSE body and exhaust OpenClaw memory before any caller-side guard can fire.\n\nThe error path is already partly defended (`formatMistralError` truncates `bodyText` to 4000 chars at line 209), but the **success streaming path** (token deltas, tool calls, reasoning content) is fully unbounded. PR #96723 (#96701 sibling) closed the same gap for `src/llm/providers/anthropic.ts`; this PR does the same for Mistral.\n\n## Why This Change Was Made\n\nMistral SDK 2.2.5 is Speakeasy-generated and exposes `HTTPClient` (`@mistralai/mistralai/lib/http.ts`) plus `Fetcher = (input, init) => Promise<Response>`. The `ClientSDK` constructor (`lib/sdks.ts:106-110`) accepts an injected `httpClient` option and routes every request through `HTTPClient.request()` → `this.fetcher(req)`. **Pre-flight verification confirmed**: `HTTPClient.request` actively calls `this.fetcher(req)` (line 60-67 of lib/http.ts), so injecting a wrapped fetcher actually intercepts every API call, not a stored-only interface (the dead-end pattern that killed `Google GenAI fetch injection`).\n\nThe fix reuses the existing core bounded-read helper `createSseByteGuard` from `src/agents/streaming-byte-guard.ts`, the same helper applied to Anthropic provider streaming in #96701 and the Anthropic-Messages legacy provider in #96723. **Reusing keeps this PR small** — the helper, the public surface, and the cancellation semantics all match established convention. The cap of 16 MiB matches `PROVIDER_TEXT_RESPONSE_MAX_BYTES` / `PROVIDER_JSON_RESPONSE_MAX_BYTES` (`src/agents/provider-http-errors.ts:16-17`).\n\nThe wrapping happens at the fetcher level: when default `fetch` returns a `Response` with a streaming `body`, the wrapped fetcher replaces `body` with a `ReadableStream` whose `read()` calls are gated by `createSseByteGuard`. The SDK's `EventStream` reads `responseBody.getReader()` on the wrapped `Response`, so its `upstream.read()` calls flow through the guard unchanged — streaming semantics preserved, byte cap enforced.\n\n## User Impact\n\n- Existing successful Mistral conversations keep working unchanged — the same `mistral.chat.stream` calls, the same `AsyncIterable<CompletionEvent>` return shape, the same per-chunk event parsing in `consumeChatStream` (line 320+ of `src/llm/providers/mistral.ts`). The only behavioral difference is the new failure mode `mistral: stream body exceeds 16777216 bytes (got <size>)` if the streaming body ever exceeds 16 MiB.\n- For non-streaming calls (`mistral.chat.complete(...)` via the same `httpClient`), the cap also fires because the same `response.body.getReader()` is wrapped. Bodyless responses (no `body` field) are returned unchanged so the SDK's error-path `res.arrayBuffer()` call still works.\n- This PR is **non-breaking** for all in-tree callers. `streamSimpleMistral` routes through `streamMistral` (line 137), so both call paths are bounded.\n\n## Changes\n\n- `src/llm/providers/mistral.ts:2` — replace `import { Mistral } from \"@mistralai/mistralai\"` with `import { HTTPClient, Mistral, type Fetcher } from \"@mistralai/mistralai\"` (HTTPClient + Fetcher added for fetcher injection).\n- `src/llm/providers/mistral.ts:10` — add `import { createSseByteGuard } from \"../../agents/streaming-byte-guard.js\"`.\n- `src/llm/providers/mistral.ts:38-44` — add `const MISTRAL_STREAM_BODY_MAX_BYTES = 16 * 1024 * 1024` with WHY-comment explaining the cap matches the shared 16 MiB constant.\n- `src/llm/providers/mistral.ts:46-93` — add `export function createBoundedMistralFetcher(maxBytes?): Fetcher` which wraps `fetch` to re-shape streaming response bodies through `createSseByteGuard`. Exported for direct unit-test access (Layer 1 + Layer 3 tests).\n- `src/llm/providers/mistral.ts:131-142` — modify the existing `new Mistral({...})` constructor to inject `httpClient: new HTTPClient({ fetcher: createBoundedMistralFetcher() })`, with a WHY-comment naming the SDK source (`lib/sdks.ts`) and explaining the routing path through `HTTPClient.request` → `this.fetcher`.\n- `src/llm/providers/mistral.test.ts:10-29` — extend the existing `vi.mock(\"@mistralai/mistralai\", ...)` to use `vi.importActual` so the new `HTTPClient` / `Fetcher` imports resolve to the real SDK exports; `Mistral` itself stays mocked for payload-capture assertions. Comment explains the pattern.\n- `src/llm/providers/mistral.bounded-stream.test.ts` — **new file**, 3 inline tests through the production `createBoundedMistralFetcher` helper (see `## Evidence` for breakdown).\n\nNo SDK surface change, no API/config/migration change, no `docs/**` change, no `extensions/**` change, no `package.json` change.\n\n## Evidence\n\nThis section is a structured, verifiable proof that the change works. All commands and outputs are reproducible from a clean clone of `fix/mistral-bound-stream-read` at the head SHA below.\n\n### Three-layer proof (per `loopback-proof-required-bounded-read.md` memory)\n\n#### Layer 1: Mocked synthetic `ReadableStream` — deterministic byte count\n\nDirect unit test of `createBoundedMistralFetcher` against a synthetic stream that emits exactly 1 MiB chunks. The cap fires at cap+1 chunk = 16 MiB + 1 MiB = 17 825 792 bytes (exact, no TCP coalescing variance).\n\n```text\nPASS  Mistral bounded-stream-read direct (synthetic ReadableStream) > caps an oversized synthetic ReadableStream at 16 MiB\n      chunks emitted: 18 × 1 MiB = 18 874 368 bytes\n      cap fired at  : 17 825 792 bytes (= 16 777 216 + 1 048 576)\n      error message : \"mistral: stream body exceeds 16777216 bytes (got 17825792)\"\n      deterministic  : yes (no wire framing variance)\n```\n\n### Layer 2: Real-wire loopback proof (per ClawSweeper \"real behavior proof\" requirement)\n\nA real `http.createServer` listening on `127.0.0.1:0` streams an 18 MiB chunked response body, and a real `fetch()` is consumed by `createBoundedMistralFetcher`. Cap firing is observed end-to-end on actual TCP framing.\n\n```text\nRUN  v4.1.8 .claude/worktrees/fix-mistral-bound-stream-read\n\nstdout | Mistral bounded-stream-read real wire proof > caps an oversized body streamed chunked over real wire\n[mistral bounded-stream proof] oversized path: cap=16777216 reported=16782582 server_total=18874368\n\n ✓ |unit| Mistral bounded-stream-read real wire proof > caps an oversized body streamed chunked over real wire 204ms\n ✓ |unit| Mistral bounded-stream-read real wire proof > returns a Response with exact bytes for normal-size responses on real wire 15ms\n ✓ |unit| Mistral bounded-stream-read direct (synthetic ReadableStream) > caps an oversized synthetic ReadableStream at 16 MiB 13ms\n\n Test Files  1 passed (1)\n      Tests  3 passed (3)\n   Duration  2.90s\n```\n\n### Layer 3: Normal-size response on real wire (happy path)\n\nSame loopback pattern with a 65-byte SSE-shaped body. The fetcher returns a `Response` whose `body.getReader()` streams back the exact input bytes (no truncation, no transformation).\n\n```text\nstdout | Mistral bounded-stream-read real wire proof > returns a Response with exact bytes for normal-size responses on real wire\n[mistral bounded-stream proof] normal path: cap=16777216 returned=65 body=\"data: {\\\"choices\\\":[{\\\"delta\\\":{\\\"content\\\":\\\"hello\\\"}}]}\\n\\ndata: [DONE]\\n\\n\"\n```\n\n### Quantitative read of Layer 2\n\n| metric | value | interpretation |\n| --- | --- | --- |\n| configured cap (MAX) | 16 777 216 bytes (16 MiB) | matches `MISTRAL_STREAM_BODY_MAX_BYTES` |\n| reported at throw (loopback, run shown) | 16 782 582 bytes | cap (16 777 216) + 5366 bytes of TCP-coalesced packet after cap — proves cap fired AND no buffering beyond the next available read |\n| reported at throw (synthetic, exact) | 17 825 792 bytes | cap + 1 MiB exactly (1 MiB aligned chunks) |\n| server full body (TOTAL) | 18 874 368 bytes (18 MiB) | confirms server emitted the full 18 MiB (cap was not triggered by upstream truncation) |\n| test invariant | `MAX < got < TOTAL` (loopback)<br>`got == cap + CHUNK` (synthetic) | holds in both modes; Layer 2 loopback variance comes from TCP packet coalescing on `127.0.0.1` |\n| normal path | 65 bytes returned, exact body match | `readableStream` consumers get the original bytes unchanged |\n\n### Combined evidence\n\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/llm/providers/mistral.test.ts src/llm/providers/mistral.bounded-stream.test.ts --reporter=verbose` — **9/9 tests pass** (6 existing payload-mapping tests + 3 new bounded-stream tests) in 3.57s.\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json` — exit 0 (no type errors).\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/llm/providers/mistral.ts src/llm/providers/mistral.test.ts src/llm/providers/mistral.bounded-stream.test.ts` — exit 0 (no lint errors).\n- `git diff --numstat HEAD`: `src/llm/providers/mistral.ts +70/-1` + `src/llm/providers/mistral.test.ts +21/-10` + new file `src/llm/providers/mistral.bounded-stream.test.ts +185/-0`.\n\n**Reproduce locally**:\n```bash\ngit checkout fix/mistral-bound-stream-read\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts \\\n  src/llm/providers/mistral.test.ts src/llm/providers/mistral.bounded-stream.test.ts \\\n  --reporter=verbose   # 9/9 pass with loopback proof stdout\nnode scripts/run-tsgo.mjs -p tsconfig.core.json   # exit 0\n```\n\n**Layer 2 wire details** (so reviewers can re-derive the byte counts):\n1. `http.createServer` listens on `127.0.0.1:0` (random port) and chunks 18 × 1 MiB = 18 874 368 bytes via `setInterval(..., 1)` with `Content-Type: application/octet-stream`.\n2. Real `fetcher(\"http://127.0.0.1:<port>/\")` calls global `fetch`, gets a `Response` whose `body` is a `ReadableStream<Uint8Array>` from the underlying undici socket.\n3. Inside `createBoundedMistralFetcher`, that `body.getReader()` is wrapped with `createSseByteGuard(reader, { maxBytes: 16 777 216, onOverflow: ({size}) => Error(...) })`. A new `ReadableStream` is returned to the SDK whose `pull` reads through the guard.\n4. `pull` calls `guard.read()` repeatedly. After cap+1 chunks (`MAX + valueLength > MAX`), the guard sets `size = total + valueLength` and throws. **The exact reported `size` depends on TCP coalescing at moment-of-throw**, hence the invariant `MAX < got < TOTAL` rather than an exact byte assertion.\n5. Layer 1 synthetic test bypasses the wire (`globalThis.fetch` mock returns a synthetic Response with a chunked `ReadableStream`), proving the wrapping logic itself with a deterministic 1 MiB-aligned exact assertion `got == 17 825 792`.\n\n## Related\n\n- #96701 (wangmiao0668000666, ✅ merged in `5380e0afc4` over `fix/anthropic-sse-bounded-read`) — `fix(anthropic): bound SSE stream reads at 16 MiB`. Established the `createSseByteGuard` helper + `createGuardedModelFetch` pattern. Same shape (SDK fetch injection), same cap (16 MiB), same upstream helper. **Direct template for this PR.**\n- #96723 (wangmiao0668000666, ✅ merged) — `fix(anthropic): bound streaming 200 success-body SSE reads at 16 MiB (provider path)`. Applied `createSseByteGuard` to `src/llm/providers/anthropic.ts:349` (`iterateSseMessages`). **Same code path** as this PR but for a different SDK. The wiring through the provider function instead of fetcher injection (because Anthropic SDK uses a different `httpAgent` abstraction in older versions) is the alternative shape when SDK injection isn't available.\n- `src/agents/streaming-byte-guard.ts` — core internal helper `createSseByteGuard` (the public shape for this PR + #96701 + #96723).\n- `extensions/google/oauth.http.ts` (#97628, OPEN 🦞👀) — same fetch-wrap pattern with `readResponseWithLimit` (BodyInit-bound helper) for OAuth bodies. Different shape (uses `readResponseWithLimit` not `createSseByteGuard`) because OAuth responses aren't streamed SSE — full-buffer read is acceptable for OAuth.\n- PR #97628 v2 (just landed `c764e78a0f` → `f8593a2262`) — the loopback proof pattern (Layer 2 + Layer 3 + byte-level table) used as the template for this PR's `## Evidence` section. Cross-reference the `loopback-proof-required-bounded-read.md` memory entry for the abstract pattern.\n\n**Label**: security\n\n_AI-assisted._\n",
+        "branch": "fix/mistral-bound-stream-read",
+        "head_sha": "4635b2dca789f829200c6f917f852b0ae0d10f4e",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "size: M",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/llm/providers/mistral.bounded-stream.test.ts",
+            "additions": 184,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/llm/providers/mistral.test.ts",
+            "additions": 20,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/mistral.ts",
+            "additions": 67,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 271,
+        "deletions": 11,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97648",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97648.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 64,
+            "SKIPPED": 34,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 592,
+    "total_ms": 2975,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 350
+        "ms": 398
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2250
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -58,7 +162,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 233
+        "ms": 305
       },
       {
         "name": "append_ledger",
