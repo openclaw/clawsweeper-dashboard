@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-30T12:24:19.370Z",
+  "generated_at": "2026-06-30T12:24:21.456Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-30T09:24:15.478Z",
+  "since": "2026-06-30T09:24:18.699Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    98082
+    98079
   ],
   "comment_ids": [
-    4843400558
+    4843400120
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98082:4843400558:2026-06-30T12:21:48Z:re_review",
-      "comment_id": "4843400558",
-      "comment_version_key": "4843400558:2026-06-30T12:21:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98082#issuecomment-4843400558",
+      "idempotency_key": "comment-router:openclaw/openclaw:98079:4843400120:2026-06-30T12:21:45Z:re_review",
+      "comment_id": "4843400120",
+      "comment_version_key": "4843400120:2026-06-30T12:21:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98079#issuecomment-4843400120",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 98082,
+      "issue_number": 98079,
       "author": "lsr911",
       "author_id": 18230762,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-30T12:21:48Z",
-      "comment_updated_at": "2026-06-30T12:21:48Z",
+      "comment_created_at": "2026-06-30T12:21:45Z",
+      "comment_updated_at": "2026-06-30T12:21:45Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -73,51 +73,55 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(providers): release stream reader lock after classifying SDK stream body",
-        "body": "## What Problem This Solves\n\n`src/agents/provider-transport-fetch.ts:349` acquires a `ReadableStream` reader via `response.body?.getReader()` in `classifyOpenAISdkStreamBody` but does not call `reader.releaseLock()` in the finally block. If the classification throws, the reader lock is leaked.\n\n## Changes\n\n- `src/agents/provider-transport-fetch.ts`: add `reader.releaseLock()` (wrapped in try/catch) in the finally block after `reader.cancel()`\n\nThis matches the defensive lock-release pattern used elsewhere in the codebase.\n\nLabel: bugfix | merge-risk: 🟢 minimal | AI-assisted\n\n## Evidence\n\n### Code path analysis\n\nThe affected function `classifyOpenAISdkStreamBody`:\n1. Acquires `reader = response.body?.getReader()`\n2. Reads the first chunk to classify the stream type\n3. Has a `finally` block that calls `reader.cancel()` but did NOT call `reader.releaseLock()`\n\n`reader.cancel()` rejects pending reads but does not release the lock on the underlying stream. Per the Streams specification, `releaseLock()` is required to allow other consumers to acquire the stream. Adding it ensures proper cleanup.",
-        "branch": "fix/provider-classify-stream-reader-release",
-        "head_sha": "949f4bef24e0524a3ed0b2c02fae3f821dd78294",
+        "title": "fix(ollama): release stream reader lock to prevent resource leak",
+        "body": "## What Problem This Solves\n\n`extensions/ollama/src/stream.ts` acquires a `ReadableStreamDefaultReader` via `response.body.getReader()` inside a try block, but the finally block that calls `release()` did not call `reader.releaseLock()`. Per the Streams specification, `releaseLock()` is required to release the lock on the underlying stream — without it, the stream remains locked after the function returns.\n\nAdditionally, the original `const reader` declaration inside the try block caused a TypeScript error: the finally block cannot reference a const that is not guaranteed to be assigned in all code paths (error paths throw before reader assignment).\n\n## Changes\n\n- `extensions/ollama/src/stream.ts`: hoist `reader` declaration before try block → `let reader: ReadableStreamDefaultReader<Uint8Array> | undefined`\n- Assign `reader` inside try: `reader = response.body.getReader()`\n- In finally: `reader?.releaseLock()` (optional chaining for safety when try throws before assignment)\n\nLabel: bugfix | merge-risk: 🟢 minimal | AI-assisted\n\n## Evidence\n\n### Code path analysis\n\nBefore the fix:\n```\ntry {\n  reader = body.getReader()   // may throw before this line\n  while(true) { read() }      // stream processing\n} finally {\n  // reader might be unassigned → TS error\n  await release()\n}\n```\n\nAfter the fix:\n```\nlet reader: ... | undefined\ntry {\n  reader = body.getReader()   // safe: declared outside\n  while(true) { read() }\n} finally {\n  reader?.releaseLock()       // safe: optional chaining\n  await release()\n}\n```\n\nThe `?.` operator ensures that if the try block throws before `reader` is assigned (e.g., non-OK response, empty body), the finally block degrades gracefully to a no-op for `releaseLock()` while still executing `await release()`.\n\n### Reference\n\nPer the Streams specification: \"A ReadableStream reader lock is released by calling `reader.releaseLock()`. This must be called even after `reader.cancel()` — cancel rejects pending reads but does not release the lock.\"",
+        "branch": "fix/ollama-stream-reader-release",
+        "head_sha": "241f18fec78408c9a41a6d92402a77ad3dd508b2",
         "author": "lsr911",
         "labels": [
-          "agents",
           "size: XS",
-          "P2",
+          "extensions: ollama",
+          "P3",
           "rating: 🧂 unranked krab",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/provider-transport-fetch.ts",
-            "additions": 3,
-            "deletions": 0,
+            "path": "extensions/ollama/src/stream.ts",
+            "additions": 5,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 1,
-        "additions": 3,
-        "deletions": 0,
+        "additions": 5,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98082",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98082.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98079",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98079.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 92,
-          "gatingTotal": 87,
+          "total": 85,
+          "gatingTotal": 80,
           "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
+            "SUCCESS": 58,
+            "SKIPPED": 26,
+            "FAILURE": 1
           },
-          "blockers": [],
+          "blockers": [
+            "checks-node-compact-large-whole-1:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "checks-node-compact-large-whole-1:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
@@ -128,15 +132,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4211,
+    "total_ms": 3075,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2133
+        "ms": 662
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1745
+        "ms": 2082
       },
       {
         "name": "classify_comment_commands",
