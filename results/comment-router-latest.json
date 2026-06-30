@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-30T22:58:28.366Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-30T22:58:30.212Z",
+  "repo": "steipete/macos-automator-mcp",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-30T19:58:25.993Z",
+  "since": "2026-06-30T19:58:29.792Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    98291
+    252
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -28,172 +28,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98291:4848552549:2026-06-30T22:58:22Z:clawsweeper_needs_human",
-      "comment_id": "4848552549",
-      "comment_version_key": "4848552549:2026-06-30T22:58:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98291#issuecomment-4848552549",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98291,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-30T22:52:27Z",
-      "comment_updated_at": "2026-06-30T22:58:22Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Human/contributor follow-up is needed for real behavior proof; there is no narrow code defect for an automated repair lane.; Cleared: The diff touches local gateway/systemd parsing, status text, restart control, and tests only; no dependency, workflow, permission, credential, or supply-chain surface is introduced. (sha=98d261f81beba091991495abb5a8ae5233adc4d0)",
-      "review_summary": "The PR adds systemd start-limit runtime fields, detects terminal restart give-up, runs reset-failed before restart, and updates gateway status/doctor hints with focused tests.\n\nPR surface: Source +95, Tests +241. Total +336 across 8 files.\n\nReproducibility: yes. at source/dependency level: current main collapses failed systemd runtime into generic stopped guidance and restart omits reset-failed, while systemd v249 exposes the needed counters and reset-failed behavior. I did not run a live OpenClaw/systemd reproduction in this read-only review.",
-      "review_followup": "- [P1] Human/contributor follow-up is needed for real behavior proof; there is no narrow code defect for an automated repair lane.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "98d261f81beba091991495abb5a8ae5233adc4d0",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): surface systemd start-limit exhaustion",
-        "body": "## What Problem This Solves\n\nThe managed gateway's systemd unit ships `Restart=always` with `StartLimitBurst=5` /\n`StartLimitIntervalSec=60`. When the gateway crashes faster than that allows, systemd latches the\nunit into `failed` and **stops auto-restarting it entirely**. OpenClaw collapses that terminal state\ninto a generic `status: \"stopped\"`, so `openclaw gateway status` and `openclaw doctor` only report\n*\"Service is loaded but not running (likely exited immediately).\"* — there is no signal that systemd\nhas given up, and nothing ever clears the failed latch, so on systemd versions that refuse a start in\nthat state the gateway cannot be recovered with `openclaw gateway restart`.\n\n## Why This Change Was Made\n\nA crash-looped, given-up service is a distinct, actionable state (the systemd analogue of a\nKubernetes CrashLoopBackOff), not an ordinary stop. Surfacing it and making the existing restart\ncommand recover it turns a silent dead end into a one-command fix, using state systemd already exposes.\n\nThe change is two small parts:\n\n1. **Detect the give-up.** `readSystemdServiceRuntime` now also reads `Result`, `NRestarts`, and\n   `StartLimitBurst`. Detection is `state === \"failed\" && (Result === \"start-limit-hit\" ||\n   (StartLimitBurst > 0 && NRestarts >= StartLimitBurst))`. The counter path is the important one:\n   once the gateway process has actually run and exited non-zero, systemd keeps `Result = exit-code`\n   and never overwrites it with `start-limit-hit`, so `Result` alone misses real crash loops. While a\n   unit is still inside its restart cycle its state is `activating`, not `failed`, so the check only\n   fires at the terminal give-up.\n2. **Recover on restart.** `openclaw gateway restart` now runs `systemctl reset-failed <unit>` before\n   `restart`. It is idempotent (a no-op on a healthy unit) and clears the failed/start-limit latch so a\n   crash-looped gateway comes back up.\n\nPresentation changes are confined to the existing `stopped` branch of `openclaw gateway status` and\n`openclaw doctor`; all other wording, health computation, the generated unit, and non-systemd backends\nare untouched.\n\n## User Impact\n\n- A crash-looped gateway now reports an actionable line — *\"systemd stopped restarting the gateway\n  after repeated crashes; run `openclaw gateway restart` or inspect logs.\"* — instead of the\n  misleading \"exited immediately.\"\n- `openclaw gateway restart` reliably recovers a unit that systemd has stopped restarting.\n- No new config, env var, flag, or unit change. An ordinary single failure still shows the existing\n  \"likely exited immediately\" hint.\n\n## Evidence\n\n- **Unit tests** (`pnpm test`): `service-runtime.test.ts` + `doctor-format.test.ts` (12), `systemd.test.ts`\n  (92, incl. parse fixtures, runtime classification, and `reset-failed`-before-`restart` ordering across\n  user/sudo/machine-fallback/system scopes), `status.print.test.ts` (18). `oxfmt --check` clean;\n  `tsgo` core + test-types green.\n- **Real systemd 249 capture.** A throwaway crashing user unit (`ExecStart=/bin/false`,\n  `StartLimitBurst=2`, `Restart=always`) was driven past its start limit:\n  - Give-up state (read with the new property set): `ActiveState=failed`, `SubState=failed`,\n    `Result=exit-code`, `NRestarts=2`, `StartLimitBurst=2` — confirming `Result` stays `exit-code`\n    (not `start-limit-hit`) and that `NRestarts == StartLimitBurst` marks the give-up.\n  - `systemctl --user reset-failed` returned the unit to `Result=success`, `NRestarts=0`, `inactive`,\n    confirming the recovery path.\n",
-        "branch": "fix/gateway-systemd-start-limit-hit",
-        "head_sha": "98d261f81beba091991495abb5a8ae5233adc4d0",
-        "author": "masatohoshino",
-        "labels": [
-          "gateway",
-          "cli",
-          "commands",
-          "size: M",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/daemon-cli/status.print.test.ts",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/daemon-cli/status.print.ts",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-format.test.ts",
-            "additions": 41,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-format.ts",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/service-runtime.test.ts",
-            "additions": 72,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/daemon/service-runtime.ts",
-            "additions": 40,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd.test.ts",
-            "additions": 105,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd.ts",
-            "additions": 37,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 8,
-        "additions": 346,
-        "deletions": 10,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98291",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98291.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 33,
-            "SUCCESS": 58,
-            "IN_PROGRESS": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2707,
+    "total_ms": 733,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 424
+        "ms": 409
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1934
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -205,11 +55,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 323
+        "ms": 312
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
