@@ -4,35 +4,35 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: Jun 30, 2026, 22:53 UTC
+Last source update: Jun 30, 2026, 23:21 UTC
 
 ### Fleet
 
 | Metric | Count |
 | --- | ---: |
 | Covered repositories | 3 |
-| Open review records | 6769 |
+| Open review records | 6772 |
 | Archived closed records | 11189 |
-| Fresh reviews, 7d | 5605 |
+| Fresh reviews, 7d | 5618 |
 | Proposed closes awaiting apply | 93 |
 | Work candidates awaiting promotion | 391 |
-| Failed or stale reviews | 38 |
+| Failed or stale reviews | 39 |
 
 ### Current Runs
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | Jun 30, 2026, 22:50 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/28480403353) |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Review publish complete | Jun 30, 2026, 22:52 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/28480902859) |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Review publish complete | Jun 30, 2026, 22:12 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/28478911620) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Review comments checked | Jun 30, 2026, 23:20 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/28481697130) |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Hot intake publish complete | Jun 30, 2026, 22:54 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/28481001406) |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Hot intake publish complete | Jun 30, 2026, 23:21 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/28482080887) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6695 | 10593 | 5532 | 93 | 389 | 38 | Jun 30, 2026, 22:52 UTC | Jun 30, 2026, 22:53 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6698 | 10593 | 5545 | 93 | 389 | 39 | Jun 30, 2026, 23:17 UTC | Jun 30, 2026, 22:53 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | 63 | 423 | 62 | 0 | 2 | 0 | Jun 30, 2026, 22:27 UTC | Jun 30, 2026, 02:20 UTC |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 11 | 173 | 11 | 0 | 0 | 0 | Jun 30, 2026, 22:11 UTC | Jun 30, 2026, 22:12 UTC |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 11 | 173 | 11 | 0 | 0 | 0 | Jun 30, 2026, 23:20 UTC | Jun 30, 2026, 22:12 UTC |
 
 ### Work Candidates
 
@@ -84,21 +84,21 @@ Last source update: Jun 30, 2026, 22:53 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98290](https://github.com/openclaw/openclaw/issues/98290) | [Bug]: iOS app does not render markdown tables or headers (raw pipes shown) | keep_open / kept_open | complete | Jun 30, 2026, 22:52 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98287](https://github.com/openclaw/openclaw/issues/98287) | [Bug]: Signal quoted replies can lose quoted context in BodyForAgent | keep_open / kept_open | complete | Jun 30, 2026, 22:51 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98289](https://github.com/openclaw/openclaw/pull/98289) | fix(signal): include quoted reply context for agents | keep_open / kept_open | complete | Jun 30, 2026, 22:49 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98288](https://github.com/openclaw/openclaw/pull/98288) | Allow MCP server-name projection for embedded agents | keep_open / kept_open | complete | Jun 30, 2026, 22:48 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98280](https://github.com/openclaw/openclaw/pull/98280) | fix(android): explain camera permission for setup scans | keep_open / kept_open | complete | Jun 30, 2026, 22:33 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98285](https://github.com/openclaw/openclaw/pull/98285) | fix(agents): move channel-varying system-prompt sections below the ca… | close / kept_open | complete | Jun 30, 2026, 22:32 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#97137](https://github.com/openclaw/openclaw/pull/97137) | doctor: add memory search lint findings | keep_open / kept_open | complete | Jun 30, 2026, 22:30 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98283](https://github.com/openclaw/openclaw/issues/98283) | [Feature]: Redesign iOS Control tab to a flatter, card-based layout | keep_open / kept_open | complete | Jun 30, 2026, 22:30 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98281](https://github.com/openclaw/openclaw/pull/98281) | fix(gateway): strip provider defaults for config.patch | keep_open / kept_open | complete | Jun 30, 2026, 22:30 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98284](https://github.com/openclaw/openclaw/pull/98284) | fix(browser): persist managed Chrome cookies across restarts | keep_open / kept_open | complete | Jun 30, 2026, 22:29 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#97845](https://github.com/openclaw/openclaw/pull/97845) | fix: antml:/mm: namespaced tool-call XML leaks into chat replies (#97750) | keep_open / kept_open | complete | Jun 30, 2026, 22:29 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#92070](https://github.com/openclaw/openclaw/pull/92070) | feat(anthropic): enforce --safe-mode on all claude-cli subprocess launches | keep_open / kept_open | complete | Jun 30, 2026, 22:28 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#90450](https://github.com/openclaw/openclaw/pull/90450) | fix(agents): preserve streamed assistant text when Claude CLI result event is empty | keep_open / kept_open | complete | Jun 30, 2026, 22:28 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#92114](https://github.com/openclaw/openclaw/pull/92114) | fix(memory): report indexed vector store in status | keep_open / kept_open | complete | Jun 30, 2026, 22:28 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#92147](https://github.com/openclaw/openclaw/pull/92147) | [codex] support Responses system prompts in instructions | close / proposed_close | complete | Jun 30, 2026, 22:28 UTC |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | [#380](https://github.com/openclaw/clawsweeper/pull/380) | Claim command dispatches before execution | keep_open / kept_open | complete | Jun 30, 2026, 23:20 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98144](https://github.com/openclaw/openclaw/pull/98144) | fix(tui): correct disconnect copy for device scope upgrades | keep_open / kept_open | complete | Jun 30, 2026, 23:17 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#97168](https://github.com/openclaw/openclaw/pull/97168) | fix(slack): prefer current thread session for inherited outbound replies | keep_open / kept_open | complete | Jun 30, 2026, 23:16 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98269](https://github.com/openclaw/openclaw/pull/98269) | fix: unify Android Voice setup readiness | keep_open / kept_open | complete | Jun 30, 2026, 23:14 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98288](https://github.com/openclaw/openclaw/pull/98288) | Allow MCP server-name projection for embedded agents | keep_open / kept_open | failed | Jun 30, 2026, 23:11 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98293](https://github.com/openclaw/openclaw/pull/98293) | fix(gateway): emit stale exec approval followup diagnostics | keep_open / kept_open | complete | Jun 30, 2026, 23:06 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98292](https://github.com/openclaw/openclaw/pull/98292) | fix(exec): emit structured event when stale approval followups are suppressed (fixes #98279) | keep_open / kept_open | complete | Jun 30, 2026, 23:01 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98290](https://github.com/openclaw/openclaw/issues/98290) | [Bug]: iOS app does not render markdown tables or headers (raw pipes shown) | keep_open / kept_open | complete | Jun 30, 2026, 22:59 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#96186](https://github.com/openclaw/openclaw/pull/96186) | fix: identify Mattermost channels as channels in prompts | keep_open / kept_open | failed | Jun 30, 2026, 22:59 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98291](https://github.com/openclaw/openclaw/pull/98291) | fix(gateway): surface systemd start-limit exhaustion | keep_open / kept_open | complete | Jun 30, 2026, 22:57 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#92243](https://github.com/openclaw/openclaw/pull/92243) | feat(coreweave): add CoreWeave Serverless Inference model provider | keep_open / kept_open | complete | Jun 30, 2026, 22:56 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#98289](https://github.com/openclaw/openclaw/pull/98289) | fix(signal): include quoted reply context for agents | keep_open / kept_open | complete | Jun 30, 2026, 22:55 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#92230](https://github.com/openclaw/openclaw/pull/92230) | feat: add model switch choices to /model | keep_open / kept_open | complete | Jun 30, 2026, 22:53 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#92217](https://github.com/openclaw/openclaw/pull/92217) | feat(fireworks): catalog DeepSeek V4 Pro, MiniMax M2.7, GLM-5.1, GPT-OSS 120B reasoning models | keep_open / kept_open | complete | Jun 30, 2026, 22:51 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#92236](https://github.com/openclaw/openclaw/pull/92236) | fix(webchat): surface Codex commentary progress | keep_open / kept_open | complete | Jun 30, 2026, 22:51 UTC |
 
 </details>
 
