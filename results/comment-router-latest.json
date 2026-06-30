@@ -1,20 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-30T10:29:47.841Z",
+  "generated_at": "2026-06-30T10:30:58.353Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-30T07:29:47.502Z",
+  "since": "2026-06-30T07:30:56.202Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    98120
+    98003
   ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -28,22 +29,129 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98003:4839661391:2026-06-30T10:30:53Z:clawsweeper_needs_human",
+      "comment_id": "4839661391",
+      "comment_version_key": "4839661391:2026-06-30T10:30:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98003#issuecomment-4839661391",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98003,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-30T03:44:24Z",
+      "comment_updated_at": "2026-06-30T10:30:53Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No automated repair is needed; the remaining action is maintainer acceptance of the intentional guarded-transport compatibility and availability risk.; Cleared: No concrete security or supply-chain regression was found; the diff reuses existing guarded transport and adds local tests without dependency, workflow, secret, lockfile, or package metadata changes. (sha=099a5847372beb85934f3861f12fc9f1b11b82aa)",
+      "review_summary": "The PR wires `buildGuardedModelFetch(model)` into the Anthropic Cloudflare AI Gateway SDK client constructor and adds constructor, SSRF-block, and loopback proof tests.\n\nPR surface: Source +2, Tests +197. Total +199 across 3 files.\n\nReproducibility: yes. Source inspection shows current main routes normal `streamAnthropic` calls through a Cloudflare Anthropic SDK constructor that lacks a custom `fetch`, while the locked SDK falls back to default/global fetch when `options.fetch` is absent.",
+      "review_followup": "- No automated repair is needed; the remaining action is maintainer acceptance of the intentional guarded-transport compatibility and availability risk.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "099a5847372beb85934f3861f12fc9f1b11b82aa",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(anthropic): wire buildGuardedModelFetch into the Cloudflare createClient branch",
+        "body": "## What Problem This Solves\n\nThe Anthropic provider (`anthropic.ts`) creates five `Anthropic` SDK clients — one for Cloudflare, one for GitHub Copilot, one for Microsoft Foundry bearer auth, one for OAuth, and one for the API-key fallback. None of them passes a custom `fetch` option. Streaming Anthropic calls from these providers bypass the guarded provider transport — SSRF protection, request timeout, retry-hint injection, and response lifecycle management that every other Anthropic SDK path already has.\n\nThis injects `fetch: buildGuardedModelFetch(model)` into the **Cloudflare AI Gateway** SDK constructor specifically, bringing that branch to guarded-fetch parity with:\n- `anthropic-transport-stream.ts:788` (managed Anthropic transport)\n- `openai-responses.ts` (#97848)\n- `openai-completions.ts` (#97228)\n- `azure-openai-responses.ts`\n\nThis is **one of five split PRs** that supersede #97868. Each PR is one constructor's blast radius — separate from the others. Maintainers can land any combination independently.\n\n## Why This Change Was Made\n\n`buildGuardedModelFetch` is the canonical fetch wrapper applied to every Anthropic SDK constructor in the codebase. The Anthropic SDK accepts `fetch?: Fetch` per its constructor options. The Cloudflare branch was missing this wrapper.\n\nThe change is 2 lines (+1 import, +1 `fetch:` option) — the same scope as #97848 for OpenAI Responses and #97228 for OpenAI Completions. This PR also adds an inline `http.createServer` loopback test to prove the guard is actively in scope on this code path.\n\n## Evidence\n\n### Layer 1: Mock-based constructor wiring\n\n`anthropic.test.ts` already mocks the Anthropic SDK to capture constructor config. The existing Cloudflare test was extended to assert the new `fetch:` option is in scope:\n\n```diff\n   it(\"keeps Cloudflare AI Gateway upstream provider auth on the Anthropic API key\", async () => {\n     ...\n     const config = anthropicMockState.configs[0] as {\n       apiKey?: string | null;\n       authToken?: string | null;\n       defaultHeaders?: Record<string, string | null>;\n+      fetch?: unknown;\n     };\n\n     expect(config.apiKey).toBe(\"sk-ant-provider\");\n     expect(config.authToken).toBeNull();\n     expect(config.defaultHeaders?.[\"x-api-key\"]).toBeUndefined();\n     expect(config.defaultHeaders?.[\"cf-aig-authorization\"]).toBe(\"Bearer gateway-token\");\n+    // Bounded-read contract: a custom `fetch` is wired through the SDK.\n+    expect(typeof config.fetch).toBe(\"function\");\n   });\n```\n\n**Negative control**: removing `fetch: buildGuardedModelFetch(model)` makes `typeof config.fetch === \"function\"` fail.\n\n### Layer 2: SSRF-block guard-specific proof\n\n`anthropic-cloudflare.fetch-proof.test.ts` proves `buildGuardedModelFetch` is actively blocking requests rather than just being present in constructor options:\n\n1. Stubs `globalThis.fetch` as a **call counter** — does NOT mock the `anthropic-ai/sdk`\n2. Configures the model with `baseUrl: \"http://169.254.169.254/v1\"` — a cloud metadata IP that the SSRF guard blocks\n3. Calls `streamAnthropic` through the real SDK + `buildGuardedModelFetch`\n4. The guard intercepts the private IP before `globalThis.fetch` is ever reached\n5. Assertion: `expect(globalFetchCalled).toBe(0)` — guard-specific behavior\n\n**Why this is needed:** The raw `@anthropic-ai/sdk` uses `globalThis.fetch` by default (when no custom `fetch` option is supplied). A test that only asserts the SDK reaches `globalThis.fetch` would pass even without `buildGuardedModelFetch`. The SSRF-block assertion closes that gap.\n\n### Test results (real terminal output)\n\n```\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts \\\n  src/llm/providers/anthropic.test.ts \\\n  src/llm/providers/anthropic-cloudflare.fetch-proof.test.ts\n\n RUN  v4.1.8 /tmp/wt-anthropic-cloudflare\n\n Test Files  2 passed (2)\n      Tests  38 passed (38)\n   Start at  11:42:13\n   Duration  3.90s (transform 1.79s, setup 728ms, import 1.70s, tests 3.42s, environment 0ms)\n```\n\nAll tests pass consistently.\n\n### Layer 3: Real wire loopback proof (vitest inline test)\n\n`anthropic-cloudflare.fetch-proof.test.ts` adds a second `describe(...)` block `Anthropic Cloudflare guard real wire loopback proof (http.createServer)` that spins up a real `node:http` server on `127.0.0.1:0`, points the model at it via `attachModelProviderRequestTransport({ allowPrivateNetwork: true })`, and drives the actual `@anthropic-ai/sdk` through `streamAnthropic` — no SDK mock, no fetch-intercept. The test prints one `[layer3 loopback proof]` line with quantified byte/event counts so vitest `--reporter=verbose` stdout captures them as evidence.\n\nRun from worktree branch `fix/anthropic-cloudflare-fetch-wiring`:\n\n```\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts \\\n  src/llm/providers/anthropic-cloudflare.fetch-proof.test.ts --reporter=verbose\n\n RUN  v4.1.8 /tmp/wt-anthropic-cloudflare\n\n ✓ |unit| src/llm/providers/anthropic-cloudflare.fetch-proof.test.ts > Anthropic Cloudflare guard-specific SSRF blocking proof > blocks a private-IP request before globalThis.fetch is called (guard-specific behavior) 2663ms\nstdout | src/llm/providers/anthropic-cloudflare.fetch-proof.test.ts > Anthropic Cloudflare guard real wire loopback proof (http.createServer) > streams Anthropic SSE end-to-end through buildGuardedModelFetch against a real loopback server\n[layer3 loopback proof] server_hits=1 request_url=/v1/messages request_bytes=167 content_type=application/json text_bytes=47 stop_reason=stop\n\n ✓ |unit| src/llm/providers/anthropic-cloudflare.fetch-proof.test.ts > Anthropic Cloudflare guard real wire loopback proof (http.createServer) > streams Anthropic SSE end-to-end through buildGuardedModelFetch against a real loopback server 65ms\n\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n   Start at  11:41:10\n   Duration  3.32s (transform 694ms, setup 319ms, import 32ms, tests 2.73s, environment 0ms)\n```\n\n**Quantified read of the loopback proof:**\n| metric | value | meaning |\n|---|---|---|\n| `server_hits` | 1 | Local `http.createServer` listener actually received the SDK's POST |\n| `request_url` | `/v1/messages` | `@anthropic-ai/sdk` appended `/v1/messages` to baseUrl (correct shape) |\n| `request_bytes` | 167 | Real wire body the SDK serialized |\n| `text_bytes` | 47 | Text content assembled by `streamAnthropic` from `content_block_delta` events |\n| `stop_reason` | `stop` | Stream ended cleanly — SSRF guard did not block loopback when `allowPrivateNetwork: true` |\n\n**Layer 3 reads**:\n- `server_hits=1` confirms the local `http.createServer` listener actually received the SDK's POST. This is real wire traffic, not a `globalThis.fetch` spy.\n- `request_url=/v1/messages` matches the Anthropic SDK's documented `/v1/messages` URL pattern when `baseUrl` is the host root.\n- `text_bytes=47` confirms `streamAnthropic` parsed the local server's Anthropic SSE response into `text_delta` events.\n- `stop_reason=stop` proves the SDK reached the network through `buildGuardedModelFetch` and the SSRF guard accepted the loopback target because `allowPrivateNetwork: true` is set on the model. The existing SSRF-block test provides the differential (same setup but `baseUrl: http://169.254.169.254/v1` → `globalFetchCalled === 0`).\n\n### Real behavior proof\n\n- **Behavior addressed**: `createClient` in `src/llm/providers/anthropic.ts` (Cloudflare branch) now passes `fetch: buildGuardedModelFetch(model)` to `new Anthropic({...})`, so Anthropic calls routed through the Cloudflare AI Gateway inherit OpenClaw guarded-fetch policy (SSRF block, request timeout, retry-hint injection, response lifecycle management, content-type normalization).\n- **Real environment tested**: Linux x86_64, Node v20.20.0, repo checkout `fix/anthropic-cloudflare-fetch-wiring` (commit `b0039d6405`).\n- **Exact steps or command run after this patch**:\n  - `node scripts/run-vitest.mjs src/llm/providers/anthropic-cloudflare.fetch-proof.test.ts --run --reporter=verbose`\n  - Captured terminal output shown above (Layer 3).\n- **Evidence after fix**:\n  - Layer 1 (mocked): `anthropic.test.ts` asserts the constructor wiring (existing tests preserved, +5 lines).\n  - Layer 2 (SSRF-block vitest): `anthropic-cloudflare.fetch-proof.test.ts` SSRF-block test stubs `globalThis.fetch`, configures `baseUrl: http://169.254.169.254/v1`, asserts `globalFetchCalled === 0` (block before globalThis.fetch is reached).\n  - Layer 3 (real wire loopback): `anthropic-cloudflare.fetch-proof.test.ts` loopback `describe` block spins up `http.createServer` on `127.0.0.1`, the SDK actually POSTs `/v1/messages`, server logs `request_bytes=167 content_type=application/json`, SDK parses 6 SSE events, `text_bytes=47` extracted, `stop_reason=stop`. The `[layer3 loopback proof]` line is emitted by the test's `console.log`.\n- **Observed result after fix**: 2/2 tests in `anthropic-cloudflare.fetch-proof.test.ts` pass; 36/36 existing tests in `anthropic.test.ts` still pass. Layer 1+2+3 together prove: (a) `buildGuardedModelFetch` is wired into the Cloudflare constructor, (b) the guard actively intercepts blocked targets before `globalThis.fetch` is reached, and (c) the guard accepts loopback when `allowPrivateNetwork: true` is configured and the SDK + response lifecycle work end-to-end on real HTTP.\n- **What was not tested**: No live Anthropic API call (no API key); the loopback server returns synthetic SSE. The 16 MiB JSON-synthesis cap and 64 KiB non-OK cap are exercised in `provider-transport-fetch.test.ts`; this PR only wires the guard into the constructor, not the cap behavior.\n\n### Diff scope\n\n```\n3 files changed, 199 insertions(+)\n  src/llm/providers/anthropic.ts                              |   2 ++   (1 import + 1 fetch: line)\n  src/llm/providers/anthropic.test.ts                         |   5 +   (constructor wiring assertion)\n  src/llm/providers/anthropic-cloudflare.fetch-proof.test.ts  | 192 ++++++ (1 SSRF-block + 1 inline real-wire loopback test)\n```\n\n## Security & Privacy\n\n- Hardening change: previously-unwrapped Anthropic SDK fetch calls through Cloudflare AI Gateway now inherit OpenClaw's SSRF guard, request timeout, retry hints, and response lifecycle management.\n- No new network calls, no new persisted data, no new logging of secrets.\n- The `fetch` option is standard Anthropic SDK API surface; no monkey-patching.\n\n## Compatibility\n\n- Existing Cloudflare AI Gateway Anthropic requests now use guarded fetch instead of SDK-default fetch. For default Cloudflare endpoints this is transparent.\n- Custom Cloudflare base URLs (enterprise proxy, self-hosted gateway) now inherit the same SSRF policy, timeout, and retry behavior as sibling guarded Anthropic paths.\n- **Risk acknowledged**: custom endpoints that previously worked with unguarded SDK-default fetch may now fail closed under SSRF policy. This is the same risk accepted for all other Anthropic SDK paths and is the intended hardening behavior. Per the #97868 review, maintainers may choose to land only some of the five split PRs; this PR specifically affects Cloudflare AI Gateway traffic only.\n- No config/env changes, no migration needed.\n- Blast radius: one constructor in one runtime file + its tests. No shared mocks, no public API.\n\n## What was not tested\n\n- The 16 MiB JSON-synthesis cap and 64 KiB non-OK cap are exercised in `provider-transport-fetch.test.ts`; this PR only proves the guard is wired into the Cloudflare constructor.\n- No live Anthropic endpoint was hit; the SSRF block happens before any network call.\n\n## Related\n\n- Supersedes #97868 (5-constructor combined PR, ClawSweeper recommended splitting into per-constructor PRs to reduce blast radius)\n- Sibling: openai-responses fetch wiring (#97848)\n- Sibling: openai-completions fetch wiring (#97228)\n- Upstream guard: `buildGuardedModelFetch` in `src/agents/provider-transport-fetch.ts:776`\n",
+        "branch": "fix/anthropic-cloudflare-fetch-wiring",
+        "head_sha": "099a5847372beb85934f3861f12fc9f1b11b82aa",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/llm/providers/anthropic-cloudflare.fetch-proof.test.ts",
+            "additions": 192,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/llm/providers/anthropic.test.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/anthropic.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 199,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98003",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98003.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 98,
+          "gatingTotal": 93,
+          "counts": {
+            "SUCCESS": 63,
+            "SKIPPED": 34,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 534,
+    "total_ms": 2353,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 328
+        "ms": 259
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1879
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -55,7 +163,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 195
+        "ms": 191
       },
       {
         "name": "append_ledger",
