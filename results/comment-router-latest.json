@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-30T12:23:48.470Z",
+  "generated_at": "2026-06-30T12:24:13.945Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-30T09:23:47.543Z",
+  "since": "2026-06-30T09:24:11.305Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97674
+    98145
   ],
-  "comment_ids": [
-    4843390697
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,34 +31,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:97674:4843390697:2026-06-30T12:20:58Z:re_review",
-      "comment_id": "4843390697",
-      "comment_version_key": "4843390697:2026-06-30T12:20:58Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97674#issuecomment-4843390697",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98145:4843368933:2026-06-30T12:24:07Z:clawsweeper_needs_human",
+      "comment_id": "4843368933",
+      "comment_version_key": "4843368933:2026-06-30T12:24:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98145#issuecomment-4843368933",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97765,
-      "author": "lin-hongkuan",
-      "author_id": 234943746,
+      "issue_number": 98145,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-30T12:20:57Z",
-      "comment_updated_at": "2026-06-30T12:20:57Z",
+      "comment_created_at": "2026-06-30T12:19:29Z",
+      "comment_updated_at": "2026-06-30T12:24:07Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- Protected maintainer-authored PR with no actionable review findings should stay in normal maintainer review rather than cleanup or repair automation.; Cleared: The diff only changes device pairing request reconciliation and a colocated regression test; it does not add dependencies, scripts, workflow permissions, secret handling, or new external code execution. (sha=1e583e066b3c0fb030a4e6c48486416bb2646744)",
+      "review_summary": "The PR changes device pairing so a subset reconnect refreshes one already-covering pending request in place while broader-scope escalations still mint a replacement request id.\n\nPR surface: Source +43, Tests +52. Total +95 across 2 files.\n\nReproducibility: yes. at source level: current main refreshes only exact pending snapshots, and the shared reconciler deletes/replaces non-refreshable pending requests, so a subset reconnect can invalidate the id the owner copied. I did not run tests because this cleanup review is read-only.",
+      "review_followup": "- Protected maintainer-authored PR with no actionable review findings should stay in normal maintainer review rather than cleanup or repair automation.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "1e583e066b3c0fb030a4e6c48486416bb2646744",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,24 +68,93 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(device-pairing): don't churn requestId on subset re-requests (AI-assisted)",
+        "body": "## Problem\n\nThis is the root cause of the confusing `unknown requestId` failures when approving a device whose TUI requested a scope upgrade:\n\n1. A TUI connect files a **broad** scope-upgrade request (e.g. `operator.admin/pairing/read/write`). The owner copies its id from `openclaw devices list`.\n2. `openclaw devices approve <id>` reconnects as a CLI probe that only needs a **subset** (e.g. `operator.pairing`).\n3. In `requestDevicePairing`, the subset re-request is not an exact snapshot match, so it falls through to `buildReplacement`, which **mints a fresh `randomUUID()`** and deletes the prior request (`pairing-files.ts`).\n4. The id the owner just copied no longer exists → approve fails with `unknown requestId`, and each retry churns the id again.\n\n## Why not just always preserve the id?\n\nBecause the requestId↔scope-snapshot binding is intentional and security-motivated: a stale id must not be approvable into *broader* scopes than the owner saw. `device-pairing-churn.test.ts` locks this in for the escalation case. So the fix must be narrower.\n\n## Fix\n\n`src/infra/device-pairing.ts`: refresh the existing request **in place** (same id, same `ts`) only when the incoming request asks for roles/scopes that a single existing pending request (same device key + role) **already covers** (`incomingApprovalCoveredByExisting`). Escalations that request *more* than the pending request are deliberately excluded and still supersede with a fresh id.\n\nThis keeps the security property (id never silently gains scopes the owner didn't see) while fixing the churn that broke approval.\n\n## Tests\n\n`src/infra/device-pairing-churn.test.ts`:\n- New: broad pending request + subset reconnect ⇒ **same** requestId, `created: false`, broader pending scopes preserved, and the originally-listed id stays approvable.\n- Existing churn/escalation tests (superset reconnect ⇒ new id) still pass unchanged.\n\nVerified locally:\n- `device-pairing.test.ts` (57) + `device-pairing-churn.test.ts` (3) pass.\n- `server.device-pair-approve-supersede.test.ts` + `server.device-pair-approve-authz.test.ts` (18) pass.\n- `oxlint` clean.\n\n## Notes\n\n- No `CHANGELOG.md` edit (per CONTRIBUTING).\n- Companion PRs: the self-approval deadlock (gateway auth), the TUI disconnect copy, and the `pairing list` empty-enum crash.\n- 🤖 AI-assisted (Claude Code), authored/reviewed by @RomneyDa.",
+        "branch": "fix/device-pairing-stable-request-id",
+        "head_sha": "1e583e066b3c0fb030a4e6c48486416bb2646744",
+        "author": "romneyda",
+        "labels": [
+          "maintainer",
+          "size: S",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/infra/device-pairing-churn.test.ts",
+            "additions": 52,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/device-pairing.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 96,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98145",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98145.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 98,
+          "gatingTotal": 93,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 34,
+            "SUCCESS": 58,
+            "IN_PROGRESS": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 3065,
+    "total_ms": 2960,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 915
+        "ms": 449
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2179
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -99,11 +166,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2138
+        "ms": 310
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
