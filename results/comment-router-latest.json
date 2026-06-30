@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-30T12:19:02.458Z",
+  "generated_at": "2026-06-30T12:19:38.282Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-30T09:18:59.684Z",
+  "since": "2026-06-30T09:19:37.649Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     98133
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4843326121
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -37,16 +39,16 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/98133#issuecomment-4843162964",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 98133,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 98127,
+      "author": "solodmd",
+      "author_id": 51304754,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-30T12:01:13Z",
-      "comment_updated_at": "2026-06-30T12:18:55Z",
+      "comment_created_at": "2026-06-30T12:17:04Z",
+      "comment_updated_at": "2026-06-30T12:17:04Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -68,107 +70,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex-supervisor): bound inbound websocket frame size at 16 MiB",
-        "body": "## What Problem This Solves\n\n`extensions/codex-supervisor/src/json-rpc-client.ts:288-293` constructs the inbound `WebSocket` for the Codex app-server connection without a `maxPayload` option. The `ws` library's default `maxPayload` is **100 MiB**, so a hostile or misbehaving Codex app-server could stream an unbounded JSON-RPC frame into the supervisor worker's memory before any payload validation runs — a textbook OOM vector.\n\nThis affects both the `ws://`/`wss://` transport and the `unix://` socket transport: both `new WebSocket(...)` call sites are unbounded.\n\n## Why This Change Was Made\n\nThe `ws` library supports a per-connection `maxPayload` option that:\n1. Rejects inbound frames exceeding the cap with `RangeError: Max payload size exceeded`\n2. Closes the offending socket immediately\n3. Emits an `'error'` event that `WebSocketCodexJsonRpcConnection` already routes through its existing `fail()` / `closedError` plumbing\n\nThe fix mirrors the pattern from `extensions/codex/src/app-server/sandbox-exec-server.ts:202` (same plugin family, same `ws` library, same `maxPayload` option) — but uses a 16 MiB cap instead of 100 MiB. 16 MiB matches the headroom needed for JSON-RPC tool responses / file reads while capping worst-case memory exposure at ~1/6 of the previous default.\n\nThe `MAX_CODEX_SUPERVISOR_WS_INBOUND_BYTES` constant is module-local rather than SDK-promoted because:\n- No other plugin currently needs the same cap (verified via `grep -rn \"maxPayload\" extensions/` — each surface picks its own value based on frame semantics)\n- The OpenClaw PR template favors minimal change scope; promoting a constant adds docs/API surface budget cost\n\n## Evidence\n\n```\n$ grep -n \"maxPayload\" extensions/codex-supervisor/src/json-rpc-client.ts\n12: const MAX_CODEX_SUPERVISOR_WS_INBOUND_BYTES = 16 * 1024 * 1024;\n69:           maxPayload: MAX_CODEX_SUPERVISOR_WS_INBOUND_BYTES,\n72:           maxPayload: MAX_CODEX_SUPERVISOR_WS_INBOUND_BYTES,\n\n$ grep -rn \"maxPayload\" extensions/codex/src/app-server/sandbox-exec-server.ts extensions/voice-call/src/media-stream.ts extensions/voice-call/src/webhook/realtime-handler.ts\nextensions/codex/src/app-server/sandbox-exec-server.ts:202:    maxPayload: CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES,\nextensions/voice-call/src/media-stream.ts:177:        maxPayload: MAX_INBOUND_MESSAGE_BYTES,\nextensions/voice-call/src/webhook/realtime-handler.ts:380:      maxPayload: MAX_REALTIME_MESSAGE_BYTES,\n```\n\nSiblings (sandbox-exec 100 MiB, voice-call media-stream 64 KiB, voice-call webhook 256 KiB) each pick a cap based on frame semantics. JSON-RPC control messages need a generous cap for tool/file responses; 16 MiB is the smallest value that fits the largest typical Codex app-server payload (large `tool/read` results) while bounding worst-case OOM well below the 100 MiB default.\n\n## After-fix Proof\n\n- `node scripts/run-vitest.mjs extensions/codex-supervisor/src/json-rpc-client.maxpayload.test.ts --run --reporter=verbose`\n\n```\n ✓ |extensions| extensions/codex-supervisor/src/json-rpc-client.maxpayload.test.ts > connectCodexAppServerEndpoint websocket maxPayload guard > rejects an inbound frame that exceeds the 16 MiB cap 283ms\n ✓ |extensions| extensions/codex-supervisor/src/json-rpc-client.maxpayload.test.ts > connectCodexAppServerEndpoint websocket maxPayload guard > accepts a frame well under the 16 MiB cap (regression: the guard does not block normal traffic) 7ms\n\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n   Duration  1.08s\n\n[test] passed 1 Vitest shard in 11.39s\n```\n\nBoth tests use a real loopback `WebSocketServer` (`ws://localhost:<random port>`), not mocks:\n- **Test 1 (rejects oversized)**: server sends a 32 MiB frame (2× the cap). Production `connectCodexAppServerEndpoint` rejects with a `RangeError: Max payload size exceeded`-flavored error from the `ws` library. The test asserts the error message matches `/max.*payload|payload.*size|too large|exceeds/i`.\n- **Test 2 (regression: accepts normal)**: server sends a valid 120-byte `initialize` response. Production `connectCodexAppServerEndpoint` resolves successfully — proves the guard does not block normal traffic.\n\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json extensions/codex-supervisor/src/json-rpc-client.ts extensions/codex-supervisor/src/json-rpc-client.maxpayload.test.ts` → EXIT=0\n- `git diff --check openclaw/main...HEAD` → clean\n\n## Revert-line gate (proves the regression catch is wired to the production line)\n\nTemporarily reverting the `maxPayload` options via `git stash push extensions/codex-supervisor/src/json-rpc-client.ts`:\n\n```\n FAIL  |extensions| extensions/codex-supervisor/src/json-rpc-client.maxpayload.test.ts > connectCodexAppServerEndpoint websocket maxPayload guard > rejects an inbound frame that exceeds the 16 MiB cap\n   expect((captured as Error).message.toLowerCase()).toMatch(\n                                                         ^\n     /max.*payload|payload.*size|too large|exceeds/i,\n   )\n\n Test Files  1 failed (1)\n      Tests  1 failed | 1 passed (2)\n```\n\nWithout the `maxPayload` option, the `ws` library accepts the 32 MiB frame (under its 100 MiB default), the client's pending `initialize` request hangs until the 60-second timeout, and the test fails because no maxPayload-flavored error is ever produced. This proves the regression gate is wired to the production constructor — not a coincidence of mock shape. Stash restored before commit.\n\n## Diff scope\n\n```\n extensions/codex-supervisor/src/json-rpc-client.ts              |  9 ++++++++-\n extensions/codex-supervisor/src/json-rpc-client.maxpayload.test.ts | 122 +++++++++++++++++++++ (new)\n 2 files changed, 130 insertions(+), 1 deletion(-)\n```\n\n- Source: 4-line constant + 4-line comment + 2 maxPayload options = 10 net insertions in 1 file\n- Tests: 122 net insertions in 1 new test file (real loopback `WebSocketServer` + 2 tests, 333ms + 7ms runtime)\n- Total: 130 insertions / 1 deletion across 2 files\n- No committed repro script (per SKILL.md rule); the proof output above was generated inline and is not part of the diff\n\n## Security & Privacy\n\nInbound frame size is bounded at the protocol layer before any payload validation runs. A hostile app-server sending an oversized frame is rejected at the `ws` library layer with an immediate socket close; the supervisor worker never allocates memory proportional to the hostile payload. Existing message-level validation (`JSON.parse` → `handleMessage`) is unchanged.\n\n## Compatibility\n\n- `ws` is already a dependency of `@openclaw/codex-supervisor`; no new dependency added\n- The `maxPayload` option is supported by the `ws` library since v0.5.0; current version (per `package.json`) is well past that\n- The 16 MiB cap is generous enough for typical JSON-RPC tool responses and file reads; legitimate app-server clients should not be affected\n- No existing tests change behavior; the new `*.maxpayload.test.ts` only covers the new option\n\n## What was not tested\n\nLive Codex app-server connection with a real 32 MiB hostile frame from a hostile upstream. The fix uses the `ws` library's well-tested `maxPayload` enforcement; the new test exercises the same code path through a real loopback WebSocketServer. Integration coverage at this layer (vs. our test) would be the actual hostile-app-server scenario, which is out of scope for an OpenClaw PR.\n\n## Related\n\n- `extensions/codex/src/app-server/sandbox-exec-server.ts:202` — same `ws` library, same `maxPayload` option, different surface (server-side vs. our client-side)\n- `extensions/voice-call/src/media-stream.ts:177` — same pattern, different cap (64 KiB) for tighter voice frame bounds\n- `extensions/voice-call/src/webhook/realtime-handler.ts:380` — same pattern, 256 KiB cap for voice-call webhook frames\n- `extensions/voice-call/src/media-stream.test.ts:985` — sibling test \"rejects oversized pre-start frames at the websocket maxPayload guard before validation runs\" that inspired this test pattern (server-side; ours is client-side)\n\n## Diff stat\n- Source: 9 net insertions in `json-rpc-client.ts` (1 import section + 1 constant + 1 comment + 2 maxPayload options − 1 net from reformatting the unix/non-unix branches)\n- Tests: 122 net insertions in `json-rpc-client.maxpayload.test.ts` (new file, 1 describe block, 2 it blocks)\n- Total: 130 insertions / 1 deletion across 2 files\n- 2 new tests added (1 hostile-frame reject + 1 normal-frame regression)",
-        "branch": "fix/codex-supervisor-ws-maxpayload",
-        "head_sha": "a3951ff87f4475e7aef0c2f65c01dfae2378852b",
-        "author": "wangmiao0668000666",
-        "labels": [
-          "agents",
-          "size: M",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof",
-          "extensions: codex-supervisor"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex-supervisor/src/json-rpc-client.maxpayload.test.ts",
-            "additions": 122,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/codex-supervisor/src/json-rpc-client.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/provider-transport-fetch.test.ts",
-            "additions": 84,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/provider-transport-fetch.ts",
-            "additions": 31,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/azure-openai-responses.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 249,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98133",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98133.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 98,
-          "gatingTotal": 93,
-          "counts": {
-            "SUCCESS": 64,
-            "SKIPPED": 32,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-test-types:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3168,
+    "total_ms": 2390,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 471
+        "ms": 620
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2287
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -180,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 383
+        "ms": 1757
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
