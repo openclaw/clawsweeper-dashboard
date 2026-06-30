@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-30T17:19:08.140Z",
+  "generated_at": "2026-06-30T17:19:21.945Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-30T14:19:05.888Z",
+  "since": "2026-06-30T14:19:21.368Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     98206
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4846125051
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -37,137 +39,12 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/98206#issuecomment-4845169483",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 98206,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 97733,
+      "author": "clawSean",
+      "author_id": 260045960,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-30T15:22:40Z",
-      "comment_updated_at": "2026-06-30T17:19:02Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=5444c766fd4502c207c8c24da1bd16a32081b20d)",
-      "review_summary": "The PR adds optional `res.meta` to the Gateway response schema/docs/Swift model, forwards handler metadata on WebSocket `res` frames, and adds protocol/responder tests.\n\nPR surface: Source +1, Tests +94, Docs +9, Other +4. Total +108 across 6 files.\n\nReproducibility: yes. for source-level reproduction: current main and v2026.6.11 accept handler `meta` and handlers populate cached/run metadata, but the WebSocket response frame and schema omit it. I did not establish a live gateway/client repro in this read-only review.",
-      "review_followup": "- [P1] Manual follow-up is needed because the remaining blockers combine contributor real-behavior proof with a generated-client compatibility fix, so ClawSweeper should not queue an autonomous repair while proof is still missing.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "5444c766fd4502c207c8c24da1bd16a32081b20d",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: forward response-frame meta to clients",
-        "body": "Closes #98203\n\n## What Problem This Solves\n\nClients connected to the gateway cannot read per-response metadata. The `respond(ok, payload, error, meta)` callback in `message-handler.ts` accepts a `meta` argument, and the agent method handlers already populate it — `server-methods/agent.ts` returns `{ cached: true, runId }` when it serves a deduplicated request, and passes `{ runId }` / `{ aborted }` elsewhere — but the `res` frame is built as `{ type, id, ok, payload, error }` and `meta` is forwarded only to `logWs`. Combined with `ResponseFrameSchema` being `additionalProperties: false` with no `meta` key, the metadata the gateway computes never reaches the wire. A transport bridge reading `res.meta?.cached` to suppress retries on an already-cached failure always sees `undefined` and re-sends it.\n\n## Why This Change Was Made\n\nThis wires up an already-built-but-dropped channel rather than adding a new feature:\n\n- `packages/gateway-protocol/src/schema/frames.ts` — add `meta: Type.Optional(Type.Record(Type.String(), Type.Unknown()))` to `ResponseFrameSchema` (same idiom already used for `args`/`data` records elsewhere in the package), keeping `additionalProperties: false`.\n- `src/gateway/server/ws-connection/message-handler.ts` — spread the existing `meta` onto the `res` frame: `send({ type: \"res\", id: req.id, ok, payload, error, ...(meta ? { meta } : {}) })`. `send` is typed `(obj: unknown) => void`, so the spread is type-safe, and the frame stays backward compatible when no handler supplies `meta`.\n- `docs/gateway/protocol.md` — document the optional `res.meta` field and its additive-to-v4 compatibility expectation.\n- Regenerated the Swift protocol baseline (`apps/shared/.../GatewayModels.swift`) so `checks-fast-bundled-protocol` passes.\n\nNon-goal: this PR does not change which handlers populate `meta` or introduce new metadata fields — it only makes the existing `meta` observable to clients.\n\n## User Impact\n\nClients can now read response metadata (e.g. `cached`) from `res` frames, so transports/bridges can stop retrying responses the gateway already cached or deduplicated. No behavior change for clients that ignore `meta`; frames without `meta` are unchanged.\n\n## Evidence\n\nBuilt and ran the repo's vitest suite locally (vitest 4.1.8) against the changed modules:\n\n- **Real WS frame emission** — `src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts` (`-t \"meta forwarding\"`): drives the **real** `attachGatewayWsMessageHandler` `respond` → `send` path, with `handleGatewayRequest` stubbed to mirror the actual agent dedupe call `respond(ok, payload, error, { cached: true, runId })`. Asserts the **emitted `res` frame** carries `meta: { cached: true, runId }`, and omits `meta` entirely when the handler supplies none. The mock boundary is only the dispatch — the envelope/forwarding under test (the line this PR changes) and the frame construction are the real code path. **2 passed.**\n\n  ```\n  ✓ forwards handler meta (e.g. cached) onto the emitted res frame\n  ✓ omits meta on the res frame when the handler supplies none\n   Test Files  3 passed (3)\n        Tests  6 passed | 66 skipped (72)\n  ```\n\n- **Schema contract** — `packages/gateway-protocol/src/index.test.ts` (`-t \"validateResponseFrame\"`): a frame without `meta` validates (backward compatible), a frame carrying `{ cached, runId }` validates, an unknown top-level field is still rejected. **passed.**\n\n  ```\n   Test Files  2 passed (2)\n        Tests  6 passed | 90 skipped (96)\n  ```\n\nNote on environment: the npm registry available in my sandbox could not complete a full `pnpm install` (timeouts on a few optional native packages), so I could not run the entire `pnpm build && pnpm check && pnpm test` lane; CI on this PR exercises it. A live channel capture of `res.meta` on the wire would additionally require triggering the gateway's dedupe replay against a configured model, which the above test reproduces deterministically through the real respond/send path instead.\n\n---\n🤖 AI-assisted (authored with Claude).\n",
-        "branch": "fix/forward-res-frame-meta",
-        "head_sha": "5444c766fd4502c207c8c24da1bd16a32081b20d",
-        "author": "petroff",
-        "labels": [
-          "docs",
-          "app: web-ui",
-          "gateway",
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/protocol.md",
-            "additions": 10,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/index.test.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/frames.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts",
-            "additions": 68,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/ws-connection/message-handler.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 112,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98206",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98206.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 98,
-          "gatingTotal": 93,
-          "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:98206:4846021875:2026-06-30T17:04:13Z:re_review",
-      "comment_id": "4846021875",
-      "comment_version_key": "4846021875:2026-06-30T17:04:13Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98206#issuecomment-4846021875",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98206,
-      "author": "petroff",
-      "author_id": 2150355,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-30T17:04:13Z",
-      "comment_updated_at": "2026-06-30T17:04:13Z",
+      "comment_created_at": "2026-06-30T17:16:52Z",
+      "comment_updated_at": "2026-06-30T17:16:52Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -193,110 +70,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: forward response-frame meta to clients",
-        "body": "Closes #98203\n\n## What Problem This Solves\n\nClients connected to the gateway cannot read per-response metadata. The `respond(ok, payload, error, meta)` callback in `message-handler.ts` accepts a `meta` argument, and the agent method handlers already populate it — `server-methods/agent.ts` returns `{ cached: true, runId }` when it serves a deduplicated request, and passes `{ runId }` / `{ aborted }` elsewhere — but the `res` frame is built as `{ type, id, ok, payload, error }` and `meta` is forwarded only to `logWs`. Combined with `ResponseFrameSchema` being `additionalProperties: false` with no `meta` key, the metadata the gateway computes never reaches the wire. A transport bridge reading `res.meta?.cached` to suppress retries on an already-cached failure always sees `undefined` and re-sends it.\n\n## Why This Change Was Made\n\nThis wires up an already-built-but-dropped channel rather than adding a new feature:\n\n- `packages/gateway-protocol/src/schema/frames.ts` — add `meta: Type.Optional(Type.Record(Type.String(), Type.Unknown()))` to `ResponseFrameSchema` (same idiom already used for `args`/`data` records elsewhere in the package), keeping `additionalProperties: false`.\n- `src/gateway/server/ws-connection/message-handler.ts` — spread the existing `meta` onto the `res` frame: `send({ type: \"res\", id: req.id, ok, payload, error, ...(meta ? { meta } : {}) })`. `send` is typed `(obj: unknown) => void`, so the spread is type-safe, and the frame stays backward compatible when no handler supplies `meta`.\n- `docs/gateway/protocol.md` — document the optional `res.meta` field and its additive-to-v4 compatibility expectation.\n- Regenerated the Swift protocol baseline (`apps/shared/.../GatewayModels.swift`) so `checks-fast-bundled-protocol` passes.\n\nNon-goal: this PR does not change which handlers populate `meta` or introduce new metadata fields — it only makes the existing `meta` observable to clients.\n\n## User Impact\n\nClients can now read response metadata (e.g. `cached`) from `res` frames, so transports/bridges can stop retrying responses the gateway already cached or deduplicated. No behavior change for clients that ignore `meta`; frames without `meta` are unchanged.\n\n## Evidence\n\nBuilt and ran the repo's vitest suite locally (vitest 4.1.8) against the changed modules:\n\n- **Real WS frame emission** — `src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts` (`-t \"meta forwarding\"`): drives the **real** `attachGatewayWsMessageHandler` `respond` → `send` path, with `handleGatewayRequest` stubbed to mirror the actual agent dedupe call `respond(ok, payload, error, { cached: true, runId })`. Asserts the **emitted `res` frame** carries `meta: { cached: true, runId }`, and omits `meta` entirely when the handler supplies none. The mock boundary is only the dispatch — the envelope/forwarding under test (the line this PR changes) and the frame construction are the real code path. **2 passed.**\n\n  ```\n  ✓ forwards handler meta (e.g. cached) onto the emitted res frame\n  ✓ omits meta on the res frame when the handler supplies none\n   Test Files  3 passed (3)\n        Tests  6 passed | 66 skipped (72)\n  ```\n\n- **Schema contract** — `packages/gateway-protocol/src/index.test.ts` (`-t \"validateResponseFrame\"`): a frame without `meta` validates (backward compatible), a frame carrying `{ cached, runId }` validates, an unknown top-level field is still rejected. **passed.**\n\n  ```\n   Test Files  2 passed (2)\n        Tests  6 passed | 90 skipped (96)\n  ```\n\nNote on environment: the npm registry available in my sandbox could not complete a full `pnpm install` (timeouts on a few optional native packages), so I could not run the entire `pnpm build && pnpm check && pnpm test` lane; CI on this PR exercises it. A live channel capture of `res.meta` on the wire would additionally require triggering the gateway's dedupe replay against a configured model, which the above test reproduces deterministically through the real respond/send path instead.\n\n---\n🤖 AI-assisted (authored with Claude).\n",
-        "branch": "fix/forward-res-frame-meta",
-        "head_sha": "5444c766fd4502c207c8c24da1bd16a32081b20d",
-        "author": "petroff",
-        "labels": [
-          "docs",
-          "app: web-ui",
-          "gateway",
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/protocol.md",
-            "additions": 10,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/index.test.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/frames.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts",
-            "additions": 68,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/ws-connection/message-handler.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 112,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98206",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98206.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 98,
-          "gatingTotal": 93,
-          "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2454,
+    "total_ms": 1955,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 285
+        "ms": 561
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1949
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 4
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -308,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 190
+        "ms": 1379
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
