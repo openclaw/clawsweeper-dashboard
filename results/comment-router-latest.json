@@ -1,17 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-30T16:21:50.482Z",
+  "generated_at": "2026-06-30T16:22:32.619Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-30T13:21:48.082Z",
+  "since": "2026-06-30T13:22:29.572Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    98211
+    95178
   ],
-  "status_comment_id": 4845667999,
+  "comment_ids": [
+    4845670046
+  ],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -30,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98211:4845338409:2026-06-30T16:21:40Z:clawsweeper_needs_human",
-      "comment_id": "4845338409",
-      "comment_version_key": "4845338409:2026-06-30T16:21:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98211#issuecomment-4845338409",
+      "idempotency_key": "comment-router:openclaw/openclaw:95178:4845670046:2026-06-30T16:19:28Z:re_review",
+      "comment_id": "4845670046",
+      "comment_version_key": "4845670046:2026-06-30T16:19:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95178#issuecomment-4845670046",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 98210,
-      "author": "ooiuuii",
-      "author_id": 169449607,
+      "target_branch": null,
+      "issue_number": 95178,
+      "author": "mmyzwl",
+      "author_id": 30864295,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-30T16:19:10Z",
-      "comment_updated_at": "2026-06-30T16:19:10Z",
-      "status_comment_id": 4845667999,
+      "comment_created_at": "2026-06-30T16:19:28Z",
+      "comment_updated_at": "2026-06-30T16:19:28Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -67,20 +70,95 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(claude-cli): return updatedInput in canUseTool allow response for Claude Code >= 2.1",
+        "body": "## Summary\n\nClaude Code 2.1.x tightened the `PermissionResult` schema. The new union accepts:\n- `{ behavior: \"allow\", updatedInput: <record> }` — allow with both the behavior discriminator and original tool input forwarded\n- `{ behavior: \"deny\", message: <string> }` — deny with reason\n\nOpenClaw's `can_use_tool` control response handler was returning the deprecated shape `{ behavior: \"allow\" }` without `updatedInput`, causing a `ZodError` on every tool call that hits the approval flow.\n\nFixes #95171\n\n## Root Cause\n\nIn `src/agents/cli-runner/claude-live-session.ts:879`, the allow branch returned `{ behavior: \"allow\" }` which is the pre-2.1 shape. Claude Code >= 2.1 validates the response union strictly and rejects the deprecated field-only shape.\n\n## Changes\n\n1. **`src/agents/cli-runner/claude-live-session.ts`**: Changed the allow branch from `{ behavior: \"allow\" }` to `{ behavior: \"allow\", updatedInput: isRecord(request.input) ? request.input : {} }`, preserving the required `behavior` discriminator while adding the original tool input from the control request. Uses the local `isRecord()` type guard for safe access when input may not be a record.\n\n2. **`src/agents/cli-runner.spawn.test.ts`**: Updated 6 test assertions — 3 new `updatedInput` assertions added alongside the 3 existing `behavior` assertions, ensuring the response shape is fully validated. Type annotations updated from `{ behavior: string }` to `{ behavior: \"allow\"; updatedInput: Record<string, unknown> }` for tighter type checking.\n\n## Real behavior proof\n\n**Behavior or issue addressed**: The Claude Code >= 2.1 `PermissionResult` union rejects `{ behavior: \"allow\" }` without `updatedInput`. This PR returns both `behavior: \"allow\"` and `updatedInput` from the request input.\n\n**Real environment tested**: Node v24.13.1, Linux x86_64, openclaw@main (04a414189b41)\n\n**Evidence type**: terminal\n\n**Proof script** — standalone schema validation showing three response shapes tested against the `PermissionResult` union contract:\n\n```js\nconst { isRecord } = await import('./src/utils.ts');\n\nfunction isValidPermissionResult(val) {\n  if (typeof val !== \"object\" || val === null) return \"neither\";\n  if (val.behavior === \"allow\" && \"updatedInput\" in val && typeof val.updatedInput === \"object\") return \"allow\";\n  if (val.behavior === \"deny\" && typeof val.message === \"string\") return \"deny\";\n  return \"neither\";\n}\n\n// Test 1: Three response shapes against the schema\nconst shapes = [\n  { label: \"OLD (pre-fix): { behavior: 'allow' }\",         resp: { behavior: \"allow\" } },\n  { label: \"INCOMPLETE: { updatedInput } (no behavior)\",    resp: { updatedInput: {} } },\n  { label: \"FIX: { behavior: 'allow', updatedInput }\",      resp: { behavior: \"allow\", updatedInput: {} } },\n];\n\nfor (const { label, resp } of shapes) {\n  const verdict = isValidPermissionResult(resp);\n  console.log(`${label} → ${verdict === \"allow\" ? \"Valid allow ✅\" : `Rejected (${verdict}) ❌`}`);\n}\n\n// Test 2: Various input types with the fixed handler logic\nconst testInputs = [\n  { command: \"ls\", args: [\"-la\"] },\n  { code: \"console.log('hello')\", language: \"javascript\" },\n  \"just a string\",\n  null,\n];\n\nfor (const input of testInputs) {\n  const resp = { behavior: \"allow\", updatedInput: isRecord(input) ? input : {} };\n  const valid = isValidPermissionResult(resp) === \"allow\";\n  console.log(`${JSON.stringify(resp)} | isValid: ${valid ? \"✅\" : \"❌\"}`);\n}\n\n// Test 3: Deny path unchanged\nconst denyResponse = { behavior: \"deny\", message: \"OpenClaw policy denied.\" };\nconsole.log(`${JSON.stringify(denyResponse)} | valid: ${isValidPermissionResult(denyResponse) === \"deny\" ? \"✅\" : \"❌\"}`);\n```\n\n**Actual terminal output** (real run on Node v24.13.1, Linux x86_64):\n```\nOLD (pre-fix): { behavior: 'allow' } → Rejected (neither) ❌\nINCOMPLETE: { updatedInput } (no behavior) → Rejected (neither) ❌\nFIX: { behavior: 'allow', updatedInput } → Valid allow ✅\n{\"behavior\":\"allow\",\"updatedInput\":{\"command\":\"ls\",\"args\":[\"-la\"]}} | isValid: ✅\n{\"behavior\":\"allow\",\"updatedInput\":{\"code\":\"console.log('hello')\",\"language\":\"javascript\"}} | isValid: ✅\n{\"behavior\":\"allow\",\"updatedInput\":{}} | isValid: ✅\n{\"behavior\":\"allow\",\"updatedInput\":{}} | isValid: ✅\n{\"behavior\":\"deny\",\"message\":\"OpenClaw policy denied.\"} | valid: ✅\n```\n\n**Unit test verification** (real run):\n```\n> node scripts/test-projects.mjs \"src/agents/cli-runner.spawn.test.ts\"\n\n RUN  v4.1.8\n\n Test Files  1 passed (1)\n      Tests  60 passed (60)\n   Start at  00:16:15\n   Duration  49.09s\n```\n\n**Observed result after the fix**: The `PermissionResult` union accepts `{ behavior: \"allow\", updatedInput: ... }` as a valid allow response. All 60 tests in `cli-runner.spawn.test.ts` pass.\n\n**What was not tested**: A live Claude Code 2.1.x approval-flow tool call with the fixed payload shape. The proof validates the response schema at the runtime contract level using the same `PermissionResult` union constraints that Claude Code enforces.\n\n## Tests and validation\n\n| Test Type | Result | Details |\n|-----------|--------|---------|\n| Unit Tests (cli-runner.spawn) | ✅ | 60/60 passed — covers allow and deny branches |\n| Schema Validation | ✅ | 3 response shapes + 4 input types validated against PermissionResult union |\n\nAll `can_use_tool`-related tests pass (allow and deny coverage across multiple policy configurations).\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes` / `No`)\n\n**No** — the fix restores the previously-working approval flow for Claude Code >= 2.1.x. Users of older versions continue to work (the `updatedInput` field is additive and `behavior: \"allow\"` is preserved).\n\nDid config, environment, or migration behavior change? (`Yes` / `No`)\n\n**No**\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes` / `No`)\n\n**No**\n\nWhat is the highest-risk area?\n- Regression on approval flows: a mistyped `updatedInput` could break allow decisions under specific permission modes.\n\nHow is that risk mitigated?\n- Type-safe with `isRecord()` guard; all 60 `cli-runner.spawn.test.ts` test cases pass, covering allow and deny branches.\n\n## Current review state\n\nWhat is the next action?\n- Ready for ClawSweeper re-review",
+        "branch": "fix/issue-95171-canusetool-returns-deprecated-behavior-allow-shape",
+        "head_sha": "adf8976b151c98eab28dc2a673771d184a95faa0",
+        "author": "mmyzwl",
+        "labels": [
+          "agents",
+          "size: XS",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "src/agents/cli-runner.spawn.test.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/claude-live-session.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 7,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95178",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95178.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 64,
+            "SKIPPED": 30,
+            "IN_PROGRESS": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4032,
+    "total_ms": 3345,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2388
+        "ms": 792
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2240
       },
       {
         "name": "classify_comment_commands",
@@ -96,7 +174,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1632
+        "ms": 298
       },
       {
         "name": "append_ledger",
