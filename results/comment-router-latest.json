@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-30T06:29:50.476Z",
+  "generated_at": "2026-06-30T06:29:59.200Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-30T03:29:48.391Z",
+  "since": "2026-06-30T03:29:57.185Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97731
+    98043
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97731:4830748742:2026-06-30T06:29:44Z:clawsweeper_auto_repair",
-      "comment_id": "4830748742",
-      "comment_version_key": "4830748742:2026-06-30T06:29:44Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97731#issuecomment-4830748742",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98043:4840497361:2026-06-30T06:29:51Z:clawsweeper_auto_repair",
+      "comment_id": "4840497361",
+      "comment_version_key": "4840497361:2026-06-30T06:29:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98043#issuecomment-4840497361",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97731,
+      "issue_number": 98043,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T09:06:43Z",
-      "comment_updated_at": "2026-06-30T06:29:44Z",
+      "comment_created_at": "2026-06-30T06:24:45Z",
+      "comment_updated_at": "2026-06-30T06:29:51Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=52504d736020eb5503aa516a4d21632ce624f9c3)",
-      "review_summary": "The PR adds a zombie reaper that sends SIGCHLD to OpenClaw and PID 1, starts a periodic gateway reaper, schedules post-kill reaping in exec and supervisor paths, and adds unit/proof scripts.\n\nPR surface: Source +216, Tests +70. Total +286 across 6 files.\n\nReproducibility: yes. for the PR defect: upstream libuv source shows SIGCHLD handling waits tracked child PIDs, while this PR relies on it to reap untracked direct zombies. The full production leak still needs branch-tied Docker/Linux before-and-after proof.",
-      "review_followup": "- [P1] Human process-lifecycle review is needed because the blocker is fix direction plus contributor real-world proof, not a narrow mechanical repair.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=a210c384f5cd21949d04a382bb955cd0d70f6f8d)",
+      "review_summary": "The PR adds Swedish Android string resources, iOS InfoPlist localizations, and sv-SE App Store Connect metadata for the mobile apps.\n\nPR surface: Other +50. Total +50 across 15 files.\n\nReproducibility: not applicable. for the localization feature itself; for the review finding, yes. Source inspection shows current main has no WatchExtension target or directory while the PR adds a new file under apps/ios/WatchExtension/Sources.",
+      "review_followup": "- [P1] The author should address the dead watch path and add real behavior proof; automation should not take over because contributor-side proof remains required.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "52504d736020eb5503aa516a4d21632ce624f9c3",
+      "expected_head_sha": "a210c384f5cd21949d04a382bb955cd0d70f6f8d",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,80 +70,139 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(process): add zombie reaper to prevent child process leak",
-        "body": "Closes #97616\n\n## What Problem This Solves\n\nLong-running openclaw gateway processes in Docker accumulate zombie processes over time. One user reported 800+ zombie processes (`openclaw-hooks`, `bash`, `codex`, `chrome-headless`) after running openclaw 2026.6.10 for several months. Each zombie consumes a PID slot and kernel resources. When the process limit is exhausted, the runtime degrades (`spawn EAGAIN`, `uv_thread_create`, gateway instability, connector silence).\n\n**Root cause**: When openclaw kills a process tree via `kill(-pid, SIGKILL)`, grandchildren may exit and become zombies **before** their parent (openclaw's direct child) is killed. When the group leader dies, the zombie grandchildren are reparented to PID 1, but **no new SIGCHLD is sent** because the grandchildren already exited. The zombies remain permanently unreaped.\n\nlibuv already calls `waitpid(-1, WNOHANG)` in a loop inside its SIGCHLD handler, which would reap these zombies — but the SIGCHLD never fires for processes that exited before being reparented.\n\n## Why This Change Was Made\n\nThe fix adds a lightweight zombie reaper (`src/process/zombie-reaper.ts`) with two mechanisms:\n\n1. **Post-kill reaping**: After every process-tree kill (in `process/exec.ts` and `process/supervisor/supervisor.ts`), call `reapZombies()` which sends `SIGCHLD` to the current process. This triggers libuv's `waitpid(-1, WNOHANG)` loop, reaping any zombie children — including grandchildren reparented to us.\n\n2. **Periodic fallback** (every 30s): A background `unref()`d timer in the gateway server triggers the same SIGCHLD sweep, catching zombies that accumulated outside kill-tree paths.\n\nThis approach is pure Node.js (`process.kill(process.pid, 'SIGCHLD')`) — no native addons, no external dependencies, no Python helpers. It leverages libuv's existing waitpid loop.\n\n**Why not use tini?** The Docker image already uses `tini -s` as PID 1, which should reap orphans. But tini cannot reap grandchildren that exit *before* being reparented — the race is intrinsic to `kill(-pid, SIGKILL)` timing. The fix closes the gap at the source: reaping happens immediately after every process-tree kill.\n\n## User Impact\n\nGateway processes running in Docker (or as PID 1 in any container) no longer accumulate zombie processes over weeks/months. The periodic reaper runs every 30s with no measurable CPU overhead. Windows is a no-op (SIGCHLD doesn't exist).\n\n## Evidence\n\n### Code quality\n- `oxlint --tsconfig config/tsconfig/oxlint.core.json` on all 5 changed files: **0 errors, 0 warnings**\n- `git diff --check`: passed (no whitespace errors)\n\n### Unit tests\n- `src/process/zombie-reaper.test.ts` (6 tests): coverage of `reapZombies()` safety, `startZombieReaper`/`stopZombieReaper` lifecycle, idempotency, and platform no-ops\n\n### Behavior proof\n- `src/process/zombie-reaper.proof.ts`: run on Linux with `node --import tsx`. All 6 invariants verified:\n  ```\n  [zombie-reaper.proof] === Zombie Reaper Behavior Proof ===\n  [zombie-reaper.proof] Step 1: reapZombies() does not throw\n  [zombie-reaper.proof]   PASS: reapZombies() completed without error\n  [zombie-reaper.proof] Step 2: Spawn child processes\n  [zombie-reaper.proof]   PASS: 5 child processes spawned and reaped by Node.js\n  [zombie-reaper.proof] Step 3: reapZombies() is idempotent\n  [zombie-reaper.proof]   PASS: reapZombies() called 3 times consecutively without errors\n  [zombie-reaper.proof] Step 4: startZombieReaper / stopZombieReaper lifecycle\n  [zombie-reaper.proof]   PASS: restart after stop works\n  [zombie-reaper.proof] Step 5: Post-reaping process state\n  [zombie-reaper.proof]   System zombies: 0 (485 total)\n  [zombie-reaper.proof] === All proofs passed ===\n  ```\n\n### Before/after (Docker simulation)\n```\n# Before fix — zombie accumulation scenario (from #97616 reporter):\n  total processes: 336\n  zombies: 225\n  zombie_comm openclaw-hooks: 113\n  zombie_comm bash:          108\n\n# After fix — with zombie reaper active:\n  $ ps aux | grep defunct | wc -l\n  0\n  # Periodic reaper (30s) + post-kill reaping prevent accumulation.\n```\n\n### Not tested\n- Multi-month soak test in a real Docker deployment (requires extended runtime)\n- Interaction with seccomp/SELinux blocking SIGCHLD delivery (silently caught)\n\n## Merge Risk\n\n**Low**. The change:\n- Only sends SIGCHLD to the current process, which libuv already handles safely\n- Is a no-op on Windows\n- Catches all errors silently (seccomp/SELinux restrictions are non-fatal)\n- The periodic timer is `.unref()`'d so it doesn't keep the event loop alive\n- 6 unit tests + behavior proof included\n- No external dependencies or native addons\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/zombie-reaper-97616",
-        "head_sha": "52504d736020eb5503aa516a4d21632ce624f9c3",
-        "author": "krissding",
+        "title": "Add Swedish mobile app localization",
+        "body": "## What Problem This Solves\n\nOpenClaw has mobile app surfaces for iOS and Android, but this repo did not include Swedish localization for the Android node app label, iOS permission prompts/display names, or iOS App Store Connect metadata. Swedish users would therefore see English mobile app copy even when using a Swedish device/store locale.\n\n## Summary\n\n- Add Swedish Android app resources for the mobile node app label.\n- Add Swedish iOS InfoPlist localizations for permission prompts and extension display names.\n- Add Swedish `sv-SE` App Store Connect metadata for the iOS app.\n\n## Evidence\n\n- `xmllint --noout apps/android/app/src/main/res/values/strings.xml apps/android/app/src/main/res/values-sv/strings.xml`\n- `find apps/ios -path '*/sv.lproj/InfoPlist.strings' -print0 | xargs -0 -n1 plutil -lint`\n- Ruby metadata length check for App Store fields: `name.txt` 21/30, `subtitle.txt` 28/30, `promotional_text.txt` 126/170, `keywords.txt` 89/100\n- `git diff --check origin/main..HEAD`\n\nAI-assisted: yes.\n\n## Real behavior proof\n\nBehavior addressed: Swedish users now get Swedish mobile app metadata/resources where the repo exposes localizable Android resources, iOS permission strings, extension display names, and App Store Connect metadata.\n\nReal environment tested: Local macOS checkout of `openclaw/openclaw` after rebasing onto current `origin/main` (`56c2d637d9`). No App Store Connect credentials or Android SDK were configured in this environment.\n\nExact steps or command run after this patch: Ran Android XML lint with `xmllint`, iOS `.strings` lint with `plutil`, App Store field length checks with Ruby, and whitespace validation with `git diff --check origin/main..HEAD`. Also attempted `./gradlew :app:assemblePlayDebug` from `apps/android`.\n\nEvidence after fix: XML and all five iOS `sv.lproj/InfoPlist.strings` files linted successfully. App Store field lengths are within limits: `name.txt` 21/30, `subtitle.txt` 28/30, `promotional_text.txt` 126/170, `keywords.txt` 89/100. `git diff --check origin/main..HEAD` passed.\n\nObserved result after fix: The repo now contains Swedish Android resources, Swedish iOS runtime permission/display-name strings, and complete Swedish `sv-SE` iOS store metadata.\n\nWhat was not tested: Android package build did not complete because the local environment has no Android SDK (`ANDROID_HOME`/`apps/android/local.properties` missing). App Store Connect upload was not run because no `apps/ios/fastlane/.env` or ASC auth environment variables were available.\n",
+        "branch": "l10n/sv-mobile-apps",
+        "head_sha": "a210c384f5cd21949d04a382bb955cd0d70f6f8d",
+        "author": "yeager",
         "labels": [
-          "gateway",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
+          "app: android",
+          "app: ios",
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/exec.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/supervisor/supervisor.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/zombie-reaper.proof.ts",
-            "additions": 101,
+            "path": "apps/android/app/src/main/res/values-sv/strings.xml",
+            "additions": 3,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/process/zombie-reaper.test.ts",
-            "additions": 70,
+            "path": "apps/ios/ActivityWidget/sv.lproj/InfoPlist.strings",
+            "additions": 1,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/process/zombie-reaper.ts",
-            "additions": 98,
+            "path": "apps/ios/ShareExtension/sv.lproj/InfoPlist.strings",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/ios/Sources/sv.lproj/InfoPlist.strings",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/ios/WatchApp/sv.lproj/InfoPlist.strings",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/ios/WatchExtension/Sources/sv.lproj/InfoPlist.strings",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/ios/fastlane/metadata/sv-SE/description.txt",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/ios/fastlane/metadata/sv-SE/keywords.txt",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/ios/fastlane/metadata/sv-SE/marketing_url.txt",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/ios/fastlane/metadata/sv-SE/name.txt",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/ios/fastlane/metadata/sv-SE/privacy_url.txt",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/ios/fastlane/metadata/sv-SE/promotional_text.txt",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/ios/fastlane/metadata/sv-SE/release_notes.txt",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/ios/fastlane/metadata/sv-SE/subtitle.txt",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/ios/fastlane/metadata/sv-SE/support_url.txt",
+            "additions": 1,
             "deletions": 0,
             "changeType": "ADDED"
           }
         ],
-        "changedFiles": 6,
-        "additions": 287,
-        "deletions": 1,
+        "changedFiles": 15,
+        "additions": 50,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97731",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97731.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98043",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98043.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 11,
-          "gatingTotal": 6,
+          "total": 41,
+          "gatingTotal": 36,
           "counts": {
-            "SUCCESS": 8,
-            "SKIPPED": 3
+            "CANCELLED": 1,
+            "SUCCESS": 21,
+            "SKIPPED": 19
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -155,19 +214,19 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2411,
+    "total_ms": 2282,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 489
+        "ms": 322
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1583
+        "ms": 1679
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -179,11 +238,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 316
+        "ms": 253
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
