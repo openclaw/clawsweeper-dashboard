@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-30T02:29:44.408Z",
+  "generated_at": "2026-06-30T02:29:47.438Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-29T23:29:42.963Z",
+  "since": "2026-06-29T23:29:44.843Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    92518
+    97848
   ],
   "comment_ids": [
-    4839331874
+    4839331427
   ],
-  "status_comment_id": 4839332093,
+  "status_comment_id": 4839331651,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92518:4839331874:2026-06-30T02:28:37Z:re_review",
-      "comment_id": "4839331874",
-      "comment_version_key": "4839331874:2026-06-30T02:28:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92518#issuecomment-4839331874",
+      "idempotency_key": "comment-router:openclaw/openclaw:97848:4839331427:2026-06-30T02:28:30Z:re_review",
+      "comment_id": "4839331427",
+      "comment_version_key": "4839331427:2026-06-30T02:28:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97848#issuecomment-4839331427",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 92518,
-      "author": "jailbirt",
-      "author_id": 1300135,
+      "issue_number": 97848,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-30T02:28:37Z",
-      "comment_updated_at": "2026-06-30T02:28:37Z",
-      "status_comment_id": 4839332093,
+      "comment_created_at": "2026-06-30T02:28:30Z",
+      "comment_updated_at": "2026-06-30T02:28:30Z",
+      "status_comment_id": 4839331651,
       "trigger": "mention",
       "command": "re-review — the **real behavior proof** section is now in the pr description (body), not just a comment",
       "intent": "re_review",
@@ -74,118 +74,166 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-06-30T02:29:45.044Z",
+          "dispatched_at": "2026-06-30T02:29:48.522Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 92518
+          "item_number": 97848
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-06-30T02:29:47.094Z",
-          "response_comment_id": "4826722265",
+          "commented_at": "2026-06-30T02:29:49.805Z",
+          "response_comment_id": "4839331651",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "googlechat: deliver media as a text link when attachment upload is unauthorized (app auth)",
-        "body": "## Summary\n\nWhen the Google Chat channel is configured with **app authentication** (service account, `chat.bot` scope — the default for most Chat apps), any agent reply that includes media (`MEDIA:<url>`, a markdown image, or the message tool's media param) fails to deliver. The plugin downloads the media and calls the Chat **media upload** API, which returns:\n\n```\n403 PERMISSION_DENIED — \"Request had insufficient authentication scopes.\"\n```\n\nThis is **not a misconfiguration**: per Google's docs, [uploading a file attachment](https://developers.google.com/workspace/chat/upload-media-attachments) is **not supported with app authentication** — it requires *user* auth (domain-wide delegation impersonating a user). App-auth Chat apps simply cannot upload attachments.\n\nToday that 403 fails the whole outbound message. This PR makes both media send paths **fall back to delivering the media URL as a text link** when (a) the upload is rejected for auth/scope reasons and (b) the source is a remote `http(s)` URL — so the user still receives the artifact instead of nothing. Upload behavior is unchanged where it works (user auth / DWD).\n\n## Impact (before this change)\n\n- Any agent/skill that returns media under app auth (e.g. a browser-automation skill returning a screenshot or a downloaded PDF) fails to deliver.\n- **Sub-agent completion announces** are hit hardest: the announce errors with `Google Chat upload 403`, retries, then `announce give up (retry-limit)` — and the user gets **no response at all**.\n- The artifact is often already a public/temporary URL (e.g. a GCS signed URL) that can simply be shared as a link.\n\n## Repro\n\n1. Google Chat channel with app auth (service account, `chat.bot`).\n2. Have an agent reply with `MEDIA:https://<some-public-url>` to a DM.\n3. Observe `403 insufficient authentication scopes` on the attachment upload and the message failing to deliver.\n\n## Change\n\n- **`api.ts`** — add `isGoogleChatAttachmentUploadUnauthorized(err)`, which recognizes the 403/scope error (`403` / `PERMISSION_DENIED` / `insufficient authentication scopes`). `uploadGoogleChatAttachment` surfaces these via the shared error path as `Google Chat upload 403: <body>`, so the detector matches the real upload failure.\n- **`monitor-reply-delivery.ts`** (`deliverGoogleChatReply`) — the normal channel reply delivery path. Wrap the upload; on an unauthorized error with a remote URL, send the caption + URL as text instead of failing.\n- **`channel.adapters.ts`** (outbound adapter `sendMedia`) — the path used by **sub-agent completion announce**. Same fallback, returning a normal text send receipt.\n- **`channel.runtime.ts`** — export the new helper so both paths can use it.\n\n```ts\ntry {\n  upload = await uploadGoogleChatAttachment({ account, space, ... });\n} catch (err) {\n  // App auth (chat.bot) cannot upload attachments (403). For remote URLs,\n  // deliver as a text link so the message still reaches the user.\n  if (isGoogleChatAttachmentUploadUnauthorized(err) && /^https?:\\/\\//i.test(mediaUrl)) {\n    const linkText = [text, mediaUrl].map((p) => p?.trim()).filter(Boolean).join(\"\\n\");\n    return await sendGoogleChatMessage({ account, space, text: linkText, thread });\n  }\n  throw err;\n}\n```\n\n## Behavior preserved\n\n- **User auth / DWD** deployments still upload native attachments — the fallback only triggers on an auth/scope error.\n- **Local-file** media is unaffected (the fallback requires a remote `http(s)` URL).\n- **Non-auth** upload errors are re-thrown exactly as before.\n\n## Tests\n\n- `channel.test.ts` → *\"falls back to a text link when the attachment upload is unauthorized\"* (adapter / announce path).\n- `monitor.reply-delivery.test.ts` → *\"delivers media as a text link when the attachment upload is unauthorized\"* (channel reply path).\n- Both assert that no attachment is sent and the caption + URL are delivered as text.\n\nValidated against a **production app-auth Chat app**: an agent reply containing media (`MEDIA:<public-url>`) now reaches the user as a clickable link instead of failing with 403 / no delivery.\n\n## Alternatives considered (open to maintainer preference)\n\n- A config flag `channels.googlechat.mediaDelivery: \"upload\" | \"link\"` (explicit, skips the upload roundtrip when link delivery is known).\n- For images specifically, render a `cardsV2` image widget with `imageUrl` (inline preview, no upload) instead of a bare link — could be a follow-up.\n\n\n\n---\n\n## Real behavior proof\n\nLocal runs against this branch (post-push head), Node 24 / pnpm 11.2.2, vitest 4.1.7.\n\n### Validation (re-runnable) — all three app-auth upload paths\n\n```\nnode scripts/run-vitest.mjs extensions/googlechat/src/actions.test.ts \\\n  extensions/googlechat/src/channel.test.ts extensions/googlechat/src/monitor.reply-delivery.test.ts\n#  Test Files 3 passed (3)   Tests 30 passed (30)\n```\nKey passing tests:\n```\n✓ monitor.reply-delivery.test.ts > delivers media as a text link when the attachment upload is unauthorized   (normal reply path)\n✓ channel.test.ts                > falls back to a text link when the attachment upload is unauthorized          (subagent-announce adapter path)\n✓ actions.test.ts                > falls back to a text link when the action media upload is unauthorized         (message-action path — NEW)\n✓ actions.test.ts                > does not fall back for a local-file upload-file when the upload is unauthorized (re-throw guard — NEW)\n```\nType-check: `pnpm tsgo:extensions` + `pnpm tsgo:extensions:test` → exit 0.\n\n### Behavior repro (real predicate + authentic 403)\n\nA repro imports the **real** `isGoogleChatAttachmentUploadUnauthorized` from `api.ts` (not a mock copy) and feeds it the authentic 403 string `uploadGoogleChatAttachment` throws (`Google Chat upload 403: {\"error\":{\"code\":403,\"message\":\"Request had insufficient authentication scopes.\",\"status\":\"PERMISSION_DENIED\"}}`), then drives the real `deliverGoogleChatReply` with only the network seam mocked:\n```\n[with-fix]  outbound text = \"here is the screenshot\\nhttps://storage.example.com/shot.png\"\n[control-A] NON-403 (500) upload error -> NO fallback, error logged, no link send\n[control-B] 403 but NON-https media URL -> NO link fallback\n```\n**Baseline** (parent commit, pre-fix) with the identical 403 input: the media reply is silently DROPPED (error → log only). **AFTER**: exactly one text message with the URL inlined, no attachment, status sink fired, no runtime error.\n\n### Scope — #89430 fully covered\n\nAll three app-auth `uploadGoogleChatAttachment` paths now fall back to a remote-https text link on a 403: `monitor-reply-delivery.ts`, `channel.adapters.ts`, and now `actions.ts` (message-action). The `upload-file` action with a **local** file path intentionally does **not** fall back (the `/^https?:\\/\\//` guard re-throws) — there is no public URL to post and that action's explicit contract is to attach a file. It is fallback-on-403, not \"always link\".\n\nCorroboration: on a live openclaw-server (Google Chat app auth) remote media already delivers as a text link with no 403; this repro additionally proves the **403-triggered** branch and its non-regression controls.\n\n\n## Real behavior proof (app-auth link fallback)\n\nExercised this PR's `sendMedia` fallback against the app-auth failure mode — Google Chat returns `403 insufficient authentication scopes` / `PERMISSION_DENIED` on `attachments:upload` under chat.bot app auth (media upload is not supported for app auth):\n\n```\napp-auth 403 + remote URL  -> upload throws 403 -> fallback -> sendGoogleChatMessage(text=\"<caption>\\n<url>\")\n                             -> artifact delivered as a clickable link (before: 403, whole reply dropped)\napp-auth 403 + local path   -> re-thrown (fallback scoped to remote http(s) URLs only)\nuser-auth / DWD (upload OK) -> normal attachment delivery, unchanged\n```\n\nDeployed-in-production confirmation: the equivalent media-as-link behavior runs on an app-auth Google Chat deployment (gateway 2026.6.8) — both `sendMedia` paths (channel runtime deliver + the sub-agent announce adapter) are patched, so agents emitting `MEDIA:<remote-url>` get the artifact delivered as a clickable link instead of the whole reply failing. Regression tests for the three paths above are in this PR.\n",
-        "branch": "fix/googlechat-media-link-403-fallback",
-        "head_sha": "ea021d45df6d416a2d7e02986f3dc474de7a2f7c",
-        "author": "jailbirt",
+        "title": "fix(openai-responses): bound SSE response reads via buildGuardedModelFetch",
+        "body": "## What Problem This Solves\n\nThe OpenAI Responses provider (`openai-responses.ts`) creates an OpenAI SDK client without a custom `fetch` option. All streaming Responses API calls from this provider bypass the guarded provider transport — SSRF protection, request timeout, retry-hint injection, and response lifecycle management that every other OpenAI SDK path already has.\n\nThis injects `fetch: buildGuardedModelFetch(model)` into the SDK constructor, bringing the Responses provider to guarded-fetch parity with:\n- `openai-transport-stream.ts` (3 branches)\n- `openai-completions.ts` (#97228)\n- `azure-openai-responses.ts`\n\n## Why This Change Was Made\n\n`buildGuardedModelFetch` is the canonical fetch wrapper applied to every OpenAI SDK constructor in the codebase. The OpenAI SDK accepts `fetch?: Fetch | undefined` per its constructor options. The Responses provider was the remaining OpenAI SDK path without this wrapper.\n\nThe change is 2 lines (+1 import, +1 `fetch:` option) — the same scope as #97228 for completions.\n\n## Evidence\n\n### Layer 1: Mock-based constructor wiring\n\n`openai-responses.test.ts` verifies the SDK constructor receives `buildGuardedModelFetch`:\n\n```\n ✓ wires buildGuardedModelFetch into the OpenAI SDK fetch option\n```\n\n**Negative control**: removing `fetch: buildGuardedModelFetch(model)` makes `typeof captured.fetch === \"function\"` fail.\n\n### Layer 2: SSRF-block guard-specific proof\n\n`openai-responses.fetch-proof.test.ts` proves `buildGuardedModelFetch` is actively blocking requests rather than just being present in constructor options:\n\n1. Stubs `globalThis.fetch` as a **call counter** — does NOT mock the `openai` SDK\n2. Configures the model with `baseUrl: \"http://169.254.169.254/v1\"` — a cloud metadata IP that the SSRF guard blocks\n3. Calls `streamOpenAIResponses` through the real SDK + `buildGuardedModelFetch`\n4. The guard intercepts the private IP before `globalThis.fetch` is ever reached\n5. Assertion: `expect(globalFetchCalled).toBe(0)` — guard-specific behavior\n\n**Why this is needed:** The raw `openai` SDK uses `globalThis.fetch` by default (when no custom `fetch` option is supplied). A test that only asserts the SDK reaches `globalThis.fetch` would pass even without `buildGuardedModelFetch`. The SSRF-block assertion closes that gap.\n\n### Test results (real terminal output)\n\n```\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts \\\n  src/llm/providers/openai-responses.test.ts \\\n  src/llm/providers/openai-responses.fetch-proof.test.ts\n\n RUN  v4.1.8\n\n\n Test Files  2 passed (2)\n      Tests  2 passed (2)\n   Start at  01:21:47\n   Duration  4.56s (transform 1.62s, setup 579ms, import 92ms, tests 3.64s, environment 0ms)\n```\n\nAll tests pass consistently.\n\n### Layer 3: Real wire loopback proof (vitest inline test)\n\n`openai-responses.fetch-proof.test.ts` adds a second `describe(...)` block `OpenAI Responses guard real wire loopback proof (http.createServer)` that spins up a real `node:http` server on `127.0.0.1:0`, points the model at it via `attachModelProviderRequestTransport({ allowPrivateNetwork: true })`, and drives the actual `openai` SDK through `streamOpenAIResponses` — no SDK mock, no fetch-intercept. The test prints one `[layer3 loopback proof]` line with quantified byte/event counts so vitest `--reporter=verbose` stdout captures them as evidence.\n\nRun from worktree branch `fix/openai-responses-bounded-read`:\n\n```\n$ node scripts/run-vitest.mjs src/llm/providers/openai-responses.fetch-proof.test.ts --run --reporter=verbose\n\n RUN  v4.1.8 /tmp/wt97848\n\nstdout | src/llm/providers/openai-responses.fetch-proof.test.ts > OpenAI Responses guard real wire loopback proof (http.createServer) > streams OpenAI Responses SSE end-to-end through buildGuardedModelFetch against a real loopback server\n[layer3 loopback proof] server_hits=1 request_url=/v1/responses request_bytes=136 content_type=application/json sse_events=5 text_bytes=43 stop_reason=stop\n\n ✓ |unit| src/llm/providers/openai-responses.fetch-proof.test.ts > OpenAI Responses guard-specific SSRF blocking proof > blocks a private-IP request before globalThis.fetch is called (guard-specific behavior) 9177ms\n ✓ |unit| src/llm/providers/openai-responses.fetch-proof.test.ts > OpenAI Responses guard real wire loopback proof (http.createServer) > streams OpenAI Responses SSE end-to-end through buildGuardedModelFetch against a real loopback server 67ms\n\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n```\n\n**Quantified read of the loopback proof:**\n| metric | value | meaning |\n|---|---|---|\n| `server_hits` | 1 | Local `http.createServer` listener actually received the SDK's POST |\n| `request_url` | `/v1/responses` | `openai` SDK appended `/responses` to baseUrl (correct shape) |\n| `request_bytes` | 136 | Real wire body the SDK serialized (model + input + stream:true + store:false) |\n| `sse_events` | 5 | Events parsed from the local server's OpenAI Responses SSE response |\n| `text_bytes` | 43 | Text content assembled by `streamOpenAIResponses` from `text_delta` events |\n| `stop_reason` | `stop` | Stream ended cleanly — SSRF guard did not block loopback when `allowPrivateNetwork: true` |\n\n\n**Layer 3 reads**:\n- `server_hits=1` confirms the local `http.createServer` listener actually received the SDK's POST. This is real wire traffic, not a `globalThis.fetch` spy.\n- `request_url=/v1/responses` matches the SDK's documented `/responses` URL pattern when `baseUrl` already ends with `/v1`.\n- `sse_events=5` + `text_bytes=43` confirm `streamOpenAIResponses` parsed the local server's OpenAI Responses SSE response into the expected event sequence (`response.created`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.completed`).\n- `stop_reason=stop` proves the SDK reached the network through `buildGuardedModelFetch` and the SSRF guard accepted the loopback target because `allowPrivateNetwork: true` is set on the model. The existing SSRF-block test provides the differential (same setup but `baseUrl: http://169.254.169.254/v1` → `globalFetchCalled === 0`).\n\n### Real behavior proof\n\n- **Behavior addressed**: `createClient` in `src/llm/providers/openai-responses.ts` now passes `fetch: buildGuardedModelFetch(model)` to `new OpenAI({...})`, so OpenAI Responses requests inherit OpenClaw guarded-fetch policy (SSRF block, request timeout, retry-hint injection, response lifecycle management, content-type normalization).\n- **Real environment tested**: Linux x86_64, Node v20.20.0, repo checkout `fix/openai-responses-bounded-read` (latest commit to be added on top of `2e082f5ab0`).\n- **Exact steps or command run after this patch**:\n  - `node scripts/run-vitest.mjs src/llm/providers/openai-responses.fetch-proof.test.ts --run --reporter=verbose`\n  - Captured terminal output shown above (Layer 3).\n- **Evidence after fix**:\n  - Layer 1 (mocked): `openai-responses.test.ts` asserts the constructor wiring (existing tests preserved).\n  - Layer 2 (SSRF-block vitest): `openai-responses.fetch-proof.test.ts` SSRF-block test stubs `globalThis.fetch`, configures `baseUrl: http://169.254.169.254/v1`, asserts `globalFetchCalled === 0` (block before globalThis.fetch is reached).\n  - Layer 3 (real wire loopback): `openai-responses.fetch-proof.test.ts` loopback `describe` block spins up `http.createServer` on `127.0.0.1`, the SDK actually POSTs `/v1/responses`, server logs `request_bytes=136 content_type=application/json`, SDK parses 5 SSE events, `text_bytes=43` extracted, `stop_reason=stop`. The `[layer3 loopback proof]` line is emitted by the test's `console.log`.\n- **Observed result after fix**: 2/2 tests in `openai-responses.fetch-proof.test.ts` pass. Layer 1+2+3 together prove: (a) `buildGuardedModelFetch` is wired into the OpenAI Responses constructor, (b) the guard actively intercepts blocked targets before `globalThis.fetch` is reached, and (c) the guard accepts loopback when `allowPrivateNetwork: true` is configured and the SDK + response lifecycle work end-to-end on real HTTP.\n- **What was not tested**: No live OpenAI Responses API call (no API key); the loopback server returns synthetic SSE. The 16 MiB JSON-synthesis cap and 64 KiB non-OK cap are exercised in `provider-transport-fetch.test.ts`; this PR only wires the guard into the constructor, not the cap behavior.\n\n### Diff scope\n\n```\n3 files changed, ~140 insertions(+)\n  src/llm/providers/openai-responses.ts                  |  2 ++   (1 import + 1 fetch: line)\n  src/llm/providers/openai-responses.test.ts             |  6 + (constructor wiring test)\n  src/llm/providers/openai-responses.fetch-proof.test.ts | 84 ++++++ (1 SSRF-block + 1 inline real-wire loopback test)\n```\n\n## Security & Privacy\n\n- Hardening change: previously-unwrapped OpenAI Responses SDK fetch calls now inherit OpenClaw's SSRF guard, request timeout, retry hints, and response lifecycle management.\n- No new network calls, no new persisted data, no new logging of secrets.\n- The `fetch` option is standard OpenAI SDK API surface; no monkey-patching.\n\n## Compatibility\n\n- Existing OpenAI Responses API requests now use guarded fetch instead of SDK-default fetch. For standard `api.openai.com` endpoints this is transparent.\n- Custom `baseUrl` (enterprise proxy, self-hosted gateway) now inherits the same SSRF policy, timeout, and retry behavior as other OpenAI SDK paths — consistent with sibling `openai-transport-stream.ts`, `openai-completions.ts`, and `azure-openai-responses.ts` which already use `buildGuardedModelFetch`.\n- **Risk acknowledged**: custom endpoints that previously worked with unguarded SDK-default fetch may now fail closed under SSRF policy. This is the same risk accepted for all other OpenAI SDK paths and is the intended hardening behavior.\n- No config/env changes, no migration needed.\n- Blast radius: one runtime file + its tests. No shared mocks, no public API.\n\n## What was not tested\n\n- The 16 MiB JSON-synthesis cap and 64 KiB non-OK cap are exercised in `provider-transport-fetch.test.ts`; this PR only proves the guard is wired into the constructor.\n- No live OpenAI endpoint was hit; the SSRF block happens before any network call.\n\n",
+        "branch": "fix/openai-responses-bounded-read",
+        "head_sha": "b42a59e7ce35847fc4d743bd2d82dffea3a787ac",
+        "author": "wangmiao0668000666",
         "labels": [
-          "channel: googlechat",
           "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "extensions/googlechat/src/actions.test.ts",
-            "additions": 83,
+            "path": "src/llm/providers/openai-responses.fetch-proof.test.ts",
+            "additions": 243,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/googlechat/src/actions.ts",
-            "additions": 29,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/googlechat/src/api.ts",
-            "additions": 13,
+            "path": "src/llm/providers/openai-responses.test.ts",
+            "additions": 75,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "extensions/googlechat/src/channel.adapters.ts",
-            "additions": 42,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/googlechat/src/channel.runtime.ts",
+            "path": "src/llm/providers/openai-responses.ts",
             "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/googlechat/src/channel.test.ts",
-            "additions": 43,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/googlechat/src/monitor-reply-delivery.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/googlechat/src/monitor.reply-delivery.test.ts",
-            "additions": 44,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 8,
-        "additions": 279,
-        "deletions": 16,
+        "changedFiles": 3,
+        "additions": 320,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92518",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92518.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97848",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97848.md",
         "mode": "autonomous",
         "mergeable": "CONFLICTING",
         "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 19,
-          "gatingTotal": 14,
+          "total": 97,
+          "gatingTotal": 92,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 8,
-            "SKIPPED": 9,
+            "SUCCESS": 22,
+            "IN_PROGRESS": 41,
+            "SKIPPED": 33,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE"
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -195,15 +243,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4598,
+    "total_ms": 5726,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 583
+        "ms": 700
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 849
+        "ms": 1881
       },
       {
         "name": "classify_comment_commands",
@@ -219,7 +267,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3142
+        "ms": 3121
       },
       {
         "name": "append_ledger",
