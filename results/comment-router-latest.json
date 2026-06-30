@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-30T13:56:39.949Z",
+  "generated_at": "2026-06-30T13:56:46.976Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-30T10:56:34.823Z",
+  "since": "2026-06-30T10:56:43.987Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    98165
+    98102
   ],
   "comment_ids": [
     4844240272
@@ -33,19 +33,151 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98150:4844240272:2026-06-30T13:55:13Z:re_review",
-      "comment_id": "4844240272",
-      "comment_version_key": "4844240272:2026-06-30T13:55:13Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98150#issuecomment-4844240272",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98102:4841676467:2026-06-30T13:56:39Z:clawsweeper_auto_repair",
+      "comment_id": "4841676467",
+      "comment_version_key": "4841676467:2026-06-30T13:56:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98102#issuecomment-4841676467",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 98165,
+      "issue_number": 98102,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-30T13:55:13Z",
-      "comment_updated_at": "2026-06-30T13:55:13Z",
-      "status_comment_id": 4844240953,
+      "comment_created_at": "2026-06-30T09:04:56Z",
+      "comment_updated_at": "2026-06-30T13:56:39Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=720d1e9c6e18485503bd3066ec554e970204bd0a)",
+      "review_summary": "This PR adds durable retry handling for retryable single-message Telegram media fetch failures during spooled replay, adds regression tests, and refreshes the plugin SDK API baseline hash.\n\nPR surface: Source +38, Tests +201, Generated 0. Total +239 across 6 files.\n\nReproducibility: yes. source-level: current main can catch single-message media fetch failure, send only a best-effort warning, and return without failed-retryable while bot-core completes non-retryable spooled updates. The PR still lacks live Telegram restart-window proof.",
+      "review_followup": "- [P1] Manual review remains because the PR needs contributor/maintainer real-behavior proof and a maintainer decision on the public SDK export.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "720d1e9c6e18485503bd3066ec554e970204bd0a",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(telegram): durably retry inbound media dropped during restart (#98076)",
+        "body": "Fixes #98076\n\n## What Problem This Solves\n\nA single inbound media message (e.g. a **document**) whose download fails is\nhandled best-effort in `processInboundMessage`: it warns \"Failed to download\nmedia. Please try again.\" and lets the update complete. `bot-core` then marks\nthe **spooled** update `completed: true` (acked). During a gateway\nrestart/upgrade window the warning send *also* fails, so the document is\n**silently dropped** — never written to `media/inbound/`, no retry, no notice to\nthe user or the assistant. The issue confirms a re-send after the restart landed\ncorrectly, so the loss is restart-window-specific.\n\n## Why This Change Was Made\n\nInbound media that fails transiently around a restart should be durably re-driven\nafter the gateway comes back, not acked-and-lost. The spooled-replay completion\ncontract already keeps `failed-retryable` updates; the single-message media catch\njust never recorded that outcome, so the spool acked the update and dropped it.\n\nThe retry decision must be precise. `fetch_failed` is the catch-all media error\ncode and covers both transient failures (network, shutdown/abort) **and**\npermanent ones (SSRF/guard denials, local Bot API path/read errors). Durably\nretrying a permanent failure would loop it in the spool with the user warning\nsuppressed. The correct transient/abort determination already lives in\n`src/media/fetch.ts` (`isAbortError` / `isTransientNetworkError`), so the policy\nbelongs there rather than re-derived in the channel.\n\n## User Impact\n\n- A document sent right before a gateway restart is now **downloaded after the\n  gateway comes back** instead of silently lost.\n- No new user-facing warning spam: the \"try again\" notice is suppressed only on\n  durable spooled replay (we are retrying); live failures and permanent failures\n  still warn exactly as before.\n- Permanent failures (size limit, blocked/guarded fetch, bad path) are **not**\n  requeued — they stay best-effort (acked + warned) and cannot loop the spool.\n- Media-group albums are unchanged: they keep their intentional\n  skip-the-unfetchable-photo + partial-delivery warning (#55216).\n\n## Evidence\n\nSource-level regression proof, run locally on macOS against this patch (this issue\nis `needs-live-repro`; a live restart-during-upload rig and the agentic native\nTelegram proof job require maintainer/write perms, so the mechanism is proven\nagainst the real handler + `bot-core` completion frame):\n\n- **`src/media/fetch.ts` — `isDurablyRetryableMediaFetchError`** =\n  `shouldRetryMediaFetch` (the canonical in-loop transient policy) **plus**\n  shutdown/abort `fetch_failed`. Truth-table unit tests in\n  `src/media/fetch.test.ts` cover: transient-network + 408/5xx → retry;\n  shutdown/abort `fetch_failed` → retry; **permanent `fetch_failed` (guard/SSRF,\n  local path), other 4xx, and size limits → no retry**.\n- **Behavioral tests in `bot.create-telegram-bot.channel-post-media.test.ts`**\n  drive a real single-message document fetch failure through the actual handler\n  inside `runWithTelegramUpdateProcessingFrame` + `withTelegramSpooledReplayUpdate`:\n  - spooled-replay **shutdown abort** → `{ kind: \"failed-retryable\" }` (kept) and\n    the retry notice is **not** sent;\n  - spooled-replay **permanent `fetch_failed` (guard/SSRF)** → acked (no\n    failed-retryable result) and the user **is** warned;\n  - spooled-replay **size-limit** → acked + warned.\n- **Full telegram + media suites green** (`fetch`, `bot-core`,\n  `bot-update-tracker`, `polling-session`, `bot-message`, media-group\n  skip-warning, classifier + behavioral): 264 tests pass.\n- `pnpm tsgo:core` + `tsgo:core:test` + `tsgo:extensions` +\n  `tsgo:extensions:test`, `pnpm plugin-sdk:api:check`, `oxfmt --check`,\n  `node scripts/run-oxlint.mjs`, and staged `gitleaks protect --staged --redact`\n  all clean.\n\n## Not Covered\n\nA live Telegram account with a gateway restart triggered mid-upload is not\nreproduced here; the durable-keep / ack / warning-suppression behavior is asserted\nat the source level. A maintainer can capture visible proof via Mantis if desired.\n",
+        "branch": "wolf/telegram-media-fetch-retryable-on-restart",
+        "head_sha": "720d1e9c6e18485503bd3066ec554e970204bd0a",
+        "author": "luoyanglang",
+        "labels": [
+          "docs",
+          "channel: telegram",
+          "size: M",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-handlers.media.test.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-handlers.runtime.ts",
+            "additions": 27,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot.create-telegram-bot.channel-post-media.test.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media/fetch.test.ts",
+            "additions": 62,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/media/fetch.ts",
+            "additions": 23,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 253,
+        "deletions": 14,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98102",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98102.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 100,
+          "gatingTotal": 95,
+          "counts": {
+            "SUCCESS": 66,
+            "SKIPPED": 32,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:98102:4844119650:2026-06-30T13:43:15Z:re_review",
+      "comment_id": "4844119650",
+      "comment_version_key": "4844119650:2026-06-30T13:43:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98102#issuecomment-4844119650",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98102,
+      "author": "luoyanglang",
+      "author_id": 238804951,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-30T13:43:15Z",
+      "comment_updated_at": "2026-06-30T13:43:15Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,155 +200,119 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-30T13:56:40.944Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 98150
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-30T13:56:43.517Z",
-          "response_comment_id": "4844222524",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(telegram): consume trailing notify=false marker and send silent",
-        "body": "## What Problem This Solves\n\nWhen agents append a trailing standalone `notify=false` to request silent delivery, the marker leaks into the visible Telegram message body. Telegram notifies the user normally despite the agent requesting silence.\n\n## Root Cause\n\nThe marker was not consumed before text entered Telegram delivery paths. Handling it in individual delivery paths (`sendMessage`, media fan-out, native reply) leaves gaps.\n\n## Fix\n\nConsume the marker once in `sendTelegramPayloadMessages` — the **shared upstream entry point** for ALL Telegram outbound delivery. One fix covers every path.\n\n- **1 file, 18 lines** (outbound-adapter.ts)\n- Strips trailing standalone `notify=false` from visible text\n- Sets `silent: true`, which maps to `disable_notification: true` in Telegram API\n- Inline mentions like \"use notify=false\" are preserved unchanged\n\nCloses #80569\n\n## Change Type\n\n- [x] Bug fix\n\n## Scope\n\n- [x] Telegram channel (outbound adapter)\n\n## Evidence\n\n### Full pipeline proof: marker → silent → API params\n\n```\n═════════════════════════════════════════════════════════════════\n  #98150 Full Pipeline Proof — notify=false → silent delivery\n═════════════════════════════════════════════════════════════════\n\n── Phase 1: Marker parsing ──\n  ✅ trailing standalone\n  ✅ marker only\n  ✅ whitespace tolerant\n  ✅ after blank line\n  ✅ inline (not consumed)\n  ✅ middle (not consumed)\n\n── Phase 2: silent flag propagation (all paths) ──\n  ✅ text-only path: silent=true, text=\"hello\"\n  ✅ media caption path: silent=true, text=\"media caption\"\n  ✅ native reply path: silent=true, text=\"reply text\"\n  ✅ no marker → no silent: silent=undefined, text=\"normal message\"\n  ✅ empty text: silent=undefined, text=\"\"\n\n── Phase 3: Telegram API parameter mapping ──\n  silent=true  → {\"disable_notification\":true} ✅\n  silent=false → {} ✅ (no param)\n  silent=undef → {} ✅ (no param)\n\n✅ ALL CHECKS PASSED\n```\n\n### Test suite — zero regression\n\n```\nnpx vitest run extensions/telegram/src/outbound-adapter.test.ts\n  Test Files  1 passed (1)     Tests  27 passed (27)\n\nnpx vitest run extensions/telegram/src/send.test.ts\n  Test Files  1 passed (1)     Tests  139 passed (139)\n```\n\n### Formatting\n\n```\npnpm exec oxfmt --check extensions/telegram/src/outbound-adapter.ts\n  All matched files use the correct format.\n```\n\n## Security Impact\n\n- New permissions? No\n- Secrets handling changed? No\n- New network calls? No",
-        "branch": "fix/80569-telegram-silent-notify",
-        "head_sha": "01f0f7a007c31f5edc3e975cae208c908650f4cb",
-        "author": "zoowh",
+        "title": "fix(telegram): durably retry inbound media dropped during restart (#98076)",
+        "body": "Fixes #98076\n\n## What Problem This Solves\n\nA single inbound media message (e.g. a **document**) whose download fails is\nhandled best-effort in `processInboundMessage`: it warns \"Failed to download\nmedia. Please try again.\" and lets the update complete. `bot-core` then marks\nthe **spooled** update `completed: true` (acked). During a gateway\nrestart/upgrade window the warning send *also* fails, so the document is\n**silently dropped** — never written to `media/inbound/`, no retry, no notice to\nthe user or the assistant. The issue confirms a re-send after the restart landed\ncorrectly, so the loss is restart-window-specific.\n\n## Why This Change Was Made\n\nInbound media that fails transiently around a restart should be durably re-driven\nafter the gateway comes back, not acked-and-lost. The spooled-replay completion\ncontract already keeps `failed-retryable` updates; the single-message media catch\njust never recorded that outcome, so the spool acked the update and dropped it.\n\nThe retry decision must be precise. `fetch_failed` is the catch-all media error\ncode and covers both transient failures (network, shutdown/abort) **and**\npermanent ones (SSRF/guard denials, local Bot API path/read errors). Durably\nretrying a permanent failure would loop it in the spool with the user warning\nsuppressed. The correct transient/abort determination already lives in\n`src/media/fetch.ts` (`isAbortError` / `isTransientNetworkError`), so the policy\nbelongs there rather than re-derived in the channel.\n\n## User Impact\n\n- A document sent right before a gateway restart is now **downloaded after the\n  gateway comes back** instead of silently lost.\n- No new user-facing warning spam: the \"try again\" notice is suppressed only on\n  durable spooled replay (we are retrying); live failures and permanent failures\n  still warn exactly as before.\n- Permanent failures (size limit, blocked/guarded fetch, bad path) are **not**\n  requeued — they stay best-effort (acked + warned) and cannot loop the spool.\n- Media-group albums are unchanged: they keep their intentional\n  skip-the-unfetchable-photo + partial-delivery warning (#55216).\n\n## Evidence\n\nSource-level regression proof, run locally on macOS against this patch (this issue\nis `needs-live-repro`; a live restart-during-upload rig and the agentic native\nTelegram proof job require maintainer/write perms, so the mechanism is proven\nagainst the real handler + `bot-core` completion frame):\n\n- **`src/media/fetch.ts` — `isDurablyRetryableMediaFetchError`** =\n  `shouldRetryMediaFetch` (the canonical in-loop transient policy) **plus**\n  shutdown/abort `fetch_failed`. Truth-table unit tests in\n  `src/media/fetch.test.ts` cover: transient-network + 408/5xx → retry;\n  shutdown/abort `fetch_failed` → retry; **permanent `fetch_failed` (guard/SSRF,\n  local path), other 4xx, and size limits → no retry**.\n- **Behavioral tests in `bot.create-telegram-bot.channel-post-media.test.ts`**\n  drive a real single-message document fetch failure through the actual handler\n  inside `runWithTelegramUpdateProcessingFrame` + `withTelegramSpooledReplayUpdate`:\n  - spooled-replay **shutdown abort** → `{ kind: \"failed-retryable\" }` (kept) and\n    the retry notice is **not** sent;\n  - spooled-replay **permanent `fetch_failed` (guard/SSRF)** → acked (no\n    failed-retryable result) and the user **is** warned;\n  - spooled-replay **size-limit** → acked + warned.\n- **Full telegram + media suites green** (`fetch`, `bot-core`,\n  `bot-update-tracker`, `polling-session`, `bot-message`, media-group\n  skip-warning, classifier + behavioral): 264 tests pass.\n- `pnpm tsgo:core` + `tsgo:core:test` + `tsgo:extensions` +\n  `tsgo:extensions:test`, `pnpm plugin-sdk:api:check`, `oxfmt --check`,\n  `node scripts/run-oxlint.mjs`, and staged `gitleaks protect --staged --redact`\n  all clean.\n\n## Not Covered\n\nA live Telegram account with a gateway restart triggered mid-upload is not\nreproduced here; the durable-keep / ack / warning-suppression behavior is asserted\nat the source level. A maintainer can capture visible proof via Mantis if desired.\n",
+        "branch": "wolf/telegram-media-fetch-retryable-on-restart",
+        "head_sha": "720d1e9c6e18485503bd3066ec554e970204bd0a",
+        "author": "luoyanglang",
         "labels": [
+          "docs",
           "channel: telegram",
           "size: M",
           "mantis: telegram-visible-proof",
-          "P2",
+          "P1",
           "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/telegram/src/outbound-adapter.ts",
-            "additions": 18,
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-handlers.media.test.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-handlers.runtime.ts",
+            "additions": 27,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot.create-telegram-bot.channel-post-media.test.ts",
+            "additions": 125,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "proof-97769.ts",
-            "additions": 123,
+            "path": "src/media/fetch.test.ts",
+            "additions": 62,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "proof-final.mjs",
-            "additions": 94,
+            "path": "src/media/fetch.ts",
+            "additions": 23,
             "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "proof-real-behavior.mjs",
-            "additions": 88,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "proof-workspace/John Smith.txt",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 324,
-        "deletions": 0,
+        "changedFiles": 6,
+        "additions": 253,
+        "deletions": 14,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98150",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98150.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98102",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98102.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 91,
-          "gatingTotal": 86,
+          "total": 100,
+          "gatingTotal": 95,
           "counts": {
-            "SUCCESS": 45,
-            "SKIPPED": 31,
-            "FAILURE": 9,
-            "IN_PROGRESS": 6
+            "SUCCESS": 66,
+            "SKIPPED": 32,
+            "FAILURE": 1,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "build-artifacts:FAILURE",
-            "QA Smoke CI:FAILURE",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE",
-            "CodeQL:FAILURE"
+            "checks-node-compact-small-whole-2:FAILURE"
           ],
-          "pending": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
+          "pending": [],
           "terminalBlockers": [
-            "build-artifacts:FAILURE",
-            "QA Smoke CI:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE",
-            "CodeQL:FAILURE"
+            "checks-node-compact-small-whole-2:FAILURE"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 9292,
+    "total_ms": 3319,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 3098
+        "ms": 636
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2014
+        "ms": 2337
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 4
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -228,11 +324,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 4155
+        "ms": 320
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
