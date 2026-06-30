@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-30T09:04:23.852Z",
+  "generated_at": "2026-06-30T09:04:26.969Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-30T06:04:21.995Z",
+  "since": "2026-06-30T06:04:26.628Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    98097
+    98100
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,124 +29,18 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98097:4841555857:2026-06-30T09:04:17Z:clawsweeper_auto_repair",
-      "comment_id": "4841555857",
-      "comment_version_key": "4841555857:2026-06-30T09:04:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98097#issuecomment-4841555857",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98097,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-30T08:49:18Z",
-      "comment_updated_at": "2026-06-30T09:04:17Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=06abc95b7b6803b38bac5cdc4254f1af91c8ce9d)",
-      "review_summary": "The PR wraps `streamAssistantResponse` in `try/catch`, emits a terminal assistant message from accumulated partial content on mid-stream iterator errors, and adds three agent-loop regression tests.\n\nPR surface: Source +29, Tests +204. Total +233 across 2 files.\n\nReproducibility: yes. at source level, but not live-reproduced in this read-only review. Current main emits transient partial updates and creates an empty failure message when stream processing rejects before terminal `message_end`.",
-      "review_followup": "- [P1] The PR needs human/contributor handling because real behavior proof is missing, although the code defect itself is mechanically repairable.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "06abc95b7b6803b38bac5cdc4254f1af91c8ce9d",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agent-core): preserve partial streaming content on stream iterator error",
-        "body": "## What Problem This Solves\r\n\r\nWhen an LLM streaming response is interrupted mid-stream by an idle timeout\r\nor transport abort, the text content that was already streamed and visible\r\nin the UI is permanently lost. After a page refresh, the conversation shows\r\nno visible assistant content — only the timeout error text.\r\n\r\n### Root Cause\r\n\r\nIn `streamAssistantResponse` (`packages/agent-core/src/agent-loop.ts`),\r\nstreaming text chunks arrive as events and are accumulated in the\r\n`partialMessage` variable, then delivered to the UI via `message_update`.\r\nHowever, `message_update` events are **never persisted** to the session\r\nfile — only `message_end` triggers persistence (`agent-session.ts:637`,\r\n`sessionManager.appendMessage`).\r\n\r\nWhen the stream stalls and the idle timeout watchdog fires\r\n(`streamWithIdleTimeout`), the `Promise.race` between\r\n`streamIterator.next()` and the timeout promise rejects, interrupting the\r\n`for await` loop **before** `message_end` is emitted for `partialMessage`.\r\nThe variable goes out of scope and all accumulated text is discarded.\r\n\r\nThe error propagates up: `streamAssistantResponse` → `runLoop` →\r\n`runAgentLoop` → `runWithLifecycle` → `handleRunFailure` (agent.ts:535).\r\n\r\n`handleRunFailure` synthesizes a **new failure message with empty content**\r\n(`[{ type: \"text\", text: \"\" }]`, `stopReason: \"aborted\"`). This empty\r\nmessage is what gets persisted to the session file, replacing the real\r\npartial content that was already shown to the user.\r\n\r\n### Fix\r\n\r\nWrap the `for await` loop and post-loop fallback in `try/catch` inside\r\n`streamAssistantResponse`. When the stream iterator throws and\r\n`partialMessage` has been populated (a `start` event was received with\r\nat least one content block), the catch block:\r\n\r\n1. Emits `message_end` with `partialMessage` (preserving the real\r\n   streamed content), `stopReason: \"error\"`, and the original error\r\n   in `errorMessage`.\r\n2. Returns the terminal message **instead of rethrowing**, so `runLoop`\r\n   processes it through its normal `stopReason === \"error\"` /\r\n   `stopReason === \"aborted\"` turn-end path. This avoids\r\n   `handleRunFailure` emitting a duplicate empty-content message.\r\n\r\nWhen `partialMessage` is not populated (error before any content), the\r\nerror is still rethrown so `handleRunFailure` can synthesize the\r\nappropriate error payload.\r\n\r\n### Behavior Change\r\n\r\n| Scenario | Before | After |\r\n|---|---|---|\r\n| Idle timeout after partial streaming | Session has empty content + error text | Session has real partial content + error metadata |\r\n| Idle timeout before any streaming | `handleRunFailure` creates error message | Unchanged (error rethrown) |\r\n| Normal completion (`done`/`error` via provider) | Unchanged | Unchanged |\r\n| Upper-layer failover / retry logic | Unchanged | Unchanged |\r\n\r\n## User Impact\r\n\r\n- Users no longer lose partial streaming content on idle timeout.\r\n  Refreshing the page after a timeout shows the text the model produced\r\n  before stalling.\r\n- The `stopReason` is `\"error\"` so the UI can display an appropriate\r\n  error state alongside the preserved content.\r\n- The original timeout error message is preserved in `errorMessage`.\r\n- No impact on normal completion paths, failover, retry, or model\r\n  fallback logic.\r\n\r\n## Evidence\r\n\r\n| Check | Result |\r\n|---|---|\r\n| TypeScript (`pnpm tsgo`) | ✅ Clean |\r\n| Build (`pnpm build`) | ✅ Clean, no dynamic import issues |\r\n| agent-core tests (56 tests, 11 files) | ✅ All passing |\r\n| agent-loop tests (18 tests, incl. 3 new) | ✅ All passing |\r\n| Formatting (`oxfmt --check`) | ✅ Clean |\r\n\r\n### New Test Cases (3 added)\r\n\r\n1. **`emits message_end with partial content when the stream iterator\r\n   throws mid-stream`** — Verifies that text content from `text_delta`\r\n   events is preserved in the terminal message when the async iterator\r\n   throws after streaming has started.\r\n\r\n2. **`propagates the error when no partial content was received before\r\n   the stream iterator throws`** — Verifies that errors before any\r\n   content still propagate to `handleRunFailure` unchanged.\r\n\r\n3. **`preserves multi-block partial content (text + thinking) on\r\n   mid-stream error`** — Verifies that both thinking and text content\r\n   blocks accumulated across multiple stream events are preserved in\r\n   the terminal message.\r\n",
-        "branch": "fix/preserve-partial-content-on-stream-error",
-        "head_sha": "06abc95b7b6803b38bac5cdc4254f1af91c8ce9d",
-        "author": "lzw-xydt",
-        "labels": [
-          "size: M",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "packages/agent-core/src/agent-loop.test.ts",
-            "additions": 204,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/agent-core/src/agent-loop.ts",
-            "additions": 79,
-            "deletions": 50,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 283,
-        "deletions": 50,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98097",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98097.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 78,
-          "gatingTotal": 73,
-          "counts": {
-            "SUCCESS": 63,
-            "SKIPPED": 12,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-whole-2:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-whole-2:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2100,
+    "total_ms": 600,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 358
+        "ms": 330
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1486
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
@@ -162,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 232
+        "ms": 259
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
