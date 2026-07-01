@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T00:24:00.753Z",
+  "generated_at": "2026-07-01T00:24:31.295Z",
   "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-30T21:23:59.358Z",
+  "since": "2026-06-30T21:24:30.115Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    1797
+    1787
   ],
   "comment_ids": [
-    4849079865
+    4849079895
   ],
-  "status_comment_id": 4849080088,
+  "status_comment_id": 4849080126,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:steipete/CodexBar:1797:4849079865:2026-07-01T00:23:25Z:re_review",
-      "comment_id": "4849079865",
-      "comment_version_key": "4849079865:2026-07-01T00:23:25Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1797#issuecomment-4849079865",
+      "idempotency_key": "comment-router:steipete/CodexBar:1787:4849079895:2026-07-01T00:23:26Z:re_review",
+      "comment_id": "4849079895",
+      "comment_version_key": "4849079895:2026-07-01T00:23:26Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1787#issuecomment-4849079895",
       "repo": "steipete/CodexBar",
       "target_branch": "main",
-      "issue_number": 1797,
+      "issue_number": 1787,
       "author": "steipete",
       "author_id": 58493,
       "author_association": "OWNER",
-      "comment_created_at": "2026-07-01T00:23:25Z",
-      "comment_updated_at": "2026-07-01T00:23:25Z",
-      "status_comment_id": 4849080088,
+      "comment_created_at": "2026-07-01T00:23:26Z",
+      "comment_updated_at": "2026-07-01T00:23:26Z",
+      "status_comment_id": 4849080126,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -74,94 +74,70 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-07-01T00:24:01.580Z",
+          "dispatched_at": "2026-07-01T00:24:31.950Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 1797
+          "item_number": 1787
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-01T00:24:02.560Z",
-          "response_comment_id": "4849080088",
+          "commented_at": "2026-07-01T00:24:32.784Z",
+          "response_comment_id": "4849080126",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "admin",
       "target": {
         "kind": "pull_request",
-        "title": "Fix Codex cost inflation from cached input double-billing",
-        "body": "## Summary\n\nFixes Codex cost inflation (≈2.7x–4.6x depending on workload) for any usage that includes cached input tokens. The regression was introduced by #1768 (\"Fix Codex archived usage undercount\") and is present on `main`; it is not in any shipped release (the last release, `v0.37.2`, predates that merge).\n\nThe archived-usage dedupe part of #1768 (`seenSessionIds` -> `contributingSessionIds`) is correct and is left untouched. This change only fixes the pricing math and the cache invalidation that lets the fix take effect.\n\nFixes #1796.\n\n## Root cause\n\n`Sources/CodexBarCore/Vendored/CostUsage/CostUsagePricing.swift`, private `codexCostUSD(pricing:...)`. Codex reports `input_tokens` as the total prompt size, with `cached_input_tokens` a subset of it. #1768 changed the function to treat them as additive:\n\n```diff\n-        let nonCached = max(0, inputTokens - cached)\n+        let nonCached = max(0, inputTokens)\n-        let usesLongContextRates = pricing.thresholdTokens.map { max(0, inputTokens) > $0 } ?? false\n+        let usesLongContextRates = pricing.thresholdTokens.map { (nonCached + cached) > $0 } ?? false\n```\n\nTwo compounding defects:\n\n1. Cached tokens are double-billed: the full `input_tokens` is charged at the input rate, and the cached subset is charged again at the cache-read rate.\n2. The 272K long-context threshold is evaluated against `input + cached` (double-counting cached) instead of `input`, so workloads tip into the doubled long-context rates far too early.\n\n## Fix\n\n1. Restore the clamp in `codexCostUSD`: bill only the non-cached remainder at the input rate, and key the long-context threshold off `inputTokens` (which already includes cached).\n\n```swift\nlet cached = min(max(0, cachedInputTokens), max(0, inputTokens))\nlet nonCached = max(0, inputTokens - cached)\n...\nlet usesLongContextRates = pricing.thresholdTokens.map { max(0, inputTokens) > $0 } ?? false\n```\n\n2. Cache invalidation. Costs are persisted per file as precomputed nanos (`codexCostNanos`) and only repriced when `codexPricingKey` changes. That key is derived from rate constants only, so a formula-only fix would keep reusing stale inflated costs for already-scanned days. A `codexCostFormulaVersion` token is added to the hashed input of `codexPricingKey` (both the built-in and models.dev branches, prefixes preserved) so existing caches mismatch and reprice via the existing full-rescan path.\n\n## Tests\n\n- Reverted the expectations in `CostUsagePricingTests`, `CostUsageScannerPriorityTests`, and `CostUsageScannerBreakdownTests` that #1768 changed to assert the inflated numbers.\n- Added `does not double bill cached input tokens` and `clamps cache reads to input tokens` in `CostUsagePricingTests`.\n- Added `codex daily report reprices cached costs when cost formula version changes` in `CostUsageScannerBreakdownTests`, which seeds a cache with a stale pricing key and inflated nanos and asserts it reprices to the correct value.\n\nCommands run:\n\n```\nswift test --filter CostUsagePricingTests --filter CostUsageScannerPriorityTests --filter CostUsageScannerBreakdownTests --filter CostUsageFetcherTests --filter PiSessionCostScannerTests --filter CostUsageDailyReportMergeTests\nmake check\n```\n\nAll pass (124 cost tests; 0 lint violations).\n",
-        "branch": "fix/codex-cost-cached-double-billing",
-        "head_sha": "87e4d85f91ead5adcddd37ccc424b966af1c1b29",
-        "author": "dstier-git",
+        "title": "docs: add Sakana AI provider detail page",
+        "body": "## Summary\n\nAdds `docs/sakana.md`, the provider reference page for Sakana AI. This fills a gap left after #1774 merged the Sakana provider implementation in June 2026.\n\nAll other active providers that ship with a settings UI have a detail page in `docs/`; Sakana AI was the only one missing. The page covers setup, the manual Cookie auth flow, data source, parsed quota windows (5-hour and weekly), CLI usage, error table, and related files.\n\n## Details\n\n- Fills the missing `docs/sakana.md` entry to match the pattern for other providers.\n- Content derived from `SakanaProviderDescriptor.swift`, `SakanaUsageFetcher.swift`, `SakanaSettingsReader.swift`, `SakanaProviderImplementation.swift`, and existing test fixtures.\n- No code, config, or runtime behavior changes; docs only.\n- PR #1783 (open) handles the `docs/providers.md` count update, strategy table row, and `## Sakana AI` section; a `Details:` link can be added there once both land.\n\n## Validation\n\n- `node Scripts/check-documentation-links.mjs` — documentation links OK: 134 local links\n- `node Scripts/check-site-locales.mjs` — app/site locales OK\n- `node Scripts/generate-llms.mjs --check` — llms index OK\n- `node Scripts/check-app-locales.mjs --test` — locale tests OK\n- `bash Scripts/lint.sh lint-linux` — 0 violations, 0 serious in 1195 files\n- `git diff --check` — clean",
+        "branch": "kiran/add-sakana-provider-doc-20260630",
+        "head_sha": "f39879f0c4a767d4edba0f970993b0d5ae6d2b42",
+        "author": "kiranmagic7",
         "labels": [
-          "P2",
-          "merge-risk: 🚨 compatibility",
-          "proof: sufficient",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
+          "status: 👀 ready for maintainer look",
+          "P3",
+          "rating: 🐚 platinum hermit"
         ],
         "files": [
           {
-            "path": "Sources/CodexBarCore/Generated/CodexParserHash.generated.swift",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarCore/Vendored/CostUsage/CostUsagePricing.swift",
-            "additions": 8,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarCore/Vendored/CostUsage/CostUsageScanner.swift",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/CostUsagePricingTests.swift",
-            "additions": 98,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/CostUsageScannerBreakdownTests.swift",
-            "additions": 78,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/CostUsageScannerPriorityTests.swift",
-            "additions": 23,
-            "deletions": 20,
-            "changeType": "MODIFIED"
+            "path": "docs/sakana.md",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 6,
-        "additions": 216,
-        "deletions": 50,
+        "changedFiles": 1,
+        "additions": 80,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1797",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1797.md",
+        "automerge_cluster_id": "automerge-steipete-codexbar-1787",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1787.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 1,
-          "gatingTotal": 1,
+          "total": 7,
+          "gatingTotal": 7,
           "counts": {
-            "SUCCESS": 1
+            "SUCCESS": 4,
+            "IN_PROGRESS": 2,
+            "SKIPPED": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
+          ],
+          "pending": [
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -172,15 +148,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3765,
+    "total_ms": 3123,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 494
+        "ms": 457
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 888
+        "ms": 707
       },
       {
         "name": "classify_comment_commands",
@@ -196,7 +172,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2359
+        "ms": 1933
       },
       {
         "name": "append_ledger",
