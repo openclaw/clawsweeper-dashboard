@@ -2,12 +2,12 @@
 repo: "openclaw/crabbox"
 cluster_id: "issue-openclaw-crabbox-756"
 mode: "autonomous"
-run_id: "28549257399"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28549257399"
+run_id: "28552758020"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28552758020"
 head_sha: "0c85aae0ecbcccf48586be0926893302c559df5e"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-01T21:57:03.953Z"
+published_at: "2026-07-01T22:50:53.623Z"
 canonical: "https://github.com/openclaw/crabbox/issues/756"
 canonical_issue: "https://github.com/openclaw/crabbox/issues/756"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/crabbox
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28549257399](https://github.com/openclaw/clawsweeper/actions/runs/28549257399)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28552758020](https://github.com/openclaw/clawsweeper/actions/runs/28552758020)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/crabbox/issues/756
 
 ## Summary
 
-Issue #756 is still viable on current main. The hydrated issue is open, no active implementation PR is present in the artifact, and the first-page docs can be improved with a narrow docs-only PR that explains Crabbox's audience, solved problems, use cases, and non-goals while preserving generic product positioning.
+Issue #756 remains a viable non-security docs implementation request on current main. The hydrated issue is open, no active implementation PR is present in the artifact, and the first-page docs still need a narrow clarification of Crabbox's audience, solved problem, appropriate use cases, and non-goals while preserving generic remote testing/execution positioning.
 
 ## Impact
 
@@ -66,8 +66,8 @@ Issue #756 is still viable on current main. The hydrated issue is open, no activ
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #756 | keep_canonical | planned | canonical | #756 is the only hydrated item and remains the canonical docs clarity request. |
-| cluster:issue-openclaw-crabbox-756 | fix_needed | planned |  | A narrow docs-only implementation is appropriate and no product or security decision is blocking it. |
+| #756 | keep_canonical | planned | canonical | #756 is the only hydrated item and is the canonical source issue for this implementation lane. |
+| cluster:issue-openclaw-crabbox-756 | fix_needed | planned |  | A narrow docs-only PR is appropriate; there is no security signal or product ambiguity blocking implementation. |
 | cluster:issue-openclaw-crabbox-756 | build_fix_artifact | planned |  | The artifact gives the executor a narrow PR plan for the allowed fix path. |
 
 ## Needs Human
