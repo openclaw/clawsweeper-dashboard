@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T08:15:41.006Z",
+  "generated_at": "2026-07-01T08:16:45.363Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T05:15:39.244Z",
+  "since": "2026-07-01T05:16:41.269Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    98098
+    98493
   ],
   "comment_ids": [
-    4851994781
+    4852004502
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4852004963,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98098:4851994781:2026-07-01T08:14:26Z:status",
-      "comment_id": "4851994781",
-      "comment_version_key": "4851994781:2026-07-01T08:14:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98098#issuecomment-4851994781",
+      "idempotency_key": "comment-router:openclaw/openclaw:98493:4852004502:2026-07-01T08:15:26Z:re_review",
+      "comment_id": "4852004502",
+      "comment_version_key": "4852004502:2026-07-01T08:15:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98493#issuecomment-4852004502",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98098,
-      "author": "lwy-2",
-      "author_id": 294104458,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-01T08:14:26Z",
-      "comment_updated_at": "2026-07-01T08:14:26Z",
-      "status_comment_id": null,
+      "target_branch": "main",
+      "issue_number": 98493,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T08:15:26Z",
+      "comment_updated_at": "2026-07-01T08:15:26Z",
+      "status_comment_id": 4852004963,
       "trigger": "mention",
-      "command": "status",
-      "intent": "status",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -68,167 +68,120 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "ignored",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-01T08:16:46.029Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 98493
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-01T08:16:47.032Z",
+          "response_comment_id": "4852004963",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(nextcloud-talk,discord): bound response body reads for webhook and error paths",
-        "body": "## What Problem This Solves\n\nFixes unbounded response body reads in three bundled plugin HTTP paths that can let a hostile or oversized endpoint exhaust gateway memory:\n\n1. **Nextcloud Talk bot preflight** — Error body read via unbounded `response.text()` when Nextcloud API returns non-ok status.\n2. **Discord webhook send** — Webhook send response parsed via unbounded `response.json()`.\n3. **OpenRouter/Google OAuth** — Token exchange responses read without size limits.\n\n## Why This Change Was Made\n\nEach path previously read the full HTTP response body without a size limit. A compromised or misconfigured endpoint could return a multi-gigabyte response and exhaust gateway memory. The fix replaces unbounded reads with bounded SDK readers that enforce size limits and signal overflow explicitly.\n\n- Discard webhook + Google OAuth success paths: `readProviderJsonResponse` (bounded + overflow-signaling)\n- OpenRouter OAuth success path: `readProviderJsonResponse` (bounded + overflow-signaling) — **replaces previous `readResponseTextLimited` which silently truncated JSON, producing confusing parse errors**\n- Nextcloud error path: `readResponseTextLimited(8KB)` (bounds memory, truncation acceptable for error diagnostics)\n\n## User Impact\n\n- **Discord webhook**: oversized response → explicit \"response exceeded N bytes\" error (vs silent OOM)\n- **OpenRouter/Google OAuth**: oversized token response → explicit overflow error (vs confusing parse failure or OOM)\n- **Nextcloud bot preflight**: oversized error body → truncated to 8KB diagnostic (vs unbounded read)\n\n## Evidence\n\n### Before/After comparison (real node script)\n\n```\n╔══════════════════════════════════════════════════════════╗\n║   有界响应体读取修复 — Before/After 对比                 ║\n╚══════════════════════════════════════════════════════════╝\n\n💬 场景 1: Discord Webhook — 10MB 响应\n\n  🔴 BEFORE: response.json() 无界\n  ❌ SyntaxError — 超大 JSON 解析失败 (内存压力)\n\n  🟢 AFTER: readProviderJsonResponse (有界 1MB)\n  ✅ Discord webhook send response exceeded 1048576 bytes\n\n🔑 场景 2: OpenRouter OAuth — 截断 JSON\n\n  🔴 BEFORE: readResponseTextLimited 截断 → JSON.parse 失败\n  ❌ SyntaxError: Unterminated string in JSON at position 26\n     用户看到迷惑性 \"unexpected response\"\n\n  🟢 AFTER: readProviderJsonResponse (清晰溢出错误)\n  ✅ OpenRouter OAuth key exchange response exceeded 16384 bytes\n\n☁️  场景 3: Nextcloud Talk — 100MB 错误体\n\n  🔴 BEFORE: response.text() 无界\n  ⚠️ 整个 100MB 读入内存 — 可被用于 DoS\n\n  🟢 AFTER: readResponseTextLimited(8KB)\n  ✅ 仅读 8KB，内存受保护\n```\n\n### OpenRouter OAuth — specific fix\n\nThe previous `readResponseBody` used `readResponseTextLimited` for both success and error paths. On success, a truncated JSON body would fail `JSON.parse` with `SyntaxError`, which was caught and returned as raw text — causing `parseOpenRouterKeyResponse` to fail with \"unexpected response\".\n\nNow uses `readProviderJsonResponse` for the success path, which throws an explicit overflow error when the response exceeds the size limit.\n\n### Tests\n\n```\n$ pnpm test extensions/openrouter/oauth.test.ts\n Test Files  1 passed (1), Tests 8 passed (8)\n\n$ pnpm test extensions/discord --reporter=verbose\n Test Files  162 passed (162), Tests 1816 passed (1816)\n```\n\n### Build\n\n- `pnpm build`: ✓ 0 errors\n\n## Real environment\n\n| Key | Value |\n|-----|-------|\n| OS | Linux 4.19.112 (x86_64, el8) |\n| Node | v22.19.0 |\n| Build | OpenClaw 2026.6.11 |\n\n## Files changed\n\n| File | Change |\n|------|--------|\n| `extensions/discord/src/send.webhook.ts` | Use `readProviderJsonResponse` for webhook success response |\n| `extensions/google/oauth.token.ts` | Use `readProviderJsonResponse` for OAuth token grant response |\n| `extensions/openrouter/oauth.ts` | Use `readProviderJsonResponse` for OAuth success path (was `readResponseTextLimited` → silent truncation); remove unused `RESPONSE_BODY_LIMIT` constant |\n| `extensions/nextcloud-talk/src/bot-preflight.ts` | Use `readResponseTextLimited(8KB)` for error body instead of unbounded `response.text()` |\n\n## Notes\n\n- **AI-assisted**: yes (Claude Code)",
-        "branch": "fix/bound-nextcloud-discord-response-reads",
-        "head_sha": "35025df8edaf2957bb44533cb97ffdfe9e66c389",
-        "author": "lwy-2",
+        "title": "fix(transcripts): close readline interface and destroy read stream on error exit",
+        "body": "## What Problem This Solves\n\n`TranscriptsStore.readUtterancesFromDir` (`src/transcripts/store.ts:199-218`) streams `transcript.jsonl` through a `createReadStream` + `readline.createInterface` pair when `maxUtterances` is set, but it never closes the interface or destroys the stream. If `JSON.parse` throws inside the `for await` loop, the function propagates the error while leaving the underlying file descriptor open. Over time this leaks fds in long-running gateway processes.\n\n## Changes\n\n- `src/transcripts/store.ts`: extract the `createReadStream` result into a named `stream`, wrap the `for await` loop in `try/finally`, and call `lines.close()` and `stream.destroy()` in `finally`. When `stream.destroy()` does not immediately close the fs handle, await the stream's `close` event before returning.\n- `src/transcripts/store.test.ts`: add regression tests for missing-file handling, normal JSONL reads, tail truncation, and fd-leak-free behavior on both the malformed-JSON error path and the happy path.\n\n## Real behavior proof\n\n**BEFORE (current `main`, no fix applied)**  \nDriving the real `TranscriptsStore.readUtterancesFromSessionDir` against a malformed JSONL file leaks the transcript fd:\n\n```text\nthrew as expected: SyntaxError\ntranscript path: /tmp/openclaw-repro-98467-i9zShq/2026-07-01/session-1/transcript.jsonl\nthrew on malformed JSON: true\nopen fds before call: 25\nopen fds after call: 26\nleaked transcript.jsonl fds: 1\n  leaked fd: /tmp/openclaw-repro-98467-i9zShq/2026-07-01/session-1/transcript.jsonl\nFAIL: file descriptor leak detected\n```\n\n**NEGATIVE CONTROL**  \nReverting only the source change in `src/transcripts/store.ts` while keeping the new tests makes the fd-leak regression test fail:\n\n```text\n× src/transcripts/store.test.ts > ... > does not leak file descriptors when JSON.parse throws\n  → expected [ Array(1) ] to have a length of +0 but got 1\n Test Files  1 failed (1)\n      Tests  1 failed | 4 passed (5)\n```\n\n**AFTER (this branch)**  \nThe same local fd-count repro and the new unit tests pass with zero leaked fds:\n\n```text\nthrew as expected: SyntaxError\ntranscript path: /tmp/openclaw-repro-98467-TDJkNx/2026-07-01/session-1/transcript.jsonl\nthrew on malformed JSON: true\nopen fds before call: 25\nopen fds after call: 25\nleaked transcript.jsonl fds: 0\nPASS: no file descriptor leak after malformed JSON read\n```\n\n## Evidence\n\n- **Behavior addressed**: `TranscriptsStore.readUtterancesFromDir` now closes the readline interface and destroys the read stream (awaiting close) when the streaming JSONL parser exits, fixing a file descriptor leak on malformed lines.\n- **Real environment tested**: Linux x86_64, Node v22.22.0, repo checkout `/home/0668000666/0668000666/AI/OpenClaw/new_open_claw`, branch `fix/transcripts-store-fd-leak`, base `openclaw/main @ 0a9708ed0f`.\n- **Exact steps or command run after this patch**:\n  ```bash\n  node scripts/run-vitest.mjs run src/transcripts/store.test.ts --reporter=verbose\n  # → Test Files  1 passed (1)\n  #      Tests  5 passed (5)\n\n  # Local-only fd-count repro (not committed):\n  # node --import tsx /tmp/issue-98467-fd-leak.mts\n  # → leaked transcript.jsonl fds: 0\n  # → PASS: no file descriptor leak after malformed JSON read\n\n  node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json \\\n    src/transcripts/store.ts src/transcripts/store.test.ts\n  # → exit 0\n\n  pnpm tsgo:core\n  # → silent (no type errors)\n  ```\n- **Evidence after fix**: 5/5 new regression tests pass; the local fd-count repro reports `leaked transcript.jsonl fds: 0` after a malformed-line parse error; source change is 1 file, ~10 net LoC.\n- **Observed result after fix**: The streaming read path no longer leaks file descriptors when `JSON.parse` throws or when the loop exits normally.\n- **What was not tested**: Live long-running gateway telemetry under production load; the fix relies on local fd counting and unit tests. Windows/macOS fd behavior was not explicitly measured, but the cleanup calls (`lines.close()`, `stream.destroy()`, awaiting `close`) are platform-agnostic Node.js APIs.\n\n## Tests and validation\n\n- Added `src/transcripts/store.test.ts` with 5 tests covering:\n  - missing `transcript.jsonl` returns `[]`\n  - normal JSONL read returns utterances\n  - `maxUtterances` keeps only the tail\n  - malformed JSON does not leak fds\n  - happy path does not leak fds\n- Revert-line gate verified: reverting the `try/finally` cleanup makes the fd-leak test fail.\n\n## Risk checklist\n\n- **Scope**: 1 source file (`src/transcripts/store.ts`), 1 new test file.\n- **Behavior change**: only the cleanup path; happy-path output unchanged.\n- **API/signature changes**: none.\n- **Type check**: `pnpm tsgo:core` passes. `pnpm tsgo:core:test` fails on pre-existing errors in `src/gateway/server-cron-notifications.test.ts`, `src/gateway/server-cron.test.ts`, and `src/llm/providers/anthropic.test.ts` that are unrelated to this change (verified on `openclaw/main @ 0a9708ed0f`).\n- **No config/env/migration changes**.\n- **No security/auth/secrets/tool-execution changes**.\n\n## Related\n\n- Closes #98467.\n- PR #98140 is a competing fix with the same source shape but no tests and no real-behavior proof.\n",
+        "branch": "fix/transcripts-store-fd-leak",
+        "head_sha": "ae8fe263098730777e3f90f9f3f4ba5399dc990a",
+        "author": "wangmiao0668000666",
         "labels": [
-          "channel: discord",
-          "size: XS",
-          "extensions: google",
-          "extensions: openrouter",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
+          "size: S"
         ],
         "files": [
           {
-            "path": "extensions/discord/src/send.webhook.ts",
-            "additions": 6,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google/oauth.token.ts",
-            "additions": 7,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openrouter/oauth.ts",
-            "additions": 11,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
-            "additions": 320,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
-            "additions": 86,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 12,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.ts",
-            "additions": 22,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/sdk.test.ts",
-            "additions": 57,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
-            "additions": 508,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 119,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-session-takeover.real.test.ts",
-            "additions": 502,
+            "path": "src/transcripts/store.test.ts",
+            "additions": 108,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/llm/providers/openai-completions.test.ts",
-            "additions": 32,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-responses-shared.test.ts",
-            "additions": 43,
-            "deletions": 2,
+            "path": "src/transcripts/store.ts",
+            "additions": 19,
+            "deletions": 8,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 24,
-        "deletions": 12,
+        "changedFiles": 2,
+        "additions": 127,
+        "deletions": 8,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98098",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98098.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98493",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98493.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 11,
-          "gatingTotal": 6,
+          "total": 97,
+          "gatingTotal": 92,
           "counts": {
-            "SUCCESS": 8,
-            "SKIPPED": 3
+            "SUCCESS": 53,
+            "SKIPPED": 32,
+            "IN_PROGRESS": 8,
+            "FAILURE": 3,
+            "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
+          "blockers": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:FAILURE",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-3:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "author association NONE and repository permission read are not allowed"
+      "author_readonly_authorized": true
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1954,
+    "total_ms": 6289,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 462
+        "ms": 2321
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1286
+        "ms": 1760
       },
       {
         "name": "classify_comment_commands",
@@ -244,11 +197,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 191
+        "ms": 2183
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
