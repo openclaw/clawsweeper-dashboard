@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T06:45:15.281Z",
+  "generated_at": "2026-07-01T06:45:12.695Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T03:45:12.899Z",
+  "since": "2026-07-01T03:45:09.054Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    98418
+    84792
   ],
   "comment_ids": [
-    4851071663
+    4851089225
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4851089782,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
   "commands_seen": 2,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98418:4850388340:2026-07-01T06:45:08Z:clawsweeper_needs_human",
-      "comment_id": "4850388340",
-      "comment_version_key": "4850388340:2026-07-01T06:45:08Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98418#issuecomment-4850388340",
+      "idempotency_key": "comment-router:openclaw/openclaw:84792:4851089225:2026-07-01T06:44:11Z:re_review",
+      "comment_id": "4851089225",
+      "comment_version_key": "4851089225:2026-07-01T06:44:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84792#issuecomment-4851089225",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98418,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": "main",
+      "issue_number": 84792,
+      "author": "TurboTheTurtle",
+      "author_id": 35905412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T04:58:24Z",
-      "comment_updated_at": "2026-07-01T06:45:08Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-01T06:44:11Z",
+      "comment_updated_at": "2026-07-01T06:44:11Z",
+      "status_comment_id": 4851089782,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,221 +68,180 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): avoid duplicate launchd restart bootstrap",
-        "body": "## What Problem This Solves\n\n`openclaw gateway restart` can create a second gateway on macOS installs where the gateway is managed by a user LaunchAgent with `RunAtLoad`/`KeepAlive`.\n\nThe failure mode is easiest to hit from non-Aqua contexts, for example SSH or another background shell on a Mac that also has a console/auto-login user session. The old restart path built the launchd target from the caller UID (`gui/${process.getuid()}`), then ran `launchctl kickstart -k`. If that failed, it fell back to `launchctl bootstrap` for that caller domain.\n\nOn multi-GUI-session machines, the running KeepAlive job may actually live in the console user domain, such as `gui/501`. Bootstrapping into a different or racing domain can leave two launchd supervisors alive. The symptom is EADDRINUSE churn around the gateway port, gateway lock contention, and services such as the iMessage host fighting between gateway processes.\n\n## Repro Shape\n\n1. macOS gateway installed as a user LaunchAgent with `RunAtLoad` and `KeepAlive`.\n2. The active gateway is supervised in the console/auto-login GUI domain.\n3. Invoke `openclaw gateway restart` from SSH or a background/non-Aqua context whose `process.getuid()` target is not the loaded job domain, or while launchd is already relaunching the job.\n4. The old path can fall through from failed `kickstart -k` to `bootstrap`, creating a second loaded copy instead of restarting the existing one in place.\n\n## Fix\n\n- Probe launchd with `launchctl print <domain>/<label>` before taking restart action.\n- Prefer the actual loaded domain among explicit env, console user, caller UID, and the existing `gui/501` fallback.\n- Apply the loaded-domain probe to both restart surfaces that can touch launchd: the external helper in `src/infra/restart.ts` and the actual CLI service restart owner path in `src/daemon/launchd.ts`.\n- If the job is already loaded, use `launchctl kickstart -k` and never bootstrap.\n- Bootstrap only after `launchctl print` confirms the job is not loaded.\n- If bootstrap races with another loader and reports already loaded, retry with `kickstart -k` rather than bootstrapping again.\n- Add a post-restart listener-count check on the external helper so duplicate gateway listeners are surfaced as a failed restart instead of triggering another fallback.\n\nThis intentionally does not change the internal self-restart path in `process-respawn.ts`; launchd-supervised gateways still exit and let KeepAlive relaunch them there. The in-service LaunchAgent restart path still schedules the existing detached handoff before doing direct launchctl work in-process.\n\n## Evidence\n\n- External helper regression coverage models a loaded launchd job and asserts `triggerOpenClawRestart` runs `launchctl print gui/501/ai.openclaw.gateway` followed by `launchctl kickstart -k gui/501/ai.openclaw.gateway`, with no `bootstrap` call.\n- CLI owner-path regression coverage now models `openclaw gateway restart` resolving a loaded console LaunchAgent after a caller-domain miss: `launchctl print gui/777/ai.openclaw.gateway`, then `launchctl print gui/501/ai.openclaw.gateway`, then `launchctl enable gui/501/ai.openclaw.gateway`, then `launchctl kickstart -k gui/501/ai.openclaw.gateway`, with no `bootstrap` or `bootout` call.\n- The genuinely-unloaded path remains covered separately, so `bootstrap` is still allowed only after `launchctl print` reports not loaded.\n- The already-loaded bootstrap race is covered: status `37` now retries with `kickstart -k` and does not attempt a second bootstrap.\n- Duplicate post-restart listeners are covered on the external helper: two gateway listener PIDs make the restart result fail with a duplicate-listener detail instead of falling through to another launchd action.\n- No live production `openclaw gateway restart` was run while validating this fix, to avoid triggering the duplicate-process bug on the real gateway.\n\n## Tests\n\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/restart.test.ts`\n- `node scripts/run-vitest.mjs src/daemon/launchd.test.ts`\n- `node scripts/run-vitest.mjs src/daemon/launchd-restart-handoff.test.ts`\n- `node scripts/run-vitest.mjs src/daemon/service.test.ts`\n- `pnpm exec oxfmt --check --threads=1 src/infra/restart.ts src/infra/restart.test.ts src/daemon/launchd.ts src/daemon/launchd.test.ts src/daemon/launchd-restart-handoff.ts src/daemon/launchd-restart-handoff.test.ts src/daemon/service.test.ts`\n- `pnpm exec oxlint src/infra/restart.ts src/infra/restart.test.ts src/daemon/launchd.ts src/daemon/launchd.test.ts src/daemon/launchd-restart-handoff.ts src/daemon/launchd-restart-handoff.test.ts src/daemon/service.test.ts`\n- `git diff --check origin/main...HEAD`\n- `pnpm tsgo:prod`\n",
-        "branch": "codex/gateway-restart-launchd-dedupe",
-        "head_sha": "fd92beecad95f6a3a0a8a935113db38192d35d9f",
-        "author": "turbotheturtle",
-        "labels": [
-          "gateway",
-          "size: L",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/daemon/launchd.test.ts",
-            "additions": 65,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/launchd.ts",
-            "additions": 74,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart.test.ts",
-            "additions": 170,
-            "deletions": 22,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart.ts",
-            "additions": 160,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 469,
-        "deletions": 49,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98418",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98418.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 98,
-          "gatingTotal": 93,
-          "counts": {
-            "SUCCESS": 63,
-            "SKIPPED": 32,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "externalBlockers": []
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-01T06:45:13.726Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 84792
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-01T06:45:15.032Z",
+          "response_comment_id": "4851089782",
+          "response_comment_mode": "updated"
         }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:98418:4850891686:2026-07-01T06:26:22Z:re_review",
-      "comment_id": "4850891686",
-      "comment_version_key": "4850891686:2026-07-01T06:26:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98418#issuecomment-4850891686",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98418,
-      "author": "TurboTheTurtle",
-      "author_id": 35905412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T06:26:22Z",
-      "comment_updated_at": "2026-07-01T06:26:22Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): avoid duplicate launchd restart bootstrap",
-        "body": "## What Problem This Solves\n\n`openclaw gateway restart` can create a second gateway on macOS installs where the gateway is managed by a user LaunchAgent with `RunAtLoad`/`KeepAlive`.\n\nThe failure mode is easiest to hit from non-Aqua contexts, for example SSH or another background shell on a Mac that also has a console/auto-login user session. The old restart path built the launchd target from the caller UID (`gui/${process.getuid()}`), then ran `launchctl kickstart -k`. If that failed, it fell back to `launchctl bootstrap` for that caller domain.\n\nOn multi-GUI-session machines, the running KeepAlive job may actually live in the console user domain, such as `gui/501`. Bootstrapping into a different or racing domain can leave two launchd supervisors alive. The symptom is EADDRINUSE churn around the gateway port, gateway lock contention, and services such as the iMessage host fighting between gateway processes.\n\n## Repro Shape\n\n1. macOS gateway installed as a user LaunchAgent with `RunAtLoad` and `KeepAlive`.\n2. The active gateway is supervised in the console/auto-login GUI domain.\n3. Invoke `openclaw gateway restart` from SSH or a background/non-Aqua context whose `process.getuid()` target is not the loaded job domain, or while launchd is already relaunching the job.\n4. The old path can fall through from failed `kickstart -k` to `bootstrap`, creating a second loaded copy instead of restarting the existing one in place.\n\n## Fix\n\n- Probe launchd with `launchctl print <domain>/<label>` before taking restart action.\n- Prefer the actual loaded domain among explicit env, console user, caller UID, and the existing `gui/501` fallback.\n- Apply the loaded-domain probe to both restart surfaces that can touch launchd: the external helper in `src/infra/restart.ts` and the actual CLI service restart owner path in `src/daemon/launchd.ts`.\n- If the job is already loaded, use `launchctl kickstart -k` and never bootstrap.\n- Bootstrap only after `launchctl print` confirms the job is not loaded.\n- If bootstrap races with another loader and reports already loaded, retry with `kickstart -k` rather than bootstrapping again.\n- Add a post-restart listener-count check on the external helper so duplicate gateway listeners are surfaced as a failed restart instead of triggering another fallback.\n\nThis intentionally does not change the internal self-restart path in `process-respawn.ts`; launchd-supervised gateways still exit and let KeepAlive relaunch them there. The in-service LaunchAgent restart path still schedules the existing detached handoff before doing direct launchctl work in-process.\n\n## Evidence\n\n- External helper regression coverage models a loaded launchd job and asserts `triggerOpenClawRestart` runs `launchctl print gui/501/ai.openclaw.gateway` followed by `launchctl kickstart -k gui/501/ai.openclaw.gateway`, with no `bootstrap` call.\n- CLI owner-path regression coverage now models `openclaw gateway restart` resolving a loaded console LaunchAgent after a caller-domain miss: `launchctl print gui/777/ai.openclaw.gateway`, then `launchctl print gui/501/ai.openclaw.gateway`, then `launchctl enable gui/501/ai.openclaw.gateway`, then `launchctl kickstart -k gui/501/ai.openclaw.gateway`, with no `bootstrap` or `bootout` call.\n- The genuinely-unloaded path remains covered separately, so `bootstrap` is still allowed only after `launchctl print` reports not loaded.\n- The already-loaded bootstrap race is covered: status `37` now retries with `kickstart -k` and does not attempt a second bootstrap.\n- Duplicate post-restart listeners are covered on the external helper: two gateway listener PIDs make the restart result fail with a duplicate-listener detail instead of falling through to another launchd action.\n- No live production `openclaw gateway restart` was run while validating this fix, to avoid triggering the duplicate-process bug on the real gateway.\n\n## Tests\n\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/restart.test.ts`\n- `node scripts/run-vitest.mjs src/daemon/launchd.test.ts`\n- `node scripts/run-vitest.mjs src/daemon/launchd-restart-handoff.test.ts`\n- `node scripts/run-vitest.mjs src/daemon/service.test.ts`\n- `pnpm exec oxfmt --check --threads=1 src/infra/restart.ts src/infra/restart.test.ts src/daemon/launchd.ts src/daemon/launchd.test.ts src/daemon/launchd-restart-handoff.ts src/daemon/launchd-restart-handoff.test.ts src/daemon/service.test.ts`\n- `pnpm exec oxlint src/infra/restart.ts src/infra/restart.test.ts src/daemon/launchd.ts src/daemon/launchd.test.ts src/daemon/launchd-restart-handoff.ts src/daemon/launchd-restart-handoff.test.ts src/daemon/service.test.ts`\n- `git diff --check origin/main...HEAD`\n- `pnpm tsgo:prod`\n",
-        "branch": "codex/gateway-restart-launchd-dedupe",
-        "head_sha": "fd92beecad95f6a3a0a8a935113db38192d35d9f",
+        "title": "Run memory flush before preflight compaction",
+        "body": "Fixes #84695.\n\n## Summary\n\n- Run automatic memory flush before preflight compaction in `runReplyAgent`.\n- Keep visible memory-flush errors on the same pre-run return path before the main reply.\n- Add regression coverage proving memory flush is invoked before preflight compaction.\n\n## What Problem This Solves\n\n`runReplyAgent` must run the memory-flush phase before preflight compaction so durable memory has a chance to run before aggressive transcript reduction. Before this PR, preflight compaction could run first and reduce transcript context before the automatic memory flush path had a chance to preserve it.\n\n## Evidence\n\n- Real environment tested: isolated worktree `/private/tmp/openclaw-pr84792-proof-rebase-20260630`, rebased onto `origin/main` `d68ba5edc59`, PR head `efe360d0fbe`, Node `v24.18.0`.\n- Committed non-mocked direct-run proof: `src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts` now includes `starts memory flush before preflight compaction with real maintenance helpers`.\n- That e2e suite does not mock `runMemoryFlushIfNeeded` or `runPreflightCompactionIfNeeded`. The test runs real `runReplyAgent`, enables the diagnostics timeline, and asserts the actual `reply.memory_flush` span starts before `reply.preflight_compaction`.\n- The suite stubs the embedded provider execution path, so no external provider turn is needed; the proof covers the direct pre-run maintenance ordering that this PR changes.\n\nCommand:\n\n```sh\nnode scripts/run-vitest.mjs src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts\n```\n\nResult:\n\n```text\nTest Files  1 passed (1)\nTests  64 passed (64)\n```\n\nObserved result after fix: the committed e2e proof shows the non-mocked direct `runReplyAgent` maintenance path starts `reply.memory_flush` before `reply.preflight_compaction`.\n\n## Verification\n\n```text\nnode scripts/run-vitest.mjs src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts\nTest Files  1 passed (1)\nTests  64 passed (64)\n\nnode node_modules/.bin/oxfmt --check --threads=1 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts\nAll matched files use the correct format.\n\ngit diff --check\n# clean\n```\n",
+        "branch": "fix/memory-flush-before-compaction-84695",
+        "head_sha": "efe360d0fbe5020d39872b9f3a0581041b5dd441",
         "author": "turbotheturtle",
         "labels": [
-          "gateway",
-          "size: L",
+          "size: S",
+          "proof: supplied",
           "P1",
-          "rating: 🧂 unranked krab",
+          "rating: 🦪 silver shellfish",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
+          "merge-risk: 🚨 session-state",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/daemon/launchd.test.ts",
-            "additions": 65,
-            "deletions": 3,
+            "path": "src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts",
+            "additions": 7,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/daemon/launchd.ts",
-            "additions": 74,
-            "deletions": 10,
+            "path": "src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts",
+            "additions": 103,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/restart.test.ts",
-            "additions": 170,
-            "deletions": 22,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart.ts",
-            "additions": 160,
-            "deletions": 14,
+            "path": "src/auto-reply/reply/agent-runner.ts",
+            "additions": 21,
+            "deletions": 21,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 469,
-        "deletions": 49,
+        "changedFiles": 3,
+        "additions": 131,
+        "deletions": 24,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98418",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98418.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84792",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84792.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 98,
-          "gatingTotal": 93,
+          "total": 91,
+          "gatingTotal": 86,
           "counts": {
-            "SUCCESS": 63,
-            "SKIPPED": 32,
-            "FAILURE": 2,
+            "SUCCESS": 30,
+            "SKIPPED": 24,
+            "IN_PROGRESS": 36,
             "NEUTRAL": 1
           },
           "blockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2728,
+    "total_ms": 6731,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 456
+        "ms": 1916
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1911
+        "ms": 1711
       },
       {
         "name": "classify_comment_commands",
@@ -298,11 +257,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 334
+        "ms": 3077
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 2
       }
     ]
   }
