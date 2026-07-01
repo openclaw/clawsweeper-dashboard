@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T10:55:20.654Z",
+  "generated_at": "2026-07-01T10:55:21.232Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T07:55:17.136Z",
+  "since": "2026-07-01T07:55:20.666Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -39,12 +39,12 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/98508#issuecomment-4853547971",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 98508,
+      "issue_number": 98506,
       "author": "lzyyzznl",
       "author_id": 41978486,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T10:52:57Z",
-      "comment_updated_at": "2026-07-01T10:52:57Z",
+      "comment_created_at": "2026-07-01T10:52:59Z",
+      "comment_updated_at": "2026-07-01T10:52:59Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -70,96 +70,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(update-check): bound npm registry JSON response read to prevent OOM",
-        "body": "## Summary\n\n**Problem**: The `fetchPublicNpmPackageTargetStatus` function reads npm registry metadata via `res.json()` without any size limit on the response body. A compromised or malicious npm registry endpoint could return an arbitrarily large response, causing Node.js to buffer the entire body in memory and leading to OOM in the update-check path.\n\n**Solution**: Replace the unbounded `res.json()` with the existing `readProviderJsonResponse` shared helper, which enforces a 16 MiB cap via `readResponseWithLimit`. The helper uses the response's `ReadableStream` reader to incrementally accumulate chunks and throws a descriptive error if the cap is exceeded.\n\n**What changed**: One call site in `src/infra/update-check.ts:128` — `const body = await res.json()` becomes `const body = await readProviderJsonResponse(res, \"npm package target status\")`. The helper handles JSON parsing internally and returns the parsed object. Error responses (non-200) are still short-circuited before reaching the bounded reader.\n\n**What did NOT change**: Update-check error handling, fallback logic, and all user-facing behavior are identical. The `fetchNpmPackageTargetStatus` return type and all callers are unchanged. No dependency or config changes.\n\n## Real behavior proof\n\n**Behavior addressed**: Bounded JSON body read for npm registry metadata fetch to prevent OOM on oversized response.\n\n**Real environment tested**: Linux 6.8.0-124-generic, Node v25.9.0\n\n**Exact steps or command run after this patch**:\n\nA dedicated proof script starts a local HTTP server serving both normal (~1 MB) and oversized (~20 MB, above the 16 MiB cap) responses, then drives the bounded reader against both endpoints. This demonstrates the fix with real HTTP traffic rather than synthetic test streams.\n\nProof script: [`scripts/proof-real-behavior.mjs`](https://github.com/lzyyzznl/openclaw/blob/fix/update-check-bound-response/scripts/proof-real-behavior.mjs)\n\n**After-fix evidence (real HTTP)**:\n\n```\n═══════════════════════════════════════════════════════════════\n  Real Behavior Proof — PR #98508\n  Bounded npm registry JSON response read\n═══════════════════════════════════════════════════════════════\n\n🧪 Test server: http://127.0.0.1:34819\n🧪 Node version: v25.9.0\n🧪 Platform: linux\n\n─────────────────────────────────────────────────────────────\n  Test 1: Normal response (~1 MB) — bounded reader accepts\n─────────────────────────────────────────────────────────────\n  ✅ Parsed correctly:\n     version: 2026.6.5\n     engines: {\"node\":\">=22\"}\n\n─────────────────────────────────────────────────────────────\n  Test 2: Oversized response (~20 MB > 16 MiB cap) — rejected\n─────────────────────────────────────────────────────────────\n  ✅ Correctly rejected with:\n     Error: npm package target status: JSON response exceeds 16777216 bytes\n     RSS delta: 88 MiB (bounded reader prevented OOM)\n\n─────────────────────────────────────────────────────────────\n  Test 3: Empty JSON object — accepted\n─────────────────────────────────────────────────────────────\n  ✅ Parsed successfully: {} {}\n\n─────────────────────────────────────────────────────────────\n  Test 4: Malformed JSON — rejected with malformed error\n─────────────────────────────────────────────────────────────\n  ✅ Correctly rejected malformed JSON:\n     Error: npm package target status: malformed JSON response\n\n═══════════════════════════════════════════════════════════════\n  Results: 4 passed, 0 failed\n═══════════════════════════════════════════════════════════════\n```\n\n### 16 MiB cap — maintainer note\n\nThis change replaces `res.json()` with the existing `readProviderJsonResponse` shared helper, which enforces a 16 MiB cap via `readResponseWithLimit`. The cap is inherited from the existing `PROVIDER_JSON_RESPONSE_MAX_BYTES` constant (same value used by other provider integrations in the codebase).\n\n**Design rationale**:\n- The npm registry metadata endpoint for a single package version typically returns <1 MB\n- 16 MiB is the existing codebase-wide cap for provider JSON responses — no new constant needed\n- If the npm registry returned a response exceeding 16 MiB, the bounded reader produces an `{ error: \"JSON response exceeds...\" }` result, which the caller already handles via the existing error-path in `fetchNpmPackageTargetStatus`\n\nIf maintainers prefer a different cap value for the npm registry endpoint specifically, I'm happy to adjust. The `readProviderJsonResponse` helper accepts an optional `maxBytes` override.\n\n## Tests and validation\n\n### Unit tests\n\n```\n$ pnpm test -- src/infra/update-check.test.ts\n[test] starting test/vitest/vitest.infra.config.ts\n\n RUN  v4.1.8 /home/0668001050/workspace/openclaw\n\n ✓ src/infra/update-check.test.ts (23 tests) 928ms\n\n Test Files  1 passed (1)\n      Tests  23 passed (23)\n```\n\n### Boundary scenarios covered\n\n| # | Test | Expected |\n|---|------|----------|\n| 1 | Valid registry JSON with version field | Parsed correctly |\n| 2 | Oversized stream response >16 MiB | Returns error object with `JSON response exceeds` |\n| 3 | Response just under 16 MiB | Parsed successfully |\n| 4 | Non-200 status code | Returns error object with `HTTP <code>` |\n| 5 | Malformed JSON body | Returns error object with `malformed JSON` |\n\n## Risk checklist\n\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [ ] I have updated relevant documentation\n- [ ] Breaking changes (if any) are documented in Summary\n\n**Risk level: Low** — The bounded read cap (16 MiB) is far above the expected npm registry response size (<1 MB for typical package metadata). The `readProviderJsonResponse` helper is already used by other providers in the codebase. Error responses are still handled by the existing short-circuit path before the bounded reader is invoked.\n\n**Merge-risk assessment**: Single call-site replacement with an existing shared helper. No import changes, no dependency changes, no lockfile changes. Error handling wraps exceptions into the same `{ error }` result shape. Safe to revert.",
-        "branch": "fix/update-check-bound-response",
-        "head_sha": "467ab58a1865b67e3da354fffd0d1185f31a6e31",
-        "author": "lzyyzznl",
-        "labels": [
-          "scripts",
-          "size: M",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "scripts/proof-real-behavior.mjs",
-            "additions": 236,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/update-check.test.ts",
-            "additions": 78,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/update-check.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 317,
-        "deletions": 6,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98508",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98508.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 98,
-          "gatingTotal": 93,
-          "counts": {
-            "SUCCESS": 63,
-            "SKIPPED": 33,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-lint:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3724,
+    "total_ms": 2091,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2096
+        "ms": 553
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1404
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -171,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 205
+        "ms": 1524
       },
       {
         "name": "append_ledger",
-        "ms": 4
+        "ms": 1
       }
     ]
   }
