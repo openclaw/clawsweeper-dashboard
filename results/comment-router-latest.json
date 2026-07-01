@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T03:06:49.252Z",
+  "generated_at": "2026-07-01T03:07:05.857Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T00:06:46.751Z",
+  "since": "2026-07-01T00:07:03.596Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    98329
+    98352
   ],
   "comment_ids": [
-    4849884349
+    4849892598
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4849893006,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98329:4849884349:2026-07-01T03:04:12Z:re_review",
-      "comment_id": "4849884349",
-      "comment_version_key": "4849884349:2026-07-01T03:04:12Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98329#issuecomment-4849884349",
+      "idempotency_key": "comment-router:openclaw/openclaw:98352:4849892598:2026-07-01T03:05:57Z:re_review",
+      "comment_id": "4849892598",
+      "comment_version_key": "4849892598:2026-07-01T03:05:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98352#issuecomment-4849892598",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98329,
-      "author": "wangmiao0668000666",
-      "author_id": 290215524,
+      "target_branch": "main",
+      "issue_number": 98352,
+      "author": "momothemage",
+      "author_id": 35096042,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T03:04:12Z",
-      "comment_updated_at": "2026-07-01T03:04:12Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-01T03:05:57Z",
+      "comment_updated_at": "2026-07-01T03:05:57Z",
+      "status_comment_id": 4849893006,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,115 +68,183 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-01T03:07:06.547Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 98352
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-01T03:07:07.449Z",
+          "response_comment_id": "4849893006",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(feishu): route image/file replies through the same withdrawn-target fallback as text/card",
-        "body": "## What Problem This Solves\n\n`sendImageFeishu` (`extensions/feishu/src/media.ts:517`) and `sendFileFeishu` (`extensions/feishu/src/media.ts:571`) build a non-OK reply path that does a bare `client.im.message.reply(...)` followed by `assertFeishuMessageApiSuccess`, with **none** of the withdrawn/not-found top-level fallback that the text and card reply paths get via `sendReplyOrFallbackDirect` (`extensions/feishu/src/send.ts:146`).\n\nWhen a Feishu message is withdrawn/recalled/deleted before the reply is sent, the Feishu Open Platform returns code `230011` (\"The message was withdrawn.\") or `231003` (\"The message is not found\"). The text and card reply paths catch that response and fall back to a top-level `client.im.message.create`, so the reply still reaches the chat. The image and file reply paths do not — they throw, and `sendMediaFeishu` (the public entry point) propagates the throw. The agent-generated image or file is silently lost with no delivery.\n\nThis was a known gap from the merged PR #80306, which added the `sendReplyOrFallbackDirect` wrapper to `sendMessageFeishu` and `sendCardFeishu` but did not touch `media.ts`. Issue #98311 is the focused, single-PR closure of that gap. **This revised PR also closes the r1 ClawSweeper P2 finding**: the dispatcher at `reply-dispatcher.ts:526` originally called `sendMediaFeishu` without forwarding `allowTopLevelReplyFallback`, so even after the media-side fix landed, the production caller path never set the flag and media replies still hit the thread-boundary guard with the flag unset.\n\n## Why This Change Was Made\n\nThe fix mirrors the merged #80306 pattern that already protects text and card replies:\n\n1. **Export** three helpers from `extensions/feishu/src/send.ts` so the media module can call them:\n   - `sendReplyOrFallbackDirect` — the wrapper function that owns the `try reply → catch isWithdrawnReplyError → fall back to create()` contract.\n   - `isWithdrawnReplyError` — the predicate that recognizes the `230011` / `231003` shapes.\n   - `shouldFallbackFromReplyTarget` — the predicate for the non-thrown withdrawn response (where Feishu returns a structured `{code: 230011, msg: \"The message was withdrawn.\"}` body without throwing).\n   - These are additive module-API exports; no behavior change at any existing call site.\n2. **Replace** the bare `reply()` + `assertFeishuMessageApiSuccess` blocks in `sendImageFeishu` and `sendFileFeishu` with calls to `sendReplyOrFallbackDirect`, passing the same `directParams` / `directErrorPrefix` / `replyErrorPrefix` shape that `sendMessageFeishu` and `sendCardFeishu` already use.\n3. **Plumb** a new optional `allowTopLevelReplyFallback?: boolean` through `sendImageFeishu`, `sendFileFeishu`, and `sendMediaFeishu`.\n4. **Forward the new flag from the dispatcher at `reply-dispatcher.ts:526`** (r1 ClawSweeper P2 finding). Without this forwarding, the media path cannot trigger the fallback for normal quoted group replies (`rootId !== sendReplyToMessageId`) even though text/card can.\n\nNet source change is **−20 LoC** because the wrapper deduplicates the two media paths' reply/assert/create logic.\n\n## Changes\n\n- `extensions/feishu/src/send.ts`:\n  - `export` `sendReplyOrFallbackDirect`, `isWithdrawnReplyError`, `shouldFallbackFromReplyTarget` (were module-private).\n  - Net change: +3 export keywords + 1 inline comment block, −0 LoC of logic.\n\n- `extensions/feishu/src/media.ts`:\n  - `sendImageFeishu` + `sendFileFeishu` route through `sendReplyOrFallbackDirect`. Net source change: −47 / +24.\n  - `sendMediaFeishu` plumbs `allowTopLevelReplyFallback` to both.\n  - Drop unused `assertFeishuMessageApiSuccess`, `resolveFeishuReceiptKind`, `toFeishuSendResult` imports.\n  - Net source change: −42 / +24.\n\n- `extensions/feishu/src/reply-dispatcher.ts` (r1 P2 fix):\n  - `sendMediaReplies` (`reply-dispatcher.ts:526`) now forwards `allowTopLevelReplyFallback` to `sendMediaFeishu`, matching the existing forwarding on the text/card path at lines 549/576.\n  - Net source change: +1 line.\n\n- `extensions/feishu/src/media.reply-fallback.test.ts` (new): 10 test cases covering image/file × withdrawn/not-found + thread-boundary + non-withdrawn negatives.\n\n- `extensions/feishu/src/reply-dispatcher.test.ts` (r1 P2 fix): 3 new test cases appended mirroring the existing text-path tests:\n  - `forwards top-level fallback to sendMediaFeishu for normal group quoted replies` — `rootId !== sendReplyToMessageId` → `allowTopLevelReplyFallback: true`.\n  - `keeps sendMediaFeishu opted out of top-level fallback for native topic replies` — `rootId === sendReplyToMessageId` → `allowTopLevelReplyFallback: false`.\n  - `omits allowTopLevelReplyFallback on sendMediaFeishu for top-level (non-thread) replies` — `replyInThread: false` → `allowTopLevelReplyFallback: false`.\n  - All 3 tests fail without the dispatcher forwarding (revert-line gate verified).\n\n## Real behavior proof\n\n### Layer 1: Production-path coverage (existing + new tests)\n\n```\n$ CI=true OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run \\\n  --config test/vitest/vitest.extension-channels.config.ts --reporter=verbose \\\n  extensions/feishu/src/reply-dispatcher.test.ts \\\n  extensions/feishu/src/media.reply-fallback.test.ts \\\n  extensions/feishu/src/send.reply-fallback.test.ts\n\n ✓ |extension-channels| ... 112 tests (87 dispatcher + 10 media + 15 send)\n Test Files  3 passed (3)\n      Tests  112 passed (112)\n   Duration  41.83s\n```\n\nThe 3 new dispatcher tests drive the actual `sendMediaFeishu` mock against the production dispatcher with all three branch shapes. The 10 media tests drive the actual `sendImageFeishu` and `sendFileFeishu` against `sendReplyOrFallbackDirect` with the production `client.im.message.reply` and `client.im.message.create` mock seam.\n\n### Layer 2: Negative control (revert-line gate)\n\nTemporarily reverting `reply-dispatcher.ts:532` to drop `allowTopLevelReplyFallback`:\n\n- All 3 new dispatcher tests **fail** — `sendMediaFeishu` is called without `allowTopLevelReplyFallback`, so the assertion `expectMockArgFields(..., {allowTopLevelReplyFallback: true})` fails (test 1) and `allowTopLevelReplyFallback: false` fails on the topic/top-level tests because the dispatcher field defaults to `undefined`, not `false`.\n- The 10 media tests continue to pass (they exercise `sendMediaFeishu` directly, not through the dispatcher).\n- The 87 prior dispatcher tests continue to pass (text/card path is unaffected).\n\nSo all 3 new tests are tautology-free: they actually catch a regression to the dispatcher not forwarding the flag.\n\n### Layer 3: Byte-level behavioral diff (issue body match)\n\nThe issue body provides the exact expected diff:\n\n```\n# OBSERVED (buggy, origin/main 7ceaf0ece3)\nTEXT reply withdrawn(230011): create called = 1, messageId = om_text_fallback\nIMAGE reply withdrawn(230011): threw = \"Feishu image reply failed: ...\", create called = 0\nFILE reply withdrawn-throw(230011): threw = \"Feishu file reply failed: ...\", create called = 0\n\n# EXPECTED (identical inputs, media path routed through the same withdrawn/not-found fallback)\nIMAGE reply withdrawn(230011): create called = 1, messageId = om_image_fallback\n```\n\nAfter this PR, `sendImageFeishu` / `sendFileFeishu` no longer throw on the OBSERVED rows; they fall through to `create()` and return the fallback messageId. For the r1 P2 fix specifically, the dispatcher now sets `allowTopLevelReplyFallback: true` on the production `sendMediaFeishu` call for normal quoted group replies, so the wrapper's `params.replyInThread && params.allowTopLevelReplyFallback !== true` check is satisfied and the fallback path is exercised end-to-end.\n\n## Diff scope\n\n```\n extensions/feishu/src/media.reply-fallback.test.ts | 270 ++++++++++++++++++++++\n extensions/feishu/src/media.ts                     | 131 +++++-----\n extensions/feishu/src/reply-dispatcher.test.ts     |  58 +++++\n extensions/feishu/src/reply-dispatcher.ts          |   1 +\n extensions/feishu/src/send.ts                      |   9 ++-\n 5 files changed, 392 insertions(+), 77 deletions(-)\n```\n\n- Source: 1 line in `reply-dispatcher.ts` (P2 fix) + the original media/send.ts changes (−42/+24 source) = ~22 net insertions in source.\n- Tests: 270 net insertions in `media.reply-fallback.test.ts` (10 new cases) + 58 net insertions in `reply-dispatcher.test.ts` (3 new cases).\n- 0 already-landed files in this PR — clean branch from latest `openclaw/main @ 7ceaf0ece3`.\n\n## Security & Privacy\n\n- No new network calls, no new persisted data, no new logging of secrets.\n- No change to the SSRF / auth / token-handling surface — `resolveFeishuSendTarget` is unchanged.\n- The `allowTopLevelReplyFallback` param is opt-in (defaults to `undefined` which behaves the same as the text path), so existing callers that don't pass it get the same semantics as the text path now.\n\n## Compatibility\n\n- **Compatibility impact (minimal)**: image and file replies that previously failed silently on a withdrawn target now succeed via the top-level fallback. The thread-boundary guard is preserved for the case where a `replyInThread` reply hits a withdrawn target without `allowTopLevelReplyFallback: true`.\n- No config/env changes, no migration needed.\n- Blast radius: 2 send functions in `media.ts` + 1 forwarding line in `reply-dispatcher.ts`. No public API change. The new `allowTopLevelReplyFallback` is an optional new param that doesn't change the signature for any caller that omits it.\n\n## What was not tested\n\n- Live Feishu Open Platform API call with a real withdrawn target. The fix is a code path that consumes a `client.im.message.reply` result and either returns a success or throws; the in-process behavior is fully covered by the 10+3 new tests.\n- The streaming-card / upload-failure paths in #94894 / #98250 / #98251 are out of scope (those are separate concerns about upload failure and text degradation).\n- The `pumpStreamWithRecovery` in-stream error path is not used by feishu (it's an anthropic-only path).\n\n## Risk checklist\n\n- User-visible behavior change? **Yes (intended)** — image and file replies to withdrawn/recalled/deleted targets now succeed via top-level fallback instead of being dropped. After the r1 P2 fix, the production dispatcher also forwards the new fallback flag so the production text/card symmetry extends to media.\n- Config/env/migration change? **No**.\n- Security/auth/secrets/network/tool-execution change? **No**.\n- Backward compatibility: identical behavior for the \"non-withdrawn reply failure\" path; identical thread-boundary guard for `replyInThread && !allowTopLevelReplyFallback`; new fallback only fires for the exact same conditions the text/card path already handles.\n\n## Related\n\n- Issue #98311 (the bug this PR fixes).\n- PR #80306 (the prior fix that added the `sendReplyOrFallbackDirect` wrapper to the text/card reply path — this PR mirrors that fix to the image/file reply path, plus the r1 P2 dispatcher forwarding).\n- Sibling UTF-16 truncation PRs in the same campaign (#98008 twitch, #97982 signal, #98058 msteams, #98065 imessage) are unrelated to this PR (different surface, different file family).\n\n## AI disclosure\n\nAI-assisted (Claude Sonnet); reviewed by human author before submission. Real environment verification (fresh vitest run on commit `1f52bf2c9c`, oxlint, tsgo, revert-line gate) performed by human author. The 13 new unit tests (10 media + 3 dispatcher) drive the actual `sendImageFeishu` / `sendFileFeishu` / `sendMediaFeishu` call sites end-to-end against the production `sendReplyOrFallbackDirect` wrapper. Clean branch from latest `openclaw/main @ 7ceaf0ece3`.",
-        "branch": "fix/feishu-media-withdrawn-fallback",
-        "head_sha": "1f52bf2c9c9fa14cafead6655cd130888a38b295",
-        "author": "wangmiao0668000666",
+        "title": "fix(security): warn on agent skill MCP boundary drift",
+        "body": "Related: #98315\n\n## What Problem This Solves\n\nResolves a problem where operators could configure per-agent skill allowlists and MCP visibility, but `openclaw security audit` would not warn when those agents still had host exec access that could reach global MCP client registries such as `skills/config/mcporter.json`.\n\n## Why This Change Was Made\n\nThis adds a targeted audit finding for the risky combination instead of trying to block one `mcporter --config` command shape, which would be bypassable by alternate clients or direct script paths. The change also documents that agent skill allowlists are OpenClaw visibility/loading filters, not shell-time authorization boundaries.\n\n## User Impact\n\nOperators now get a concrete warning when per-agent skill restrictions coexist with host-exec-capable agents and configured/global MCP registries. The remediation points them toward the actual enforcement layers: deny or tightly allowlist host exec, sandbox or OS-user isolation, separate trust boundaries, and per-agent MCP credentials.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs src/security/audit-config-basics.test.ts` — 1 file / 7 tests passed.\n- `pnpm format:check -- src/security/audit.ts src/security/audit-config-basics.test.ts docs/gateway/security/audit-checks.md docs/tools/skills-config.md docs/tools/skills.md` — passed.\n- `git diff --check` — passed.\n- `pnpm docs:list` — passed.\n\nProof gap: `pnpm check:changed -- ...` could not run because the local Crabbox binary is `0.15.0` and the Testbox provider requires Crabbox `>=0.22.0`.\n",
+        "branch": "feature/fix-mcporter-config-boundary",
+        "head_sha": "ab3c29ef4c731dfdbff75f2f5c7ec65c63ec195d",
+        "author": "momothemage",
         "labels": [
-          "channel: feishu",
-          "size: M",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
+          "docs",
+          "gateway",
+          "security",
+          "maintainer",
+          "size: M"
         ],
         "files": [
           {
-            "path": "extensions/feishu/src/media.reply-fallback.test.ts",
-            "additions": 270,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/feishu/src/media.ts",
-            "additions": 56,
-            "deletions": 75,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/reply-dispatcher.test.ts",
-            "additions": 58,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/reply-dispatcher.ts",
+            "path": "docs/gateway/security/audit-checks.md",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/send.ts",
-            "additions": 7,
-            "deletions": 2,
+            "path": "docs/tools/skills-config.md",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/skills.md",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/security/audit-config-basics.test.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/security/audit.ts",
+            "additions": 156,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 5,
-        "additions": 392,
-        "deletions": 77,
+        "additions": 258,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98329",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98329.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98352",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98352.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 91,
-          "gatingTotal": 86,
+          "total": 103,
+          "gatingTotal": 98,
           "counts": {
-            "FAILURE": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 54,
-            "IN_PROGRESS": 3,
+            "SUCCESS": 34,
+            "SKIPPED": 36,
+            "IN_PROGRESS": 26,
+            "QUEUED": 6,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE",
             "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-7:FAILURE",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:QUEUED",
+            "checks-node-compact-small-2:QUEUED",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:QUEUED",
+            "checks-node-compact-small-5:QUEUED",
+            "checks-node-compact-small-6:QUEUED",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:QUEUED",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
             "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:QUEUED",
+            "checks-node-compact-small-2:QUEUED",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:QUEUED",
+            "checks-node-compact-small-5:QUEUED",
+            "checks-node-compact-small-6:QUEUED",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:QUEUED",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-compact-small-7:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2881,
+    "total_ms": 4324,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 633
+        "ms": 541
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1854
+        "ms": 1703
       },
       {
         "name": "classify_comment_commands",
@@ -192,7 +260,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 380
+        "ms": 2052
       },
       {
         "name": "append_ledger",
