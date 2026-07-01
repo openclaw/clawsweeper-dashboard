@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T00:39:33.299Z",
+  "generated_at": "2026-07-01T00:39:48.851Z",
   "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-30T21:39:30.650Z",
+  "since": "2026-06-30T21:39:47.291Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    1797
+    1799
   ],
   "comment_ids": [
-    4849163053
+    4849164043
   ],
-  "status_comment_id": 4849163282,
+  "status_comment_id": 4849164264,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:steipete/CodexBar:1797:4849163053:2026-07-01T00:38:24Z:re_review",
-      "comment_id": "4849163053",
-      "comment_version_key": "4849163053:2026-07-01T00:38:24Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1797#issuecomment-4849163053",
+      "idempotency_key": "comment-router:steipete/CodexBar:1799:4849164043:2026-07-01T00:38:33Z:re_review",
+      "comment_id": "4849164043",
+      "comment_version_key": "4849164043:2026-07-01T00:38:33Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1799#issuecomment-4849164043",
       "repo": "steipete/CodexBar",
       "target_branch": "main",
-      "issue_number": 1797,
+      "issue_number": 1799,
       "author": "steipete",
       "author_id": 58493,
       "author_association": "OWNER",
-      "comment_created_at": "2026-07-01T00:38:24Z",
-      "comment_updated_at": "2026-07-01T00:38:24Z",
-      "status_comment_id": 4849163282,
+      "comment_created_at": "2026-07-01T00:38:33Z",
+      "comment_updated_at": "2026-07-01T00:38:33Z",
+      "status_comment_id": 4849164264,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -74,124 +74,87 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-07-01T00:39:34.018Z",
+          "dispatched_at": "2026-07-01T00:39:49.835Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 1797
+          "item_number": 1799
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-01T00:39:34.983Z",
-          "response_comment_id": "4849163282",
+          "commented_at": "2026-07-01T00:39:50.885Z",
+          "response_comment_id": "4849164264",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "admin",
       "target": {
         "kind": "pull_request",
-        "title": "Fix Codex cost inflation from cached input double-billing",
-        "body": "## Summary\n\nFixes Codex cost inflation (≈2.7x–4.6x depending on workload) for any usage that includes cached input tokens. The regression was introduced by #1768 (\"Fix Codex archived usage undercount\") and is present on `main`; it is not in any shipped release (the last release, `v0.37.2`, predates that merge).\n\nThe archived-usage dedupe part of #1768 (`seenSessionIds` -> `contributingSessionIds`) is correct and is left untouched. This change only fixes the pricing math and the cache invalidation that lets the fix take effect.\n\nFixes #1796.\n\n## Root cause\n\n`Sources/CodexBarCore/Vendored/CostUsage/CostUsagePricing.swift`, private `codexCostUSD(pricing:...)`. Codex reports `input_tokens` as the total prompt size, with `cached_input_tokens` a subset of it. #1768 changed the function to treat them as additive:\n\n```diff\n-        let nonCached = max(0, inputTokens - cached)\n+        let nonCached = max(0, inputTokens)\n-        let usesLongContextRates = pricing.thresholdTokens.map { max(0, inputTokens) > $0 } ?? false\n+        let usesLongContextRates = pricing.thresholdTokens.map { (nonCached + cached) > $0 } ?? false\n```\n\nTwo compounding defects:\n\n1. Cached tokens are double-billed: the full `input_tokens` is charged at the input rate, and the cached subset is charged again at the cache-read rate.\n2. The 272K long-context threshold is evaluated against `input + cached` (double-counting cached) instead of `input`, so workloads tip into the doubled long-context rates far too early.\n\n## Fix\n\n1. Restore the clamp in `codexCostUSD`: bill only the non-cached remainder at the input rate, and key the long-context threshold off `inputTokens` (which already includes cached).\n\n```swift\nlet cached = min(max(0, cachedInputTokens), max(0, inputTokens))\nlet nonCached = max(0, inputTokens - cached)\n...\nlet usesLongContextRates = pricing.thresholdTokens.map { max(0, inputTokens) > $0 } ?? false\n```\n\n2. Cache invalidation. Costs are persisted per file as precomputed nanos (`codexCostNanos`) and only repriced when `codexPricingKey` changes. That key is derived from rate constants only, so a formula-only fix would keep reusing stale inflated costs for already-scanned days. A `codexCostFormulaVersion` token is added to the hashed input of `codexPricingKey` (both the built-in and models.dev branches, prefixes preserved) so existing caches mismatch and reprice via the existing full-rescan path.\n\n## Tests\n\n- Reverted the expectations in `CostUsagePricingTests`, `CostUsageScannerPriorityTests`, and `CostUsageScannerBreakdownTests` that #1768 changed to assert the inflated numbers.\n- Added `does not double bill cached input tokens` and `clamps cache reads to input tokens` in `CostUsagePricingTests`.\n- Added `codex daily report reprices cached costs when cost formula version changes` in `CostUsageScannerBreakdownTests`, which seeds a cache with a stale pricing key and inflated nanos and asserts it reprices to the correct value.\n\nCommands run:\n\n```\nswift test --filter CostUsagePricingTests --filter CostUsageScannerPriorityTests --filter CostUsageScannerBreakdownTests --filter CostUsageFetcherTests --filter PiSessionCostScannerTests --filter CostUsageDailyReportMergeTests\nmake check\n```\n\nAll pass (124 cost tests; 0 lint violations).\n",
-        "branch": "fix/codex-cost-cached-double-billing",
-        "head_sha": "f552fd732b22fb4ae17be435c6f25266feeedf56",
-        "author": "dstier-git",
-        "labels": [
-          "P2",
-          "merge-risk: 🚨 compatibility",
-          "proof: sufficient",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
-        ],
+        "title": "[codex] Bound Claude web fetch duration",
+        "body": "## Summary\n\n- enforce `--web-timeout` around the complete Claude web usage strategy\n- preserve Claude CLI auto ordering (`web -> cli`) while falling back after a bounded timeout\n- surface the timeout directly for explicit `--source web`\n- use the existing bounded task join so uncooperative cookie/network work cannot hold the caller open\n\n## Root cause\n\nClaude's web strategy ignored `ProviderFetchContext.webTimeout`. A stale browser session or blocked cookie/web operation could therefore prevent CLI auto mode from reaching its existing Claude CLI fallback.\n\n## Validation\n\n- `swift test --filter ClaudeWebFetchDeadlineTests`\n- focused Claude planner/fallback/resilience suites (32 tests)\n- `make check`\n- `git diff --check`\n\nCloses #1731\n",
+        "branch": "codex/bound-claude-web-fetch",
+        "head_sha": "04bce404f02c2087cfa765f555d9a863b325cc1f",
+        "author": "steipete",
+        "labels": [],
         "files": [
           {
-            "path": "Sources/CodexBarCore/Generated/CodexParserHash.generated.swift",
+            "path": "Sources/CodexBarCLI/CLIOptions.swift",
             "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "Sources/CodexBarCore/PiSessionCostScanner.swift",
-            "additions": 3,
-            "deletions": 1,
+            "path": "Sources/CodexBarCore/Providers/Claude/ClaudeProviderDescriptor.swift",
+            "additions": 52,
+            "deletions": 7,
             "changeType": "MODIFIED"
           },
           {
-            "path": "Sources/CodexBarCore/Vendored/CostUsage/CostUsagePricing.swift",
-            "additions": 8,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarCore/Vendored/CostUsage/CostUsageScanner.swift",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/CostUsageFetcherTests.swift",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/CostUsagePricingTests.swift",
-            "additions": 98,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/CostUsageScannerBreakdownTests.swift",
-            "additions": 78,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/CostUsageScannerPriorityTests.swift",
-            "additions": 23,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/PiSessionCostScannerTests.swift",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
+            "path": "Tests/CodexBarTests/ClaudeWebFetchDeadlineTests.swift",
+            "additions": 132,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 9,
-        "additions": 223,
-        "deletions": 55,
+        "changedFiles": 3,
+        "additions": 185,
+        "deletions": 8,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1797",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1797.md",
+        "automerge_cluster_id": "automerge-steipete-codexbar-1799",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1799.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "APPROVED",
         "checks": {
-          "total": 98,
-          "gatingTotal": 93,
+          "total": 9,
+          "gatingTotal": 9,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 64,
-            "FAILURE": 1,
-            "NEUTRAL": 1
+            "SUCCESS": 3,
+            "IN_PROGRESS": 2,
+            "QUEUED": 4
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-lint:FAILURE"
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS",
+            "swift-test-macos (0, 4):QUEUED",
+            "swift-test-macos (1, 4):QUEUED",
+            "swift-test-macos (2, 4):QUEUED",
+            "swift-test-macos (3, 4):QUEUED"
           ],
           "pending": [
-            "Real behavior proof:CANCELLED"
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS",
+            "swift-test-macos (0, 4):QUEUED",
+            "swift-test-macos (1, 4):QUEUED",
+            "swift-test-macos (2, 4):QUEUED",
+            "swift-test-macos (3, 4):QUEUED"
           ],
-          "terminalBlockers": [
-            "check-lint:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -201,19 +164,19 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4853,
+    "total_ms": 4283,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1821
+        "ms": 662
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 814
+        "ms": 885
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -225,7 +188,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2193
+        "ms": 2712
       },
       {
         "name": "append_ledger",
