@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T05:03:10.878Z",
+  "generated_at": "2026-07-01T05:04:13.812Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T02:03:08.273Z",
+  "since": "2026-07-01T02:04:13.393Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    98418
+    98420
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,134 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98418:4850388340:2026-07-01T05:03:04Z:clawsweeper_auto_repair",
-      "comment_id": "4850388340",
-      "comment_version_key": "4850388340:2026-07-01T05:03:04Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98418#issuecomment-4850388340",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98418,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T04:58:24Z",
-      "comment_updated_at": "2026-07-01T05:03:04Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=dcbc4e480925400b3a70ca97a9c8cbde633fb9cf)",
-      "review_summary": "The branch changes `src/infra/restart.ts` and its tests to probe launchd domains before external restart, avoid bootstrapping an already loaded job, retry bootstrap races with `kickstart -k`, and report duplicate post-restart listeners.\n\nPR surface: Source +146, Tests +148. Total +294 across 2 files.\n\nReproducibility: yes. at source level for the review finding: the actual CLI restart route still goes through `restartLaunchAgent`, while the PR only changes `triggerOpenClawRestart`. I did not run a live macOS launchd reproduction in this read-only review.",
-      "review_followup": "- [P1] A maintainer should require the CLI LaunchAgent restart path to be covered and ask the contributor for real macOS launchd proof; automation cannot supply the contributor's real setup proof.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "dcbc4e480925400b3a70ca97a9c8cbde633fb9cf",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): avoid duplicate launchd restart bootstrap",
-        "body": "## What Problem This Solves\n\n`openclaw gateway restart` can create a second gateway on macOS installs where the gateway is managed by a user LaunchAgent with `RunAtLoad`/`KeepAlive`.\n\nThe failure mode is easiest to hit from non-Aqua contexts, for example SSH or another background shell on a Mac that also has a console/auto-login user session. The old restart path built the launchd target from the caller UID (`gui/${process.getuid()}`), then ran `launchctl kickstart -k`. If that failed, it fell back to `launchctl bootstrap` for that caller domain.\n\nOn multi-GUI-session machines, the running KeepAlive job may actually live in the console user domain, such as `gui/501`. Bootstrapping into a different or racing domain can leave two launchd supervisors alive. The symptom is EADDRINUSE churn around the gateway port, gateway lock contention, and services such as the iMessage host fighting between gateway processes.\n\n## Repro Shape\n\n1. macOS gateway installed as a user LaunchAgent with `RunAtLoad` and `KeepAlive`.\n2. The active gateway is supervised in the console/auto-login GUI domain.\n3. Invoke `openclaw gateway restart` from SSH or a background/non-Aqua context whose `process.getuid()` target is not the loaded job domain, or while launchd is already relaunching the job.\n4. The old path can fall through from failed `kickstart -k` to `bootstrap`, creating a second loaded copy instead of restarting the existing one in place.\n\n## Fix\n\n- Probe launchd with `launchctl print <domain>/<label>` before taking restart action.\n- Prefer the actual loaded domain among explicit env, console user, caller UID, and the existing `gui/501` fallback.\n- If the job is already loaded, use `launchctl kickstart -k` and never bootstrap.\n- Bootstrap only after `launchctl print` confirms the job is not loaded.\n- If bootstrap races with another loader and reports already loaded, retry with `kickstart -k` rather than bootstrapping again.\n- Add a post-restart listener-count check so duplicate gateway listeners are surfaced as a failed restart instead of triggering another fallback.\n\nThis intentionally does not change the internal self-restart path in `process-respawn.ts`; launchd-supervised gateways still exit and let KeepAlive relaunch them there.\n\n## Evidence\n\n- Regression coverage now models a loaded launchd job and asserts the external restart path runs `launchctl print gui/501/ai.openclaw.gateway` followed by `launchctl kickstart -k gui/501/ai.openclaw.gateway`, with no `bootstrap` call.\n- The tests cover the genuinely-unloaded path separately, so `bootstrap` is still allowed only after `launchctl print` reports not loaded.\n- The already-loaded bootstrap race is covered: status `37` now retries with `kickstart -k` and does not attempt a second bootstrap.\n- Duplicate post-restart listeners are covered: two gateway listener PIDs make the restart result fail with a duplicate-listener detail instead of falling through to another launchd action.\n- No live `openclaw gateway restart` was run while validating this fix, to avoid triggering the production duplicate-process bug.\n\n## Tests\n\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/restart.test.ts`\n- `pnpm exec oxfmt --check --threads=1 src/infra/restart.ts src/infra/restart.test.ts`\n- `pnpm exec oxlint src/infra/restart.ts src/infra/restart.test.ts`\n- `git diff --check origin/main...HEAD`\n- `pnpm tsgo:prod`\n",
-        "branch": "codex/gateway-restart-launchd-dedupe",
-        "head_sha": "dcbc4e480925400b3a70ca97a9c8cbde633fb9cf",
-        "author": "turbotheturtle",
-        "labels": [
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/infra/restart.test.ts",
-            "additions": 170,
-            "deletions": 22,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart.ts",
-            "additions": 160,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 330,
-        "deletions": 36,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98418",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98418.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 99,
-          "gatingTotal": 94,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 33,
-            "SUCCESS": 60,
-            "IN_PROGRESS": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2922,
+    "total_ms": 743,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 433
+        "ms": 409
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2160
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -168,11 +56,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 304
+        "ms": 324
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
