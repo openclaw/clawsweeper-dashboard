@@ -2,19 +2,19 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-97889"
 mode: "autonomous"
-run_id: "28520217663"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28520217663"
+run_id: "28541747622"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28541747622"
 head_sha: "0c85aae0ecbcccf48586be0926893302c559df5e"
-workflow_conclusion: "success"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-01T13:22:57.117Z"
+published_at: "2026-07-01T19:29:44.220Z"
 canonical: "#97889"
 canonical_issue: null
 canonical_pr: "#97889"
 actions_total: 1
 fix_executed: 0
-fix_failed: 1
-fix_blocked: 1
+fix_failed: 0
+fix_blocked: 0
 apply_executed: 0
 apply_blocked: 0
 apply_skipped: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28520217663](https://github.com/openclaw/clawsweeper/actions/runs/28520217663)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28541747622](https://github.com/openclaw/clawsweeper/actions/runs/28541747622)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
@@ -43,8 +43,8 @@ Make PR #97889 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 | --- | ---: |
 | Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 1 |
-| Fix blocked | 1 |
+| Fix failed | 0 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
 | Apply blocked | 0 |
 | Apply skipped | 0 |
@@ -54,9 +54,7 @@ Make PR #97889 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | command timed out after 300000ms: git fetch origin +refs/pull/97889/head:refs/remotes/clawsweeper/source-pr-97889 |
-| execute_fix | blocked |  |  | command timed out after 300000ms: git fetch origin +refs/pull/97889/head:refs/remotes/clawsweeper/source-pr-97889 |
-| automerge_repair_outcome_comment | updated | #97889 |  |  |
+| _None_ |  |  |  |  |
 
 ## Apply Actions
 
