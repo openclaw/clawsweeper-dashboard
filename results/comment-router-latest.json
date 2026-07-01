@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T06:22:54.872Z",
+  "generated_at": "2026-07-01T06:23:04.666Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T03:22:52.749Z",
+  "since": "2026-07-01T03:23:02.681Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    98140
+    98402
   ],
-  "comment_ids": [
-    4850858092
-  ],
-  "status_comment_id": 4850858436,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 6,
+  "commands_seen": 3,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,21 +31,132 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98140:4850858092:2026-07-01T06:21:46Z:re_review",
-      "comment_id": "4850858092",
-      "comment_version_key": "4850858092:2026-07-01T06:21:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98140#issuecomment-4850858092",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98402:4850266135:2026-07-01T06:22:58Z:clawsweeper_needs_human",
+      "comment_id": "4850266135",
+      "comment_version_key": "4850266135:2026-07-01T06:22:58Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4850266135",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 98140,
-      "author": "zhangLei99586",
-      "author_id": 294081397,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-01T06:21:46Z",
-      "comment_updated_at": "2026-07-01T06:21:46Z",
-      "status_comment_id": 4850858436,
+      "target_branch": null,
+      "issue_number": 98402,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T04:31:01Z",
+      "comment_updated_at": "2026-07-01T06:22:58Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] No narrow automated repair is indicated now; remaining work is maintainer review of poison-row semantics plus exact-head CI status.; Cleared: The diff only changes local SQLite queue parsing and tests, with no dependency, CI, secret, permission, or code-execution surface added. (sha=11ed39db2c394b89ec5d2e718bb25244bb1d1a6e)",
+      "review_summary": "The branch wraps channel ingress queue JSON parsing in tagged results, skips corrupt payload rows or omits corrupt metadata in queue reads, validates payloads before claims, scans past corrupt pending rows, and adds SQLite-backed regression tests.\n\nPR surface: Source +60, Tests +215. Total +275 across 2 files.\n\nReproducibility: yes. Source inspection shows current main calls bare JSON.parse during queue record conversion, and the PR body provides real on-disk SQLite negative-control proof; I did not run tests locally because this review is read-only.",
+      "review_followup": "- [P2] No narrow automated repair is indicated now; remaining work is maintainer review of poison-row semantics plus exact-head CI status.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "11ed39db2c394b89ec5d2e718bb25244bb1d1a6e",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(infra): guard channel ingress queue parseJson against corrupted JSON",
+        "body": "## What Problem This Solves\n\nFixes an issue where a single corrupted `payload_json`, `metadata_json`, or `completed_metadata_json` row in the SQLite channel ingress queue crashes the entire queue operation. The `parseJson()` helper calls `JSON.parse(value)` without a try-catch. A corrupt row throws an uncaught `SyntaxError` that propagates through `baseRecord()` (called by `listPending`, `listClaims`, `claimNext`, `enqueue`) and `completedRecord()` (called by `enqueue` duplicate detection). One bad row in `listPending()` or `listClaims()` kills **all** entries in that listing. This affects every channel that uses the durable ingress queue for inbound message processing.\n\nAdditionally, `claimNext` and `claim` would UPDATE a pending row to `claimed` status **before** validating the payload could be decoded — so a corrupt payload could become an invisible claimed row, hidden from `listPending`/`listClaims`/`recoverStaleClaims`, permanently blocking queue recovery.\n\n## Why This Change Was Made\n\nThree coordinated changes:\n\n1. **Tagged parse result**: `parseJson()` now returns `{ ok: true, value } | { ok: false }` instead of the ambiguous `unknown | null`. `JSON.parse(\"null\")` is valid and returns `null`, which the old sentinel conflated with parse failure. The tagged result cleanly separates \"valid JSON value\" from \"corrupt input\".\n\n2. **Guard `parseJson` at the chokepoint**: `baseRecord()` returns `null` when `payload_json` is corrupt (unrecoverable). Corrupt `metadata_json`/`completed_metadata_json` is non-fatal — the record is kept with metadata omitted. All callers (`listPending`, `listClaims`, `enqueue`, `claimNext`, `claim`) handle null/omitted results.\n\n3. **Validate before claiming**: `claimNext` calls `baseRecord()` inside `rows.find()` to skip corrupt rows before they are selected, and `claim` pre-reads the pending row and validates `baseRecord()` before issuing the UPDATE. No corrupt row can ever be promoted to `claimed` status.\n\n## User Impact\n\nNo user-visible impact under normal operation. When a channel ingress queue row is somehow corrupted:\n- `listPending` / `listClaims` skip the bad entry instead of crashing\n- `claimNext` / `claim` skip corrupt rows and claim the next valid one\n- `enqueue` duplicate detection works with corrupt metadata omitted\n- Valid JSON `null` payload is correctly preserved (not treated as corrupt)\n\n## Real behavior proof\n\n- **Real environment:** Linux, Node v22.22.0, driving real `createChannelIngressQueue` against a real on-disk SQLite database.\n- **Evidence after fix (23 tests, all pass):**\n\n```text\n$ node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts --run\n Test Files  1 passed (1)\n      Tests  23 passed (23)\n```\n\nNew tests cover: pending row with corrupt `payload_json` → skipped, corrupt `metadata_json` → metadata omitted, claimed row with corrupt payload → skipped, corrupt `completed_metadata_json` → duplicate detection works, `claimNext` skips corrupt → claims next valid, `claim` returns null for corrupt, valid JSON null → preserved.\n\n- **Negative control (pre-fix — 4 SyntaxError crashes):**\n\n```text\n$ git show origin/main:src/channels/message/ingress-queue.ts > /tmp/iq-old.ts   && cp /tmp/iq-old.ts src/channels/message/ingress-queue.ts   && node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts --run\n\n FAIL  skips a pending row with corrupt payload_json in listPending\n       SyntaxError: Expected property name or '}' in JSON at position 1\n       ❯ parseJson (src/channels/message/ingress-queue.ts:222)\n\n FAIL  skips corrupt metadata_json in listPending\n       SyntaxError at parseJson (line 222)\n\n FAIL  skips a claimed row with corrupt payload_json in listClaims\n       SyntaxError at parseJson (line 222)\n\n FAIL  skips corrupt completed_metadata_json during duplicate detection\n       SyntaxError at parseJson (line 222)\n\n Test Files  1 failed (1)  —  4 failed | 16 passed (20)\nexit=1\n```\n\nRestoring the fix returns to 23/23 green. The negative control is load-bearing: same tests, same corrupt rows, same disk boundary.\n\n- **What was not tested:** a live gateway with real channels end-to-end. The proof drives the same exported queue APIs against a real SQLite database, which exercises the shared chokepoint.\n\n## Evidence\n\n**Existing tests — no regressions:**\n\n```text\n$ node scripts/run-vitest.mjs src/channels/message/durable-receive.test.ts --run\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\n**Lint:** `oxlint` clean on both changed files.\n\nAI-assisted.",
+        "branch": "fix/ingress-queue-parsejson-guard",
+        "head_sha": "11ed39db2c394b89ec5d2e718bb25244bb1d1a6e",
+        "author": "pick-cat",
+        "labels": [
+          "size: M",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/channels/message/ingress-queue.test.ts",
+            "additions": 215,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/message/ingress-queue.ts",
+            "additions": 83,
+            "deletions": 23,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 298,
+        "deletions": 23,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98402",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98402.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 61,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:98402:4850597678:2026-07-01T05:38:09Z:re_review",
+      "comment_id": "4850597678",
+      "comment_version_key": "4850597678:2026-07-01T05:38:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4850597678",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98402,
+      "author": "Pick-cat",
+      "author_id": 266665499,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T05:38:09Z",
+      "comment_updated_at": "2026-07-01T05:38:09Z",
+      "status_comment_id": null,
       "trigger": "mention",
-      "command": "review",
+      "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -68,95 +177,62 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-07-01T06:22:55.897Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 98140
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-01T06:22:58.200Z",
-          "response_comment_id": "4849699343",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: close readline interface and destroy read stream in transcript store",
-        "body": "## What Problem This Solves\n\nFixes a file descriptor leak: `createReadStream` + `readline.createInterface` were not cleaned up after `for await` loop exit.\n\n## Why This Change Was Made\n\nWrap the loop in `try/finally` that calls `lines.close()` and `stream.destroy()`.\n\n## User Impact\n\nNo user-visible change. Prevents file descriptor exhaustion.\n\n## Evidence\n\n```\nsrc/agents/tools/transcripts-tool.test.ts\nTest Files  1 passed (1)\n     Tests  10 passed (10)\n[test] passed 1 Vitest shard in 20.13s\n```\n\nNode.js `readline` module does not close the underlying stream; explicit `close()` + `destroy()` is the recommended cleanup pattern.",
-        "branch": "fix/readline-stream-leak",
-        "head_sha": "a49365d32a3147dbaf9f9329da177bb4311f5b30",
-        "author": "zhanglei99586",
-        "labels": [
-          "size: XS",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/transcripts/store.ts",
-            "additions": 15,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 15,
-        "deletions": 9,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98140",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98140.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 17,
-          "gatingTotal": 12,
-          "counts": {
-            "SUCCESS": 8,
-            "SKIPPED": 9
-          },
-          "blockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:98402:4850295529:2026-07-01T04:37:43Z:re_review",
+      "comment_id": "4850295529",
+      "comment_version_key": "4850295529:2026-07-01T04:37:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4850295529",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98402,
+      "author": "Pick-cat",
+      "author_id": 266665499,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T04:37:43Z",
+      "comment_updated_at": "2026-07-01T04:37:43Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6180,
+    "total_ms": 3629,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 678
+        "ms": 307
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1429
+        "ms": 1662
       },
       {
         "name": "classify_comment_commands",
@@ -172,7 +248,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 4046
+        "ms": 1633
       },
       {
         "name": "append_ledger",
