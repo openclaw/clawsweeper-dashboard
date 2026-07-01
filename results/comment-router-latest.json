@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T19:03:35.827Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-01T19:04:23.112Z",
+  "repo": "openclaw/Peekaboo",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T16:03:33.361Z",
+  "since": "2026-07-01T16:04:21.298Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    98418
+    204
   ],
   "comment_ids": [
-    4859171465
+    4859178700
   ],
-  "status_comment_id": 4859171767,
+  "status_comment_id": 4859179075,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98418:4859171465:2026-07-01T19:02:26Z:re_review",
-      "comment_id": "4859171465",
-      "comment_version_key": "4859171465:2026-07-01T19:02:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98418#issuecomment-4859171465",
-      "repo": "openclaw/openclaw",
+      "idempotency_key": "comment-router:openclaw/Peekaboo:204:4859178700:2026-07-01T19:03:13Z:re_review",
+      "comment_id": "4859178700",
+      "comment_version_key": "4859178700:2026-07-01T19:03:13Z",
+      "comment_url": "https://github.com/openclaw/Peekaboo/pull/204#issuecomment-4859178700",
+      "repo": "openclaw/Peekaboo",
       "target_branch": "main",
-      "issue_number": 98418,
-      "author": "TurboTheTurtle",
-      "author_id": 35905412,
+      "issue_number": 204,
+      "author": "SebTardif",
+      "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T19:02:26Z",
-      "comment_updated_at": "2026-07-01T19:02:26Z",
-      "status_comment_id": 4859171767,
+      "comment_created_at": "2026-07-01T19:03:13Z",
+      "comment_updated_at": "2026-07-01T19:03:13Z",
+      "status_comment_id": 4859179075,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -74,94 +74,79 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-07-01T19:03:36.586Z",
+          "dispatched_at": "2026-07-01T19:04:24.212Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 98418
+          "item_number": 204
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-01T19:03:38.828Z",
-          "response_comment_id": "4850892025",
+          "commented_at": "2026-07-01T19:04:25.289Z",
+          "response_comment_id": "4859179075",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): avoid duplicate launchd restart bootstrap",
-        "body": "## What Problem This Solves\n\n`openclaw gateway restart` can create a second gateway on macOS installs where the gateway is managed by a user LaunchAgent with `RunAtLoad`/`KeepAlive`.\n\nThe failure mode is easiest to hit from non-Aqua contexts, for example SSH or another background shell on a Mac that also has a console/auto-login user session. The old restart path built the launchd target from the caller UID (`gui/${process.getuid()}`), then ran `launchctl kickstart -k`. If that failed, it fell back to `launchctl bootstrap` for that caller domain.\n\nOn multi-GUI-session machines, the running KeepAlive job may actually live in the console user domain, such as `gui/501`. Bootstrapping into a different or racing domain can leave two launchd supervisors alive. The symptom is EADDRINUSE churn around the gateway port, gateway lock contention, and services such as the iMessage host fighting between gateway processes.\n\n## Repro Shape\n\n1. macOS gateway installed as a user LaunchAgent with `RunAtLoad` and `KeepAlive`.\n2. The active gateway is supervised in the console/auto-login GUI domain.\n3. Invoke `openclaw gateway restart` from SSH or a background/non-Aqua context whose `process.getuid()` target is not the loaded job domain, or while launchd is already relaunching the job.\n4. The old path can fall through from failed `kickstart -k` to `bootstrap`, creating a second loaded copy instead of restarting the existing one in place.\n\n## Fix\n\n- Probe launchd with `launchctl print <domain>/<label>` before taking restart action.\n- Prefer the actual loaded domain among explicit env, console user, caller UID, and the existing `gui/501` fallback.\n- Apply the loaded-domain probe to both restart surfaces that can touch launchd: the external helper in `src/infra/restart.ts` and the actual CLI service restart owner path in `src/daemon/launchd.ts`.\n- If the job is already loaded, use `launchctl kickstart -k` and never bootstrap.\n- Bootstrap only after `launchctl print` confirms the job is not loaded.\n- If bootstrap races with another loader and reports already loaded, retry with `kickstart -k` rather than bootstrapping again.\n- Add a post-restart listener-count check on the external helper so duplicate gateway listeners are surfaced as a failed restart instead of triggering another fallback.\n\nThis intentionally does not change the internal self-restart path in `process-respawn.ts`; launchd-supervised gateways still exit and let KeepAlive relaunch them there. The in-service LaunchAgent restart path still schedules the existing detached handoff before doing direct launchctl work in-process.\n\n## Evidence\n\n- External helper regression coverage models a loaded launchd job and asserts `triggerOpenClawRestart` runs `launchctl print gui/501/ai.openclaw.gateway` followed by `launchctl kickstart -k gui/501/ai.openclaw.gateway`, with no `bootstrap` call.\n- CLI owner-path regression coverage now models `openclaw gateway restart` resolving a loaded console LaunchAgent after a caller-domain miss: `launchctl print gui/777/ai.openclaw.gateway`, then `launchctl print gui/501/ai.openclaw.gateway`, then `launchctl enable gui/501/ai.openclaw.gateway`, then `launchctl kickstart -k gui/501/ai.openclaw.gateway`, with no `bootstrap` or `bootout` call.\n- The genuinely-unloaded path remains covered separately, so `bootstrap` is still allowed only after `launchctl print` reports not loaded.\n- The already-loaded bootstrap race is covered: status `37` now retries with `kickstart -k` and does not attempt a second bootstrap.\n- Duplicate post-restart listeners are covered on the external helper: two gateway listener PIDs make the restart result fail with a duplicate-listener detail instead of falling through to another launchd action.\n- No live production `openclaw gateway restart` was run while validating this fix, to avoid triggering the duplicate-process bug on the real gateway.\n\n### Live macOS LaunchAgent proof (2026-07-01)\n\n- Ran PR head `fd92beecad95f6a3a0a8a935113db38192d35d9f` on a real macOS user LaunchAgent using a disposable label, `ai.openclaw.pr98418-proof`, in `gui/501`.\n- The disposable job was already loaded before invoking the PR restart helper: `launchctl print gui/501/ai.openclaw.pr98418-proof` returned `state = running`, `runs = 1`, `pid = 58095`.\n- Invoked `triggerOpenClawRestart()` with `OPENCLAW_LAUNCHD_LABEL=ai.openclaw.pr98418-proof`, `OPENCLAW_LAUNCHD_DOMAIN=gui/501`, and an unused temp gateway port. It returned:\n  ```json\n  {\"ok\":true,\"method\":\"launchctl\",\"tried\":[\"launchctl print gui/501/ai.openclaw.pr98418-proof\",\"launchctl kickstart -k gui/501/ai.openclaw.pr98418-proof\"]}\n  ```\n- No `launchctl bootstrap` was attempted for the already-loaded job.\n- After restart, `launchctl print gui/501/ai.openclaw.pr98418-proof` returned `state = running`, `runs = 2`, `pid = 58131`, `last exit code = 0`; the proof worker events showed start -> SIGTERM -> start.\n- Production gateway listener on `18789` was unchanged before/after the proof run, and cleanup booted out the disposable LaunchAgent successfully.\n\n## Tests\n\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/restart.test.ts`\n- `node scripts/run-vitest.mjs src/daemon/launchd.test.ts`\n- `node scripts/run-vitest.mjs src/daemon/launchd-restart-handoff.test.ts`\n- `node scripts/run-vitest.mjs src/daemon/service.test.ts`\n- `pnpm exec oxfmt --check --threads=1 src/infra/restart.ts src/infra/restart.test.ts src/daemon/launchd.ts src/daemon/launchd.test.ts src/daemon/launchd-restart-handoff.ts src/daemon/launchd-restart-handoff.test.ts src/daemon/service.test.ts`\n- `pnpm exec oxlint src/infra/restart.ts src/infra/restart.test.ts src/daemon/launchd.ts src/daemon/launchd.test.ts src/daemon/launchd-restart-handoff.ts src/daemon/launchd-restart-handoff.test.ts src/daemon/service.test.ts`\n- `git diff --check origin/main...HEAD`\n- `pnpm tsgo:prod`\n\n",
-        "branch": "codex/gateway-restart-launchd-dedupe",
-        "head_sha": "fd92beecad95f6a3a0a8a935113db38192d35d9f",
-        "author": "turbotheturtle",
+        "title": "fix(speech): honor task cancellation in recorder poll loop",
+        "body": "## Summary\n\nThe `observeRecorderState()` poll loop in `Speech.swift` uses `try? await Task.sleep(nanoseconds:)` to throttle polling. The `try?` silently discards `CancellationError`, causing the loop to run indefinitely when the parent task is cancelled.\n\nAdditionally, the observer task handle was discarded (fire-and-forget `Task { }`), so `stopListening()` had no way to cancel the poll loop. The `Task.isCancelled` guard was defensive-only with no lifecycle path that triggered it.\n\n## Problem\n\nWhen the speech recognizer's parent task is cancelled (e.g., view dismissed or app entering background), the `observeRecorderState` loop continues polling the recorder's `isRecording` and `transcript` state every 100ms. The loop only exits when `self.isListening` becomes false or `recorder.isRecording` becomes false, but neither is set by task cancellation.\n\nThe `try? await Task.sleep` pattern swallows `CancellationError` along with other errors. Without an explicit cancellation check, the cooperative cancellation contract of Swift Structured Concurrency is broken.\n\n## Fix\n\nThree changes:\n\n1. **Store the observer task handle** in `recorderObserverTask` (was fire-and-forget `Task { }`). Cancel it in `stopListening()` before stopping the recorder. This connects the cancellation guard to a real lifecycle path.\n\n2. **Add `guard !Task.isCancelled else { break }`** after the `try? await Task.sleep` call. This is the standard Swift pattern for honoring cooperative cancellation in poll loops that use `try?`.\n\n3. **Cancel the observer on the sendToAgent dismissal path.** `sendToAgent()` called `dismiss()` without calling `stopRecording()`, leaving the poll task alive after the view was dismissed. Now calls `stopRecording()` before `dismiss()` so the observer is cancelled on all paths (Cancel button, sendToAgent, and stopListening).\n\n## Origin\n\nThe poll loop was introduced in commit `babc87d58` (2025-07-30, Peter Steinberger) as part of the original speech recognizer implementation, approximately 11 months ago.\n\n## Real behavior proof\n\n- **Behavior addressed:** The `observeRecorderState()` poll loop in `Speech.swift` ignores task cancellation because `try? await Task.sleep` silently discards `CancellationError`. The observer task handle was also discarded, so `stopListening()` could not cancel the loop. Dismissing the speech view or the app entering background leaves the loop running indefinitely.\n- **Real environment tested:** macOS 26, Swift 6.3.3 (swiftlang-6.3.3.1.3), built from patched source on `fix/speech-poll-cancellation` branch.\n- **Exact steps or command run after this patch:**\n\n  ```bash\n  cd /Users/sebastientardif/Peekaboo\n  git checkout fix/speech-poll-cancellation\n\n  # Step 1. Compile standalone proof script\n  swiftc -parse-as-library -o /tmp/prove-speech \\\n    scripts/prove-speech-poll-cancellation.swift\n\n  # Step 2. Run proof\n  /tmp/prove-speech\n\n  # Step 3. Verify guard placement and task handle storage\n  grep -n 'Task.isCancelled\\|recorderObserverTask' Apps/Mac/Peekaboo/Core/Speech.swift\n  ```\n\n- **Evidence after fix:** terminal output from the standalone cancellation and lifecycle proof:\n\n  ```console\n  $ swiftc -parse-as-library -o /tmp/prove-speech scripts/prove-speech-poll-cancellation.swift && /tmp/prove-speech\n  === Speech poll-loop cancellation proof ===\n  Reproduces observeRecorderState() behavior from\n  Speech.swift:289-307\n\n  Test 1: UNFIXED pattern (try? swallows CancellationError)\n    Loops executed: 20 (expected: all 20)\n    Elapsed: 154ms\n    ⚠️  Poll loop ran to completion despite cancellation\n\n  Test 2: FIXED pattern (Task.isCancelled guard after sleep)\n    Loops executed: 2 (expected: ~2)\n    Elapsed: 158ms\n    ✅ Poll loop exited promptly on cancellation\n\n  Test 3: LIFECYCLE -- stored handle enables cancellation\n    Polls before cancel: 4\n    Polls after cancel:  4\n    Task cancelled: true\n    ✅ Stored task handle allows stopListening/sendToAgent to cancel observer\n\n  ✅ PASS: Unfixed loop ran 20/20 iterations (ignores cancel)\n  ✅ PASS: Fixed loop ran 2/20 iterations (exits on cancel)\n  ✅ PASS: Stored handle enables cancellation from all dismissal paths\n  ✅ The Task.isCancelled guard + stored handle ensures the observer\n     stops promptly on stopListening(), sendToAgent(), or view dismissal.\n  ```\n\n  Dismissal path fix verified in source (sendToAgent now calls stopRecording before dismiss):\n\n  ```console\n  $ grep -n 'stopRecording\\|dismiss' Apps/Mac/Peekaboo/Features/AI/SpeechInputView.swift\n  131:                    self.stopRecording()\n  132:                    self.dismiss()\n  233:        self.stopRecording()\n  236:        self.dismiss()\n  ```\n\n  Task handle storage and cancellation path verified:\n\n  ```console\n  $ grep -n 'Task.isCancelled\\|recorderObserverTask' Apps/Mac/Peekaboo/Core/Speech.swift\n  107:    private var recorderObserverTask: Task<Void, Never>?\n  199:            self.recorderObserverTask?.cancel()\n  200:            self.recorderObserverTask = nil\n  283:        self.recorderObserverTask = Task {\n  304:            guard !Task.isCancelled else { break }\n  ```\n\n- **Observed result after fix:** Test 1 shows the unfixed pattern runs all 20 iterations (cancellation ignored) because `try?` causes `Task.sleep` to return instantly on a cancelled task without throwing. Test 2 shows the fixed pattern exits after 2 iterations because `Task.isCancelled` catches the cancellation state. Test 3 demonstrates the stored task handle lifecycle: an observer task is started, polled 4 times, then cancelled via the handle (simulating stopListening/sendToAgent), and promptly exits. All three dismissal paths (Cancel button, sendToAgent, stopListening) now call stopRecording() which cancels the stored task handle.\n- **What was not tested:** Live cancellation with active speech recognition and a connected microphone (requires SFSpeechRecognizer authorization and audio hardware). The standalone proof reproduces the exact poll-loop pattern and lifecycle from observeRecorderState().\n\n## Related\n\n- Same bug class fixed in #193 (merged): `fix(capture): honor stop during watch transient backoff`\n- Cancellation guards in `waitForImage`: commits `dd6d47fd`, `dc75fe4f`\n\n\n",
+        "branch": "fix/speech-poll-cancellation",
+        "head_sha": "243fb7b070d3ee0ec4903cf878ba7e17af6efba6",
+        "author": "sebtardif",
         "labels": [
-          "gateway",
-          "size: L",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: 📣 needs proof",
+          "P2",
+          "rating: 🦪 silver shellfish"
         ],
         "files": [
           {
-            "path": "src/daemon/launchd.test.ts",
-            "additions": 65,
-            "deletions": 3,
+            "path": "Apps/Mac/Peekaboo/Core/Speech.swift",
+            "additions": 8,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/daemon/launchd.ts",
-            "additions": 74,
-            "deletions": 10,
+            "path": "Apps/Mac/Peekaboo/Features/AI/SpeechInputView.swift",
+            "additions": 3,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/restart.test.ts",
-            "additions": 170,
-            "deletions": 22,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart.ts",
-            "additions": 160,
-            "deletions": 14,
-            "changeType": "MODIFIED"
+            "path": "scripts/prove-speech-poll-cancellation.swift",
+            "additions": 137,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 469,
-        "deletions": 49,
+        "changedFiles": 3,
+        "additions": 148,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98418",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98418.md",
+        "automerge_cluster_id": "automerge-openclaw-peekaboo-204",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-peekaboo-204.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 98,
-          "gatingTotal": 93,
+          "total": 1,
+          "gatingTotal": 1,
           "counts": {
-            "SUCCESS": 63,
-            "SKIPPED": 32,
-            "FAILURE": 2,
-            "NEUTRAL": 1
+            "IN_PROGRESS": 1
           },
           "blockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
+            "PeekabooCore build & tests:IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
+          "pending": [
+            "PeekabooCore build & tests:IN_PROGRESS"
           ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -171,15 +156,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5945,
+    "total_ms": 4491,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 474
+        "ms": 688
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1976
+        "ms": 1112
       },
       {
         "name": "classify_comment_commands",
@@ -195,11 +180,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3469
+        "ms": 2667
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
