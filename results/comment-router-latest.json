@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T18:46:14.123Z",
-  "repo": "openclaw/openclaw-windows-node",
+  "generated_at": "2026-07-01T18:46:53.480Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T15:46:13.779Z",
+  "since": "2026-07-01T15:46:51.557Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    914
+    98738
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,126 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98738:4858922306:2026-07-01T18:46:48Z:clawsweeper_auto_repair",
+      "comment_id": "4858922306",
+      "comment_version_key": "4858922306:2026-07-01T18:46:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98738#issuecomment-4858922306",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98738,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T18:28:44Z",
+      "comment_updated_at": "2026-07-01T18:46:48Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=16aef7e7298815d2a48afa58cd45724e165e6e56)",
+      "review_summary": "The branch wires bundle MCP Client close/error callbacks, checks disconnected sessions before tool/resource/prompt calls, retires dead reused sessions during catalog refresh, and adds stdio child-process lifecycle tests.\n\nPR surface: Source +28, Tests +263. Total +291 across 2 files.\n\nReproducibility: yes. from source inspection rather than an executed current-main run. Current main leaves a closed stdio child represented by a session map entry and does not flip session.connected on transport close, so the next MCP call can hit the generic SDK Not connected path.",
+      "review_followup": "- [P1] The PR needs contributor-provided real behavior proof and an author-side CI fix; ClawSweeper should not start a repair lane while the proof gate still depends on the contributor's setup.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "16aef7e7298815d2a48afa58cd45724e165e6e56",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): fail fast with attributable reason after MCP stdio session dies mid-run",
+        "body": "<!-- Draft only. Not submitted. supersede-check + issue link still needed before gh pr create. -->\n\n## What Problem This Solves\n\nResolves a problem where, when a bundled MCP server's child process exits or\nits transport errors out mid-session, OpenClaw keeps treating that server as\nconnected. The next tool/resource/prompt call against that server either\nsurfaces the MCP SDK's generic `\"Not connected\"` error with no indication of\nwhich server died or why, or — if a catalog refresh happens to run first\n(e.g. after a `tools/list_changed` notification) — silently reuses the dead\nsession forever, so the server never recovers until the whole session's MCP\nruntime is torn down (idle sweep or explicit disposal).\n\n## Why This Change Was Made\n\nWires the MCP SDK `Client`'s `onclose`/`onerror` callbacks (public settable\nproperties on `Protocol`, not an `EventTarget`) when a bundle-mcp session is\ncreated. `onclose` is the authoritative \"this transport is gone\" signal for\nevery transport kind (stdio/SSE/streamable-http) and flips the existing\n`session.connected` flag plus a small bounded `disconnectReason` string.\n`onerror` only logs — it also fires for non-fatal protocol issues (e.g. an\nunrelated malformed message), so it must not mark a still-healthy session\ndead. `callTool`/`listResources`/`readResource`/`listPrompts`/`getPrompt` now\nshare one `requireConnectedSession` check (replacing five copies of the same\n`if (!session) throw` guard) that also rejects a disconnected session with an\nattributable message. Session reuse in the catalog-build path now retires a\ndisconnected session instead of trying to reconnect it in place: the SDK\nchains `onclose`/`onerror` cumulatively on repeat `connect()` calls on the\nsame `Client`, and the stdio transport never clears its read buffer on an\nunexpected exit, so reconnecting the same instance is not safe. Retirement\nnow hinges on one signal — `!session.connected` — regardless of when the\ndisconnect happened (before this catalog refresh started, or mid-refresh,\ne.g. the child process crashes between `ensureSessionConnected()` returning\nand `listAllToolsBestEffort()` finishing) or whether the same session\nobject is shared with an overlapping catalog generation: a dead transport\nis dead for every generation sharing it, so the existing\n`sharedWithNewerGeneration` guard (which protects a still-*healthy* shared\nsession from being disposed by an older generation's unrelated failure)\ncorrectly does not apply once the session is confirmed disconnected.\n`retireSessionIfCurrent` already no-ops safely if a newer generation\nalready replaced the map entry. Non-goals: no gateway protocol change, no\npersisted history, no new config surface.\n\n## User Impact\n\nAnyone using bundled MCP servers gets a clear, specific error\n(`bundle-mcp server \"<name>\" is disconnected: mcp transport closed`) the\nmoment they try to use a server whose process died, instead of a generic\n`\"Not connected\"` message or an indefinitely-stuck integration that silently\nnever recovers until the agent session restarts.\n\n## Evidence\n\n- Two new focused tests in `agent-bundle-mcp-runtime.test.ts`:\n  - Spawns a real fake stdio MCP child process, confirms a normal tool call\n    succeeds, `SIGKILL`s the child mid-session, then asserts the next tool\n    call fails within 200ms with the new attributable message (not a\n    timeout, not the SDK's generic message).\n  - Spawns a fake server that invalidates its own catalog via\n    `tools/list_changed`, then dies without responding during the resulting\n    refresh's `tools/list` call on the still-\"connected\" reused session;\n    asserts the dead session is purged from the runtime's session map\n    within that same refresh (a subsequent `callTool` gets the \"not\n    connected\" — session missing — message, not the \"is disconnected\"\n    message a lingering dead session object would produce).\n- `node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-runtime.test.ts src/agents/mcp-stdio-transport.test.ts` → 46/46 passed (3 repeat runs, no flakiness). The overlapping-catalog-generation sub-case (a dead session shared with `sharedWithNewerGeneration === true`) isn't covered by a dedicated test — reproducing it deterministically needs a genuinely concurrent (non-sequential) `getCatalog()` race, which adds disproportionate complexity/flakiness risk for this narrow additional branch; it's covered by code reasoning (`retireSessionIfCurrent`'s own safe no-op-if-superseded identity check) plus the existing \"in-flight invalidated\" test proving the overlapping-generation catalog mechanics themselves are unaffected.\n- `pnpm tsgo:core` (core prod typecheck) and the core test-types lane → clean; verified the checker genuinely inspects the touched file by injecting then reverting a deliberate type error.\n- `pnpm exec oxfmt --check` → clean. `node scripts/run-oxlint.mjs` → clean after two justified `oxlint-disable-next-line unicorn/prefer-add-event-listener` comments (the MCP SDK `Client` exposes these as plain callback properties, not an `EventTarget`).\n- `git diff --check` (upstream/main...HEAD) → clean.\n",
+        "branch": "fix/mcp-stdio-close-lifecycle",
+        "head_sha": "16aef7e7298815d2a48afa58cd45724e165e6e56",
+        "author": "masatohoshino",
+        "labels": [
+          "agents",
+          "size: M",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/agent-bundle-mcp-runtime.test.ts",
+            "additions": 263,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-bundle-mcp-runtime.ts",
+            "additions": 54,
+            "deletions": 26,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 317,
+        "deletions": 26,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98738",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98738.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 62,
+            "SKIPPED": 35,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 604,
+    "total_ms": 2125,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 330
+        "ms": 275
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1632
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +160,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 260
+        "ms": 192
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
