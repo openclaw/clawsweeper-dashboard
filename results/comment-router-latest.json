@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T06:57:53.353Z",
-  "repo": "openclaw/agent-skills",
+  "generated_at": "2026-07-01T06:58:08.946Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T03:57:53.082Z",
+  "since": "2026-07-01T03:58:06.402Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    42
+    98456
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,140 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98456:4851151329:2026-07-01T06:58:02Z:clawsweeper_auto_repair",
+      "comment_id": "4851151329",
+      "comment_version_key": "4851151329:2026-07-01T06:58:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98456#issuecomment-4851151329",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98456,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T06:52:09Z",
+      "comment_updated_at": "2026-07-01T06:58:02Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=2924c31960bb690ba3eadaf0ceab84401496f5cd)",
+      "review_summary": "The PR replaces unbounded browser-control HTTP error and success body reads with SDK bounded readers and adds loopback boundary tests.\n\nPR surface: Source +19, Tests +232. Total +251 across 2 files.\n\nReproducibility: yes. at source level: current main uses unbounded `res.text()` and `res.json()` in the HTTP browser-control path, and the PR body supplies a loopback test/mutation proof. I did not run a current-main repro because this review is read-only.",
+      "review_followup": "- [P1] The code fixes are mechanical, but the external-PR real proof gate and hard-cap compatibility decision need contributor or maintainer action before any repair lane should be requested.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "2924c31960bb690ba3eadaf0ceab84401496f5cd",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(browser): bound success body read in fetchHttpJson to prevent OOM",
+        "body": "## What Problem This Solves\n\n`fetchHttpJson` reads the browser-control server's success response body with a bare `res.json()` (line 286). If the browser control server — our own code running on loopback — returns an unexpectedly large JSON payload (e.g. a malformed snapshot response containing 50 MB of base64-encoded data), the unbounded read buffers the entire payload into a parsed object, which can OOM the gateway process.\n\nWhile normal browser-control responses (status, profiles, tab lists, actions) are well under 1 KB, the snapshot endpoint returns computed ARIA trees whose size depends on page complexity. A bug in the upstream server or a pathological page could produce a response large enough to exhaust the Node heap.\n\n## Why This Change Was Made\n\nThe fix replaces the bare `res.json()` with `readResponseWithLimit` capped at 16 MiB — the same cap used by `PROVIDER_JSON_RESPONSE_MAX_BYTES` across the provider layer. The bounded reader streams the body, cancels the fetch mid-stream when the cap is exceeded, and throws a descriptive error instead of materializing the full payload.\n\nThis is the second half of bounding `fetchHttpJson`'s response reads. The error path was capped at 16 KiB in a preceding change; this change caps the success path at 16 MiB.\n\n## User Impact\n\nNormal browser tool operation is unchanged: all existing response types (status, tabs, profiles, actions, snapshots) fit well within 16 MiB. The only behavioral difference is that a pathological response exceeding 16 MiB now throws `\"Browser control response exceeds 16777216 bytes\"` instead of silently consuming unbounded memory.\n\n## Evidence\n\n### Real behavior proof\n\n- **Behavior addressed**: `fetchHttpJson` success path buffers 17 MiB streaming JSON body → Object; fixed path cancels the stream at 16 MiB and throws an overflow error.\n- **Real environment tested**: Loopback HTTP server on 127.0.0.1, Node 22, Linux.\n- **Exact steps**:\n  1. Start a loopback `node:http` server returning HTTP 200 with a 17 MiB streaming JSON body.\n  2. Call `fetchBrowserJson(\"http://127.0.0.1:<port>/large\")` through the real function path.\n  3. Assert the call throws with `\"exceeds\"` and the cap value `\"16777216\"` in the error message.\n  4. Assert a small JSON response (`{\"ok\":true}`) still round-trips correctly.\n- **Observed result**: Before fix — `result = { items: [] }` (17 MiB silently parsed, no error). After fix — throws `Error: Browser control response exceeds 16777216 bytes (got 17825792)`.\n- **What was not tested**: Remote browser control server availability; snapshot endpoint size under realistic page complexity; the SSRF guard path (mocked in test); the dispatcher transport path (unchanged).\n\n### Validation Evidence\n\n```\npnpm test extensions/browser/src/browser/client-fetch.error-body-boundary.test.ts\nTest Files  1 passed (1)\n     Tests  4 passed (4)\n\ngit stash && pnpm test ...  # mutation check\nTest Files  1 failed (1)\n     Tests  1 failed | 3 passed (4)\n→ expected { items: [] } to be an instance of Error  ← 17 MiB silently parsed\n\ngit stash pop && pnpm test ...\nTest Files  1 passed (1)\n     Tests  4 passed (4)\n```\n\n### Security & Privacy / Compatibility\n\nNo new configuration, no credential changes, no protocol changes. 16 MiB cap matches the established provider-level cap. No compat risk: the browser control server is OpenClaw's own code, and all normal responses are dramatically smaller than 16 MiB.\n\n---\n\n_AI-assisted._\n",
+        "branch": "fix/browser-success-body-cap",
+        "head_sha": "6645fe0999bffc48d7933da391f92033a7e83425",
+        "author": "wings1029",
+        "labels": [
+          "size: M",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/browser/src/browser/client-fetch.error-body-boundary.test.ts",
+            "additions": 234,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/browser/src/browser/client-fetch.ts",
+            "additions": 21,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 255,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98456",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98456.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 92,
+          "gatingTotal": 87,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 50,
+            "SKIPPED": 33,
+            "IN_PROGRESS": 4,
+            "FAILURE": 4
+          },
+          "blockers": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "pending": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-3:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 461,
+    "total_ms": 2868,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 262
+        "ms": 486
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2044
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +174,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 190
+        "ms": 312
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
