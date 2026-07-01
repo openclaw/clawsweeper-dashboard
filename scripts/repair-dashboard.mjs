@@ -13,17 +13,17 @@ const CLOSE_ACTIONS = new Set([
 ]);
 const MERGE_ACTIONS = new Set(["merge_candidate", "merge_canonical"]);
 const LANE_STATES = [
-  "bot_challenged",
-  "needs_repair",
-  "repair_running",
-  "repair_pushed",
-  "waiting_checks",
-  "waiting_review",
-  "needs_human",
-  "ready_to_merge",
-  "merged",
-  "closed",
-  "blocked",
+  "maintainer_input",
+  "merge_ready",
+  "merge_not_authorized",
+  "checks_blocked",
+  "repair_open",
+  "automation_active",
+  "action_planned",
+  "automation_failed",
+  "automation_blocked",
+  "reviewed_no_action",
+  "completed",
 ];
 
 export function renderRepairDashboard(root) {
@@ -62,7 +62,7 @@ export function renderRepairDashboard(root) {
     ["blocked", "failed"].includes(String(row.action.status ?? "")),
   );
   const inspectionRows = inspectionQueue(latest, failedFixRows, blockedRows);
-  const ownerDashboard = ownerActionDashboard(latest, closedRows, mergedRows);
+  const ownerDashboard = ownerActionDashboard(latest);
   const totals = {
     latest: latest.length,
     runs: records.length,
@@ -115,29 +115,35 @@ ${rowsOrNone(ownerDashboard.summaryRows, 3)}
 | --- | ---: |
 ${rowsOrNone(ownerDashboard.stateRows, 2)}
 
-#### Needs Nico
+#### Maintainer Action
 
-| Repository | Item | Lane state | Need | Updated | Cluster | Run |
+| Repository | Item | Lane state | Recorded need | Updated | Cluster | Run |
 | --- | --- | --- | --- | --- | --- | --- |
-${rowsOrNone(ownerDashboard.needsNico.slice(0, 15).map(ownerActionRow), 7)}
+${rowsOrNone(ownerDashboard.maintainerAction.slice(0, 15).map(ownerActionRow), 7)}
 
-#### Automation Running
+#### Automation Snapshot
 
-| Repository | Item | Lane state | Automation | Updated | Cluster | Run |
+| Repository | Item | Lane state | Recorded status | Updated | Cluster | Run |
 | --- | --- | --- | --- | --- | --- | --- |
-${rowsOrNone(ownerDashboard.automationRunning.slice(0, 15).map(ownerActionRow), 7)}
+${rowsOrNone(ownerDashboard.automationSnapshot.slice(0, 15).map(ownerActionRow), 7)}
 
-#### Ready/Autonomous
+#### Intervention Needed
 
-| Repository | Item | Lane state | Next automatic action | Updated | Cluster | Run |
+| Repository | Item | Lane state | Recorded blocker | Updated | Cluster | Run |
 | --- | --- | --- | --- | --- | --- | --- |
-${rowsOrNone(ownerDashboard.readyAutonomous.slice(0, 15).map(ownerActionRow), 7)}
+${rowsOrNone(ownerDashboard.interventionNeeded.slice(0, 15).map(ownerActionRow), 7)}
 
-#### Done
+#### No Pending Action
 
-| Repository | Item | Lane state | Outcome | Updated | Cluster | Run |
+| Repository | Item | Lane state | Latest result | Updated | Cluster | Run |
 | --- | --- | --- | --- | --- | --- | --- |
-${rowsOrNone(ownerDashboard.done.slice(0, 15).map(ownerActionRow), 7)}
+${rowsOrNone(ownerDashboard.noPendingAction.slice(0, 15).map(ownerActionRow), 7)}
+
+#### Completed
+
+| Repository | Item | Lane state | Recorded outcome | Updated | Cluster | Run |
+| --- | --- | --- | --- | --- | --- | --- |
+${rowsOrNone(ownerDashboard.completed.slice(0, 15).map(ownerActionRow), 7)}
 
 ### Clusters Needing Inspection
 
@@ -214,27 +220,23 @@ function inspectionQueue(latest, failedFixRows, blockedRows) {
   );
 }
 
-function ownerActionDashboard(latest, closedRows, mergedRows) {
+function ownerActionDashboard(latest) {
   const latestRows = latest.map(ownerRowFromRecord);
-  const activeRows = latestRows.filter((row) => !["merged", "closed"].includes(row.state));
-  const doneRows = [
-    ...mergedRows.map((row) => ownerRowFromAction(row, "merged")),
-    ...closedRows.map((row) => ownerRowFromAction(row, "closed")),
-  ].sort((a, b) => Date.parse(b.updatedAt ?? "") - Date.parse(a.updatedAt ?? ""));
-  const allRows = [...activeRows, ...doneRows];
   const bucketed = {
-    needsNico: activeRows.filter((row) => row.bucket === "needs_nico"),
-    automationRunning: activeRows.filter((row) => row.bucket === "automation_running"),
-    readyAutonomous: activeRows.filter((row) => row.bucket === "ready_autonomous"),
-    done: doneRows,
+    maintainerAction: latestRows.filter((row) => row.bucket === "maintainer_action"),
+    automationSnapshot: latestRows.filter((row) => row.bucket === "automation_snapshot"),
+    interventionNeeded: latestRows.filter((row) => row.bucket === "intervention_needed"),
+    noPendingAction: latestRows.filter((row) => row.bucket === "no_pending_action"),
+    completed: latestRows.filter((row) => row.bucket === "completed"),
   };
   const stateCounts = new Map(LANE_STATES.map((state) => [state, 0]));
-  for (const row of allRows) stateCounts.set(row.state, (stateCounts.get(row.state) ?? 0) + 1);
+  for (const row of latestRows) stateCounts.set(row.state, (stateCounts.get(row.state) ?? 0) + 1);
   const summaryRows = [
-    ["Needs Nico", bucketed.needsNico.length, "approve merge/deploy, choose policy, provide access, approve broad fix, hold/close"],
-    ["Automation Running", bucketed.automationRunning.length, "worker, repair, review, or checks still in motion"],
-    ["Ready/Autonomous", bucketed.readyAutonomous.length, "can merge or close without Nico if this lane is authorized"],
-    ["Done", bucketed.done.length, "recently merged or closed"],
+    ["Maintainer Action", bucketed.maintainerAction.length, "explicit decision, access, or merge authority recorded"],
+    ["Automation Snapshot", bucketed.automationSnapshot.length, "repair, check, or planned action recorded; verify live status"],
+    ["Intervention Needed", bucketed.interventionNeeded.length, "automation failure or blocker recorded"],
+    ["No Pending Action", bucketed.noPendingAction.length, "latest record proposes no repair or apply action"],
+    ["Completed", bucketed.completed.length, "latest record contains an executed merge or close"],
   ].map(([label, count, meaning]) => `| ${label} | ${count} | ${meaning} |`);
   const stateRows = [...stateCounts.entries()].map(([state, count]) => `| ${state} | ${count} |`);
   const recapLines = ownerRecapLines(bucketed, latest.length);
@@ -242,14 +244,13 @@ function ownerActionDashboard(latest, closedRows, mergedRows) {
 }
 
 function ownerRecapLines(bucketed, latestCount) {
-  const activeCount = bucketed.needsNico.length + bucketed.automationRunning.length + bucketed.readyAutonomous.length;
   return [
-    "- Flow: bot challenge -> repair/fix -> checks/review -> merge or close.",
-    `- Current snapshot: ${countLabel(activeCount, "active lane")} and ${countLabel(bucketed.done.length, "done lane")} from ${countLabel(latestCount, "latest cluster")}: ${bucketed.needsNico.length} need Nico, ${bucketed.automationRunning.length} automation running, ${bucketed.readyAutonomous.length} ready/autonomous.`,
-    ownerRecapItem("Nico first", bucketed.needsNico[0], "nothing needs Nico right now"),
-    ownerRecapItem("Automation first", bucketed.automationRunning[0], "nothing is waiting on automation"),
-    ownerRecapItem("Ready/autonomous first", bucketed.readyAutonomous[0], "nothing is queued for autonomous action"),
-    ownerRecapItem("Done latest", bucketed.done[0], "nothing recently merged or closed"),
+    "- Snapshot only: lane states reflect the latest durable run records, not live GitHub state; verify linked items before action.",
+    `- Latest records: ${countLabel(latestCount, "cluster")}: ${bucketed.maintainerAction.length} maintainer action, ${bucketed.automationSnapshot.length} automation snapshot, ${bucketed.interventionNeeded.length} intervention needed, ${bucketed.noPendingAction.length} no pending action, ${bucketed.completed.length} completed.`,
+    ownerRecapItem("Maintainer first", bucketed.maintainerAction[0], "no explicit maintainer action recorded"),
+    ownerRecapItem("Intervention first", bucketed.interventionNeeded[0], "no automation blocker recorded"),
+    ownerRecapItem("Automation latest", bucketed.automationSnapshot[0], "no open repair or check state recorded"),
+    ownerRecapItem("Completed latest", bucketed.completed[0], "no completed action in the latest records"),
   ];
 }
 
@@ -259,7 +260,7 @@ function countLabel(count, singular) {
 
 function ownerRecapItem(label, row, emptyText) {
   if (!row) return `- ${label}: ${emptyText}.`;
-  const item = targetLink(row.record, row.action ?? {}) || clusterLink(row.record);
+  const item = ownerItemLink(row.record, row.action ?? {}) || clusterLink(row.record);
   return `- ${label}: ${repoLink(row.record)} ${item} is ${row.state}: ${truncate(row.reason, 140)}.`;
 }
 
@@ -270,113 +271,208 @@ function ownerRowFromRecord(record) {
     record,
     action: primaryAction(record, state),
     state,
-    bucket: ownerBucket(state, reason),
+    bucket: ownerBucket(state),
     reason,
     updatedAt: record.published_at ?? "",
   };
 }
 
-function ownerRowFromAction(row, state) {
-  const action = row.action;
-  return {
-    record: row.record,
-    action,
-    state,
-    bucket: "done",
-    reason: action.title || action.reason || action.action || "completed",
-    updatedAt: action.closed_at ?? action.merged_at ?? row.record.published_at ?? "",
-  };
-}
-
 function laneState(record) {
   const needsHuman = record.needs_human ?? [];
+  const actions = record.actions ?? [];
   const fixActions = record.fix_actions ?? [];
   const applyActions = record.apply_actions ?? [];
-  if (applyActions.some((action) => action.status === "executed" && MERGE_ACTIONS.has(String(action.action)))) {
-    return "merged";
-  }
-  if (applyActions.some((action) => action.status === "executed" && CLOSE_ACTIONS.has(String(action.action)))) {
-    return "closed";
-  }
-  if (needsHuman.length > 0 || record.result_status === "needs_human") return "needs_human";
-  if (hasRunningAction(fixActions) || hasRunningAction(applyActions) || isWorkflowRunning(record)) {
-    return "repair_running";
-  }
-  if (applyActions.some((action) => action.status === "ready" && MERGE_ACTIONS.has(String(action.action)))) {
-    return "ready_to_merge";
-  }
-  if (applyActions.some((action) => action.status === "blocked" && isChecksReason(action.reason))) {
-    return "waiting_checks";
-  }
-  if (fixActions.some((action) => ["pushed", "opened"].includes(String(action.status ?? "")))) {
-    if (applyActions.some((action) => action.status === "blocked" && isAuthorizationReason(action.reason))) {
-      return "repair_pushed";
-    }
-    return "waiting_review";
+  if (
+    applyActions.some(
+      (action) =>
+        action.status === "executed" &&
+        (MERGE_ACTIONS.has(String(action.action)) || CLOSE_ACTIONS.has(String(action.action))),
+    )
+  ) {
+    return "completed";
   }
   if (
-    fixActions.some((action) => ["blocked", "failed"].includes(String(action.status ?? ""))) ||
-    applyActions.some((action) => ["blocked", "failed"].includes(String(action.status ?? ""))) ||
-    record.result_status === "blocked" ||
+    needsHuman.length > 0 ||
+    record.result_status === "needs_human" ||
+    maintainerAction(actions)
+  ) {
+    return "maintainer_input";
+  }
+  if (applyActions.some((action) => action.status === "ready" && MERGE_ACTIONS.has(String(action.action)))) {
+    return "merge_ready";
+  }
+  if (
+    applyActions.some(
+      (action) =>
+        action.status === "blocked" &&
+        MERGE_ACTIONS.has(String(action.action)) &&
+        isAuthorizationReason(action.reason),
+    )
+  ) {
+    return "merge_not_authorized";
+  }
+  if (applyActions.some((action) => action.status === "blocked" && isChecksReason(action.reason))) {
+    return "checks_blocked";
+  }
+  if (
+    fixActions.some((action) => action.status === "failed") ||
+    applyActions.some((action) => action.status === "failed") ||
+    actions.some((action) => action.status === "failed") ||
     record.workflow_conclusion === "failure"
   ) {
-    return "blocked";
+    return "automation_failed";
   }
-  if (looksLikeChallengedPr(record)) return "bot_challenged";
-  return "needs_repair";
+  if (
+    fixActions.some((action) => action.status === "blocked") ||
+    applyActions.some((action) => action.status === "blocked") ||
+    actions.some((action) => action.status === "blocked") ||
+    record.result_status === "blocked"
+  ) {
+    return "automation_blocked";
+  }
+  if (hasRepairOutput(fixActions)) return "repair_open";
+  if (hasRunningAction(fixActions) || hasRunningAction(applyActions) || isWorkflowRunning(record)) {
+    return "automation_active";
+  }
+  if (plannedAction(actions)) return "action_planned";
+  return "reviewed_no_action";
 }
 
 function primaryAction(record, state) {
+  const actions = record.actions ?? [];
   const fixActions = record.fix_actions ?? [];
   const applyActions = record.apply_actions ?? [];
-  if (["ready_to_merge", "waiting_checks", "repair_pushed", "merged", "closed"].includes(state)) {
-    return applyActions.find((action) => action.target || action.url || action.pr) ?? fixActions[0] ?? null;
-  }
-  if (["waiting_review", "repair_running"].includes(state)) {
-    return fixActions.find((action) => action.pr || action.url || action.target) ?? applyActions[0] ?? null;
-  }
-  if (state === "blocked") {
+  if (state === "maintainer_input") {
     return (
-      fixActions.find((action) => ["blocked", "failed"].includes(String(action.status ?? ""))) ??
-      applyActions.find((action) => ["blocked", "failed"].includes(String(action.status ?? ""))) ??
+      maintainerAction(actions) ??
+      applyActions.find((action) => action.target || action.url || action.pr) ??
+      fixActions[0] ??
       null
     );
   }
-  return applyActions[0] ?? fixActions[0] ?? null;
+  if (state === "completed") {
+    return applyActions.find(
+      (action) =>
+        action.status === "executed" &&
+        (MERGE_ACTIONS.has(String(action.action)) || CLOSE_ACTIONS.has(String(action.action))),
+    );
+  }
+  if (state === "merge_ready") {
+    return applyActions.find(
+      (action) => action.status === "ready" && MERGE_ACTIONS.has(String(action.action)),
+    );
+  }
+  if (state === "merge_not_authorized") {
+    return applyActions.find(
+      (action) =>
+        action.status === "blocked" &&
+        MERGE_ACTIONS.has(String(action.action)) &&
+        isAuthorizationReason(action.reason),
+    );
+  }
+  if (state === "checks_blocked") {
+    return applyActions.find(
+      (action) => action.status === "blocked" && isChecksReason(action.reason),
+    );
+  }
+  if (state === "repair_open") {
+    return repairOutput(fixActions) ?? applyActions[0] ?? null;
+  }
+  if (state === "automation_active") {
+    return runningAction(fixActions) ?? runningAction(applyActions) ?? null;
+  }
+  if (state === "action_planned") return plannedAction(actions);
+  if (["automation_failed", "automation_blocked"].includes(state)) {
+    return (
+      fixActions.find((action) => ["blocked", "failed"].includes(String(action.status ?? ""))) ??
+      applyActions.find((action) => ["blocked", "failed"].includes(String(action.status ?? ""))) ??
+      actions.find((action) => action.status === "failed") ??
+      actions.find((action) => action.status === "blocked") ??
+      plannedAction(actions) ??
+      null
+    );
+  }
+  return applyActions.find((action) => action.target || action.url || action.pr) ?? fixActions[0] ?? null;
 }
 
 function ownerNeed(record, state) {
   const action = primaryAction(record, state);
-  if (state === "needs_human") return (record.needs_human ?? []).join("; ") || record.summary || "human decision needed";
-  if (state === "ready_to_merge") return action?.reason || "approve merge/automerge";
-  if (state === "repair_pushed") return action?.reason || "repair pushed; merge authority is not enabled for this lane";
-  if (state === "waiting_checks") return action?.reason || "checks are still running";
-  if (state === "waiting_review") return "repair PR is open; wait for review/checks";
-  if (state === "repair_running") return "worker, repair, review, or checks are in progress";
-  if (state === "blocked") return action?.reason || record.summary || "blocked";
-  if (state === "bot_challenged") return "bot challenged the PR; wait for repair command or maintainer decision";
-  if (state === "needs_repair") return record.summary || "repair has not started";
+  if (state === "maintainer_input") {
+    return (
+      (record.needs_human ?? []).join("; ") ||
+      action?.reason ||
+      record.summary ||
+      "maintainer input recorded"
+    );
+  }
+  if (state === "merge_ready") return action?.reason || "merge-ready action recorded";
+  if (state === "merge_not_authorized") return action?.reason || "merge authority is not enabled for this lane";
+  if (state === "checks_blocked") return action?.reason || "checks blocked the recorded action";
+  if (state === "repair_open") return action?.reason || "repair branch or PR recorded; verify live status";
+  if (state === "automation_active") return action?.reason || "active automation state recorded; verify live status";
+  if (state === "action_planned") return action?.reason || "automation action planned in the latest record";
+  if (state === "automation_failed") return action?.reason || record.summary || "automation failure recorded";
+  if (state === "automation_blocked") return action?.reason || record.summary || "automation blocker recorded";
+  if (state === "reviewed_no_action") return record.summary || "latest record has no pending action";
   return action?.title || action?.reason || record.summary || state;
 }
 
-function ownerBucket(state, reason) {
-  if (["needs_human", "ready_to_merge", "repair_pushed", "blocked"].includes(state)) return "needs_nico";
-  if (["repair_running", "waiting_checks", "waiting_review"].includes(state)) return "automation_running";
-  if (["bot_challenged", "needs_repair"].includes(state)) return "ready_autonomous";
-  if (["merged", "closed"].includes(state)) return "done";
-  if (String(reason ?? "").includes("job does not allow merge")) return "needs_nico";
-  return "ready_autonomous";
+function ownerBucket(state) {
+  if (["maintainer_input", "merge_ready", "merge_not_authorized"].includes(state)) {
+    return "maintainer_action";
+  }
+  if (["checks_blocked", "repair_open", "automation_active", "action_planned"].includes(state)) {
+    return "automation_snapshot";
+  }
+  if (["automation_failed", "automation_blocked"].includes(state)) return "intervention_needed";
+  if (state === "completed") return "completed";
+  return "no_pending_action";
+}
+
+function hasRepairOutput(actions) {
+  return Boolean(repairOutput(actions));
 }
 
 function hasRunningAction(actions) {
-  return actions.some((action) =>
-    ["queued", "in_progress", "running", "pending", "planned"].includes(String(action.status ?? "")),
+  return Boolean(runningAction(actions));
+}
+
+function runningAction(actions) {
+  return actions.find((action) =>
+    ["queued", "in_progress", "running", "pending", "planned"].includes(
+      String(action.status ?? ""),
+    ),
   );
 }
 
 function isWorkflowRunning(record) {
   return ["queued", "in_progress", "waiting", "requested"].includes(
     String(record.workflow_status ?? "").toLowerCase(),
+  );
+}
+
+function repairOutput(actions) {
+  return actions.find(
+    (action) =>
+      ["open_fix_pr", "repair_contributor_branch", "execute_fix"].includes(String(action.action ?? "")) &&
+      ["opened", "pushed", "updated"].includes(String(action.status ?? "")),
+  );
+}
+
+function maintainerAction(actions) {
+  return actions.find(
+    (action) =>
+      ["needs_human", "route_security"].includes(String(action.action ?? "")) &&
+      ["planned", "blocked", "skipped"].includes(String(action.status ?? "")),
+  );
+}
+
+function plannedAction(actions) {
+  return actions.find(
+    (action) =>
+      action.status === "planned" &&
+      !String(action.action ?? "").startsWith("keep_") &&
+      !["needs_human", "route_security"].includes(String(action.action ?? "")),
   );
 }
 
@@ -388,11 +484,6 @@ function isAuthorizationReason(reason) {
   return /job does not allow merge|intentionally blocked|not authorized|permission/i.test(
     String(reason ?? ""),
   );
-}
-
-function looksLikeChallengedPr(record) {
-  const cluster = String(record.cluster_id ?? "");
-  return cluster.startsWith("automerge-") || /review|proof|challenge/i.test(String(record.summary ?? ""));
 }
 
 function blockedReasonRows(rows) {
@@ -475,7 +566,19 @@ function closeRow(row) {
 }
 
 function ownerActionRow(row) {
-  return `| ${repoLink(row.record)} | ${targetLink(row.record, row.action ?? {})} | ${tableCell(row.state)} | ${truncate(row.reason, 150)} | ${formatTimestamp(row.updatedAt)} | ${clusterLink(row.record)} | ${runLink(row.record)} |`;
+  return `| ${repoLink(row.record)} | ${ownerItemLink(row.record, row.action ?? {})} | ${tableCell(row.state)} | ${truncate(row.reason, 150)} | ${formatTimestamp(row.updatedAt)} | ${clusterLink(row.record)} | ${runLink(row.record)} |`;
+}
+
+function ownerItemLink(record, action) {
+  const target = targetLink(record, action);
+  if (target) return target;
+  for (const value of [action.pr, action.url]) {
+    const match = String(value ?? "").match(
+      /^https:\/\/github\.com\/[^/]+\/[^/]+\/(?:issues|pull)\/(\d+)$/,
+    );
+    if (match) return link(`#${match[1]}`, value);
+  }
+  return "";
 }
 
 function repoLink(record) {
