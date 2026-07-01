@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-910"
 mode: "autonomous"
-run_id: "28539094166"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28539094166"
+run_id: "28542181224"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28542181224"
 head_sha: "0c85aae0ecbcccf48586be0926893302c559df5e"
 workflow_conclusion: "failure"
 result_status: "blocked"
-published_at: "2026-07-01T18:32:39.398Z"
+published_at: "2026-07-01T19:27:39.223Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/910"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/910"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28539094166](https://github.com/openclaw/clawsweeper/actions/runs/28539094166)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28542181224](https://github.com/openclaw/clawsweeper/actions/runs/28542181224)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/910
 
 ## Summary
 
-Issue #910 remains valid on current main 14022dc71222860b107797ff62b1acc8e08e0a8f. Current docs mention Node Mode, pairing, allowCommands, local WSL gateway setup, and operator scopes, but the beginner-facing operator/node/gateway concept model is still scattered across README.md, docs/SETUP.md, docs/ONBOARDING_WIZARD.md, and deeper architecture/research docs. A narrow docs-only PR is appropriate, but this worker cannot implement it because the checkout is read-only and the target branch is not present locally. No files were changed and validation was not run.
+Issue #910 remains valid on current main 8b857ecbb1f5f41016e7d48966100e6fb10fdba6. Current docs mention Node Mode, pairing, allowCommands, local WSL gateway setup, and operator scopes, but the beginner-facing operator/node/gateway concept model is still scattered across README.md, docs/SETUP.md, docs/ONBOARDING_WIZARD.md, and deeper architecture/research docs. A narrow docs-only PR is appropriate, but this worker cannot implement it because the checkout is read-only and the target branch is not present locally. No files were changed and validation was not run.
 
 ## Impact
 
