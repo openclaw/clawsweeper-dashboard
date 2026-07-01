@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T03:33:26.145Z",
+  "generated_at": "2026-07-01T03:33:39.872Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T00:33:25.868Z",
+  "since": "2026-07-01T00:33:37.993Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    98365
+    98364
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,132 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98364:4849988245:2026-07-01T03:33:34Z:clawsweeper_auto_repair",
+      "comment_id": "4849988245",
+      "comment_version_key": "4849988245:2026-07-01T03:33:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98364#issuecomment-4849988245",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98364,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T03:28:07Z",
+      "comment_updated_at": "2026-07-01T03:33:34Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=656c1c56e8099cdc290646da5cbfa24ae2b30334)",
+      "review_summary": "The PR retries existing memory-wiki page reads once before falling back to an empty string during source re-ingest and imported source page writes.\n\nPR surface: Source +20, Tests +38. Total +58 across 3 files.\n\nReproducibility: yes. Source inspection on current main shows both existing-page read sites catch failures to an empty string, which skips Notes preservation and writes a regenerated page over user-authored notes; the linked issue also provides fault-injected proof for the ingest path.",
+      "review_followup": "- [P1] A maintainer should choose the canonical branch against https://github.com/openclaw/openclaw/pull/98360 and require fail-closed retry exhaustion plus real after-fix proof before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "656c1c56e8099cdc290646da5cbfa24ae2b30334",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-wiki): retry transient existing-page read failures before writing (#98345)",
+        "body": "Fixes #98345.\n\n## What Problem This Solves\n\nmemory-wiki silently discards the user's `## Notes` human block when the re-read of an existing wiki page transiently fails during source re-ingest. The `.catch(() => \"\")` swallow at two sites turns a real read error into `existing = \"\"`, which routes past `preserveHumanNotesBlock` and overwrites the page without notes. The sync fingerprint advances, so the loss never self-heals.\n\nThis is a hole in the #95614 fix (`preserveHumanNotesBlock`), which only applies when the read succeeds. The writer path (`vault-page-write.ts`) already retries the exact same concurrent-rewrite race, but the reader path swallows it.\n\n## Why This Change Was Made\n\nReplaced `.catch(() => \"\")` with a retry-once pattern at both affected sites:\n\n- **`ingest.ts:90`** — source ingest writer\n- **`source-page-shared.ts:55`** — imported source page writer\n\nBoth now retry the read after a 100ms delay (matching the `vault-page-write.ts` concurrent-rewrite retry window). On persistent failure the read still falls back to `\"\"`, preserving existing worst-case behavior, but transient failures no longer wipe notes.\n\n## User Impact\n\nUser hand-written notes in the `## Notes` block survive transient read failures during re-ingest. The content update still lands, and the notes block is preserved through `preserveHumanNotesBlock` as intended. No config changes, no unsafe-local changes.\n\n## Evidence\n\n**Behavior addressed**: Transient existing-page read failure (EIO, concurrent-rewrite race) produces `existing = \"\"`, bypasses `preserveHumanNotesBlock`, and permanently discards user notes.\n\n**Real environment tested**: Node 22.19+, local OpenClaw checkout. Real vault + real `ingestMemoryWikiSource` end-to-end, with the retry pattern verified separately.\n\n**Exact steps or command run after this patch**:\n\n```\nnode scripts/run-vitest.mjs extensions/memory-wiki/src/ingest-human-notes.test.ts --run\n```\n\n**Evidence after fix**:\n\n```\nnode scripts/run-vitest.mjs extensions/memory-wiki/src/ingest-human-notes.test.ts --run\n Test Files  1 passed (1)\n      Tests  6 passed (6)\n```\n\nRetry behavior proof:\n\n```js\n// BEFORE fix: single read, swallow error → wipe notes\nconst existing = await fs.readFile(pagePath, \"utf8\").catch(() => \"\");\n// Transient failure → existing = \"\" → preserveHumanNotesBlock bypassed\n\n// AFTER fix: retry once → recover from transient failure\nconst existing = await fs.readFile(pagePath, \"utf8\").catch(async () => {\n    await new Promise((r) => { setTimeout(r, 100); });\n    return await fs.readFile(pagePath, \"utf8\").catch(() => \"\");\n});\n// Transient failure → 100ms delay → retry → notes preserved\n```\n\n```\nnode scripts/run-oxlint.mjs extensions/memory-wiki/src/ingest.ts extensions/memory-wiki/src/source-page-shared.ts\n(passed, exit 0)\n```\n\n**Observed result after fix**: A transient read failure on the existing page no longer produces `existing = \"\"`. The retry gives the filesystem a second chance (matching the concurrent-rewrite window that the writer already handles), and 6 existing human-notes tests continue to pass.\n\n**What was not tested**: Direct fault-injection of the `source-page-shared.ts:55` sibling path. Both sites share the identical `.catch(() => \"\")` swallow before `preserveHumanNotesBlock`, and the same retry pattern is applied to both.\n\n## Regression Test Plan\n\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/ingest-human-notes.test.ts --run` — 6 passed (+1 re-ingest regression)\n- `node scripts/run-oxlint.mjs extensions/memory-wiki/src/ingest.ts extensions/memory-wiki/src/source-page-shared.ts` — exit 0\n\n## Root Cause\n\nTwo swallow-read-then-overwrite sites conflate \"existing page unreadable (transient)\" with \"no existing page\":\n\n`ingest.ts:90`: `.catch(() => \"\")` turns a real read error into `\"\"`, which is falsy → `preserveHumanNotesBlock` skipped → writes markdown without notes.\n\n`source-page-shared.ts:55`: Same pattern, same consequence.\n\nThe sibling writer `vault-page-write.ts:24-32` already documents and retries the exact transient `path-mismatch` concurrent-rewrite race, but the reads above swallow it instead of retrying.\n\n## AI Assistance\n\n- **AI-assisted**: Yes\n- **Model used**: Claude Opus 4.8 (1M context)\n- **Co-Authored-By**: Already in commit message\n",
+        "branch": "fix/memory-wiki-retry-read-98345",
+        "head_sha": "656c1c56e8099cdc290646da5cbfa24ae2b30334",
+        "author": "maweibin",
+        "labels": [
+          "size: S",
+          "extensions: memory-wiki",
+          "P0",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof",
+          "merge-risk: 🚨 other"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-wiki/src/ingest-human-notes.test.ts",
+            "additions": 38,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/ingest.ts",
+            "additions": 12,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/source-page-shared.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 60,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98364",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98364.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 91,
+          "gatingTotal": 86,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 34,
+            "SUCCESS": 55
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 476,
+    "total_ms": 2130,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 266
+        "ms": 222
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1639
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +166,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 198
+        "ms": 241
       },
       {
         "name": "append_ledger",
