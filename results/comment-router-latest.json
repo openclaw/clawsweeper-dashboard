@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T03:15:51.907Z",
+  "generated_at": "2026-07-01T03:16:01.044Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T00:15:49.867Z",
+  "since": "2026-07-01T00:16:00.308Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     98354
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4849927392
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -37,28 +39,28 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/98354#issuecomment-4849915034",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 98354,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T03:10:51Z",
-      "comment_updated_at": "2026-07-01T03:15:46Z",
+      "issue_number": 98108,
+      "author": "yangpanxydt",
+      "author_id": 294440109,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-01T03:13:40Z",
+      "comment_updated_at": "2026-07-01T03:13:40Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] The remaining blocker is contributor-supplied real behavior proof, which an automated repair lane cannot provide.; Cleared: The diff changes SQLite read handling and tests only; it does not add dependencies, workflows, scripts, permissions, secrets handling, or new code execution paths. (sha=5f642c0f9c08ea31cf403fada6b59296cf87058b)",
-      "review_summary": "The PR changes SQLite delivery queue inflation to return null for corrupted `entry_json` rows, filters corrupt rows out of batch loads, and adds corrupt-row regression tests.\n\nPR surface: Source +6, Tests +162. Total +168 across 2 files.\n\nReproducibility: yes. from source inspection: current main calls `JSON.parse(row.entry_json)` outside a try/catch in the shared queue inflate helper, and startup recovery reads pending session and outbound rows through that path. I did not run the repro because this review is read-only.",
-      "review_followup": "- [P1] The remaining blocker is contributor-supplied real behavior proof, which an automated repair lane cannot provide.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "5f642c0f9c08ea31cf403fada6b59296cf87058b",
+      "expected_head_sha": null,
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -68,101 +70,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(infra): guard delivery queue inflate against corrupted entry_json",
-        "body": "## What Problem This Solves\n\nFixes an issue where a single corrupted `entry_json` row in the SQLite delivery queue (session or outbound) crashes the entire pending-entry load, preventing delivery recovery from making progress. The `inflate()` helper calls `JSON.parse(row.entry_json)` without a try-catch — a corrupt row throws an uncaught `SyntaxError` that propagates through `loadDeliveryQueueEntry` (single load), `loadDeliveryQueueEntries` (batch load — one bad row kills **all** pending entries), `updateDeliveryQueueEntry`, and `moveDeliveryQueueEntryToFailed`. Callers in session-delivery recovery, outbound recovery, and the gateway restart sentinel do not catch this error, so a single corrupt SQLite row can block all queued delivery retries.\n\n## Why This Change Was Made\n\nGuard `inflate()` itself — the shared chokepoint through which all queue reads flow. On parse failure it returns `null`. `loadDeliveryQueueEntry` already returns `null` for a missing row, so corrupt rows are treated the same way (unrecoverable → not found). `loadDeliveryQueueEntries` filters out `null` inflate results, so one corrupt row no longer discards every other pending entry in the same queue. `updateDeliveryQueueEntry` and `moveDeliveryQueueEntryToFailed` now throw a clean `ENOENT` (via `loadDeliveryQueueEntry`) instead of a raw `SyntaxError`, consistent with how they behave when an entry is genuinely absent. No API surface changes.\n\n## User Impact\n\nNo user-visible impact under normal operation. When `entry_json` is somehow corrupted (disk error, manual edit, partial write), delivery recovery now skips the bad entry instead of crashing. Recovery and gateway restart sentinel paths remain operational for the remaining valid entries.\n\n## Evidence\n\n**Regression test (11 tests, all pass):**\n\n```\npnpm test src/infra/delivery-queue-sqlite.test.ts  →  11 passed\n```\n\nCovers: corrupt single-row → `null`, corrupt-in-batch → skipped, all-corrupt-batch → empty array, `updateDeliveryQueueEntry` corrupt → clean ENOENT, `moveDeliveryQueueEntryToFailed` corrupt → clean ENOENT, plus valid-entry round-trips (upsert/load, update, delete).\n\n**Negative control (revert fix → 5 SyntaxError crashes):**\n\n```\ngit stash  # (revert to main)\npnpm test src/infra/delivery-queue-sqlite.test.ts  →  5 failed\n\nFAIL  returns null for a row with corrupted entry_json\n      SyntaxError: Expected property name or '}' in JSON at position 1\nFAIL  skips corrupt rows, returns only valid entries\n      SyntaxError: Expected property name or '}' in JSON at position 1\nFAIL  returns empty array when all rows are corrupt\n      SyntaxError: Unexpected token 'o', \"not json\" is not valid JSON\nFAIL  updateDeliveryQueueEntry with corrupt row → throws ENOENT\n      got SyntaxError instead of ENOENT\nFAIL  moveDeliveryQueueEntryToFailed with corrupt row → throws ENOENT\n      got SyntaxError instead of ENOENT\n```\n\n**Existing tests — no regressions:**\n\n```\npnpm test src/infra/outbound/delivery-queue.storage.test.ts   →  12 passed\npnpm test src/infra/session-delivery-queue.storage.test.ts    →   3 passed\n```",
-        "branch": "fix/delivery-queue-inflate-json-parse",
-        "head_sha": "5f642c0f9c08ea31cf403fada6b59296cf87058b",
-        "author": "pick-cat",
-        "labels": [
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/infra/delivery-queue-sqlite.test.ts",
-            "additions": 162,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/delivery-queue-sqlite.ts",
-            "additions": 9,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 171,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98354",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98354.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 33,
-            "SUCCESS": 55,
-            "IN_PROGRESS": 5,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-lint:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "check-lint:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2277,
+    "total_ms": 2917,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 281
+        "ms": 725
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1745
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -174,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 226
+        "ms": 2181
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
