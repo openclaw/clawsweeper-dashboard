@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-910"
 mode: "autonomous"
-run_id: "28536831262"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28536831262"
+run_id: "28539094166"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28539094166"
 head_sha: "0c85aae0ecbcccf48586be0926893302c559df5e"
 workflow_conclusion: "failure"
 result_status: "blocked"
-published_at: "2026-07-01T17:52:48.013Z"
+published_at: "2026-07-01T18:32:39.398Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/910"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/910"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28536831262](https://github.com/openclaw/clawsweeper/actions/runs/28536831262)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28539094166](https://github.com/openclaw/clawsweeper/actions/runs/28539094166)
 
 Workflow conclusion: failure
 
