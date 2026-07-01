@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T07:46:50.245Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-01T07:48:07.740Z",
+  "repo": "openclaw/clickclack",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T04:46:50.002Z",
+  "since": "2026-07-01T04:48:06.544Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    98476
+    36
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,111 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/clickclack:36:4851606055:2026-07-01T07:48:03Z:clawsweeper_needs_human",
+      "comment_id": "4851606055",
+      "comment_version_key": "4851606055:2026-07-01T07:48:03Z",
+      "comment_url": "https://github.com/openclaw/clickclack/pull/36#issuecomment-4851606055",
+      "repo": "openclaw/clickclack",
+      "target_branch": null,
+      "issue_number": 36,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T07:43:49Z",
+      "comment_updated_at": "2026-07-01T07:48:03Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] This PR needs contributor revision/proof and a maintainer decision if the new config permission contract is intentional, so it is not a safe automation takeover.; Needs attention: The diff touches a stored bearer-token config file and introduces a concrete permission-contract regression for read-only configs.; Review finding: [P1] Preserve read-only config failures — apps/api/cmd/clickclack/client.go:419 (sha=f2f269e81be06c8851b8a53928b78e8cb348e2b9)",
+      "review_summary": "This PR replaces `saveClientConfig`'s direct `os.WriteFile` with a temp-file, sync, chmod, and rename helper in `apps/api/cmd/clickclack/client.go`.\n\nReproducibility: unclear. for a real SIGKILL or power-loss corruption path because I did not exercise that scenario against current main. Source inspection confirms the current save path is a plain `os.WriteFile`, and the PR's read-only overwrite issue is clear from the new rename-based replacement code.",
+      "review_followup": "- [P1] This PR needs contributor revision/proof and a maintainer decision if the new config permission contract is intentional, so it is not a safe automation takeover.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "f2f269e81be06c8851b8a53928b78e8cb348e2b9",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(client): write client config atomically to prevent corruption on interrupted save",
+        "body": "## Problem\n\n`saveClientConfig` (`apps/api/cmd/clickclack/client.go:370`) rewrites the user's `~/.config/clickclack/config.json` with a plain `os.WriteFile`. A crash or interrupt mid-write (SIGKILL, power loss, disk full) truncates the file, and the next command that calls `loadClientConfig` fails at `json.Unmarshal` with no clean recovery path — the user has to manually delete the file to get back to a working CLI.\n\nThe pattern isn't hypothetical for this repo — `apps/api/cmd/clickclack/main.go:439` already uses the atomic-rename pattern for the DB export path.\n\n## Fix\n\nRoute the save path through a `writeClientConfigFile` helper that stages the new content to a sibling temp file, `Sync`s, then `os.Renames` over the destination. The rename is atomic on POSIX, so a torn write can only truncate the *temp* file; the destination is replaced in one atomic step or not at all.\n\n**Storage / permission contract** (explicit, so the behavior change is reviewable — same shape as [`openclaw/plugin-inspector#41`](https://github.com/openclaw/plugin-inspector/pull/41)):\n\n- **Symlink preservation.** `filepath.EvalSymlinks(path)` resolves the destination *before* choosing `filepath.Dir` for the temp file, so a link to `config.json` survives the rewrite (staged temp lands next to the *real* target and renames over the target, not the symlink itself).\n- **Mode preservation.** If the destination exists, its exact mode is re-applied to the temp file before `Rename` — the atomic replace is permission-neutral. A brand-new file gets `0o600`, matching the prior `os.WriteFile` behavior.\n- **Temp cleanup on any staging failure.** `os.Remove(tmpPath)` runs on every failure path — `Write` / `Sync` / `Chmod` / `Close` / `Rename` — not just rename failure. No `.tmp-*` litter on crash.\n- **Boundary note.** Like any temp+rename writer, the replace requires write permission on the parent directory rather than the file. For a config the user's own CLI invocation just wrote, that matches the existing `MkdirAll(dir, 0o700)` precondition.\n\n## Verification\n\n`go test ./apps/api/cmd/clickclack/` on Go 1.26.2:\n\n- New `client_atomic_test.go` — 4/4:\n  - **Round-trips** with trailing newline preserved\n  - **Preserves an existing tighter mode** — seed `0o400`, atomic rewrite, mode is still `0o400`\n  - **Preserves a symlink** — link to `real` stays a symlink; `real` receives the new content\n  - **Leaves no temp** on a forced `os.Rename` error (destination is a non-empty directory)\n- Full `apps/api/cmd/clickclack/...` package: existing tests unaffected.\n- `gofmt -l` and `go vet ./apps/api/cmd/clickclack/`: clean.\n",
+        "branch": "fix/atomic-client-config-write",
+        "head_sha": "f2f269e81be06c8851b8a53928b78e8cb348e2b9",
+        "author": "krasimirkralev",
+        "labels": [
+          "rating: 🧂 unranked krab",
+          "P2",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof",
+          "merge-risk: 🚨 compatibility"
+        ],
+        "files": [
+          {
+            "path": "apps/api/cmd/clickclack/client.go",
+            "additions": 42,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 42,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-clickclack-36",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clickclack-36.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 0,
+          "gatingTotal": 0,
+          "counts": {},
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 370,
+    "total_ms": 1429,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 232
+        "ms": 246
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 937
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +145,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 127
+        "ms": 220
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
