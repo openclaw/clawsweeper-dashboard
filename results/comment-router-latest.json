@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T09:09:23.168Z",
+  "generated_at": "2026-07-01T09:09:55.084Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T06:09:22.743Z",
+  "since": "2026-07-01T06:09:52.913Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    98499
+    98500
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,133 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98500:4852438998:2026-07-01T09:09:49Z:clawsweeper_needs_human",
+      "comment_id": "4852438998",
+      "comment_version_key": "4852438998:2026-07-01T09:09:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98500#issuecomment-4852438998",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98500,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T09:02:48Z",
+      "comment_updated_at": "2026-07-01T09:09:49Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] No ClawSweeper repair lane is appropriate because there is no concrete code defect to fix; the remaining blockers are contributor real behavior proof and normal CI/maintainer merge handling.; Cleared: The diff is a security hardening change that reuses an existing bounded-response helper and adds no dependency, workflow, permission, generated-code, or secret-handling surface. (sha=7aa5bfbbb8552327cdc0a421f6003fa9678d7ada)",
+      "review_summary": "The PR replaces the Google Meet OAuth token success-path `response.json()` read with a 256 KiB bounded read and adds focused refresh-token tests for overflow and normal JSON parsing.\n\nPR surface: Source +6, Tests +42. Total +48 across 2 files.\n\nReproducibility: yes. Current main has a source-backed reproduction path because `executeGoogleTokenRequest` buffers the successful token response with `response.json()`, and the PR adds an oversized-body test that exercises the same refresh-token path through a real `Response`; I did not run tests because this review is read-only.",
+      "review_followup": "- [P1] No ClawSweeper repair lane is appropriate because there is no concrete code defect to fix; the remaining blockers are contributor real behavior proof and normal CI/maintainer merge handling.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "7aa5bfbbb8552327cdc0a421f6003fa9678d7ada",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(google-meet): bound OAuth token JSON response to prevent unbounded read",
+        "body": "## What Problem This Solves\n\nFixes an issue where the Google Meet OAuth token exchange (`executeGoogleTokenRequest`) reads the Google OAuth token response with `await response.json()`, which has no size limit. The token endpoint (`oauth2.googleapis.com`) is expected to return a tiny JSON object (under 1 KiB), but a misconfigured proxy, compromised endpoint, or MITM could stream an arbitrarily large body and exhaust the gateway process memory.\n\nThe affected surface is the Google Meet OAuth token path — reached via `refreshGoogleMeetAccessToken` (token refresh) and `exchangeGoogleMeetAuthCode` (initial authorization).\n\n## Why This Change Was Made\n\nRead the OAuth token response through the shared `readResponseWithLimit` helper (`openclaw/plugin-sdk/response-limit-runtime`) under a 256 KiB cap, then `JSON.parse` the resulting buffer. This mirrors the existing bounded-read precedent already used across the codebase (response-limit campaign — same helper, same decode shape).\n\nThe error-path read (`readGoogleApiErrorDetail`) was already bounded via `readResponseTextLimited`, so this change only narrows the success-path read.\n\n**Cap sizing:** 256 KiB is ~250× larger than any legitimate Google OAuth token response (typically < 1 KiB for `access_token`, `expires_in`, `token_type`, optional `refresh_token` and `scope`). This is tighter than the 16 MiB generic provider cap and proportionate to the known tiny response size, matching the per-use-case sizing precedent from the response-limit campaign.\n\n**Design (fail-closed):** the bounded read is placed inside the existing `try/finally` in `executeGoogleTokenRequest`. On overflow the error propagates through `refreshGoogleMeetAccessToken` / `exchangeGoogleMeetAuthCode` to the caller. Normal, in-bounds responses parse unchanged; the existing token validation and expiration logic is untouched.\n\n**Non-goal:** this PR does not change the OAuth flow, token validation, or any public API signature.\n\n## User Impact\n\nGoogle Meet OAuth token exchanges are now protected from an OOM crash triggered by an oversized token endpoint response. On overflow the token exchange fails with a clear error message, preventing silent corruption or crash. There is no user-visible change for normal OAuth token responses. No config, API, or schema changes — purely an internal robustness improvement.\n\n## Evidence\n\n### Focused tests\n\n```\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts extensions/google-meet/src/oauth.test.ts\n\n ✓ Google Meet OAuth > builds auth URLs and prefers fresh cached access tokens\n ✓ Google Meet OAuth > refreshes access tokens with a refresh-token grant\n ✓ Google Meet OAuth > refreshes cached access tokens with Date-invalid expiries\n ✓ Google Meet OAuth > falls back when refreshed token lifetimes overflow safe milliseconds\n ✓ Google Meet OAuth > bounds fallback token lifetimes when the process clock is invalid\n ✓ Google Meet OAuth > keeps explicit zero-second token lifetimes immediately stale\n ✓ Google Meet OAuth > falls back to manual paste when the local callback port is occupied\n ✓ Google Meet OAuth > propagates non-listener callback failures without manual fallback\n ✓ Google Meet OAuth > fails closed when the OAuth token response exceeds the size cap\n ✓ Google Meet OAuth > still parses a normal token response under the cap\n\n Test Files  1 passed (1)\n      Tests  10 passed (10)\n```\n\nNew tests:\n- **fails closed when the OAuth token response exceeds the size cap** — creates a 300 KiB body (> 256 KiB cap) via a real `Response` object, drives the real `readResponseWithLimit` path through stubbed global `fetch`, verifies the error propagates.\n- **still parses a normal token response under the cap** — verifies the existing happy-path token exchange still works correctly through the bounded read path (correct `accessToken`, `expiresAt`, `tokenType` extraction).\n\nAll 8 existing tests pass unchanged, confirming the bounded read does not regress normal token exchanges.\n\n### Lint\n\n`oxlint --quiet` is clean (exit 0) on both changed files.\n\n### Mutation check (test is load-bearing)\n\nTemporarily removing the bounded read (restoring `await response.json()`) makes the oversized-body test pass because `response.json()` would buffer the full 300 KiB body without throwing — confirming the cap is load-bearing and the test guards the boundary.\n\n<details>\n<summary>Security and Privacy</summary>\n\n- Hardening fix: removes an unbounded-memory read of an external (Google OAuth) response, closing a DoS/OOM vector reachable via a compromised or MITM'd endpoint.\n- No new data is logged, persisted, or transmitted; the error message contains only the byte limit, no response content.\n- No new dependency — reuses the existing `openclaw/plugin-sdk/response-limit-runtime` helper.\n- Fail-closed: oversized input is rejected rather than partially processed.\n\n</details>\n\n<details>\n<summary>Compatibility</summary>\n\n- Backwards compatible for all normal-size responses: the token field extraction and expiration handling are unchanged.\n- Only oversized (>256 KiB) responses change outcome (now fail closed). 256 KiB is ~250× larger than any legitimate Google OAuth token JSON response.\n- No API, config, or schema changes. Blast radius is low: a single source file plus its self-contained test, no shared infra/mocks touched.\n\n</details>\n\n---\n\nAI-assisted (Claude Code). Implementation and tests were authored with Claude Code (Anthropic). Degree of assistance: the helper-reuse pattern, the per-use-case cap sizing, and the focused tests were drafted by Claude Code, then reviewed and validated locally by the author (focused vitest run + oxlint). The author can explain the technical rationale: the bug is an unbounded `response.json()` buffer in the OAuth token exchange path; the fix swaps in the shared bounded reader under a 256 KiB cap so an oversized body can never OOM the gateway process.\n",
+        "branch": "fix/google-meet-oauth-response-limit",
+        "head_sha": "7aa5bfbbb8552327cdc0a421f6003fa9678d7ada",
+        "author": "sheyanmin",
+        "labels": [
+          "size: S",
+          "plugin: google-meet",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/google-meet/src/oauth.test.ts",
+            "additions": 42,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google-meet/src/oauth.ts",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 49,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98500",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98500.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 91,
+          "gatingTotal": 86,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 34,
+            "SUCCESS": 52,
+            "FAILURE": 3
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-small-whole-3:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-3:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 816,
+    "total_ms": 2452,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 415
+        "ms": 329
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1830
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +167,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 392
+        "ms": 270
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
