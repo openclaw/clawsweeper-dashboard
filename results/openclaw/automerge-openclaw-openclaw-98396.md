@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-98396"
 mode: "autonomous"
-run_id: "28503385325"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28503385325"
-head_sha: "44f0d7ac1222b754e2b2fc5f08c259f83676f84f"
-workflow_conclusion: "failure"
+run_id: "28507834175"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28507834175"
+head_sha: "5bdf6f31c9048d59faf3cf79a23b0a88d7aabbe6"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-01T08:27:44.303Z"
+published_at: "2026-07-01T09:53:22.236Z"
 canonical: "#98396"
 canonical_issue: null
 canonical_pr: "#98396"
 actions_total: 1
 fix_executed: 0
 fix_failed: 0
-fix_blocked: 1
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28503385325](https://github.com/openclaw/clawsweeper/actions/runs/28503385325)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28507834175](https://github.com/openclaw/clawsweeper/actions/runs/28507834175)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -44,9 +44,9 @@ Make PR #98396 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 | Worker actions | 1 |
 | Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 1 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,14 +54,13 @@ Make PR #98396 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/98396 |  | source PR #98396 changed during the repair settle window; requeue against the latest head |
-| automerge_repair_outcome_comment | updated | #98396 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/98396 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #98396 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
