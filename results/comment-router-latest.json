@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T05:49:04.322Z",
+  "generated_at": "2026-07-01T05:49:25.945Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T02:49:02.436Z",
+  "since": "2026-07-01T02:49:22.898Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97727
+    98402
   ],
-  "comment_ids": [
-    4850642806
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 6,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,18 +31,125 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:97727:4850642806:2026-07-01T05:46:36Z:re_review",
-      "comment_id": "4850642806",
-      "comment_version_key": "4850642806:2026-07-01T05:46:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97727#issuecomment-4850642806",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98402:4850266135:2026-07-01T05:49:19Z:clawsweeper_auto_repair",
+      "comment_id": "4850266135",
+      "comment_version_key": "4850266135:2026-07-01T05:49:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4850266135",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97727,
-      "author": "chthtlo",
-      "author_id": 37237335,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-01T05:46:36Z",
-      "comment_updated_at": "2026-07-01T05:46:36Z",
+      "issue_number": 98402,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T04:31:01Z",
+      "comment_updated_at": "2026-07-01T05:49:19Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=8df315ac33082b600f37a48540876b985ab26332)",
+      "review_summary": "The branch wraps channel ingress queue JSON parsing in tagged results, skips or omits corrupt row JSON, validates payloads before claims, and adds SQLite-backed corrupt-row regression tests.\n\nPR surface: Source +67, Tests +219. Total +286 across 2 files.\n\nReproducibility: yes. Source inspection gives a high-confidence path: insert a corrupt pending row sorted before a valid row, then call claimNext() without deriveLaneKey; PR head filters the bad row after a one-row SQL limit and returns null.",
+      "review_followup": "- [P2] One narrow mechanical queue blocker remains, and an automated repair worker could address it without choosing a new product surface.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "8df315ac33082b600f37a48540876b985ab26332",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(infra): guard channel ingress queue parseJson against corrupted JSON",
+        "body": "## What Problem This Solves\n\nFixes an issue where a single corrupted `payload_json`, `metadata_json`, or `completed_metadata_json` row in the SQLite channel ingress queue crashes the entire queue operation. The `parseJson()` helper calls `JSON.parse(value)` without a try-catch. A corrupt row throws an uncaught `SyntaxError` that propagates through `baseRecord()` (called by `listPending`, `listClaims`, `claimNext`, `enqueue`) and `completedRecord()` (called by `enqueue` duplicate detection). One bad row in `listPending()` or `listClaims()` kills **all** entries in that listing. This affects every channel that uses the durable ingress queue for inbound message processing.\n\nAdditionally, `claimNext` and `claim` would UPDATE a pending row to `claimed` status **before** validating the payload could be decoded — so a corrupt payload could become an invisible claimed row, hidden from `listPending`/`listClaims`/`recoverStaleClaims`, permanently blocking queue recovery.\n\n## Why This Change Was Made\n\nThree coordinated changes:\n\n1. **Tagged parse result**: `parseJson()` now returns `{ ok: true, value } | { ok: false }` instead of the ambiguous `unknown | null`. `JSON.parse(\"null\")` is valid and returns `null`, which the old sentinel conflated with parse failure. The tagged result cleanly separates \"valid JSON value\" from \"corrupt input\".\n\n2. **Guard `parseJson` at the chokepoint**: `baseRecord()` returns `null` when `payload_json` is corrupt (unrecoverable). Corrupt `metadata_json`/`completed_metadata_json` is non-fatal — the record is kept with metadata omitted. All callers (`listPending`, `listClaims`, `enqueue`, `claimNext`, `claim`) handle null/omitted results.\n\n3. **Validate before claiming**: `claimNext` calls `baseRecord()` inside `rows.find()` to skip corrupt rows before they are selected, and `claim` pre-reads the pending row and validates `baseRecord()` before issuing the UPDATE. No corrupt row can ever be promoted to `claimed` status.\n\n## User Impact\n\nNo user-visible impact under normal operation. When a channel ingress queue row is somehow corrupted:\n- `listPending` / `listClaims` skip the bad entry instead of crashing\n- `claimNext` / `claim` skip corrupt rows and claim the next valid one\n- `enqueue` duplicate detection works with corrupt metadata omitted\n- Valid JSON `null` payload is correctly preserved (not treated as corrupt)\n\n## Real behavior proof\n\n- **Real environment:** Linux, Node v22.22.0, driving real `createChannelIngressQueue` against a real on-disk SQLite database.\n- **Evidence after fix (23 tests, all pass):**\n\n```text\n$ node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts --run\n Test Files  1 passed (1)\n      Tests  23 passed (23)\n```\n\nNew tests cover: pending row with corrupt `payload_json` → skipped, corrupt `metadata_json` → metadata omitted, claimed row with corrupt payload → skipped, corrupt `completed_metadata_json` → duplicate detection works, `claimNext` skips corrupt → claims next valid, `claim` returns null for corrupt, valid JSON null → preserved.\n\n- **Negative control (pre-fix — 4 SyntaxError crashes):**\n\n```text\n$ git show origin/main:src/channels/message/ingress-queue.ts > /tmp/iq-old.ts   && cp /tmp/iq-old.ts src/channels/message/ingress-queue.ts   && node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts --run\n\n FAIL  skips a pending row with corrupt payload_json in listPending\n       SyntaxError: Expected property name or '}' in JSON at position 1\n       ❯ parseJson (src/channels/message/ingress-queue.ts:222)\n\n FAIL  skips corrupt metadata_json in listPending\n       SyntaxError at parseJson (line 222)\n\n FAIL  skips a claimed row with corrupt payload_json in listClaims\n       SyntaxError at parseJson (line 222)\n\n FAIL  skips corrupt completed_metadata_json during duplicate detection\n       SyntaxError at parseJson (line 222)\n\n Test Files  1 failed (1)  —  4 failed | 16 passed (20)\nexit=1\n```\n\nRestoring the fix returns to 23/23 green. The negative control is load-bearing: same tests, same corrupt rows, same disk boundary.\n\n- **What was not tested:** a live gateway with real channels end-to-end. The proof drives the same exported queue APIs against a real SQLite database, which exercises the shared chokepoint.\n\n## Evidence\n\n**Existing tests — no regressions:**\n\n```text\n$ node scripts/run-vitest.mjs src/channels/message/durable-receive.test.ts --run\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\n**Lint:** `oxlint` clean on both changed files.\n\nAI-assisted.",
+        "branch": "fix/ingress-queue-parsejson-guard",
+        "head_sha": "8df315ac33082b600f37a48540876b985ab26332",
+        "author": "pick-cat",
+        "labels": [
+          "size: M",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/channels/message/ingress-queue.test.ts",
+            "additions": 219,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/message/ingress-queue.ts",
+            "additions": 86,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 305,
+        "deletions": 19,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98402",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98402.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "SUCCESS": 62,
+            "SKIPPED": 32,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:98402:4850597678:2026-07-01T05:38:09Z:re_review",
+      "comment_id": "4850597678",
+      "comment_version_key": "4850597678:2026-07-01T05:38:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4850597678",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98402,
+      "author": "Pick-cat",
+      "author_id": 266665499,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T05:38:09Z",
+      "comment_updated_at": "2026-07-01T05:38:09Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -70,91 +175,64 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(slack): include attachment text in thread context",
-        "body": "## What Problem This Solves\r\nSlack alert messages from monitoring bots can have an empty `message.text` while the actual alert content is stored in Slack `attachments` or Block Kit `blocks`.\r\nIn that case, OpenClaw's Slack thread context skipped the bot/root message as empty, so agents could not see the alert details in Slack threads.\r\n\r\n## Why This Change Was Made\r\nThe Slack thread starter/history resolver now derives fallback text from:\r\n- attachment fields: `pretext`, `title`, `text`, `fallback`\r\n- attachment `message_blocks`\r\n- top-level Slack `blocks`\r\nThis keeps monitoring bot alerts visible to the agent even when Slack does not populate `message.text`.\r\n\r\n## User Impact\r\nAgents in Slack alert channels can now read and triage bot-authored alert messages whose content is delivered through Slack attachments or blocks.\r\nThis specifically fixes monitoring-style Slack messages where the root thread message contains alert details only in attachments.\r\n\r\n## Evidence\r\n- Added tests for thread history preserving bot messages with text only in Slack attachments.\r\n- Added tests for thread history preserving bot messages with text only in Slack blocks.\r\n- Added tests for thread starter extracting root alert text from Slack attachments.\r\n- Ran `git diff --check`.",
-        "branch": "fix/slack-attachment-thread-context",
-        "head_sha": "5482287920cc72e1504c6e7b89f1d306d47cf853",
-        "author": "chthtlo",
-        "labels": [
-          "channel: slack",
-          "size: M",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "extensions/slack/src/monitor/media.test.ts",
-            "additions": 211,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/thread.ts",
-            "additions": 240,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 453,
-        "deletions": 5,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97727",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97727.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 86,
-          "gatingTotal": 81,
-          "counts": {
-            "SUCCESS": 60,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:98402:4850295529:2026-07-01T04:37:43Z:re_review",
+      "comment_id": "4850295529",
+      "comment_version_key": "4850295529:2026-07-01T04:37:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4850295529",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98402,
+      "author": "Pick-cat",
+      "author_id": 266665499,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T04:37:43Z",
+      "comment_updated_at": "2026-07-01T04:37:43Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2117,
+    "total_ms": 4795,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 554
+        "ms": 301
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1318
+        "ms": 2730
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -166,11 +244,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 232
+        "ms": 1736
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
