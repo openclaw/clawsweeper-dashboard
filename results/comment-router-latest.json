@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T06:35:37.620Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-01T06:35:42.120Z",
+  "repo": "openclaw/fs-safe",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T03:35:34.549Z",
+  "since": "2026-07-01T03:35:41.441Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    98402
+    33
   ],
   "comment_ids": [
-    4850956498
+    4850956675
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98402:4850956498:2026-07-01T06:33:04Z:re_review",
-      "comment_id": "4850956498",
-      "comment_version_key": "4850956498:2026-07-01T06:33:04Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4850956498",
-      "repo": "openclaw/openclaw",
+      "idempotency_key": "comment-router:openclaw/fs-safe:33:4850956675:2026-07-01T06:33:05Z:re_review",
+      "comment_id": "4850956675",
+      "comment_version_key": "4850956675:2026-07-01T06:33:05Z",
+      "comment_url": "https://github.com/openclaw/fs-safe/pull/33#issuecomment-4850956675",
+      "repo": "openclaw/fs-safe",
       "target_branch": null,
-      "issue_number": 98402,
-      "author": "Pick-cat",
-      "author_id": 266665499,
+      "issue_number": 33,
+      "author": "steipete",
+      "author_id": 58493,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T06:33:04Z",
-      "comment_updated_at": "2026-07-01T06:33:04Z",
+      "comment_created_at": "2026-07-01T06:33:05Z",
+      "comment_updated_at": "2026-07-01T06:33:05Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -70,109 +70,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(infra): guard channel ingress queue parseJson against corrupted JSON",
-        "body": "## What Problem This Solves\n\nFixes an issue where a single corrupted `payload_json`, `metadata_json`, or `completed_metadata_json` row in the SQLite channel ingress queue crashes the entire queue operation. The `parseJson()` helper calls `JSON.parse(value)` without a try-catch. A corrupt row throws an uncaught `SyntaxError` that propagates through `baseRecord()` (called by `listPending`, `listClaims`, `claimNext`, `enqueue`) and `completedRecord()` (called by `enqueue` duplicate detection). One bad row in `listPending()` or `listClaims()` kills **all** entries in that listing. This affects every channel that uses the durable ingress queue for inbound message processing.\n\nAdditionally, `claimNext` and `claim` would UPDATE a pending row to `claimed` status **before** validating the payload could be decoded — so a corrupt payload could become an invisible claimed row, hidden from `listPending`/`listClaims`/`recoverStaleClaims`, permanently blocking queue recovery.\n\n## Why This Change Was Made\n\nThree coordinated changes:\n\n1. **Tagged parse result**: `parseJson()` now returns `{ ok: true, value } | { ok: false }` instead of the ambiguous `unknown | null`. `JSON.parse(\"null\")` is valid and returns `null`, which the old sentinel conflated with parse failure. The tagged result cleanly separates \"valid JSON value\" from \"corrupt input\".\n\n2. **Guard `parseJson` at the chokepoint**: `baseRecord()` returns `null` when `payload_json` is corrupt (unrecoverable). Corrupt `metadata_json`/`completed_metadata_json` is non-fatal — the record is kept with metadata omitted. All callers (`listPending`, `listClaims`, `enqueue`, `claimNext`, `claim`) handle null/omitted results.\n\n3. **Validate before claiming**: `claimNext` calls `baseRecord()` inside `rows.find()` to skip corrupt rows before they are selected, and `claim` pre-reads the pending row and validates `baseRecord()` before issuing the UPDATE. No corrupt row can ever be promoted to `claimed` status.\n\n## User Impact\n\nNo user-visible impact under normal operation. When a channel ingress queue row is somehow corrupted:\n- `listPending` / `listClaims` skip the bad entry instead of crashing\n- `claimNext` / `claim` skip corrupt rows and claim the next valid one\n- `enqueue` duplicate detection works with corrupt metadata omitted\n- Valid JSON `null` payload is correctly preserved (not treated as corrupt)\n\n## Real behavior proof\n\n- **Real environment:** Linux, Node v22.22.0, driving real `createChannelIngressQueue` against a real on-disk SQLite database.\n- **Evidence after fix (23 tests, all pass):**\n\n```text\n$ node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts --run\n Test Files  1 passed (1)\n      Tests  23 passed (23)\n```\n\nNew tests cover: pending row with corrupt `payload_json` → skipped, corrupt `metadata_json` → metadata omitted, claimed row with corrupt payload → skipped, corrupt `completed_metadata_json` → duplicate detection works, `claimNext` skips corrupt → claims next valid, `claim` returns null for corrupt, valid JSON null → preserved.\n\n- **Negative control (pre-fix — 4 SyntaxError crashes):**\n\n```text\n$ git show origin/main:src/channels/message/ingress-queue.ts > /tmp/iq-old.ts   && cp /tmp/iq-old.ts src/channels/message/ingress-queue.ts   && node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts --run\n\n FAIL  skips a pending row with corrupt payload_json in listPending\n       SyntaxError: Expected property name or '}' in JSON at position 1\n       ❯ parseJson (src/channels/message/ingress-queue.ts:222)\n\n FAIL  skips corrupt metadata_json in listPending\n       SyntaxError at parseJson (line 222)\n\n FAIL  skips a claimed row with corrupt payload_json in listClaims\n       SyntaxError at parseJson (line 222)\n\n FAIL  skips corrupt completed_metadata_json during duplicate detection\n       SyntaxError at parseJson (line 222)\n\n Test Files  1 failed (1)  —  4 failed | 16 passed (20)\nexit=1\n```\n\nRestoring the fix returns to 23/23 green. The negative control is load-bearing: same tests, same corrupt rows, same disk boundary.\n\n- **What was not tested:** a live gateway with real channels end-to-end. The proof drives the same exported queue APIs against a real SQLite database, which exercises the shared chokepoint.\n\n## Evidence\n\n**Existing tests — no regressions:**\n\n```text\n$ node scripts/run-vitest.mjs src/channels/message/durable-receive.test.ts --run\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\n**Additional validation after CI fix:**\n\n```text\n$ pnpm check:test-types\n# passes\n\n$ node scripts/run-vitest.mjs src/gateway/server-cron.test.ts src/gateway/server-cron-notifications.test.ts --run\n Test Files  4 passed (4)\n      Tests  62 passed (62)\n\n$ node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts src/channels/message/durable-receive.test.ts --run\n Test Files  2 passed (2)\n      Tests  30 passed (30)\n\n$ git diff --check\n# passes\n```\n\nAlso rebased onto latest `origin/main`, fixed the `check-test-types` failure from typed empty mock call tuple access in gateway cron tests, and reran local autoreview with no accepted/actionable findings.\n\n**Lint:** `oxlint` clean on both changed files.\n\nAI-assisted.\n",
-        "branch": "fix/ingress-queue-parsejson-guard",
-        "head_sha": "1c7bac6b7ae6e0c7729941017fe5b56e2a5a416d",
-        "author": "pick-cat",
-        "labels": [
-          "gateway",
-          "size: M",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/channels/message/ingress-queue.test.ts",
-            "additions": 215,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/message/ingress-queue.ts",
-            "additions": 83,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron-notifications.test.ts",
-            "additions": 20,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.test.ts",
-            "additions": 12,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 330,
-        "deletions": 26,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98402",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98402.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SUCCESS": 62,
-            "SKIPPED": 31,
-            "IN_PROGRESS": 2,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-lint:FAILURE"
-          ],
-          "pending": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "check-lint:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3400,
+    "total_ms": 2612,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 750
+        "ms": 666
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2307
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -184,7 +99,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 329
+        "ms": 1933
       },
       {
         "name": "append_ledger",
