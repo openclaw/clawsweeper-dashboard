@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-910"
 mode: "autonomous"
-run_id: "28533405719"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28533405719"
+run_id: "28536831262"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28536831262"
 head_sha: "0c85aae0ecbcccf48586be0926893302c559df5e"
 workflow_conclusion: "failure"
 result_status: "blocked"
-published_at: "2026-07-01T16:54:15.205Z"
+published_at: "2026-07-01T17:52:48.013Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/910"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/910"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28533405719](https://github.com/openclaw/clawsweeper/actions/runs/28533405719)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28536831262](https://github.com/openclaw/clawsweeper/actions/runs/28536831262)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/910
 
 ## Summary
 
-Issue #910 is still valid on current main 4166e0fd63f80a9ac330e6e4d9b89066c0e1ac50. The docs have Node Mode, setup, pairing, allowCommands, and reapproval details, but they are scattered across README.md, docs/SETUP.md, docs/ONBOARDING_WIZARD.md, and developer-facing gateway docs rather than a beginner-facing concepts page. A narrow docs-only PR is appropriate, but implementation is blocked in this worker because the checkout is read-only, the local ClawSweeper artifacts are absent from disk, and network access is unavailable for branch/PR operations. No files were changed and validation was not run.
+Issue #910 remains valid on current main 14022dc71222860b107797ff62b1acc8e08e0a8f. Current docs mention Node Mode, pairing, allowCommands, local WSL gateway setup, and operator scopes, but the beginner-facing operator/node/gateway concept model is still scattered across README.md, docs/SETUP.md, docs/ONBOARDING_WIZARD.md, and deeper architecture/research docs. A narrow docs-only PR is appropriate, but this worker cannot implement it because the checkout is read-only and the target branch is not present locally. No files were changed and validation was not run.
 
 ## Impact
 
@@ -72,7 +72,7 @@ Issue #910 is still valid on current main 4166e0fd63f80a9ac330e6e4d9b89066c0e1ac
 | #632 | keep_closed | skipped | related | Closed context ref; no mutation allowed or needed. |
 | cluster:issue-openclaw-openclaw-windows-node-910 | fix_needed | planned |  |  |
 | cluster:issue-openclaw-openclaw-windows-node-910 | build_fix_artifact | planned |  |  |
-| cluster:issue-openclaw-openclaw-windows-node-910 | open_fix_pr | blocked |  | Implementation and PR creation are blocked by the read-only checkout and unavailable network in this worker. |
+| cluster:issue-openclaw-openclaw-windows-node-910 | open_fix_pr | blocked |  | Implementation and PR creation are blocked by the read-only checkout. |
 
 ## Needs Human
 
