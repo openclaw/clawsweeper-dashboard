@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T05:29:08.290Z",
+  "generated_at": "2026-07-01T05:29:07.901Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T02:29:06.622Z",
+  "since": "2026-07-01T02:29:05.232Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88172
+    98417
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 10,
-  "commands_seen": 4,
+  "scanned_comments": 4,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88172:4580799469:2026-07-01T05:29:03Z:clawsweeper_needs_human",
-      "comment_id": "4580799469",
-      "comment_version_key": "4580799469:2026-07-01T05:29:03Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88172#issuecomment-4580799469",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98417:4850385302:2026-07-01T05:29:01Z:clawsweeper_needs_human",
+      "comment_id": "4850385302",
+      "comment_version_key": "4850385302:2026-07-01T05:29:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98417#issuecomment-4850385302",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 88172,
+      "issue_number": 98417,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-30T00:08:07Z",
-      "comment_updated_at": "2026-07-01T05:29:03Z",
+      "comment_created_at": "2026-07-01T04:57:44Z",
+      "comment_updated_at": "2026-07-01T05:29:01Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=826a97e7d79521341abbddf9c619787fef6b090d)",
-      "review_summary": null,
-      "review_followup": null,
+      "repair_reason": "- [P2] The remaining action is auth-provider/runtime maintainer acceptance and candidate selection, not a narrow automated repair.; Cleared: No concrete security or supply-chain regression was found in this source/test-only OAuth session recovery patch. (sha=f5d5488922981cc14d052cba21e299dc7c09d257)",
+      "review_summary": "The PR marks resolved MCP transports as OAuth-backed, recreates stale streamable HTTP MCP sessions after OAuth 401 failures, and adds regression coverage for catalog refresh, tool-call retry, and backoff preservation.\n\nPR surface: Source +68, Tests +344. Total +412 across 3 files.\n\nReproducibility: yes. for source-level reproduction: the linked issue gives concrete token-expiry steps, current main reuses persistent MCP sessions, and the pinned SDK can throw StreamableHTTPError(401) after successful auth on the old streamable HTTP session. I did not run a live one-hour expiry repro in this read-only review.",
+      "review_followup": "- [P2] The remaining action is auth-provider/runtime maintainer acceptance and candidate selection, not a narrow automated repair.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "826a97e7d79521341abbddf9c619787fef6b090d",
+      "expected_head_sha": "f5d5488922981cc14d052cba21e299dc7c09d257",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,89 +70,66 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(mcp): kill orphaned stdio children on session teardown + auto-reconnect dead transports",
-        "body": "## Problem\n\nTwo MCP stability issues causing cron failures and mid-turn `Not connected` errors:\n\n1. **Orphaned MCP child processes:** When isolated cron sessions end, the CLI runner only closes the HTTP loopback server but leaves `SessionMcpRuntime` stdio children alive until the idle sweep. The `server-cron.ts` isolated wrapper also only cleans browser sessions. This causes process accumulation (observed 78+ orphaned processes between sweeps).\n\n2. **Unrecoverable transport death:** When an MCP child process dies mid-session (OOM, crash, pipe break), the stdio transport's `send()` throws `Not connected` because `stdin` is gone. This error is unrecoverable for the entire turn, even though the server config is still valid and a fresh process could be spawned.\n\n## Fix\n\n### Commit 1: Kill MCP stdio children on isolated session teardown\n\n- `server-cron.ts`: `runIsolatedAgentJob` finally block now also retires the MCP runtime for isolated cron sessions via `retireSessionMcpRuntimeForSessionKey()`\n- `cli-runner.ts`: when `cleanupBundleMcpOnRunEnd` is true, retires MCP runtime by session key (falling back to session ID) after `closeMcpLoopbackServer()`\n\n### Commit 2: Auto-reconnect dead MCP server sessions on tool call failure\n\n- `agent-bundle-mcp-runtime.ts`: `callTool()` now catches transport-death errors (`Not connected`, `EPIPE`, `ERR_STREAM_DESTROYED`, `write after end`) and attempts a single reconnection: dispose dead session → resolve fresh transport → connect → retry tool call\n- If reconnection fails, the original error is thrown unchanged\n- Reconnection is logged at warn level for observability\n\n### Commit 3: Separate reconnect failure from retried tool-call error\n\nSplit the inner try/catch into two phases per ClawSweeper's [P2] finding:\n- **Phase 1** (try/catch): `connectWithTimeout` only. If this fails, dispose the new session and throw the original transport-death error.\n- **Phase 2** (unguarded): retry `client.callTool` on the healthy reconnected session. If this fails, it's a normal MCP error from a live server, not a transport issue, so it propagates directly.\n\nThis ensures `sessions` map consistency: a healthy reconnected session is never disposed by a subsequent call failure.\n\n### Commit 4: Guard reconnect against McpError server responses\n\nAdded `McpError` instanceof guard before the message-substring classifier to prevent misclassifying healthy MCP server errors as transport deaths.\n\nThe MCP SDK throws two distinct error types through `client.callTool()`:\n- **Transport death:** plain `Error(\"Not connected\")` from `transport.send()` when `this._process?.stdin` is null (child process died)\n- **Server errors:** `McpError` instances (extends Error, `.name='McpError'`, `.code`) from JSON-RPC error responses (healthy server, application-level failure)\n\nBefore this fix, a healthy Playwright server returning `McpError(\"Not connected to browser\")` would match the `\"Not connected\"` substring check, causing an unnecessary reconnect and replay of a potentially non-idempotent tool call. Now `McpError` instances short-circuit to `throw` immediately, and only plain `Error` from dead transports enters the reconnect path.\n\n## Real Behavior Proof\n\n### Orphaned MCP child accumulation (before fix)\n\nLive capture from production OpenClaw instance (Mac Studio M1 Max, 32 GB) showing 3 waves of duplicate MCP children under gateway PID 70237, each spawned by successive cron runs without cleanup:\n\n```\n=== BEFORE: Current MCP child processes ===\nTimestamp: 2026-05-30T00:18:57Z\n\nMCP child process counts by server:\n  PID=46292 PPID=70237 RSS=81104KB  ETIME=03:15 proton-pass\n  PID=46300 PPID=70237 RSS=117664KB ETIME=03:14 playwright-public\n  PID=46301 PPID=70237 RSS=29344KB  ETIME=03:14 cua-driver\n  PID=46309 PPID=70237 RSS=116368KB ETIME=03:14 playwright-logged-in\n  PID=46316 PPID=70237 RSS=48160KB  ETIME=03:14 threads-mcp\n  PID=46317 PPID=70237 RSS=69120KB  ETIME=03:14 veritas\n\n  PID=46336 PPID=70237 RSS=81104KB  ETIME=02:48 proton-pass (wave 2)\n  PID=46345 PPID=70237 RSS=116240KB ETIME=02:47 playwright-public\n  PID=46346 PPID=70237 RSS=29312KB  ETIME=02:47 cua-driver\n  PID=46354 PPID=70237 RSS=115024KB ETIME=02:47 playwright-logged-in\n  PID=46361 PPID=70237 RSS=48048KB  ETIME=02:47 threads-mcp\n  PID=46362 PPID=70237 RSS=69360KB  ETIME=02:47 veritas\n\n  PID=46410 PPID=70237 RSS=99248KB  ETIME=01:23 proton-pass (wave 3)\n  PID=46418 PPID=70237 RSS=147184KB ETIME=01:23 playwright-public\n  PID=46419 PPID=70237 RSS=29264KB  ETIME=01:22 cua-driver\n  PID=46426 PPID=70237 RSS=135376KB ETIME=01:22 playwright-logged-in\n  PID=46433 PPID=70237 RSS=47904KB  ETIME=01:22 threads-mcp\n  PID=46434 PPID=70237 RSS=79184KB  ETIME=01:22 veritas\n\nSummary: 6 servers × 3 waves = 18 orphaned MCP children, ~1.2 GB RSS\nTotal MCP-like children: 25 (including non-gateway-parented)\n```\n\nThree distinct etime cohorts (03:14, 02:47, 01:22) confirm each cron run spawned a full set of 6 MCP servers and left the previous set alive.\n\n### MCP SDK error type analysis (reconnect classifier proof)\n\nVerified against `@modelcontextprotocol/sdk@1.29.0` (pinned in OpenClaw's package.json):\n\n**Transport death path** (`StdioClientTransport.send()`):\n```javascript\n// node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js\nsend(message) {\n    return new Promise(resolve => {\n        if (!this._process?.stdin) {\n            throw new Error('Not connected');  // plain Error, NOT McpError\n        }\n        // ...\n    });\n}\n```\n\n**Server error path** (`McpError` class):\n```javascript\n// node_modules/@modelcontextprotocol/sdk/dist/esm/types.js\nexport class McpError extends Error {\n    constructor(code, message, data) {\n        super(`MCP error ${code}: ${message}`);\n        this.name = 'McpError';  // distinguishable via instanceof\n    }\n}\n```\n\nThe `instanceof McpError` guard in commit 4 correctly separates these two paths without relying on fragile message-substring matching for the type distinction.\n\n### Config-level mitigation (already deployed)\n\nIn addition to the code fix, 11 cron jobs were updated with `toolsAllow` scoping so they only spawn the MCP servers they actually need. Example: `mcp-orphan-cleanup` only runs a python script via `exec`, so `toolsAllow: [\"exec\", \"process\"]` prevents it from spawning 6 MCP servers at all.\n\n### CI failure note\n\nThe `checks-node-core-fast` failure is `src/security/audit-sandbox-browser.test.ts` (2 tests timing out at 120s waiting for Docker probes). Unrelated to this PR; no MCP files touched by those tests.\n",
-        "branch": "fix/kill-mcp-children-on-session-teardown",
-        "head_sha": "826a97e7d79521341abbddf9c619787fef6b090d",
-        "author": "promptclickrun",
+        "title": "fix: recover MCP OAuth sessions after token refresh",
+        "body": "Closes #98377.\n\n## What Problem This Solves\nLong-running gateway MCP sessions could stay stuck after OAuth access-token expiry when the refreshed bearer was rejected on the old streamable HTTP MCP session.\n\n## Why This Change Was Made\nThe session MCP runtime now treats OAuth streamable HTTP 401s as stale-session failures, retires the current MCP transport once, rebuilds the catalog/session, and replays the request through the existing refresh-token path. Static-header and non-OAuth MCP failures keep the existing failure/backoff behavior.\n\n## User Impact\nHeadless gateways can recover OAuth-protected remote MCP servers without requiring a manual `openclaw mcp login` while a valid refresh token exists.\n\n## Evidence\nAdded deterministic streamable HTTP OAuth regressions for catalog refresh, direct tool calls, and failed retry/backoff preservation.\n\nReal gateway proof with `startGatewayServer`, the QA mock provider, and a local streamable-http OAuth MCP server. The server expired the access token immediately after gateway cataloging, then rejected the refreshed bearer on the stale MCP session:\n\n```text\ngateway proof result: OpenClaw gateway response completed after OAuth expiry\ngateway proof final: MCP_CODE_MODE_FILE_OK note=fixture-note-alpha unclear=none improvement=virtual-api-files-were-clear-and-needed-one-exec\ngateway proof counts: token_refreshes=1 initialize_calls=2\nredacted OAuth/MCP server transcript:\n- initialize session=- token=initial-access -> 200 stale-session\n- notifications/initialized session=stale-session token=initial-access -> 202\n- tools/list session=stale-session token=initial-access -> 200\n- server/expire session=stale-session token=initial-access -> access token expired after catalog\n- tools/call session=stale-session token=initial-access -> 401 invalid_token\n- POST /token session=- token=refresh-token -> 200 refreshed-access\n- tools/call session=stale-session token=refreshed-access -> 401 stale_mcp_session\n- initialize session=- token=refreshed-access -> 200 fresh-session\n- notifications/initialized session=fresh-session token=refreshed-access -> 202\n- tools/list session=fresh-session token=refreshed-access -> 200\n- tools/call session=fresh-session token=refreshed-access -> 200 fixture-note-alpha:fresh-session\n```\n",
+        "branch": "fix-98377-mcp-oauth-gateway-refresh",
+        "head_sha": "f5d5488922981cc14d052cba21e299dc7c09d257",
+        "author": "turbotheturtle",
         "labels": [
-          "gateway",
           "agents",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof",
-          "merge-risk: 🚨 other",
-          "triage: needs-pr-context"
+          "size: L",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 auth-provider",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
             "path": "src/agents/agent-bundle-mcp-runtime.test.ts",
-            "additions": 193,
+            "additions": 344,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
             "path": "src/agents/agent-bundle-mcp-runtime.ts",
-            "additions": 100,
-            "deletions": 7,
+            "additions": 142,
+            "deletions": 78,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/cli-runner.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.test.ts",
-            "additions": 22,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.ts",
-            "additions": 27,
+            "path": "src/agents/mcp-transport.ts",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 361,
-        "deletions": 11,
+        "changedFiles": 3,
+        "additions": 490,
+        "deletions": 78,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88172",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88172.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98417",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98417.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 99,
-          "gatingTotal": 94,
+          "total": 98,
+          "gatingTotal": 93,
           "counts": {
-            "FAILURE": 1,
-            "SKIPPED": 33,
-            "SUCCESS": 63,
-            "IN_PROGRESS": 1,
+            "SUCCESS": 64,
+            "CANCELLED": 1,
+            "SKIPPED": 32,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -161,18 +138,18 @@
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
     },
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:88172:4581339392:2026-05-30T02:22:44Z:re_review",
-      "comment_id": "4581339392",
-      "comment_version_key": "4581339392:2026-05-30T02:22:44Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88172#issuecomment-4581339392",
+      "idempotency_key": "comment-router:openclaw/openclaw:98417:4850448818:2026-07-01T05:10:55Z:re_review",
+      "comment_id": "4850448818",
+      "comment_version_key": "4850448818:2026-07-01T05:10:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98417#issuecomment-4850448818",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 88172,
-      "author": "promptclickrun",
-      "author_id": 59135406,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-30T02:22:44Z",
-      "comment_updated_at": "2026-05-30T02:22:44Z",
+      "issue_number": 98417,
+      "author": "TurboTheTurtle",
+      "author_id": 35905412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T05:10:55Z",
+      "comment_updated_at": "2026-07-01T05:10:55Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -198,195 +175,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(mcp): kill orphaned stdio children on session teardown + auto-reconnect dead transports",
-        "body": "## Problem\n\nTwo MCP stability issues causing cron failures and mid-turn `Not connected` errors:\n\n1. **Orphaned MCP child processes:** When isolated cron sessions end, the CLI runner only closes the HTTP loopback server but leaves `SessionMcpRuntime` stdio children alive until the idle sweep. The `server-cron.ts` isolated wrapper also only cleans browser sessions. This causes process accumulation (observed 78+ orphaned processes between sweeps).\n\n2. **Unrecoverable transport death:** When an MCP child process dies mid-session (OOM, crash, pipe break), the stdio transport's `send()` throws `Not connected` because `stdin` is gone. This error is unrecoverable for the entire turn, even though the server config is still valid and a fresh process could be spawned.\n\n## Fix\n\n### Commit 1: Kill MCP stdio children on isolated session teardown\n\n- `server-cron.ts`: `runIsolatedAgentJob` finally block now also retires the MCP runtime for isolated cron sessions via `retireSessionMcpRuntimeForSessionKey()`\n- `cli-runner.ts`: when `cleanupBundleMcpOnRunEnd` is true, retires MCP runtime by session key (falling back to session ID) after `closeMcpLoopbackServer()`\n\n### Commit 2: Auto-reconnect dead MCP server sessions on tool call failure\n\n- `agent-bundle-mcp-runtime.ts`: `callTool()` now catches transport-death errors (`Not connected`, `EPIPE`, `ERR_STREAM_DESTROYED`, `write after end`) and attempts a single reconnection: dispose dead session → resolve fresh transport → connect → retry tool call\n- If reconnection fails, the original error is thrown unchanged\n- Reconnection is logged at warn level for observability\n\n### Commit 3: Separate reconnect failure from retried tool-call error\n\nSplit the inner try/catch into two phases per ClawSweeper's [P2] finding:\n- **Phase 1** (try/catch): `connectWithTimeout` only. If this fails, dispose the new session and throw the original transport-death error.\n- **Phase 2** (unguarded): retry `client.callTool` on the healthy reconnected session. If this fails, it's a normal MCP error from a live server, not a transport issue, so it propagates directly.\n\nThis ensures `sessions` map consistency: a healthy reconnected session is never disposed by a subsequent call failure.\n\n### Commit 4: Guard reconnect against McpError server responses\n\nAdded `McpError` instanceof guard before the message-substring classifier to prevent misclassifying healthy MCP server errors as transport deaths.\n\nThe MCP SDK throws two distinct error types through `client.callTool()`:\n- **Transport death:** plain `Error(\"Not connected\")` from `transport.send()` when `this._process?.stdin` is null (child process died)\n- **Server errors:** `McpError` instances (extends Error, `.name='McpError'`, `.code`) from JSON-RPC error responses (healthy server, application-level failure)\n\nBefore this fix, a healthy Playwright server returning `McpError(\"Not connected to browser\")` would match the `\"Not connected\"` substring check, causing an unnecessary reconnect and replay of a potentially non-idempotent tool call. Now `McpError` instances short-circuit to `throw` immediately, and only plain `Error` from dead transports enters the reconnect path.\n\n## Real Behavior Proof\n\n### Orphaned MCP child accumulation (before fix)\n\nLive capture from production OpenClaw instance (Mac Studio M1 Max, 32 GB) showing 3 waves of duplicate MCP children under gateway PID 70237, each spawned by successive cron runs without cleanup:\n\n```\n=== BEFORE: Current MCP child processes ===\nTimestamp: 2026-05-30T00:18:57Z\n\nMCP child process counts by server:\n  PID=46292 PPID=70237 RSS=81104KB  ETIME=03:15 proton-pass\n  PID=46300 PPID=70237 RSS=117664KB ETIME=03:14 playwright-public\n  PID=46301 PPID=70237 RSS=29344KB  ETIME=03:14 cua-driver\n  PID=46309 PPID=70237 RSS=116368KB ETIME=03:14 playwright-logged-in\n  PID=46316 PPID=70237 RSS=48160KB  ETIME=03:14 threads-mcp\n  PID=46317 PPID=70237 RSS=69120KB  ETIME=03:14 veritas\n\n  PID=46336 PPID=70237 RSS=81104KB  ETIME=02:48 proton-pass (wave 2)\n  PID=46345 PPID=70237 RSS=116240KB ETIME=02:47 playwright-public\n  PID=46346 PPID=70237 RSS=29312KB  ETIME=02:47 cua-driver\n  PID=46354 PPID=70237 RSS=115024KB ETIME=02:47 playwright-logged-in\n  PID=46361 PPID=70237 RSS=48048KB  ETIME=02:47 threads-mcp\n  PID=46362 PPID=70237 RSS=69360KB  ETIME=02:47 veritas\n\n  PID=46410 PPID=70237 RSS=99248KB  ETIME=01:23 proton-pass (wave 3)\n  PID=46418 PPID=70237 RSS=147184KB ETIME=01:23 playwright-public\n  PID=46419 PPID=70237 RSS=29264KB  ETIME=01:22 cua-driver\n  PID=46426 PPID=70237 RSS=135376KB ETIME=01:22 playwright-logged-in\n  PID=46433 PPID=70237 RSS=47904KB  ETIME=01:22 threads-mcp\n  PID=46434 PPID=70237 RSS=79184KB  ETIME=01:22 veritas\n\nSummary: 6 servers × 3 waves = 18 orphaned MCP children, ~1.2 GB RSS\nTotal MCP-like children: 25 (including non-gateway-parented)\n```\n\nThree distinct etime cohorts (03:14, 02:47, 01:22) confirm each cron run spawned a full set of 6 MCP servers and left the previous set alive.\n\n### MCP SDK error type analysis (reconnect classifier proof)\n\nVerified against `@modelcontextprotocol/sdk@1.29.0` (pinned in OpenClaw's package.json):\n\n**Transport death path** (`StdioClientTransport.send()`):\n```javascript\n// node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js\nsend(message) {\n    return new Promise(resolve => {\n        if (!this._process?.stdin) {\n            throw new Error('Not connected');  // plain Error, NOT McpError\n        }\n        // ...\n    });\n}\n```\n\n**Server error path** (`McpError` class):\n```javascript\n// node_modules/@modelcontextprotocol/sdk/dist/esm/types.js\nexport class McpError extends Error {\n    constructor(code, message, data) {\n        super(`MCP error ${code}: ${message}`);\n        this.name = 'McpError';  // distinguishable via instanceof\n    }\n}\n```\n\nThe `instanceof McpError` guard in commit 4 correctly separates these two paths without relying on fragile message-substring matching for the type distinction.\n\n### Config-level mitigation (already deployed)\n\nIn addition to the code fix, 11 cron jobs were updated with `toolsAllow` scoping so they only spawn the MCP servers they actually need. Example: `mcp-orphan-cleanup` only runs a python script via `exec`, so `toolsAllow: [\"exec\", \"process\"]` prevents it from spawning 6 MCP servers at all.\n\n### CI failure note\n\nThe `checks-node-core-fast` failure is `src/security/audit-sandbox-browser.test.ts` (2 tests timing out at 120s waiting for Docker probes). Unrelated to this PR; no MCP files touched by those tests.\n",
-        "branch": "fix/kill-mcp-children-on-session-teardown",
-        "head_sha": "826a97e7d79521341abbddf9c619787fef6b090d",
-        "author": "promptclickrun",
-        "labels": [
-          "gateway",
-          "agents",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof",
-          "merge-risk: 🚨 other",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-bundle-mcp-runtime.test.ts",
-            "additions": 193,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-bundle-mcp-runtime.ts",
-            "additions": 100,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.test.ts",
-            "additions": 22,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 361,
-        "deletions": 11,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88172",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88172.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 99,
-          "gatingTotal": 94,
-          "counts": {
-            "FAILURE": 1,
-            "SKIPPED": 33,
-            "SUCCESS": 63,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:88172:4581222747:2026-05-30T01:46:24Z:re_review",
-      "comment_id": "4581222747",
-      "comment_version_key": "4581222747:2026-05-30T01:46:24Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88172#issuecomment-4581222747",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 88172,
-      "author": "promptclickrun",
-      "author_id": 59135406,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-30T01:46:24Z",
-      "comment_updated_at": "2026-05-30T01:46:24Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:88172:4580855817:2026-05-30T00:20:07Z:re_review",
-      "comment_id": "4580855817",
-      "comment_version_key": "4580855817:2026-05-30T00:20:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88172#issuecomment-4580855817",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 88172,
-      "author": "promptclickrun",
-      "author_id": 59135406,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-30T00:20:07Z",
-      "comment_updated_at": "2026-05-30T00:20:07Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2252,
+    "total_ms": 4142,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 243
+        "ms": 431
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1409
+        "ms": 2222
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -398,7 +204,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 565
+        "ms": 1432
       },
       {
         "name": "append_ledger",
