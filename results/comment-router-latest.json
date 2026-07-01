@@ -1,23 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T08:10:25.878Z",
+  "generated_at": "2026-07-01T08:11:41.231Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T05:10:23.220Z",
+  "since": "2026-07-01T05:11:40.529Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     98493
   ],
   "comment_ids": [
     4851932952
   ],
-  "status_comment_id": 4851933514,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 10,
-  "commands_seen": 5,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -38,14 +38,14 @@
       "comment_version_key": "4851932952:2026-07-01T08:09:09Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/98493#issuecomment-4851932952",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 98493,
       "author": "wangmiao0668000666",
       "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-01T08:09:09Z",
       "comment_updated_at": "2026-07-01T08:09:09Z",
-      "status_comment_id": 4851933514,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "review",
       "intent": "re_review",
@@ -68,167 +68,26 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-07-01T08:10:26.665Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 98493
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-01T08:10:28.317Z",
-          "response_comment_id": "4851933514",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(transcripts): close readline interface and destroy read stream on error exit",
-        "body": "## What Problem This Solves\n\n`TranscriptsStore.readUtterancesFromDir` (`src/transcripts/store.ts:199-218`) streams `transcript.jsonl` through a `createReadStream` + `readline.createInterface` pair when `maxUtterances` is set, but it never closes the interface or destroys the stream. If `JSON.parse` throws inside the `for await` loop, the function propagates the error while leaving the underlying file descriptor open. Over time this leaks fds in long-running gateway processes.\n\n## Changes\n\n- `src/transcripts/store.ts`: extract the `createReadStream` result into a named `stream`, wrap the `for await` loop in `try/finally`, and call `lines.close()` and `stream.destroy()` in `finally`. When `stream.destroy()` does not immediately close the fs handle, await the stream's `close` event before returning.\n- `src/transcripts/store.test.ts`: add regression tests for missing-file handling, normal JSONL reads, tail truncation, and fd-leak-free behavior on both the malformed-JSON error path and the happy path.\n- `scripts/repro/issue-98467-fd-leak.mts`: standalone Linux repro that counts `/proc/self/fd` before and after invoking the store on a malformed JSONL file.\n\n## Real behavior proof\n\n**BEFORE (current `main`, no fix applied)**  \nDriving the real `TranscriptsStore.readUtterancesFromSessionDir` against a malformed JSONL file leaks the transcript fd:\n\n```text\nthrew as expected: SyntaxError\n=== Issue #98467 reproduction ===\ntranscript path: /tmp/openclaw-repro-98467-i9zShq/2026-07-01/session-1/transcript.jsonl\nthrew on malformed JSON: true\nopen fds before call: 25\nopen fds after call: 26\nleaked transcript.jsonl fds: 1\n  leaked fd: /tmp/openclaw-repro-98467-i9zShq/2026-07-01/session-1/transcript.jsonl\nFAIL: file descriptor leak detected\n```\n\n**NEGATIVE CONTROL**  \nReverting only the source change in `src/transcripts/store.ts` while keeping the new tests makes the fd-leak regression test fail:\n\n```text\n× src/transcripts/store.test.ts > ... > does not leak file descriptors when JSON.parse throws\n  → expected [ Array(1) ] to have a length of +0 but got 1\n Test Files  1 failed (1)\n      Tests  1 failed | 4 passed (5)\n```\n\n**AFTER (this branch)**  \nThe same repro and tests pass with zero leaked fds:\n\n```text\nthrew as expected: SyntaxError\n=== Issue #98467 reproduction ===\ntranscript path: /tmp/openclaw-repro-98467-TDJkNx/2026-07-01/session-1/transcript.jsonl\nthrew on malformed JSON: true\nopen fds before call: 25\nopen fds after call: 25\nleaked transcript.jsonl fds: 0\nPASS: no file descriptor leak after malformed JSON read\n```\n\n## Evidence\n\n- **Behavior addressed**: `TranscriptsStore.readUtterancesFromDir` now closes the readline interface and destroys the read stream (awaiting close) when the streaming JSONL parser exits, fixing a file descriptor leak on malformed lines.\n- **Real environment tested**: Linux x86_64, Node v22.22.0, repo checkout `/home/0668000666/0668000666/AI/OpenClaw/new_open_claw`, branch `fix/transcripts-store-fd-leak`, base `openclaw/main @ 0a9708ed0f`.\n- **Exact steps or command run after this patch**:\n  ```bash\n  node scripts/run-vitest.mjs run src/transcripts/store.test.ts --reporter=verbose\n  # → Test Files  1 passed (1)\n  #      Tests  5 passed (5)\n\n  node --import tsx scripts/repro/issue-98467-fd-leak.mts\n  # → leaked transcript.jsonl fds: 0\n  # → PASS: no file descriptor leak after malformed JSON read\n\n  node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json \\\n    src/transcripts/store.ts src/transcripts/store.test.ts scripts/repro/issue-98467-fd-leak.mts\n  # → exit 0\n\n  pnpm tsgo:core\n  # → silent (no type errors)\n  ```\n- **Evidence after fix**: 5/5 new regression tests pass; the standalone repro reports `leaked transcript.jsonl fds: 0` after a malformed-line parse error; source change is 1 file, +10 LoC.\n- **Observed result after fix**: The streaming read path no longer leaks file descriptors when `JSON.parse` throws or when the loop exits normally.\n- **What was not tested**: Live long-running gateway telemetry under production load; the fix relies on local fd counting and unit tests. Windows/macOS fd behavior was not explicitly measured, but the cleanup calls (`lines.close()`, `stream.destroy()`, awaiting `close`) are platform-agnostic Node.js APIs.\n\n## Tests and validation\n\n- Added `src/transcripts/store.test.ts` with 5 tests covering:\n  - missing `transcript.jsonl` returns `[]`\n  - normal JSONL read returns utterances\n  - `maxUtterances` keeps only the tail\n  - malformed JSON does not leak fds\n  - happy path does not leak fds\n- Revert-line gate verified: reverting the `try/finally` cleanup makes the fd-leak test fail.\n\n## Risk checklist\n\n- **Scope**: 1 source file (`src/transcripts/store.ts`), 1 new test file, 1 repro script.\n- **Behavior change**: only the cleanup path; happy-path output unchanged.\n- **API/signature changes**: none.\n- **Type check**: `pnpm tsgo:core` passes. `pnpm tsgo:core:test` fails on pre-existing errors in `src/gateway/server-cron-notifications.test.ts`, `src/gateway/server-cron.test.ts`, and `src/llm/providers/anthropic.test.ts` that are unrelated to this change (verified on `openclaw/main @ 0a9708ed0f`).\n- **No config/env/migration changes**.\n- **No security/auth/secrets/tool-execution changes**.\n\n## Related\n\n- Closes #98467.\n- PR #98140 is a competing fix with the same source shape but no tests and no real-behavior proof.\n",
-        "branch": "fix/transcripts-store-fd-leak",
-        "head_sha": "7132f17c64aab40c17b42af2d85354222f8bc945",
-        "author": "wangmiao0668000666",
-        "labels": [
-          "scripts",
-          "size: M"
-        ],
-        "files": [
-          {
-            "path": "scripts/repro/issue-98467-fd-leak.mts",
-            "additions": 84,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/transcripts/store.test.ts",
-            "additions": 108,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/transcripts/store.ts",
-            "additions": 19,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 211,
-        "deletions": 8,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98493",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98493.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SUCCESS": 34,
-            "SKIPPED": 33,
-            "IN_PROGRESS": 27,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:FAILURE",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "checks-node-compact-small-whole-3:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5717,
+    "total_ms": 2697,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 483
+        "ms": 691
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2160
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -240,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3048
+        "ms": 1995
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
