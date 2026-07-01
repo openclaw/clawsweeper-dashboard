@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T08:50:29.431Z",
+  "generated_at": "2026-07-01T08:50:37.838Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T05:50:27.379Z",
+  "since": "2026-07-01T05:50:35.879Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    98356
+    98139
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4852315830
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98356:4849936484:2026-07-01T03:21:09Z:clawsweeper_needs_human",
-      "comment_id": "4849936484",
-      "comment_version_key": "4849936484:2026-07-01T03:21:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98356#issuecomment-4849936484",
+      "idempotency_key": "comment-router:openclaw/openclaw:98139:4852315830:2026-07-01T08:48:10Z:re_review",
+      "comment_id": "4852315830",
+      "comment_version_key": "4852315830:2026-07-01T08:48:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98139#issuecomment-4852315830",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 98356,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T03:15:44Z",
-      "comment_updated_at": "2026-07-01T03:21:09Z",
+      "issue_number": 98139,
+      "author": "zhangLei99586",
+      "author_id": 294081397,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-01T08:48:10Z",
+      "comment_updated_at": "2026-07-01T08:48:10Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -68,13 +70,14 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): keep provider-owned CLI sessions across the daily default reset",
-        "body": "## What Problem This Solves\n\nThe provider-owned CLI session exemption shipped for the gateway `agent.run` path in #97931 (merged as `d9aedc32a1`) was applied only to the two gateway freshness decision sites (`src/gateway/server-methods/agent.ts`, `src/config/sessions/entry-freshness.ts`). The scheduled isolated-agent cron path does not go through `agent.run`; it runs through `runCronIsolatedAgentTurn` -> `resolveCronSession` (`src/cron/isolated-agent/session.ts`), which still called `evaluateSessionFreshness` directly with no provider-owned guard.\n\nAs a result, a recurring cron job with a persistent session target on a CLI runtime (`claude-cli`, `codex`, `gemini-cli`) had its session rotated after the daily boundary under the default reset config. The rollover minted a new `sessionId` and, because `sanitizeFreshCronSessionEntry` does not carry `cliSessionBindings`, dropped the CLI binding and split the transcript. The cron agent silently lost its underlying CLI conversation every morning (default `atHour: 4`), with no memory of prior runs, and the user had no signal.\n\nThe local `openclaw` command resolver (`src/agents/command/session.ts` `resolveSession`) shared the identical gap.\n\n## Why This Change Was Made\n\n`#97931` documented the invariant that a provider-owned CLI session must survive the implicit daily/idle reset unless the operator configured a reset (or explicitly ran `session.reset` / `/reset`). The inbound auto-reply path (`src/auto-reply/reply/session.ts`) and the gateway path both honor it via `resetPolicy.configured !== true && hasProviderOwnedSession(entry)`. The two remaining non-gateway resolvers did not, so the exemption users rely on was not applied to scheduled or command-line turns.\n\n## User Impact\n\nRecurring cron jobs with persistent session targets, and local `openclaw agent` command runs, now preserve provider-owned CLI conversations across the implicit daily reset boundary. Behavior is unchanged when a reset is configured, when `session.reset` / `/reset` is invoked, or for non-provider-owned sessions; those still rotate. The command path additionally still rotates when the terminal main transcript is newer than the registry.\n\n## Root cause\n\n`src/cron/isolated-agent/session.ts` (before):\n\n```ts\nconst freshness = evaluateSessionFreshness({\n  updatedAt: entry.updatedAt,\n  ...resolveSessionLifecycleTimestamps({ entry, agentId: params.agentId, storePath }),\n  now: params.nowMs,\n  policy: resetPolicy,\n});\n```\n\nNo `hasProviderOwnedSession` guard, unlike the inbound and (post-#97931) gateway paths. `resolveCronSession` is reached for persistent-target jobs via `src/gateway/server-cron.ts` -> `runCronIsolatedAgentTurn` -> `src/cron/isolated-agent/run.ts:648` `resolveCronSession({ forceNew: input.job.sessionTarget === \"isolated\" })`, where `forceNew` is `false`.\n\n## Fix\n\n`src/cron/isolated-agent/session.ts` (after):\n\n```ts\nconst skipImplicitExpiry = resetPolicy.configured !== true && hasProviderOwnedSession(entry);\nconst freshness = skipImplicitExpiry\n  ? ({ fresh: true } satisfies SessionFreshness)\n  : evaluateSessionFreshness({\n      updatedAt: entry.updatedAt,\n      ...resolveSessionLifecycleTimestamps({ entry, agentId: params.agentId, storePath }),\n      now: params.nowMs,\n      policy: resetPolicy,\n    });\n```\n\nThe command resolver gets the same guard, kept subordinate to the terminal-main-transcript rotation so that signal still rotates:\n\n```ts\nconst skipImplicitExpiry = resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);\nconst fresh = sessionEntry\n  ? !terminalMainTranscriptNewerThanRegistry &&\n    (skipImplicitExpiry || evaluateSessionFreshness({ ... }).fresh)\n  : false;\n```\n\n## Why this is the right boundary\n\n`hasProviderOwnedSession` is the single shared predicate `#97931` exported for exactly this purpose. This change routes the two remaining non-gateway resolvers through it rather than adding a fourth copy, so all four session-admission surfaces (inbound, gateway, cron, command) now honor the same exemption. No new config, no runtime shim.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/cron/isolated-agent/session.provider-owned-reset.test.ts src/agents/command/session.provider-owned-reset.test.ts` - passes with the patch; the \"keeps a provider-owned CLI session\" case fails on pristine `origin/main` (4ac5cf8636) and passes after, in both files.\n- `node scripts/run-vitest.mjs src/cron/isolated-agent/session.test.ts` - existing suite still green.\n- `oxlint`, `oxfmt --check`, and `tsgo` (`tsconfig.core.json` + `tsconfig.core.test.json`) clean on the changed files.\n\n## Real behavior proof\nBehavior addressed: a scheduled provider-owned CLI cron session was rotated to a new sessionId and lost its claude-cli binding after crossing the daily default reset boundary.\nReal environment tested: drove the real `resolveCronSession` (the function `runCronIsolatedAgentTurn` invokes at `run.ts:648`) against an on-disk `sessions.json` store, on pristine main 4ac5cf8636 and on the patched head fdbe84d686. The session store file read, the freshness evaluator, the reset-policy resolver, and the `hasProviderOwnedSession` predicate all stayed real; nothing was stubbed.\nExact steps or command run after this patch: wrote a `sessions.json` holding one `claude-cli` provider-owned entry (`model` set, `cliSessionBindings[\"claude-cli\"]` present) whose `sessionStartedAt` predates the 04:00 daily boundary by 29 hours, pointed `session.store` at it with the default unconfigured reset config, then called `resolveCronSession({ forceNew: false })` and read back `isNewSession`, the resulting `sessionId`, and the reloaded `claude-cli` binding.\nEvidence after fix:\n```\n# BEFORE (pristine main 4ac5cf8636)\nisNewSession=true\nsessionId=4a918a2f-563a-48e3-83b3-9668b56f7ae9\nsessionIdChanged=true\nclaudeCliBinding=DROPPED\n# AFTER (this patch, identical inputs)\nisNewSession=false\nsessionId=sess-2f9c1e\nsessionIdChanged=false\nclaudeCliBinding=claude-cli-conv-88b2\n```\nObserved result after fix: the persistent-target cron session now keeps its original sessionId and its claude-cli conversation binding across the daily boundary instead of rolling to a fresh id and dropping the binding.\nWhat was not tested: no live provider request was issued and no full build was run; the daily boundary was reached by backdating the stored session rather than waiting real time.\n",
-        "branch": "fix/cron-provider-owned-session-reset",
-        "head_sha": "fdbe84d686d42f458efbe9e660ee7aa80ceb5f65",
-        "author": "yetval",
+        "title": "fix: use Object.hasOwn instead of in operator in usage bar translator",
+        "body": "Related: #98466\n\n## What Problem This Solves\n\n`key in table` checks prototype chain — `toString`/`constructor` match `Object.prototype` instead of fallthrough.\n\n## Why This Change Was Made\n\nReplace `key in table` with `Object.hasOwn(table, key)` in alias + case table lookup (2 lines).\n\n## User Impact\n\nFixes incorrect usage bar rendering when keys coincide with prototype names.\n\n## Evidence\n\n**Runtime terminal proof (Node v24.13.1):**\n\n![screenshot](https://raw.githubusercontent.com/zhangLei99586/openclaw/proof-screenshots/pr-98139-proof.png)\n\n- 15/15 tests passed + 2 new regression tests (`translator.test.ts`)\n- `renderUsageBar(tpl, {m:\"toString\"}) → \"owned-value\"` — Object.hasOwn verified",
+        "branch": "fix/in-operator-prototype",
+        "head_sha": "94a5d9b21588d9e711d7a04b8bfe0fbe5d4012d0",
+        "author": "zhanglei99586",
         "labels": [
           "agents",
           "size: M",
@@ -85,40 +88,28 @@
         ],
         "files": [
           {
-            "path": "src/agents/command/session.provider-owned-reset.test.ts",
-            "additions": 72,
+            "path": "src/auto-reply/usage-bar/translator.test.ts",
+            "additions": 25,
             "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/command/session.ts",
-            "additions": 14,
-            "deletions": 10,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/isolated-agent/session.provider-owned-reset.test.ts",
-            "additions": 84,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/isolated-agent/session.ts",
-            "additions": 15,
-            "deletions": 10,
+            "path": "src/auto-reply/usage-bar/translator.ts",
+            "additions": 3,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 185,
-        "deletions": 20,
+        "changedFiles": 2,
+        "additions": 28,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98356",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98356.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98139",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98139.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
@@ -138,25 +129,25 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "target is not open"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2396,
+    "total_ms": 2163,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 410
+        "ms": 609
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1630
+        "ms": 1337
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -168,7 +159,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 332
+        "ms": 204
       },
       {
         "name": "append_ledger",
