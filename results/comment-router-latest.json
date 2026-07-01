@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T07:25:53.735Z",
-  "repo": "steipete/CodexBar",
+  "generated_at": "2026-07-01T07:26:39.044Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T04:25:53.491Z",
+  "since": "2026-07-01T04:26:37.413Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    1805
+    97922
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,260 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97922:4836768513:2026-07-01T07:26:34Z:clawsweeper_needs_human",
+      "comment_id": "4836768513",
+      "comment_version_key": "4836768513:2026-07-01T07:26:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97922#issuecomment-4836768513",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97922,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-29T20:33:03Z",
+      "comment_updated_at": "2026-07-01T07:26:34Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] No automated code repair remains from this read-only review; the blockers are contributor real behavior proof and maintainer acceptance of the delete-mode suspended-retention tradeoff.; Cleared: The diff changes core TypeScript lifecycle state and tests only; no dependency, workflow, package, secret, permission, or supply-chain surface is touched. (sha=0001cab4d8ed41839a751c6f552670837820e64b)",
+      "review_summary": "The PR preserves successful expected subagent completion results on retry-limit/expiry give-up by marking pending final delivery suspended/escalated instead of clearing delete-mode payloads, with lifecycle and registry coverage.\n\nPR surface: Source +50, Tests +121. Total +171 across 5 files.\n\nReproducibility: yes. at source level: current main clears/fails non-keep expected completions on give-up, while the PR preserves successful captured results through suspended steering. I did not run a live timing-sensitive transport reproduction.",
+      "review_followup": "- [P1] No automated code repair remains from this read-only review; the blockers are contributor real behavior proof and maintainer acceptance of the delete-mode suspended-retention tradeoff.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "0001cab4d8ed41839a751c6f552670837820e64b",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(subagents): escalate expected completions on delivery give-up instead of dropping them",
+        "body": "## What problem this solves\n\nOn delivery give-up (retry-limit / expiry), an *expected* subagent completion that already produced a result was silently dropped — `clearPendingFinalDelivery` + marked `failed` — so a parent/user that was waiting on it received nothing but a log line. This is the silent-loss path behind a cluster of open reports.\n\nThe give-up handling in `subagent-registry-lifecycle.ts` has two branches:\n\n- **suspend** — preserves the payload (`status: suspended`) so the steering queue can still deliver it to the requester.\n- **fallback** — clears the payload and marks the run `failed`.\n\nThe fallback runs whenever the completion is not suspendable (e.g. `cleanup: \"delete\"`, or a non-`COMPLETE` ended reason) even though the subagent *succeeded and produced a result*. That produced result is then dropped.\n\n```mermaid\nflowchart TD\n  A[completion ready, delivery to parent fails] --> B{retry/expiry exhausted?}\n  B -- no --> R[retry / defer]\n  B -- \"yes (give-up)\" --> C{suspendable?<br/>ok outcome + cleanup keep}\n  C -- yes --> S[suspend: payload kept, delivered by steering queue]\n  C -- no --> D{expected completion +<br/>captured result?}\n  D -- \"yes (this PR)\" --> E[escalate: preserve and surface to user<br/>status suspended, escalated flag]\n  D -- no --> X[clear + failed<br/>nothing to deliver]\n```\n\n## What changed\n\n- New shared helper `escalateExpectedCompletionOnGiveUp`: when a completion was expected and a result was captured, preserve it (reusing the suspend path, tagged `escalated`) instead of clearing the payload.\n- Applied to **both** give-up sites (`finalizeResumedAnnounceGiveUp` and the resume cleanup handler) so neither drops silently.\n- Adds an `escalated` flag to `SubagentCompletionDeliveryState`.\n- The retry/expiry decision and the existing suspend path are unchanged.\n\n## Behavior change (delete-mode give-up)\n\nThis intentionally changes the delete-mode give-up contract: a `cleanup: \"delete\"` run that produced an *expected* result is now escalated (preserved for delivery) rather than dropped on give-up. Retained completions are bounded by the existing suspended-delivery prune/expiry, so this does not leak runs. The existing test that asserted the drop is updated to assert the new escalation.\n\n## Open question for reviewers\n\nThe escalation reuses the existing pending-final-delivery path (the steering queue delivers `suspended` entries to `payload.requesterSessionKey`). That stops the silent clear and preserves the result. For the case where the requester chain is fully gone, the entry is bounded by prune/expiry rather than surfaced elsewhere — would you prefer a dedicated root/user escalation notice there, or is preserving-via-the-existing-path the right first step?\n\n## Evidence\n\nLocal, against the same tree as the branch:\n\n- `pnpm tsgo:core`, `tsgo:core:test`, `tsgo:test:src` — clean (exit 0, no type errors)\n- `oxlint` on the four changed files — 0 warnings / 0 errors\n- `vitest run src/agents/subagent-registry.test.ts src/agents/subagent-registry-lifecycle.test.ts` — 196 passed, including the new escalate, no-expected-completion, and delete-mode-escalation cases\n\nRefs #92433, #67777, #90944, #92116\n\n\n### Real behavior proof: retry-limit give-up preserves expected delete-mode completion\n\nRedacted local terminal output from PR head `0001cab4d8ed41839a751c6f552670837820e64b`:\n\n```text\n$ pnpm exec vitest run src/agents/subagent-registry-lifecycle.test.ts src/agents/subagent-registry.test.ts --config test/vitest/vitest.agents.config.ts -t \"escalates\" --reporter verbose\n\nRUN  v4.1.8 /home/koltigin/openclaw-pr-97922\n\n✓ |agents| src/agents/subagent-registry-lifecycle.test.ts > subagent registry lifecycle hardening > escalates an expected completion with a result on give-up instead of dropping it 27ms\n✓ |agents| src/agents/subagent-registry.test.ts > subagent registry seam flow > escalates delete-mode completion runs with a captured result when announce cleanup gives up after retry limit 151ms\n\nTest Files  2 passed (2)\nTests  2 passed | 98 skipped (100)\nDuration  4.16s\n```\n\nWhat this proves on the production registry/lifecycle path:\n\n- `finalizeResumedAnnounceGiveUp` no longer clears a successful expected completion after retry-limit give-up.\n- The preserved payload is marked `delivery.status: \"suspended\"` and `delivery.escalated: true` with `frozenResultText: \"final answer\"`.\n- The registry-level retry path keeps the delete-mode run visible through `listSubagentRunsForRequester(\"agent:main:main\")`, so the existing requester steering surface can pick up the suspended payload instead of losing it.\n",
+        "branch": "feat/subagent-give-up-escalate",
+        "head_sha": "0001cab4d8ed41839a751c6f552670837820e64b",
+        "author": "mertbasar0",
+        "labels": [
+          "agents",
+          "size: S",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-lifecycle.test.ts",
+            "additions": 116,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-lifecycle.ts",
+            "additions": 42,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.test.ts",
+            "additions": 11,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.types.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 177,
+        "deletions": 6,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97922",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97922.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97922:4851181965:2026-07-01T06:57:03Z:re_review",
+      "comment_id": "4851181965",
+      "comment_version_key": "4851181965:2026-07-01T06:57:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97922#issuecomment-4851181965",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97922,
+      "author": "MertBasar0",
+      "author_id": 100199793,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T06:57:03Z",
+      "comment_updated_at": "2026-07-01T06:57:03Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(subagents): escalate expected completions on delivery give-up instead of dropping them",
+        "body": "## What problem this solves\n\nOn delivery give-up (retry-limit / expiry), an *expected* subagent completion that already produced a result was silently dropped — `clearPendingFinalDelivery` + marked `failed` — so a parent/user that was waiting on it received nothing but a log line. This is the silent-loss path behind a cluster of open reports.\n\nThe give-up handling in `subagent-registry-lifecycle.ts` has two branches:\n\n- **suspend** — preserves the payload (`status: suspended`) so the steering queue can still deliver it to the requester.\n- **fallback** — clears the payload and marks the run `failed`.\n\nThe fallback runs whenever the completion is not suspendable (e.g. `cleanup: \"delete\"`, or a non-`COMPLETE` ended reason) even though the subagent *succeeded and produced a result*. That produced result is then dropped.\n\n```mermaid\nflowchart TD\n  A[completion ready, delivery to parent fails] --> B{retry/expiry exhausted?}\n  B -- no --> R[retry / defer]\n  B -- \"yes (give-up)\" --> C{suspendable?<br/>ok outcome + cleanup keep}\n  C -- yes --> S[suspend: payload kept, delivered by steering queue]\n  C -- no --> D{expected completion +<br/>captured result?}\n  D -- \"yes (this PR)\" --> E[escalate: preserve and surface to user<br/>status suspended, escalated flag]\n  D -- no --> X[clear + failed<br/>nothing to deliver]\n```\n\n## What changed\n\n- New shared helper `escalateExpectedCompletionOnGiveUp`: when a completion was expected and a result was captured, preserve it (reusing the suspend path, tagged `escalated`) instead of clearing the payload.\n- Applied to **both** give-up sites (`finalizeResumedAnnounceGiveUp` and the resume cleanup handler) so neither drops silently.\n- Adds an `escalated` flag to `SubagentCompletionDeliveryState`.\n- The retry/expiry decision and the existing suspend path are unchanged.\n\n## Behavior change (delete-mode give-up)\n\nThis intentionally changes the delete-mode give-up contract: a `cleanup: \"delete\"` run that produced an *expected* result is now escalated (preserved for delivery) rather than dropped on give-up. Retained completions are bounded by the existing suspended-delivery prune/expiry, so this does not leak runs. The existing test that asserted the drop is updated to assert the new escalation.\n\n## Open question for reviewers\n\nThe escalation reuses the existing pending-final-delivery path (the steering queue delivers `suspended` entries to `payload.requesterSessionKey`). That stops the silent clear and preserves the result. For the case where the requester chain is fully gone, the entry is bounded by prune/expiry rather than surfaced elsewhere — would you prefer a dedicated root/user escalation notice there, or is preserving-via-the-existing-path the right first step?\n\n## Evidence\n\nLocal, against the same tree as the branch:\n\n- `pnpm tsgo:core`, `tsgo:core:test`, `tsgo:test:src` — clean (exit 0, no type errors)\n- `oxlint` on the four changed files — 0 warnings / 0 errors\n- `vitest run src/agents/subagent-registry.test.ts src/agents/subagent-registry-lifecycle.test.ts` — 196 passed, including the new escalate, no-expected-completion, and delete-mode-escalation cases\n\nRefs #92433, #67777, #90944, #92116\n\n\n### Real behavior proof: retry-limit give-up preserves expected delete-mode completion\n\nRedacted local terminal output from PR head `0001cab4d8ed41839a751c6f552670837820e64b`:\n\n```text\n$ pnpm exec vitest run src/agents/subagent-registry-lifecycle.test.ts src/agents/subagent-registry.test.ts --config test/vitest/vitest.agents.config.ts -t \"escalates\" --reporter verbose\n\nRUN  v4.1.8 /home/koltigin/openclaw-pr-97922\n\n✓ |agents| src/agents/subagent-registry-lifecycle.test.ts > subagent registry lifecycle hardening > escalates an expected completion with a result on give-up instead of dropping it 27ms\n✓ |agents| src/agents/subagent-registry.test.ts > subagent registry seam flow > escalates delete-mode completion runs with a captured result when announce cleanup gives up after retry limit 151ms\n\nTest Files  2 passed (2)\nTests  2 passed | 98 skipped (100)\nDuration  4.16s\n```\n\nWhat this proves on the production registry/lifecycle path:\n\n- `finalizeResumedAnnounceGiveUp` no longer clears a successful expected completion after retry-limit give-up.\n- The preserved payload is marked `delivery.status: \"suspended\"` and `delivery.escalated: true` with `frozenResultText: \"final answer\"`.\n- The registry-level retry path keeps the delete-mode run visible through `listSubagentRunsForRequester(\"agent:main:main\")`, so the existing requester steering surface can pick up the suspended payload instead of losing it.\n",
+        "branch": "feat/subagent-give-up-escalate",
+        "head_sha": "0001cab4d8ed41839a751c6f552670837820e64b",
+        "author": "mertbasar0",
+        "labels": [
+          "agents",
+          "size: S",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-lifecycle.test.ts",
+            "additions": 116,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-lifecycle.ts",
+            "additions": 42,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.test.ts",
+            "additions": 11,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.types.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 177,
+        "deletions": 6,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97922",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97922.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 441,
+    "total_ms": 1853,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 233
+        "ms": 234
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1380
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +294,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 197
+        "ms": 209
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
