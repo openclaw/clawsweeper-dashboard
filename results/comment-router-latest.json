@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T11:07:53.897Z",
-  "repo": "openclaw/spogo",
+  "generated_at": "2026-07-01T11:07:57.595Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T08:07:53.466Z",
+  "since": "2026-07-01T08:07:56.436Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    35
+    98555
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,133 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98555:4853647684:2026-07-01T11:07:50Z:clawsweeper_needs_human",
+      "comment_id": "4853647684",
+      "comment_version_key": "4853647684:2026-07-01T11:07:50Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98555#issuecomment-4853647684",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98555,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-01T11:03:00Z",
+      "comment_updated_at": "2026-07-01T11:07:50Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=90670fd7c35711f762f35b55a091baa714d62d7d)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "90670fd7c35711f762f35b55a091baa714d62d7d",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-wiki): retry transient existing-page reads to preserve human Notes blocks",
+        "body": "## Summary\n\n**Problem**: Two memory-wiki source-page write paths (`ingest.ts:90` and `source-page-shared.ts:55`) read the existing vault page before re-ingest with `.catch(() => \"\")`. A transient I/O failure (EIO, fs-safe `path-mismatch` concurrent-rewrite race) turns the read result into an empty string, which routes past `preserveHumanNotesBlock` and silently overwrites the user's hand-written `## Notes` block with an empty template. The sync fingerprint advances, so the loss never self-heals.\n\n**Solution**: Replace the swallowed `.catch(() => \"\")` with a one-shot retry (100ms delay) in both paths. If the retry still fails, throw rather than silently producing an empty string that would cause data loss. The writer already retries the exact same transient `path-mismatch` race (`vault-page-write.ts:24-32`) — this fix makes the reader match the writer's resilience.\n\n**What changed**: `extensions/memory-wiki/src/ingest.ts` — +25/-2 (add `readVaultPageWithRetry` helper, replace `.catch(() => \"\")` with retry-then-throw); `extensions/memory-wiki/src/source-page-shared.ts` — +24/-2 (add `readExistingVaultPageText` helper, same pattern); `extensions/memory-wiki/src/ingest.test.ts` — +56/-1 (regression test: transient EIO → retry preserves notes); `extensions/memory-wiki/src/source-page-shared.test.ts` — +42 (regression test: re-ingest preserves notes)\n\n**What did NOT change**: `preserveHumanNotesBlock`, the writer's `writeGuardedVaultPage` retry loop, the fs-safe vault layer, any other memory-wiki module, config, or protocol surface.\n\nFixes #98345\n\n## What Problem This Solves\n\nA P0 data-loss bug: when a memory-wiki source is re-ingested while a transient I/O failure hits the existing-page re-read, the user's hand-written `## Notes` block is permanently lost. The generated content still lands, the page persists, and the sync fingerprint advances, so the loss never self-heals on a later sync.\n\nThis is the same fail-open-on-read anti-pattern the repo already fixed for config (#96469) and doctor (#98245): a swallowed read error must not be treated as \"no prior data\" before an overwrite.\n\n## Real behavior proof\n\n**Behavior addressed**: Transient existing-page read failure during memory-wiki source re-ingest silently empties the user's `## Notes` block.\n\n**Real setup tested**:\n- **Runtime**: Node 24.13, Linux x86_64\n- **Branch**: `fix/issue-98345-memory-wiki-notes-wipe` at `90670fd7c3`\n- **Test runner**: `scripts/run-vitest.mjs`\n\n**Root cause**: Both `ingest.ts:90` and `source-page-shared.ts:55` use `.catch(() => \"\")` to read the existing page. A transient I/O failure (EIO or the fs-safe `path-mismatch` concurrent-rewrite race) returns empty string → `preserveHumanNotesBlock` is bypassed → the regenerated template (with empty `## Notes`) overwrites the user's hand-written notes. The writer already retries this exact race (`vault-page-write.ts:31-32` via `isConcurrentRewriteRace`), but the reader swallows it.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs run extensions/memory-wiki/src/ingest.test.ts extensions/memory-wiki/src/source-page-shared.test.ts`\n\n**After-fix evidence**:\n```\n[test] starting test/vitest/vitest.extension-memory.config.ts\n RUN  v4.1.8\n\n Test Files  2 passed (2)\n      Tests  6 passed (6)\n   Start at  17:58:39\n   Duration  7.28s\n\n[test] passed 1 Vitest shard in ~18s\n```\n\n**Regression test: transient EIO in ingest.ts (#98345)**:\n1. First ingest creates the page\n2. User adds hand-written note: \"KEY INSIGHT: add Q3 goals (irreplaceable)\"\n3. `vi.spyOn(fs, \"readFile\")` injects a single EIO failure on the existing-page re-read\n4. Second ingest runs — the retry (100ms) recovers and `preserveHumanNotesBlock` runs\n5. User's note survives ✅\n\n**Regression test: re-ingest in source-page-shared.ts (#98345)**:\n1. Initial import writes the page\n2. User adds a note\n3. Re-import with updated source — notes preserved ✅\n\n**Observed result after the fix**: A transient I/O failure on the existing-page read triggers one retry (100ms delay). If the retry succeeds, `preserveHumanNotesBlock` preserves the user's notes as intended. If the retry also fails, the error propagates (fail-closed) rather than silently producing an empty string.\n\n**What was not tested**: Racing two real concurrent syncs to trigger the fs-safe path-mismatch race. The EIO injection stands in for the transient failure; the retry logic is source-identical across EIO and path-mismatch. The `source-page-shared.ts` path uses `vault.readText` (fs-safe layer), which cannot be cleanly mocked in a unit test without importing the security runtime.\n\n**Evidence provenance**: `scripts/run-vitest.mjs` on the PR head at Node 24.13 / Linux x86_64, 2026-07-01.\n\n## Evidence\n\n### Vitest (6/6)\n\n| Test | Result |\n|------|--------|\n| ingest: copies local file → sources markdown | ✅ |\n| **ingest: transient EIO → retry preserves notes (#98345)** | ✅ |\n| source-page-shared: falls back on out-of-range mtime | ✅ |\n| source-page-shared: preserves Notes on update | ✅ |\n| source-page-shared: CRLF notes without marker comments | ✅ |\n| **source-page-shared: re-ingest preserves notes (#98345)** | ✅ |\n\n### Before/after behavior\n\n```\n# BEFORE (buggy, main @ 4ac5cf86): user note wiped\n## Notes\n<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->\n\n# AFTER (fixed): note survives, content still lands\n## Notes\n<!-- openclaw:human:start -->\nKEY INSIGHT: covers the Q2 roadmap (irreplaceable human note)\n<!-- openclaw:human:end -->\n```\n\n## Tests and validation\n\n| Test Type | Result | Details |\n|-----------|--------|---------|\n| Existing ingest tests | ✅ 1/1 | Pre-existing test unchanged |\n| Existing source-page-shared tests | ✅ 3/3 | Pre-existing tests unchanged |\n| New ingest regression | ✅ 1/1 | EIO + retry preserves notes |\n| New source-page-shared regression | ✅ 1/1 | Re-ingest preserves notes |\n| Total | ✅ 6/6 | Zero regressions |\n\n## Code walkthrough\n\nThe fix adds a small retry helper to each affected file and replaces the `.catch(() => \"\")` pattern:\n\n**ingest.ts** — `readVaultPageWithRetry`:\n```typescript\nasync function readVaultPageWithRetry(pagePath: string): Promise<string> {\n  try {\n    return await fs.readFile(pagePath, \"utf8\");\n  } catch {\n    // Retry once after a short delay — transient races resolve sub-ms.\n    await new Promise((resolve) => setTimeout(resolve, 100));\n    return await fs.readFile(pagePath, \"utf8\");\n  }\n}\n```\n\n**source-page-shared.ts** — `readExistingVaultPageText`:\n```typescript\nasync function readExistingVaultPageText(vault, pagePath): Promise<string> {\n  try {\n    return await vault.readText(pagePath);\n  } catch {\n    await new Promise((resolve) => setTimeout(resolve, 100));\n    return await vault.readText(pagePath);\n  }\n}\n```\n\nBoth helpers follow the same pattern: attempt the read, retry once after 100ms, throw on second failure. The 100ms delay matches the retry window used by the writer's `writeGuardedVaultPage` (25ms–50ms delays, 3 attempts).\n\n## Design decisions\n\n**Why retry-once instead of multi-retry like the writer?** The writer retries 3 times with 25–50ms delays because the transient rewrite race resolves sub-ms. The reader faces the same race at a different point in the lifecycle — a single retry with a generous 100ms window is sufficient. If the file is persistently unreadable (permission error, disk failure), failing fast is better than blocking the ingest pipeline with retries.\n\n**Why throw on second failure instead of fall back to empty?** Failing closed (throw) ensures the caller's error handling can retry the entire ingest operation. Failing open (return \"\") permanently loses user data with no detectable error. The existing callers already handle thrown errors — the ingest falls through to catch blocks, the source-page-shared path returns a result with error context.\n\n**Why not share the helper between the two files?** `ingest.ts` uses bare `fs.readFile` (the page path is a direct filesystem path within the vault). `source-page-shared.ts` uses `vault.readText` (which goes through the fs-safe security layer). The two read methods have different signatures and dependency chains, so a shared helper would need to abstract over both — adding complexity for a 6-line retry loop.\n\n## Risk checklist\n\n**What is the highest-risk area of this change?** The throw-on-failure path. If an existing page is genuinely unreadable (permission error, disk corruption), the ingest/sync will now fail with an error instead of silently producing a blank page. This is the correct behavior — a detectible error is always better than silent data loss — but it may surface pre-existing filesystem issues that were previously hidden by the swallow.\n\n**Risk level**: Low — the fix only changes the behavior of a `.catch(() => \"\")` to `.catch(() => { throw })`. The 100ms retry covers the transient case. Persistent failures become visible errors instead of silent data loss. All existing tests pass unchanged. The writer already retries the same transient race, confirming the retry approach is correct for this codebase.\n\n**Mitigation**: One-shot retry covers the transient case. Persistent failure surfaces immediately as an error (no silent data loss). Callers already handle thrown errors.\n\n**Merge risk declaration**: No merge risk. Pure fix of a fail-open read pattern in two memory-wiki helper functions. No config, protocol, API, or SDK surface changes. The sibling `unsafe-local.ts` path (#97523) is distinct — this fix does not change its behavior.\n\n## Architecture context\n\nThe memory-wiki plugin writes vault pages through two source page writer paths. Both share the same Notes-preservation contract (`preserveHumanNotesBlock`) but read the existing page through different I/O layers:\n\n| Path | File | Read method | Retry added |\n|------|------|-------------|-------------|\n| Source ingest | `ingest.ts:90` | `fs.readFile(pagePath)` | `readVaultPageWithRetry` |\n| Source page shared | `source-page-shared.ts:55` | `vault.readText(pagePath)` | `readExistingVaultPageText` |\n\nBoth paths follow the same flow:\n1. Read existing page (now with retry)\n2. Generate new rendered content from source\n3. If existing page exists: splice user's Notes block from existing into new rendered content\n4. Write merged page to vault\n\nThe Notes preservation relies on step 1 returning the real existing content. When step 1 returns `\"\"` (because `.catch(() => \"\")` swallowed a transient error), step 3 is skipped (the `existing ? preserve : new` ternary), and step 4 writes the template with an empty Notes block.\n\n### The fs-safe path-mismatch race\n\nThe writer at `vault-page-write.ts:24-32` documents and retries a specific transient race condition:\n\n1. Writer opens file for atomic write (temp + rename)\n2. Concurrent bridge re-export replaces the same file via rename\n3. fs-safe guard detects the opened-fd identity mismatch → throws `FsSafeError` with code `path-mismatch`\n4. Writer catches this, retries 3 times with 25–50ms delays\n\nThe same race can occur between step 1 (read existing page) and step 4 (write merged page): the file is replaced by a concurrent sync between the read and the write. Before this fix, if the concurrent replacement happened between step 1's read and the fs-safe guard, the read would fail with `path-mismatch`, `.catch(() => \"\")` would return `\"\"`, and the user's Notes would be wiped in step 4 — even though the writer would successfully retry its own operation.\n\nThe fix adds parity: the reader now retries the same transient race, so the subsequent Notes preservation runs on the correct existing content.\n\n### Relation to #95614\n\nPR #95614 added `preserveHumanNotesBlock` to protect human notes on successful re-ingest. This fix closes the gap where transient read failures bypassed that protection. The fix complements #95614 rather than replacing it.\n\n### Relation to #97523\n\nIssue #97523 covers a distinct bug: unsafe-local sync deletes imported pages when the configured source path is unavailable. This fix only addresses the existing-page re-read path — it does not change the unsafe-local prune/recreate behavior.\n\n## How to test manually\n\nReproducing the bug requires injecting a transient I/O failure at the existing-page read site after adding human notes. The ingest.test.ts regression test does this by:\n\n1. Reading the ingested page to capture the user's notes\n2. Spying on `fs.readFile` to inject one EIO failure on the specific page path\n3. Running the ingest again with an updated source\n4. Asserting the user's notes survive in the output page\n\nThe same pattern applies to the vault.readText path used by source-page-shared.ts, though that path is tested through the normal re-ingest flow (without mock injection, since vault.readText goes through the fs-safe security layer).\n\n## Linked context\n\n| Issue/PR | Status | Relationship |\n|----------|--------|-------------|\n| #98345 | Open | Active canonical tracker — this PR targets it |\n| #95614 | Merged | Added `preserveHumanNotesBlock` on successful re-ingest — this fix covers the unreadable-existing-page path that bypassed it |\n| #97523 | Open | Distinct — unsafe-local prune/recreate when source path is unavailable |\n| #97527 | Open | Candidate PR for #97523, not this bug |\n| #97560 | Open | Candidate PR for #97523, not this bug |\n| #96469 | Fixed | Same fail-open-on-read anti-pattern in config |\n| #98245 | Fixed | Same fail-open-on-read anti-pattern in doctor |\n| #92134 | Closed | Sibling transient path-mismatch context |\n\n## Current review state\n\nThis is a narrow data-loss fix: two `.catch(() => \"\")` replaced by retry-once-then-throw. The approach matches the writer's existing retry pattern for the same transient race. Two regression tests added. No config, protocol, or API changes. Ready for maintainer review.\n\n## Notes\n\nThe fix scope is deliberately minimal. The `.catch(() => \"\")` fail-open pattern exists in specific code sites where read → write coherence matters. Expanding the fix to a general-purpose retry helper across all memory-wiki reads would touch callers whose failure semantics differ (log vs skip vs replace). The two affected sites are the only ones where a swallowed read can cause permanent user data loss. Any future sites added under `extensions/memory-wiki/src/` that read a page before overwriting it should adopt the same retry-once pattern.\n\nThe 100ms delay between retries is intentionally generous. Most transient races (EIO from concurrent rename, path-mismatch from fs-safe guard) resolve in under 1ms. The 100ms window provides headroom for slower filesystems (NFS, FUSE) without meaningfully blocking the ingest pipeline — a single ingest already takes hundreds of milliseconds for compilation and indexing.\n",
+        "branch": "fix/issue-98345-memory-wiki-notes-wipe",
+        "head_sha": "90670fd7c35711f762f35b55a091baa714d62d7d",
+        "author": "zhangqueping",
+        "labels": [
+          "size: S",
+          "extensions: memory-wiki",
+          "P0",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-wiki/src/ingest.test.ts",
+            "additions": 55,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/ingest.ts",
+            "additions": 24,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/source-page-shared.test.ts",
+            "additions": 42,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/source-page-shared.ts",
+            "additions": 23,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 144,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98555",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98555.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 17,
+          "gatingTotal": 12,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 6,
+            "SKIPPED": 10
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 759,
+    "total_ms": 1366,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 421
+        "ms": 284
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 857
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +167,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 329
+        "ms": 196
       },
       {
         "name": "append_ledger",
