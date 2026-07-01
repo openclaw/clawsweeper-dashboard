@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T13:22:33.760Z",
+  "generated_at": "2026-07-01T13:22:33.913Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T10:22:31.486Z",
+  "since": "2026-07-01T10:22:33.244Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    98507
+    98506
   ],
   "comment_ids": [
-    4855367203
+    4855367524
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -34,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98507:4855367203:2026-07-01T13:19:55Z:re_review",
-      "comment_id": "4855367203",
-      "comment_version_key": "4855367203:2026-07-01T13:19:55Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98507#issuecomment-4855367203",
+      "idempotency_key": "comment-router:openclaw/openclaw:98506:4855367524:2026-07-01T13:19:57Z:re_review",
+      "comment_id": "4855367524",
+      "comment_version_key": "4855367524:2026-07-01T13:19:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98506#issuecomment-4855367524",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 98507,
+      "issue_number": 98506,
       "author": "lzyyzznl",
       "author_id": 41978486,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T13:19:55Z",
-      "comment_updated_at": "2026-07-01T13:19:55Z",
+      "comment_created_at": "2026-07-01T13:19:57Z",
+      "comment_updated_at": "2026-07-01T13:19:57Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -71,239 +71,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(google-vertex-adc): bound token response body read to prevent OOM",
-        "body": "## What Problem This Solves\n\nThe `readGoogleOauthTokenResponsePayload` function in `vertex-adc.ts` buffers the full Google OAuth token response before parsing. A malicious or misconfigured OAuth endpoint could send a very large response, causing the gateway process to run out of memory.\n\nThis is the same class of issue as https://github.com/openclaw/openclaw/issues/98424 but in the Google Vertex token-refresh path.\n\n## Why This Change Was Made\n\nThe original code used `response.arrayBuffer()` which buffers the entire response body in memory before parsing. This PR replaces that with `readResponseWithLimit` from the plugin SDK, which uses a streaming reader with a 16 MiB byte cap.\n\n### Changes in this iteration (v3)\n\n**Replaced ISIZE pre-check with bounded gunzip (`maxOutputLength`):**\n- The previous ISIZE (gzip trailer uncompressed size) pre-check was modulo 2^32 and could be bypassed by a 4 GiB+ payload with ISIZE = 0\n- Now uses Node.js zlib's `gunzipSync(bytes, { maxOutputLength })` which limits decompression output at the zlib layer before full allocation\n- This is both more correct (zlib-native, not ad-hoc header parsing) and more secure (no modulo wrap-around)\n\n**Fixed `content-encoding` header handling:**\n- Removed the `content-encoding` header fallback from `shouldGunzipGoogleOauthTokenResponse`\n- Node.js fetch auto-decompresses gzip bodies and may leave `content-encoding: gzip` on the response, causing `gunzipSync` to fail on already-decompressed data\n- Now only checks gzip magic bytes (`0x1f 0x8b`) to decide whether to decompress\n\n## User Impact\n\nNone under normal operation. ADC token responses are typically < 10 KiB. The 16 MiB cap is far above any legitimate response size.\n\n## Evidence\n\n### Unit tests\n```\n ✓ extensions/google/transport-stream.test.ts (73 tests) 3158ms\n   Tests  73 passed (73)\n```\n\n### Real behavior proof (local HTTP server, 7 scenarios)\n\n```\n═══════════════════════════════════════════════════════════════\n  Real Behavior Proof — PR #98507\n  Bounded Google Vertex ADC token response body read\n═══════════════════════════════════════════════════════════════\n\n🧪 Node version: v25.9.0\n🧪 Platform: linux\n\n  Test 1: Normal token response — bounded reader accepts\n  ✅ Parsed correctly: access_token=ya29.test-token-123, expires_in=3600\n\n  Test 2: Gzip-compressed token response — accepted\n  ✅ Gzip token parsed correctly: access_token=ya29.gzip-token\n\n  Test 3: Oversized response (~20 MB > 16 MiB) — wire cap rejects\n  ✅ Correctly rejected with: token response exceeds 16 MiB\n     RSS delta: 81 MiB (bounded reader prevented OOM)\n\n  Test 4: Gzip compressed overflow — bounded reader catches it\n  ✅ Correctly caught with: decompressed token response exceeds 16 MiB\n     (Node.js fetch auto-decompressed gzip; wire cap caught the\n      decompressed data. Decompression cap is defense-in-depth.)\n\n  Test 5: Empty body — returns undefined\n  ✅ Correctly returned undefined\n\n  Test 6: Invalid JSON — returns undefined (graceful)\n  ✅ Correctly returned undefined for invalid JSON\n\n  Test 7: OAuth error response — error_description parsed\n  ✅ Error response parsed correctly: error=invalid_grant\n\n═══════════════════════════════════════════════════════════════\n  Results: 7 passed, 0 failed\n═══════════════════════════════════════════════════════════════\n```\n\n### Key findings\n\n1. Normal token responses — bounded reader accepts without regression\n2. Gzip-compressed token responses — decompressed and parsed correctly\n3. Oversized wire responses (>16 MiB) — caught with descriptive error; RSS does not spike\n4. Gzip compressed overflow (small wire, huge decompressed) — caught by the bounded gunzip `maxOutputLength` option\n5. Empty body and invalid JSON — handled gracefully (returns undefined)\n6. OAuth error responses — `error_description` parsed correctly\n7. The 16 MiB cap is far above expected ADC token responses (< 10 KiB)",
-        "branch": "fix/vertex-adc-bound-response-read",
-        "head_sha": "64222a4578f0e1f95e0d00487e730091dfa6e8dc",
-        "author": "lzyyzznl",
-        "labels": [
-          "scripts",
-          "size: L",
-          "extensions: google",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/google/vertex-adc.test.ts",
-            "additions": 140,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "Sources/CodexBar/Providers/NeuralWatt/NeuralWattSettingsStore.swift",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "Sources/CodexBar/Providers/Shared/ProviderImplementationRegistry.swift",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBar/Resources/ProviderIcon-neuralwatt.svg",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "Sources/CodexBar/SettingsStore+MenuPreferences.swift",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBar/UsageStore+TokenAccounts.swift",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/proof-real-behavior.mjs",
-            "additions": 370,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "Sources/CodexBarCore/Providers/NeuralWatt/NeuralWattSettingsReader.swift",
-            "additions": 61,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "Sources/CodexBarCore/Providers/NeuralWatt/NeuralWattUsageFetcher.swift",
-            "additions": 442,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "Sources/CodexBarCore/Providers/ProviderDescriptor.swift",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarCore/Providers/ProviderTokenResolver.swift",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarCore/Providers/Providers.swift",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarCore/TokenAccountSupport.swift",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarCore/TokenAccountSupportCatalog+Data.swift",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarCore/Vendored/CostUsage/CostUsageScanner.swift",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarWidget/CodexBarWidgetProvider.swift",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBarWidget/CodexBarWidgetViews.swift",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/CLIDiagnoseCommandTests.swift",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/MenuCardNeuralWattTests.swift",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "Tests/CodexBarTests/NeuralWattUsageFetcherTests.swift",
-            "additions": 409,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "Tests/CodexBarTests/ProviderConfigEnvironmentTests.swift",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/ProviderEnvironmentResolverTests.swift",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/ProvidersPaneCoverageTests.swift",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/UsageStoreNeuralWattAccountRefreshTests.swift",
-            "additions": 145,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "docs/configuration.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/neuralwatt.md",
-            "additions": 79,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "docs/providers.md",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 538,
-        "deletions": 12,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98507",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98507.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 88,
-          "gatingTotal": 83,
-          "counts": {
-            "SUCCESS": 60,
-            "SKIPPED": 27,
-            "FAILURE": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-whole-2:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-whole-2:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2589,
+    "total_ms": 2652,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 608
+        "ms": 657
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1652
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -315,7 +100,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 315
+        "ms": 1984
       },
       {
         "name": "append_ledger",
