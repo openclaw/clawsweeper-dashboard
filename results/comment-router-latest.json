@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-01T03:46:28.113Z",
+  "generated_at": "2026-07-01T03:46:25.326Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-01T00:46:25.403Z",
+  "since": "2026-07-01T00:46:21.597Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    98354
+    98360
   ],
   "comment_ids": [
-    4850054466
+    4850061163
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4850061349,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98354:4850054466:2026-07-01T03:43:31Z:re_review",
-      "comment_id": "4850054466",
-      "comment_version_key": "4850054466:2026-07-01T03:43:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98354#issuecomment-4850054466",
+      "idempotency_key": "comment-router:openclaw/openclaw:98360:4850061163:2026-07-01T03:45:09Z:re_review",
+      "comment_id": "4850061163",
+      "comment_version_key": "4850061163:2026-07-01T03:45:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98360#issuecomment-4850061163",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98354,
-      "author": "Pick-cat",
-      "author_id": 266665499,
+      "target_branch": "main",
+      "issue_number": 98360,
+      "author": "qingminglong",
+      "author_id": 34085845,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T03:43:31Z",
-      "comment_updated_at": "2026-07-01T03:43:31Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-01T03:45:09Z",
+      "comment_updated_at": "2026-07-01T03:45:09Z",
+      "status_comment_id": 4850061349,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,58 +68,81 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-01T03:46:26.407Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 98360
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-01T03:46:27.595Z",
+          "response_comment_id": "4850061349",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(infra): guard delivery queue inflate against corrupted entry_json",
-        "body": "## What Problem This Solves\n\nFixes an issue where a single corrupted `entry_json` row in the SQLite delivery queue (session or outbound) crashes the entire pending-entry load, preventing delivery recovery from making progress. The `inflate()` helper calls `JSON.parse(row.entry_json)` without a try-catch — a corrupt row throws an uncaught `SyntaxError` that propagates through `loadDeliveryQueueEntry` (single load), `loadDeliveryQueueEntries` (batch load — one bad row kills **all** pending entries), `updateDeliveryQueueEntry`, and `moveDeliveryQueueEntryToFailed`. Callers in session-delivery recovery, outbound recovery, and the gateway restart sentinel do not catch this error, so a single corrupt SQLite row can block all queued delivery retries.\n\n## Why This Change Was Made\n\nGuard `inflate()` itself — the shared chokepoint through which all queue reads flow. On parse failure it returns `null`. `loadDeliveryQueueEntry` already returns `null` for a missing row, so corrupt rows are treated the same way (unrecoverable → not found). `loadDeliveryQueueEntries` filters out `null` inflate results, so one corrupt row no longer discards every other pending entry in the same queue. `updateDeliveryQueueEntry` and `moveDeliveryQueueEntryToFailed` now throw a clean `ENOENT` (via `loadDeliveryQueueEntry`) instead of a raw `SyntaxError`, consistent with how they behave when an entry is genuinely absent. No API surface changes.\n\n## User Impact\n\nNo user-visible impact under normal operation. When `entry_json` is somehow corrupted (disk error, manual edit, partial write), delivery recovery now skips the bad entry instead of crashing. Recovery and gateway restart sentinel paths remain operational for the remaining valid entries.\n\n## Real behavior proof\n\n- **Behavior addressed:** a corrupt `entry_json` row in the SQLite `delivery_queue_entries` table must not crash delivery queue loads; the corrupt row should be treated as unrecoverable (null/skipped) while valid rows continue to load.\n- **Real environment tested:** Linux, Node v22.22.0, local source checkout on branch `fix/delivery-queue-inflate-json-parse`, driving the **real exported** `loadDeliveryQueueEntry`, `loadDeliveryQueueEntries`, `updateDeliveryQueueEntry`, and `moveDeliveryQueueEntryToFailed` from `src/infra/delivery-queue-sqlite.ts` against a **real on-disk SQLite database** (`OPENCLAW_STATE_DIR`). Corrupt rows are inserted directly via raw SQL (same write path as `upsertDeliveryQueueEntry` uses internally) and read back through the real exported loaders across the SQLite disk boundary. 18 assertions covering 6 scenarios.\n- **Evidence after fix:**\n\n```text\n=== Real behavior proof: delivery queue inflate corrupt JSON guards ===\n\n[case 1] loadDeliveryQueueEntry: corrupt row returns null\n  ok: valid row returns entry with correct id\n  ok: valid row has retryCount\n  ok: corrupt row returns null (not SyntaxError)\n  ok: nonexistent row returns null\n\n[case 2] loadDeliveryQueueEntries: skips corrupt, returns only valid\n  ok: returns 2 valid entries (corrupt skipped)\n  ok: valid ids: s-ok-1, s-ok-2 (s-bad excluded)\n  ok: outbound: 1 valid entry (corrupt skipped)\n  ok: outbound valid id: o-ok\n\n[case 3] all-corrupt queue\n  ok: all-corrupt → empty array (not crash)\n\n[case 4] updateDeliveryQueueEntry: corrupt → ENOENT (not SyntaxError)\n  ok: throws ENOENT for corrupt row\n  ok: error code is ENOENT\n\n[case 5] moveDeliveryQueueEntryToFailed: corrupt → ENOENT (not SyntaxError)\n  ok: throws ENOENT for corrupt row\n\n[case 6] SQLite disk readback: round-trip across real DB boundary\n  ok: round-trip: enqueuedAt preserved\n  ok: round-trip: retryCount preserved\n  ok: round-trip: lastError preserved\n  ok: round-trip: lastAttemptAt preserved\n  ok: round-trip: platformSendStartedAt preserved\n  ok: round-trip: recoveryState preserved\n\n=== Summary ===\nALL PROOF ASSERTIONS: 18 passed, 0 failed\n```\n\n- **Negative control (pre-fix behavior reproduced):** reverting `src/infra/delivery-queue-sqlite.ts` to main (`4ac5cf8636`) and re-running the same proof harness crashes on case 1 with the uncaught `SyntaxError` — the corrupt row that returns `null` after the fix instead throws and aborts the entire batch:\n\n```text\n=== NEGATIVE CONTROL: main version of delivery-queue-sqlite.ts ===\n[case 1] loadDeliveryQueueEntry: corrupt row returns null\n  ok: valid row returns entry with correct id\n  ok: valid row has retryCount\n\nSyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)\n    at JSON.parse (<anonymous>)\n    at inflate (src/infra/delivery-queue-sqlite.ts:62:14)\n    at loadDeliveryQueueEntry (src/infra/delivery-queue-sqlite.ts:179:16)\n\nexit=1\n```\n\nThe negative control is load-bearing: the **same proof harness, same corrupt rows, same disk boundary** crashes on main and passes 18/18 after the fix. Restoring the fix from the branch (`git checkout HEAD -- src/infra/delivery-queue-sqlite.ts`) and re-running returns to 18/18 green.\n\n- **What was not tested:** a live gateway with real recovery loops processing corrupt entries end-to-end — no gateway was running. The proof drives the exact same exported SQLite loader functions that recovery uses (`loadDeliveryQueueEntry` ← `loadPendingDelivery`, `loadDeliveryQueueEntries` ← `loadPendingDeliveries` / `loadPendingSessionDeliveries`), against a real SQLite database across the disk boundary, which exercises the shared chokepoint.\n\n## Evidence\n\n**Regression tests (11 tests, all pass):**\n\n```text\n$ node scripts/run-vitest.mjs src/infra/delivery-queue-sqlite.test.ts --run\n Test Files  1 passed (1)\n      Tests  11 passed (11)\n```\n\nCovers: corrupt single-row → null, corrupt-in-batch → skipped, all-corrupt-batch → empty array, update-with-corrupt → clean ENOENT, move-to-failed-with-corrupt → clean ENOENT, plus valid-entry round-trips (upsert/load, update, delete).\n\n**Existing tests — no regressions:**\n\n```text\n$ node scripts/run-vitest.mjs src/infra/outbound/delivery-queue.storage.test.ts --run\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n\n$ node scripts/run-vitest.mjs src/infra/session-delivery-queue.storage.test.ts --run\n Test Files  1 passed (1)\n      Tests  3 passed (3)\n```\n\n**Lint:** `oxlint` clean on both changed files.\n\nAI-assisted.",
-        "branch": "fix/delivery-queue-inflate-json-parse",
-        "head_sha": "57daa2af5c7e919d256eb25b17bc42cc560ed29c",
-        "author": "pick-cat",
+        "title": "fix(memory-wiki): preserve notes after transient page reads",
+        "body": "﻿﻿Closes #98345\n\n## What Problem This Solves\n\nFixes an issue where memory-wiki re-ingests could permanently wipe a user's hand-written `## Notes` block when the existing page re-read hit a transient failure.\n\n## Why This Change Was Made\n\nThe memory-wiki source-page writers now retry the existing-page read once instead of converting a read failure into an empty page. That keeps the existing `preserveHumanNotesBlock()` contract active for transient read failures while still letting real repeated read failures fail closed before overwriting user-authored notes.\n\n## User Impact\n\nUsers can keep hand-written memory-wiki notes across source re-ingests and imported-source syncs even if the first existing-page read fails transiently. OpenClaw will no longer treat that failure as \"no prior notes\" and write an empty notes block over user content.\n\n## Evidence\n\n- Claim proved: after-fix direct memory-wiki ingest preserves a hand-written `## Notes` block after a one-shot existing-page read failure, and repeated existing-page read failure fails closed without overwriting the page.\n  - Command: `node --import tsx --input-type=module <redacted inline proof script>` from the PR branch worktree, using a temporary vault, real `ingestMemoryWikiSource()`, and a process-local `fs.promises.readFile` wrapper that only faults reads of `sources/roadmap.md`.\n  - Observed result:\n\n```text\n[setup] vault=<temp>/vault\n[setup] page=sources/roadmap.md\n[setup] note-present-before=true\n[transient] injected-read-failures=1\n[transient] v2-content-present=true\n[transient] human-note-preserved=true\n[transient] page-sha=23efa6c187f1de07\n[repeated] injected-read-failures=2\n[repeated] failed-closed=true\n[repeated] error=proof injected persistent existing-page read failure\n[repeated] page-unchanged=true\n[repeated] note-still-present=true\n[repeated] v3-not-written=true\n[repeated] before-sha=23efa6c187f1de07 after-sha=23efa6c187f1de07\n```\n\n- Claim proved: transient existing-page read failures preserve human notes for both the direct ingest writer and the imported-source shared writer.\n  - `node scripts/run-vitest.mjs extensions/memory-wiki/src/wiki-notes-read-retry.test.ts --reporter=verbose`\n  - Result: passed 1 Vitest shard; 1 file passed, 2 tests passed.\n- Claim proved: broader touched memory-wiki note-preservation tests still pass.\n  - `node scripts/run-vitest.mjs extensions/memory-wiki/src/ingest-human-notes.test.ts extensions/memory-wiki/src/source-page-shared.test.ts extensions/memory-wiki/src/vault-page-write.test.ts extensions/memory-wiki/src/wiki-notes-read-retry.test.ts`\n  - Result: passed 1 Vitest shard; 4 files passed, 14 tests passed.\n- Claim proved: touched files have no whitespace errors.\n  - `git diff --check`\n  - Result: passed.\n- Review gate:\n  - `python .agents\\skills\\autoreview\\scripts\\autoreview --mode local`\n  - Result: `autoreview clean: no accepted/actionable findings reported`; the tool noted the branch had no unstaged diff because the fix was already committed.\n\nNot tested / proof gaps:\n\n- I did not reproduce the underlying OS-level `path-mismatch` race with concurrent real syncs. The real-module proof above injects the exact existing-page read failure at the changed seam, and the regression tests cover both memory-wiki writer paths around that seam.\n- I did not run broad `pnpm check`, full typecheck, or full test suites per contributor-scope instructions.\r\n",
+        "branch": "codex/98345-memory-wiki-notes",
+        "head_sha": "a26bb832691615aab475b2d45be3646524d4dd6e",
+        "author": "qingminglong",
         "labels": [
           "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
+          "extensions: memory-wiki",
+          "P0",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/infra/delivery-queue-sqlite.test.ts",
-            "additions": 162,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "extensions/memory-wiki/src/ingest.ts",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/delivery-queue-sqlite.ts",
-            "additions": 9,
-            "deletions": 3,
+            "path": "extensions/memory-wiki/src/source-page-shared.ts",
+            "additions": 10,
+            "deletions": 1,
             "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/wiki-notes-read-retry.test.ts",
+            "additions": 177,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 171,
-        "deletions": 3,
+        "changedFiles": 3,
+        "additions": 196,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98354",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98354.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98360",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98360.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 98,
-          "gatingTotal": 93,
+          "total": 91,
+          "gatingTotal": 86,
           "counts": {
-            "SUCCESS": 63,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
+            "SUCCESS": 58,
+            "SKIPPED": 33
           },
           "blockers": [],
           "pending": [],
@@ -128,21 +151,20 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3031,
+    "total_ms": 6770,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 623
+        "ms": 1810
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2074
+        "ms": 1902
       },
       {
         "name": "classify_comment_commands",
@@ -158,7 +180,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 320
+        "ms": 3029
       },
       {
         "name": "append_ledger",
