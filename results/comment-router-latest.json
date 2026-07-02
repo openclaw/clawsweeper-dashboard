@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T06:38:44.533Z",
+  "generated_at": "2026-07-02T06:38:52.437Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T03:38:42.390Z",
+  "since": "2026-07-02T03:38:50.394Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    98941
+    95311
   ],
   "comment_ids": [
-    4862875401
+    4862885000
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4862885298,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98941:4862875401:2026-07-02T06:36:07Z:re_review",
-      "comment_id": "4862875401",
-      "comment_version_key": "4862875401:2026-07-02T06:36:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98941#issuecomment-4862875401",
+      "idempotency_key": "comment-router:openclaw/openclaw:95311:4862885000:2026-07-02T06:37:41Z:re_review",
+      "comment_id": "4862885000",
+      "comment_version_key": "4862885000:2026-07-02T06:37:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95311#issuecomment-4862885000",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98941,
-      "author": "miorbnli",
-      "author_id": 35856959,
+      "target_branch": "main",
+      "issue_number": 95311,
+      "author": "sunlit-deng",
+      "author_id": 253064511,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T06:36:07Z",
-      "comment_updated_at": "2026-07-02T06:36:07Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-02T06:37:41Z",
+      "comment_updated_at": "2026-07-02T06:37:41Z",
+      "status_comment_id": 4862885298,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,121 +68,203 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-02T06:38:53.158Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 95311
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-02T06:38:54.075Z",
+          "response_comment_id": "4862885298",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(extensions): bound success-path JSON response reads",
-        "body": "## What Problem This Solves\n\nThree success-path response reads still used unbounded `response.json()` / `resp.json()`. A compromised or buggy endpoint returning a multi-GB body on HTTP 200 buffers the entire body before `JSON.parse` even runs, OOMing the agent. The error path in the same files already uses a bounded reader; the success path was the inconsistent outlier.\n\n## Why This Change Was Made\n\nThis is the same partial-hardening pattern already shipped across `comfy`, `anthropic-oauth`, `sms`, `matrix`, `telegram`, and `discord/api.ts` (`b1fae752f8`, `bf66b4e1ea`, `6e98477ee4`, `853a274f14`). The three remaining sites are the obvious next batch (the other two sites in the source triage — minimax/oauth and mattermost/client — were already bounded on `main`).\n\n## User Impact\n\nNo behavior change for well-formed responses (small, valid JSON still parses). A huge or non-JSON success body is now truncated at a cap and handled gracefully instead of buffering in full and OOMing. `thread-ownership` (409 conflict body), `discord` webhook (`{id, channel_id}`), and `huggingface` model discovery (`/v1/models`) all apply the same `readResponseTextLimited` + `JSON.parse` pattern already used by their error paths.\n\n## Real behavior proof\n\n- **Behavior addressed:** The success-path `response.json()` / `resp.json()` reads buffered the entire response body with no size cap, so a huge body could OOM before parsing.\n- **Real environment tested:** Linux x86_64, Node v24.14.0, commit `2256a7d21b` on branch `fix/unbounded-success-json-reads`.\n- **Exact steps or command run after this patch:** `node --import tsx verify-bounded-json-reads.mjs` — imports the real `readResponseTextLimited` from `openclaw/plugin-sdk/provider-http` (the helper now used by all three patched sites) and exercises it over real `Response` objects: a small valid body, and a 10 MB body.\n- **Evidence after fix:** Terminal capture of `node` runtime verification (live stdout, copied verbatim):\n\n  ```text\n  $ node --import tsx verify-bounded-json-reads.mjs\n  [small valid body] read 19 bytes; JSON.parse -> owner=agent-1\n\n  [huge 10MB body] read capped at 65536 bytes (full body was 10485760 bytes)\n  truncated -> JSON.parse: SyntaxError (caller catch handles -> fallback)\n\n  [contrast] response.text()/json() buffers full 10485760 bytes (the OOM pattern this PR removes)\n\n  Verdict: success-path body reads are now capped at the limit; a huge body no longer buffers in full (OOM mitigated)\n  ```\n\n- **Observed result after fix:** A 10 MB success body is read only up to the cap (65 536 bytes) instead of buffering in full; the truncated text fails `JSON.parse` and each site's new try/catch handles it (`discord` webhook -> `{}` as before; `huggingface` -> bundled catalog, matching the `!response.ok` branch; `thread-ownership` -> propagates to its existing try/finally). A small valid body still parses cleanly.\n- **What was not tested:** A live huge response from each real upstream (the real `readResponseTextLimited` helper over real `Response` objects is the faithful unit; each patched site now calls it instead of `response.json()`).\n\n## Tests and validation\n\n```text\n$ pnpm test extensions/thread-ownership/index.test.ts\n Test Files  1 passed (1)      Tests  21 passed (21)\n$ pnpm test extensions/huggingface/models.test.ts\n Test Files  1 passed (1)      Tests   8 passed (8)\n$ pnpm test extensions/discord/src/send.webhook.proxy.test.ts\n Test Files  1 passed (1)      Tests  (3 shards, all passed)\n```\n\nNo new test added: the success-path behavior is unchanged for well-formed responses (existing suites pass), and the bound is provided by the already-tested shared `readResponseTextLimited` helper; the node runtime verification above proves the cap is now applied to these reads.\n\n## Risk checklist\n\n- User-visible behavior: Yes (intended, bounded) - a huge/non-JSON success body is now truncated + handled instead of buffering in full; well-formed responses unchanged.\n- Config/env/migration behavior: No - no config or env surface touched.\n- Security/auth/secrets/network/tool execution: Yes (improvement) - bounds response-body reads on three success paths, mitigating OOM from a compromised/buggy upstream; no new credential, network, or command-execution path.\n- Plugins/providers/channels/SDK: Yes (bounded) - touches three extensions (thread-ownership, discord, huggingface); each uses the shared `readResponseTextLimited` helper already used by its own error path. No public/plugin SDK API change.\n- Highest-risk area: a legitimately large-but-valid success body that exceeds the cap would now fall back (webhook -> {}, huggingface -> bundled catalog). All three success payloads are tiny in practice (well under 8-64 KB), and the prior behavior for an over-large body was an OOM crash, so the fallback is strictly safer.\n- Mitigation: existing thread-ownership (21) + huggingface models (8) + discord webhook (3 shards) tests pass + node runtime verification proving the cap is applied.\n\nCloses: N/A (no existing issue)\n",
-        "branch": "fix/unbounded-success-json-reads",
-        "head_sha": "e643f5da2cf1c5059eddbc7b8ba36e443c04a2b1",
-        "author": "miorbnli",
+        "title": "feat: add disableBoundaryAwareCache compat option for prefix-matching prompt cache providers",
+        "body": "## What Problem This Solves\n\nDeepSeek and Xiaomi use prefix-matching prompt caching: the system prompt prefix must stay byte-identical across requests for cache hits. OpenClaw 6.x boundary-aware caching keeps stable and dynamic prompt sections in the system prompt, so per-turn dynamic suffix text can break provider prefix matching and reduce cache hits.\n\nThis PR adds `disableBoundaryAwareCache`, auto-detected for `deepseek` and `xiaomi`, which keeps the stable prefix in the system message and moves the dynamic suffix into the first user message. It can be overridden with `compat: { disableBoundaryAwareCache: false }`.\n\nCloses #94518. Related: #91018, #90583.\n\n## Real behavior proof (required for external PRs)\n\nBehavior addressed: the production transport path (`buildOpenAICompletionsParams`) resolves DeepSeek/Xiaomi compat, preserves the stable system prefix, moves the dynamic suffix to the first user message, respects explicit `false`, and leaves OpenAI models unchanged.\n\nCurrent head verified: `943858ba56`.\n\nThe committed regression tests now cover:\n\n- DeepSeek default: stable prefix remains the system message; dynamic suffix moves to the first user message.\n- DeepSeek override: `compat.disableBoundaryAwareCache: false` preserves the normal stripped system prompt behavior.\n- OpenAI unaffected: non-DeepSeek completions models keep existing boundary handling.\n\nFocused terminal output:\n\n```bash\n$ node scripts/run-vitest.mjs src/llm/providers/openai-completions.test.ts\n[test] starting test/vitest/vitest.unit.config.ts\n\n RUN  v4.1.8 <repo>\n\n\n Test Files  1 passed (1)\n      Tests  34 passed (34)\n   Start at  14:35:07\n   Duration  814ms (transform 583ms, setup 160ms, import 534ms, tests 60ms, environment 0ms)\n\n[test] passed 1 Vitest shard in 3.32s\n```\n\n```bash\n$ node scripts/run-vitest.mjs src/agents/openai-transport-stream.test.ts\n[test] starting test/vitest/vitest.agents.config.ts\n\n RUN  v4.1.8 <repo>\n\n\n Test Files  1 passed (1)\n      Tests  286 passed (286)\n   Start at  14:35:11\n   Duration  1.02s (transform 358ms, setup 60ms, import 712ms, tests 201ms, environment 0ms)\n\n[test] passed 1 Vitest shard in 3.48s\n```\n\nLive DeepSeek API cache headers were not tested because no active API key was available. The proof above exercises the production request-building path that determines whether DeepSeek receives a byte-stable system prompt prefix.\n\nAI-assisted: built with Codex\n",
+        "branch": "fix/deepseek-boundary-aware-cache-94518",
+        "head_sha": "943858ba568e441ceb44d92ca372784fbcbdfbd0",
+        "author": "sunlit-deng",
         "labels": [
-          "channel: discord",
+          "agents",
           "size: S",
-          "extensions: huggingface",
-          "P2",
+          "P1",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
           "status: 📣 needs proof",
-          "extensions: thread-ownership"
+          "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "extensions/discord/src/send.webhook.ts",
-            "additions": 10,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/huggingface/models.ts",
-            "additions": 14,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/thread-ownership/index.test.ts",
-            "additions": 17,
+            "path": "packages/llm-core/src/types.ts",
+            "additions": 15,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/thread-ownership/index.ts",
-            "additions": 17,
-            "deletions": 2,
+            "path": "src/agents/openai-completions-compat.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 93,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 20,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sessions/model-registry.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.models.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.core.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/openai-completions.ts",
+            "additions": 46,
+            "deletions": 7,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 58,
-        "deletions": 7,
+        "changedFiles": 8,
+        "additions": 179,
+        "deletions": 14,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98941",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98941.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95311",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95311.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 92,
-          "gatingTotal": 87,
+          "total": 100,
+          "gatingTotal": 95,
           "counts": {
-            "SUCCESS": 49,
+            "FAILURE": 1,
             "SKIPPED": 32,
-            "IN_PROGRESS": 8,
-            "FAILURE": 2,
+            "SUCCESS": 36,
+            "IN_PROGRESS": 30,
             "NEUTRAL": 1
           },
           "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
             "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
             "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
+            "build-artifacts:IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
             "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
             "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
+            "Real behavior proof:FAILURE"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2466,
+    "total_ms": 4186,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 622
+        "ms": 486
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1506
+        "ms": 1542
       },
       {
         "name": "classify_comment_commands",
@@ -198,7 +280,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 324
+        "ms": 2133
       },
       {
         "name": "append_ledger",
