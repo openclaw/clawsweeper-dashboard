@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T15:39:43.180Z",
+  "generated_at": "2026-07-02T15:39:50.052Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T12:39:40.390Z",
+  "since": "2026-07-02T12:39:47.834Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    97730
+    98972
   ],
   "comment_ids": [
-    4867533324
+    4867535284
   ],
-  "status_comment_id": 4867533758,
+  "status_comment_id": 4867535717,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:97730:4867533324:2026-07-02T15:38:18Z:re_review",
-      "comment_id": "4867533324",
-      "comment_version_key": "4867533324:2026-07-02T15:38:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97730#issuecomment-4867533324",
+      "idempotency_key": "comment-router:openclaw/openclaw:98972:4867535284:2026-07-02T15:38:32Z:re_review",
+      "comment_id": "4867535284",
+      "comment_version_key": "4867535284:2026-07-02T15:38:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98972#issuecomment-4867535284",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 97730,
-      "author": "wangmiao0668000666",
-      "author_id": 290215524,
+      "issue_number": 98972,
+      "author": "pgondhi987",
+      "author_id": 270720687,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T15:38:18Z",
-      "comment_updated_at": "2026-07-02T15:38:18Z",
-      "status_comment_id": 4867533758,
+      "comment_created_at": "2026-07-02T15:38:32Z",
+      "comment_updated_at": "2026-07-02T15:38:32Z",
+      "status_comment_id": 4867535717,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -74,88 +74,256 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-07-02T15:39:44.329Z",
+          "dispatched_at": "2026-07-02T15:39:51.118Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 97730
+          "item_number": 98972
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-02T15:39:45.581Z",
-          "response_comment_id": "4867533758",
+          "commented_at": "2026-07-02T15:39:52.453Z",
+          "response_comment_id": "4867535717",
           "response_comment_mode": "updated"
         }
       ],
-      "author_repository_permission": "read",
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(tlon): bound auth response body at 16 MiB",
-        "body": "## What Problem This Solves\n\n`extensions/tlon/src/urbit/auth.ts:40` calls `await response.text().catch(() => \"\")` to drain the body of the Urbit `/~/login` response — necessary because \"some Urbit setups require the response body to be read before cookie headers finalize\". The call is unbounded: a hostile or broken Urbit endpoint (or any man-in-the-middle behind the SSRF-allowlisted host) can return an arbitrarily large body and exhaust OpenClaw memory before headers land.\n\nThis is the same flavor of bug as the closed cluster: `readResponseWithLimit` is already deployed in #96989 (provider-transport-fetch), #96993 (agents), #97687 (tlon SSE upstream sibling), and 20+ other extensions; the `/~/login` auth path is the last `urbitFetch` consumer in the tlon extension that still calls `.text()` without a cap.\n\n## Changes\n\n- `extensions/tlon/src/urbit/auth.ts`\n  - Import `readProviderTextResponse` from `openclaw/plugin-sdk/provider-http` (re-export of the SDK default 16 MiB cap).\n  - Replace `await response.text().catch(() => \"\");` with `await readProviderTextResponse(response, \"Tlon Urbit auth\");` wrapped in `try/catch` so the original \"discard body read outcome, let cookie headers parse anyway\" semantic is preserved.\n  - Add a 4-line WHY comment that explains why the body must drain (cookie-header finalize) and why a cap is required (hostile /~/login endpoint OOM). Per `AGENTS.md` inline-comment shape rule: short, why-not-what, cites the contract.\n\n- `extensions/tlon/src/urbit/auth.bounded.test.ts` (new, 122 LoC)\n  - Two inline tests via real loopback `http.createServer`:\n    - 18 MiB chunked-streamed body → assert bounded read returns a cookie still (cap fires, `.catch` discards overflow, cookie header parse still runs).\n    - Normal-size body → assert cookie is returned correctly.\n  - Uses the existing SSRF-bypass `lookupFn` pattern from `extensions/tlon/src/urbit/auth.ssrf.test.ts` so the loopback server is reachable without network egress.\n\nNet diff: `132 +9`. Same shape as the #97687 (tlon SSE) and #97721 (discord gateway-metadata) precedents.\n\n## Real behavior proof\n\nThis PR adds inline loopback proof (no mocking) per `loopback-proof-required-bounded-read.md` and the Alix-007 #96772 inline test pattern. The new test exercises the production `authenticate` → `urbitFetch` → `fetchWithSsrFGuard` → `readProviderTextResponse` chain over a real local HTTP server:\n\n```\n[tlon urbit auth bounded-read proof] oversized path: cap=16777216 bytes; cookie preserved server_total=18874368\n[tlon urbit auth bounded-read proof] normal path: cookie present=true\n```\n\n**Before / After diff at the body-read site:**\n\n| state | 18 MiB body over real HTTP | auth result |\n| --- | --- | --- |\n| before fix (`extensions/tlon/src/urbit/auth.ts` on `openclaw/main`) | `await response.text()` buffers all 18 MiB into a string before the loop ends; OOM-able | unbounded; vulnerable |\n| after fix (`76659f2081`) | `readProviderTextResponse` caps at 16 MiB; the read error is caught and the cookie header parse still runs | bounded; cookie still extracted |\n\n**Negative control:** normal-size body returns the expected cookie through the bounded path unchanged.\n\n## Evidence\n\n- **Behavior addressed**: Bound Tlon Urbit `/~/login` auth response body at 16 MiB so an oversized/broken Urbit endpoint cannot exhaust OpenClaw memory before set-cookie headers finalize.\n- **Real environment tested**: Linux Node 24, `extensions/tlon/src/urbit/auth.bounded.test.ts` against a real `http.createServer` loopback, run via `node scripts/test-extension.mjs tlon -t \"bounded-read real wire proof\"`.\n- **Exact steps or command run after this patch**:\n  - `node scripts/test-extension.mjs tlon -t \"bounded-read real wire proof\" --reporter=verbose` → `Test Files 1 passed | 15 skipped | Tests 2 passed | 135 skipped` (the new 2 tests pass, no unrelated test was touched)\n  - `pnpm tsgo:extensions` → exit 0 (extensions lane typecheck clean)\n- **Evidence after fix**:\n  - `[tlon urbit auth bounded-read proof] oversized path: cap=16777216 bytes; cookie preserved server_total=18874368`\n  - `[tlon urbit auth bounded-read proof] normal path: cookie present=true`\n- **Observed result after fix**: An 18 MiB body streaming over real wire does not OOM; the bounded read rejects at 16 MiB, the `.catch` discards the overflow, and the cookie header parse still runs to completion. Normal-size bodies parse identically through the new bounded path.\n- **What was not tested**: Live Urbit cloud / on-prem traffic. The 16 MiB cap is enforced entirely in the local loopback proof; the live HTTPS path uses the same `readProviderTextResponse` SDK helper as 20+ other extensions, so behavior is byte-identical.\n\n### Pre-existing failure note\n\n`extensions/tlon/src/core.test.ts:159` (the \"configures ship, auth, and discovery settings\" setup-wizard test) is failing on `openclaw/main` with `Error: Unexpected prompt: Ship 名称`. **This PR does not cause it** — I verified by `git stash`-ing my change and re-running `node scripts/test-extension.mjs tlon` against `openclaw/main` directly: same 1 failed / 15 passed / 136 vs 137 tests. This is an unrelated wizard-prompter test that mocks against a translated prompt and fails on localized runs; outside the scope of this bounded-read PR.\n\n## Tests and validation\n\n- Added: `extensions/tlon/src/urbit/auth.bounded.test.ts` — 2 inline tests via real loopback `http.createServer`:\n  - `does not OOM and discards body when an oversized body arrives on real wire`\n  - `returns parsed cookie for normal-size body on real wire`\n- Run: `node scripts/test-extension.mjs tlon -t \"bounded-read real wire proof\"` → **2/2 pass**, no unrelated test touched (135 skipped).\n- Typecheck: `pnpm tsgo:extensions` → exit 0.\n\n## Risk checklist\n\n- **Scope**: 1 file production changed (`auth.ts`), 1 file test added. Total `+133 / -2` LoC (S).\n- **Behavior**:\n  - Normal-size cookie extraction: unchanged — bounded reader returns the same string `response.text()` would have on a small body.\n  - Hostile body (>= 16 MiB): now capped; cookie header parse still runs because the body-read error is caught. No new failure mode for callers that already tolerate missing cookies.\n  - `release()` lifecycle unchanged — read happens inside the existing `try/finally`, so `await release()` still runs.\n- **No API / signature changes** (internal module export surface is identical).\n- **No config / env / migration / SDK boundary changes** (only an import from `openclaw/plugin-sdk/provider-http`; the SDK surface already exposes `readProviderTextResponse` for this exact case).\n- **Body==null safety**: `urbitFetch` returns the standard undici `Response` from `fetchWithSsrFGuard` (same as the msteams / inworld / discord precedents). The `getReader()` path is taken, the `arrayBuffer()` fallback is unreachable. No additional body==null check needed.\n- **Sibling reference**: PR #97687 (tlon Urbit SSE) covers `extensions/tlon/src/urbit/sse-client.ts`; this PR covers `extensions/tlon/src/urbit/auth.ts`. Non-overlapping sub-surfaces.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "fix/tlon-urbit-auth-bound",
-        "head_sha": "6c54f423140791cab63f0d59db205e6c457f82a3",
-        "author": "wangmiao0668000666",
+        "title": "fix: block channel reads outside allowlists [AI]",
+        "body": "## What Problem This Solves\n\nFixes an issue where users who restrict channel integrations to allowlisted group targets could still have agent-callable read actions query non-allowlisted Microsoft Teams, Feishu, Matrix, and Google Chat targets when the connected bot account could read them.\n\n## Why This Change Was Made\n\nThis adds channel-owned read-target authorization immediately before read-only provider API calls in the affected integrations. The checks reuse each plugin's existing route/group allowlist semantics and preserve current-conversation fallback behavior when the tool call does not provide its own target and the channel can prove the target before the read.\n\n## User Impact\n\nOperators can expect group allowlists to apply consistently to message, reaction, pin, and metadata reads in the affected channel plugins. Out-of-allowlist reads now fail before the provider API call; auth, provider selection, config shape, storage, migrations, and write-action behavior are unchanged.\n\nCompatibility note: Feishu messageId-only read/reaction paths now fail closed under allowlist or disabled-group verification, including trusted current-chat context, because an unscoped Feishu message ID cannot prove the message's actual chat before `getMessageFeishu` would be called. This intentionally prevents the provider-read-before-authorization path ClawSweeper flagged. Feishu chat-scoped reads such as pins, chat info, and member reads still use the existing allowed chat target checks; open-policy Feishu reads without disabled group entries are unchanged.\n\nAI-assisted.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs extensions/msteams/src/channel.actions.test.ts extensions/feishu/src/channel.test.ts extensions/matrix/src/tool-actions.test.ts extensions/googlechat/src/actions.test.ts` passed 4 Vitest shards.\n- `pnpm build` passed.\n- Regression tests assert out-of-allowlist read targets throw before the mocked provider runtime is called.\n- `node scripts/run-vitest.mjs extensions/feishu/src/channel.test.ts` passed 76 tests on head `d0a300ff36cac3de7c5cbe6c058255fb3fe44679`, including trusted-context Feishu messageId read/reaction denial before `getMessageFeishu`.\n- `pnpm tsgo:extensions && pnpm tsgo:extensions:test` passed on head `d0a300ff36cac3de7c5cbe6c058255fb3fe44679`.\n",
+        "branch": "fix/fix-808",
+        "head_sha": "0975b61b2fc76d42e99e1218e3f67930a330f880",
+        "author": "pgondhi987",
         "labels": [
-          "channel: tlon",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
+          "channel: googlechat",
+          "channel: matrix",
+          "channel: msteams",
+          "app: web-ui",
+          "gateway",
+          "agents",
+          "maintainer",
+          "channel: feishu",
+          "size: XL",
+          "P1",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/tlon/src/urbit/auth.bounded.test.ts",
-            "additions": 124,
+            "path": "extensions/feishu/src/channel.test.ts",
+            "additions": 801,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "extensions/tlon/src/urbit/auth.ts",
-            "additions": 11,
-            "deletions": 2,
+            "path": "extensions/feishu/src/channel.ts",
+            "additions": 320,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/googlechat/src/actions.test.ts",
+            "additions": 55,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/googlechat/src/actions.ts",
+            "additions": 43,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/actions.account-propagation.test.ts",
+            "additions": 33,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/actions.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/tool-actions.test.ts",
+            "additions": 383,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/tool-actions.ts",
+            "additions": 185,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/channel.actions.test.ts",
+            "additions": 570,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/channel.ts",
+            "additions": 230,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/index.test.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/agent.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/conversation-capability-profile.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/params.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.handlers.tools.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.handlers.types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.tools.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-plugin-tools.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-tools.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/message-tool.test.ts",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/message-tool.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-utils.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/plugins/types.core.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/send.test.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/send.ts",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 135,
-        "deletions": 2,
+        "changedFiles": 29,
+        "additions": 2745,
+        "deletions": 33,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97730",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97730.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98972",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98972.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 92,
-          "gatingTotal": 87,
+          "total": 93,
+          "gatingTotal": 88,
           "counts": {
-            "SUCCESS": 59,
-            "SKIPPED": 32,
+            "SUCCESS": 28,
+            "SKIPPED": 23,
+            "IN_PROGRESS": 41,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
             "pnpm-store-warmup:IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
             "checks-fast-bundled-protocol:IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
             "checks-fast-bun-launcher:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):FAILURE",
             "checks-fast-contracts-plugins-a:IN_PROGRESS",
             "checks-fast-contracts-plugins-b:IN_PROGRESS",
             "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:QUEUED",
+            "checks-node-compact-large-1:IN_PROGRESS",
             "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:QUEUED",
-            "checks-node-compact-large-whole-1:QUEUED",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-1:IN_PROGRESS",
             "checks-node-compact-small-10:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
@@ -179,14 +347,13 @@
             "check-additional-boundaries-a:IN_PROGRESS",
             "check-additional-boundaries-bcd:IN_PROGRESS",
             "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
           ],
           "pending": [
-            "Real behavior proof:CANCELLED",
             "pnpm-store-warmup:IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
             "checks-fast-bundled-protocol:IN_PROGRESS",
@@ -196,10 +363,10 @@
             "checks-fast-contracts-plugins-b:IN_PROGRESS",
             "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:QUEUED",
+            "checks-node-compact-large-1:IN_PROGRESS",
             "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:QUEUED",
-            "checks-node-compact-large-whole-1:QUEUED",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-1:IN_PROGRESS",
             "checks-node-compact-small-10:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
@@ -223,34 +390,30 @@
             "check-additional-boundaries-a:IN_PROGRESS",
             "check-additional-boundaries-bcd:IN_PROGRESS",
             "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Critical Quality (network-runtime-boundary):FAILURE"
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
           ],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5965,
+    "total_ms": 5385,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 710
+        "ms": 590
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2066
+        "ms": 1613
       },
       {
         "name": "classify_comment_commands",
@@ -266,7 +429,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3163
+        "ms": 3155
       },
       {
         "name": "append_ledger",
