@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T14:30:06.663Z",
+  "generated_at": "2026-07-02T14:30:11.439Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T11:30:03.830Z",
+  "since": "2026-07-02T11:30:08.196Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    98940
+    93843
   ],
   "comment_ids": [
-    4866835915
+    4866853103
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4866853512,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98940:4866835915:2026-07-02T14:27:39Z:re_review",
-      "comment_id": "4866835915",
-      "comment_version_key": "4866835915:2026-07-02T14:27:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98940#issuecomment-4866835915",
+      "idempotency_key": "comment-router:openclaw/openclaw:93843:4866853103:2026-07-02T14:29:19Z:re_review",
+      "comment_id": "4866853103",
+      "comment_version_key": "4866853103:2026-07-02T14:29:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93843#issuecomment-4866853103",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98940,
-      "author": "Pandah97",
-      "author_id": 80405497,
+      "target_branch": "main",
+      "issue_number": 93843,
+      "author": "yetval",
+      "author_id": 102706514,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T14:27:39Z",
-      "comment_updated_at": "2026-07-02T14:27:39Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-02T14:29:19Z",
+      "comment_updated_at": "2026-07-02T14:29:19Z",
+      "status_comment_id": 4866853512,
       "trigger": "mention",
-      "command": "re-review",
+      "command": "re-run",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -68,90 +68,130 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-02T14:30:12.210Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 93843
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-02T14:30:13.382Z",
+          "response_comment_id": "4866853512",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(browser): bound Playwright response body reads to prevent OOM",
-        "body": "## Summary\n\n**Problem:** `responseBodyViaPlaywright` calls `resp.text()` which decodes the entire response string (OOM risk on multi-MB responses).\n\n**Solution:** Replace with `buf.subarray(0, maxBytes)` decode window — full Buffer allocation stays but full-string decoding is bounded. Same memory-bound guarantee without CDP complexity.\n\n**What changed:** Removed CDP `Fetch.takeResponseBodyAsStream` path entirely (page-delivery truncation issue). Unified to single `body()+subarray()` path for all browsers (Chromium, Firefox, WebKit).\n\n**What did NOT change:** Public API, return types, existing caller behavior, browser support matrix.\n\n## What Problem This Solves\n\n`responseBodyViaPlaywright` previously used `resp.text()` which loads the entire response as a JavaScript string (unbounded memory allocation) before checking `maxChars`. On a 500 MB response this allocated 500 MB+ string before truncation.\n\n`resp.body()` returns a `Buffer` (Node.js native, no encoding cost). Combined with `buf.subarray(0, maxBytes)`, only the bounded prefix is decoded to string — the full 500 MB allocation becomes a 500 MB Buffer + ~800 KB string instead of a 500 MB string.\n\n## Why This Change Was Made\n\nThe original PR introduced CDP `Fetch.takeResponseBodyAsStream` for truly bounded memory capture (no full Buffer). However, CDP intercept-at-Response-stage forces `Fetch.fulfillRequest` with the captured (truncated) body, which disrupts page network behavior — the page receives a bounded prefix instead of the original response. This is fundamental to CDP's design: once the body is taken from the stream, the original response can't be forwarded.\n\nRemoving the CDP path eliminates this class of bug entirely:\n- Page always receives the original response (body, status, headers untouched)\n- No CDP session management (Fetch.enable/disable, cleanup timing)\n- Single code path for all browsers (simpler to maintain)\n- 200 lines of CDP code deleted, 4 CDP-specific tests deleted\n\n## Real behavior proof\n\n**Behavior addressed:** Verify `resp.body()` + `buf.subarray(0, maxBytes)` returns a bounded text body while the page receives the original response.\n\n**Real environment tested:** Node.js 22 with Vitest, Playwright browser test harness. Code path: `page.on('response')` → `resp.body()` → `Buffer.subarray(0, maxBytes)` → `TextDecoder.decode()`.\n\n**Exact steps or command run after this patch:**\n\n```bash\npnpm test extensions/browser/src/browser/pw-tools-core.waits-next-download-saves-it.test.ts\n```\n\n**After-fix evidence:**\n\nBEFORE FIX — CDP `Fetch.takeResponseBodyAsStream` + `Fetch.fulfillRequest`: 200 lines, CDP intercepts at Response stage → page receives truncated body\n\nAFTER FIX — `body()` + `subarray()`: 80 lines, no interception → page receives original response untouched\n\nReal browser proof (Playwright Chromium, Google Chrome 138, headless, via `page.on('response')` passive observer):\n\n```bash\n# node browser-proof.mjs\nSERVER=http://127.0.0.1:43573\n\n| Metric              | Tool (body()+subarray) | Page JS (full response) |\n|---------------------|------------------------|-------------------------|\n| Status              | 200                    | 200                     |\n| Body length         | 8000 chars (bounded)   | 520000 chars (original) |\n| Truncated?          | true                   | No                      |\n| Original response   | 520000 chars           | 520000 chars            |\n\nVerdict:\nTool returns bounded prefix (8000 < 520000): ✅\nPage receives full original body (520000 === 520000): ✅\nPage receives correct status (200): ✅\npage.on('response') is passive — page delivery unaffected: ✅\n```\n\n**Observed result after the fix:** All 15 tests pass. `resp.body()` is called but only `subarray(0, maxBytes)` is decoded to string. No page delivery disruption — the code is a passive observer via `page.on('response')`.\n\n**What was not tested:** Extremely large responses (>500 MB) — `resp.body()` still allocates a full Buffer, which is a memory cost we accept vs. the full-string cost of `resp.text()`. CDP-level zero-copy capture was removed because it can't preserve page delivery.\n\n## Tests and validation\n\n- **15 tests pass** covering: bounded decode for small/large/chunked responses, negative control (text() would decode full body), mutation test (subarray bounded regardless of Buffer size)\n- **Lint clean** (`npx oxlint`)\n- **128 lines added, 580 removed** across source + test files\n\n## Risk checklist\n\n- **Risk level:** Low — removed the risky CDP path, unified to passive observer pattern.\n- **Mitigation:** No CDP session management. No Fetch domain manipulation. No page response interception.\n- **Merge-risk explanation:** None — removed the code that caused the merge risk (CDP fulfill path). No config/env/API changes.\n- **User-visible behavior change?** No.\n- **Config/env/migration change?** No.\n- **Security/auth/network change?** No.\n\n## Linked context\n\nPattern from PR #98496 (bounded response body reads to prevent OOM). CDP approach attempted in earlier revisions of this PR, removed after ClawSweeper review identified page-delivery truncation.",
-        "branch": "fix/browser-bound-pw-tools-response-reads",
-        "head_sha": "194d9dec8173a2737415c66d0b86f3682b3d20c5",
-        "author": "pandah97",
+        "title": "fix(memory-wiki): prevent distinct titles from silently overwriting each other",
+        "body": "## Summary\n\nTwo distinct memory-wiki pages whose titles slugify to the same value silently overwrite each other, and the first page is permanently lost.\n\nThe agent-facing path is `wiki_apply` with op `create_synthesis`. When an agent saves a synthesis titled \"Q3 Report\" and later saves a different synthesis titled \"Q3-Report\", both resolve to `syntheses/q3-report.md` under id `synthesis.q3-report`. The second write overwrites the first: the first synthesis's managed Summary, sourceIds, claims, and confidence are gone, and neither `wiki_get` nor `wiki_search` can recover them. No error or warning is surfaced.\n\n`slugifyWikiSegment` collapses case, spaces, and punctuation, so realistic agent-generated titles collide: \"Q3 Report\" / \"Q3-Report\", \"Project Alpha!\" / \"Project Alpha\", \"Sales (2026)\" / \"Sales 2026\", \"Meeting Notes\" / \"meeting notes\". The sibling CLI path `wiki ingest` has the same defect for `sources/<slug>.md`.\n\n## Root cause\n\n`extensions/memory-wiki/src/apply.ts` derived the synthesis page path and id from the bare slug, with no disambiguation when an existing page at that slug belongs to a different title:\n\n```ts\n// before\nconst slug = slugifyWikiSegment(params.mutation.title);\nconst pagePath = path.join(\"syntheses\", `${slug}.md`).replace(/\\\\/g, \"/\");\nconst root = await fsRoot(params.config.vault.path);\nconst existing = await root.readText(pagePath).catch(() => \"\");\n```\n\n`slugifyWikiSegment` only appends a hash when the slug exceeds the byte cap (`extensions/memory-wiki/src/markdown.ts`), so short colliding titles get no hash. `ingest.ts` had the identical pattern for `source.<slug>`.\n\n## Fix\n\nAdd one shared identity helper and route both writers through it. The plain readable slug is reused when it is free or already owns the same title (so re-applying a synthesis still updates in place); a distinct title that lands on an existing page gets a stable title-hash suffix, matching the existing `okf.ts` hashed-identity pattern:\n\n```ts\n// after (markdown.ts)\nexport async function resolveTitleKeyedWikiSlug(params: {\n  title: string;\n  readExistingTitleBySlug: (slug: string) => Promise<string | undefined>;\n}): Promise<string> {\n  const baseSlug = slugifyWikiSegment(params.title);\n  const existingTitle = await params.readExistingTitleBySlug(baseSlug);\n  if (existingTitle === undefined || existingTitle.trim() === params.title.trim()) {\n    return baseSlug;\n  }\n  const suffix = createHash(\"sha1\").update(params.title).digest(\"hex\").slice(0, WIKI_SEGMENT_HASH_BYTES);\n  return `${baseSlug}-${suffix}`;\n}\n```\n\n`apply.ts` (`create_synthesis`) and `ingest.ts` (`wiki ingest`) both resolve their slug through this helper before reading/writing the page.\n\nThe \"existing title\" is read the same way query and compile resolve a page's effective title (`extensions/memory-wiki/src/markdown.ts`): frontmatter `title`, then the first `# ` H1 heading, then the file name. So a page that occupies the target slug but has no frontmatter (a supported hand-authored raw source page) is recognized as occupied and gets a distinct slug for the incoming title instead of being silently overwritten. The helper also canonicalizes the title once (trimmed) and uses that single value for the base slug, the existing-title comparison, and the hash suffix, so two writes of the same logical title that differ only by surrounding whitespace land on the same page instead of forking a duplicate.\n\n## Why this is the right boundary\n\n- The helper lives next to `slugifyWikiSegment` and reuses the same `WIKI_SEGMENT_HASH_BYTES` and SHA-1 pattern already used by `okf.ts`/`createWikiPageFilename`. Two call sites share it (synthesis and source), so it pays rent.\n- Backward compatible with no vault migration: the common single-page-per-title case keeps its plain `<slug>.md` path because the stored title matches. Only genuine distinct-title collisions get a hashed path, so existing vaults and same-title re-applies are unchanged.\n- Covers both managed and unmanaged pages: collision detection compares the incoming title against the existing page's effective title (frontmatter title, else H1, else file name), so a no-frontmatter raw source page is protected, not just generated pages that carry a `title` field.\n- Prior art: closed PR #65992 proposed a source-path-keyed fix for the ingest half only and was closed unmerged; merged PR #64742 fixed only the Unicode/empty-slug case. Neither touched `create_synthesis`, and the distinct-title slug collision is still live on current `main` (proof below). This change fixes the agent-facing synthesis path that no prior PR addressed, and removes the same live collision from the source path with one helper.\n\n## Verification\n\nFrom a worktree with deps (node at /opt/node/bin):\n\n- `node scripts/run-vitest.mjs extensions/memory-wiki/src/slug-collision.test.ts extensions/memory-wiki/src/wiki-notes-read-retry.test.ts extensions/memory-wiki/src/apply.test.ts extensions/memory-wiki/src/ingest.test.ts extensions/memory-wiki/src/markdown.test.ts extensions/memory-wiki/src/query.test.ts` -> 72 passed\n- `slug-collision.test.ts` regressions fail on pristine `main` and pass with this patch: distinct synthesis titles, distinct ingest titles, a no-frontmatter raw source page colliding with a generated ingest title, and a colliding title re-applied with surrounding whitespace updating its existing hashed page instead of duplicating it.\n- `wiki-notes-read-retry.test.ts` regressions fail on previous PR head 499bffe00e and pass with this patch: transient title-read failures during colliding synthesis creation and source ingest still allocate the distinct hash-suffixed page instead of reusing the occupied bare slug.\n- `./node_modules/.bin/oxlint extensions/memory-wiki/src/apply.ts extensions/memory-wiki/src/ingest.ts extensions/memory-wiki/src/markdown.ts extensions/memory-wiki/src/slug-collision.test.ts extensions/memory-wiki/src/wiki-notes-read-retry.test.ts` -> clean\n- `./node_modules/.bin/oxfmt --check extensions/memory-wiki/src/apply.ts extensions/memory-wiki/src/ingest.ts extensions/memory-wiki/src/markdown.ts extensions/memory-wiki/src/slug-collision.test.ts extensions/memory-wiki/src/wiki-notes-read-retry.test.ts` -> clean\n- `node scripts/run-tsgo.mjs -p extensions/memory-wiki/tsconfig.json` -> exit 0\n- Branch rebased onto current `origin/main` 76ccd17ac3.\n\n## Real behavior proof\n\nBehavior addressed: distinct memory-wiki syntheses and ingested sources whose titles slugify to the same value no longer overwrite each other and silently lose the first page.\nReal environment tested: drove the real `applyMemoryWikiMutation` (`create_synthesis`) and the real `ingestMemoryWikiSource` (`wiki ingest`) against temp vaults read from disk after each run, on pristine main at origin/main 9ff7abc8989c1770856b27d5b06e6bb6695ce666 with the original production files restored, on previous PR head 499bffe00e with the retry repair absent, and on PR head f7ca15a483 with this patch applied, identical inputs for each before/after pair. The transient-read run injected one filesystem `ENOENT` at the existing source page read boundary; all vault writes, page parsing, slug resolution, and disk reads stayed production code.\nExact steps or command run after this patch: apply `create_synthesis` \"Q3 Report\" (body \"Revenue grew 12 percent\", source.finance, claim.q3.revenue), then apply `create_synthesis` \"Q3-Report\" (body \"Headcount fell 4 percent\"); separately `wiki ingest` \"Q3 Report\" then \"Q3-Report\"; ingest \"Q3 Report\" onto a pre-seeded hand-authored no-frontmatter sources/q3-report.md; re-apply \"  Q3-Report  \"; then run `wiki ingest` \"Q3 Report\" followed by `wiki ingest` \"Q3-Report\" while the first read of the occupied `sources/q3-report.md` returns `ENOENT`; list each directory and read each page from disk.\nEvidence after fix:\n```\n# BEFORE (pristine origin/main, three prod files reverted, driver identical)\ncreate_synthesis distinct titles 'Q3 Report' then 'Q3-Report'\n  first  pagePath=syntheses/q3-report.md\n  second pagePath=syntheses/q3-report.md\n  synthesis page files (count=1): [\"q3-report.md\"]\n  first synthesis body keeps 'Revenue grew 12 percent': false\n  first synthesis body keeps source 'source.finance': false\n  wiki_search('Revenue grew 12 percent') recovers first synthesis: false\nwiki ingest distinct titles 'Q3 Report' then 'Q3-Report'\n  source page files (count=1): [\"q3-report.md\"]\n  ingest A page keeps 'finance source body': false\ningest onto hand-authored no-frontmatter sources/q3-report.md\n  ingest wrote to: sources/q3-report.md\n  hand-authored q3-report.md keeps 'Hand authored raw source.': false\n\n# AFTER (this patch, head 888df0ffcfecdce17a9b6c577b7d71f3109c02a9, identical inputs)\ncreate_synthesis distinct titles 'Q3 Report' then 'Q3-Report'\n  first  pagePath=syntheses/q3-report.md\n  second pagePath=syntheses/q3-report-97358135a013.md\n  synthesis page files (count=2): [\"q3-report-97358135a013.md\",\"q3-report.md\"]\n  first synthesis body keeps 'Revenue grew 12 percent': true\n  first synthesis body keeps source 'source.finance': true\n  wiki_search('Revenue grew 12 percent') recovers first synthesis: true\nwiki ingest distinct titles 'Q3 Report' then 'Q3-Report'\n  source page files (count=2): [\"q3-report-97358135a013.md\",\"q3-report.md\"]\n  ingest A page keeps 'finance source body': true\n  ingest B page keeps 'headcount source body': true\ningest onto hand-authored no-frontmatter sources/q3-report.md\n  ingest wrote to: sources/q3-report-4d84a9cac68c.md\n  hand-authored q3-report.md keeps 'Hand authored raw source.': true\nre-apply '  Q3-Report  ' (whitespace variant of existing 'Q3-Report')\n  re-apply wrote to: syntheses/q3-report-97358135a013.md\n  updates the existing hashed page in place, no duplicate: true\n  synthesis page files (count): [\"q3-report-97358135a013.md\",\"q3-report.md\"]\n\n# BEFORE (previous PR head 499bffe00e, transient source title read)\nfirst pagePath=sources/q3-report.md\nsecond pagePath=sources/q3-report.md\ninjected transient read failure: true\nsource page files (count=1): [\"q3-report.md\"]\nfirst page keeps finance source body: false\nsecond page keeps headcount source body: true\n\n# AFTER (this patch, head f7ca15a483, identical transient source title read)\nfirst pagePath=sources/q3-report.md\nsecond pagePath=sources/q3-report-97358135a013.md\ninjected transient read failure: true\nsource page files (count=2): [\"q3-report-97358135a013.md\",\"q3-report.md\"]\nfirst page keeps finance source body: true\nsecond page keeps headcount source body: true\n```\nObserved result after fix: on pristine main both distinct titles collapse onto one bare-slug page, the first synthesis body and source.finance are gone, neither wiki_search nor the on-disk page can recover them, and a real ingest overwrites a hand-authored raw page; on the previous PR head a transient existing-page title read still makes the colliding source write back to the occupied bare slug and lose the first body; after the patch the second distinct title gets a stable title-hash slug, both pages persist with their own body and sources even after the transient read failure, search recovers the first synthesis, the hand-authored raw page is left intact, and re-applying the same title with only surrounding whitespace updates the existing hashed page in place instead of forking a duplicate.\nWhat was not tested: no full `pnpm check` or `pnpm build` (OOM-prone box); two ingested sources given an identical explicit title still merge by design, since the trimmed title is the page identity here.\n",
+        "branch": "fix/memory-wiki-slug-collision",
+        "head_sha": "f7ca15a483dbc2eb1049a5076978d9c75c212f41",
+        "author": "yetval",
         "labels": [
           "size: M",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
+          "extensions: memory-wiki",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "extensions/browser/src/browser/pw-tools-core.responses.ts",
-            "additions": 31,
-            "deletions": 14,
+            "path": "extensions/memory-wiki/src/apply.ts",
+            "additions": 13,
+            "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/browser/src/browser/pw-tools-core.waits-next-download-saves-it.test.ts",
-            "additions": 186,
-            "deletions": 1,
+            "path": "extensions/memory-wiki/src/ingest.ts",
+            "additions": 32,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/markdown.ts",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/slug-collision.test.ts",
+            "additions": 193,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/wiki-notes-read-retry.test.ts",
+            "additions": 85,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 217,
-        "deletions": 15,
+        "changedFiles": 5,
+        "additions": 354,
+        "deletions": 7,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98940",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98940.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93843",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93843.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 92,
-          "gatingTotal": 87,
+          "total": 36,
+          "gatingTotal": 31,
           "counts": {
-            "SUCCESS": 56,
-            "SKIPPED": 34,
-            "FAILURE": 2
+            "SUCCESS": 13,
+            "QUEUED": 3,
+            "SKIPPED": 20
           },
           "blockers": [
-            "checks-node-compact-large-whole-1:FAILURE",
-            "checks-node-compact-small-7:FAILURE"
+            "Scan changed paths (precise):QUEUED",
+            "preflight:QUEUED",
+            "security-fast:QUEUED"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-large-whole-1:FAILURE",
-            "checks-node-compact-small-7:FAILURE"
+          "pending": [
+            "Scan changed paths (precise):QUEUED",
+            "preflight:QUEUED",
+            "security-fast:QUEUED"
           ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 3149,
+    "total_ms": 5662,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 673
+        "ms": 2040
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2146
+        "ms": 1187
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -163,11 +203,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 316
+        "ms": 2407
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
