@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T04:38:18.555Z",
+  "generated_at": "2026-07-02T04:38:29.258Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T01:38:16.723Z",
+  "since": "2026-07-02T01:38:28.690Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     98880
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4862236664
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -37,16 +39,16 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/98880#issuecomment-4861944158",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 98880,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T03:35:43Z",
-      "comment_updated_at": "2026-07-02T04:38:13Z",
+      "issue_number": 98664,
+      "author": "LeonidasLux",
+      "author_id": 294038793,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-02T04:35:56Z",
+      "comment_updated_at": "2026-07-02T04:35:56Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -68,114 +70,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): honor timeoutSeconds for dynamic tool calls",
-        "body": "Closes #98864\n\n## What Problem This Solves\n\nCodex dynamic tool calls such as `sessions_send` can pass `timeoutSeconds` without `timeoutMs`. The app-server watchdog only read `timeoutMs`, so a call with a seconds-form budget fell back to the default 90-second dynamic-tool guard and long-running bounded helpers were killed early.\n\n## Why This Change Was Made\n\nThe dynamic-tool timeout readers now fall back to `timeoutSeconds` when `timeoutMs` is absent, with two deliberate properties beyond a verbatim mapping:\n\n- **Shared, validated seconds conversion.** The conversion goes through `finiteSecondsToTimerSafeMilliseconds({ floorSeconds: true })` from `openclaw/plugin-sdk/number-runtime` — the same helper `sessions_send` uses for the same field (`src/agents/tools/sessions-send-tool.ts`) — so the watchdog and the tool agree on what counts as a usable budget. A naive floor-then-multiply reading maps a fractional value like `0.5` to `0`, which survives the `??` fallback chain and gets clamped up to a 1 ms watchdog (instant kill of the call). The shared helper rejects it and the reader falls back to the existing default. `DynamicToolCallParams.arguments` is raw `JsonValue` in the Codex app-server protocol (`codex-rs/app-server-protocol/src/protocol/v2/item.rs`, `DynamicToolCallParams`), so unvalidated values do reach this reader.\n- **Grace headroom over the budget.** `timeoutSeconds` is the tool's *inner* wait budget: `sessions_send` does gateway pre-work (session resolve, baseline snapshot, `startAgentRun`) before waiting that long, then returns a structured `{status: \"timeout\", runId, sentBeforeError}` result. A watchdog armed with exactly the same value deterministically fires first and replaces that structured result with a generic hard-timeout error, losing the `runId`. The watchdog is now the seconds budget plus `CODEX_DYNAMIC_TOOL_SECONDS_GRACE_MS` (30 s) via the shared `addTimerTimeoutGraceMs`, so the tool's own timer wins the race. `timeoutMs` keeps exact-override precedence and the existing 600 s hard cap is unchanged.\n\nThe side-thread path previously duplicated the whole timeout-reader stack; the byte-identical `readSide*` leaf readers are deleted and `side-question.ts` now imports the shared readers from `dynamic-tool-execution.ts`, so the main-thread and side-thread watchdogs cannot silently diverge (net-negative production LOC).\n\nAI-assisted: yes (initial implementation by Codex; multi-agent review and this revision by Claude). No agent transcript is included because sanitized transcript insertion was not approved in this automated run.\n\n## User Impact\n\nSeconds-form dynamic-tool budgets are honored instead of being capped by the default 90-second guard. Unlike a verbatim mapping, a `sessions_send` whose target run outlasts its budget still returns its structured timeout result (with `runId` and delivery status) instead of a generic watchdog error, and a malformed fractional budget can no longer produce an instant ~1 ms kill.\n\n## Evidence\n\nProof harness driving the real `dynamic-tool-execution.ts` code (`resolveDynamicToolCallTimeoutMs` + `handleDynamicToolCallWithTimeout`) with the tool bridge mocked as a `sessions_send`-shaped waiter (pre-work, inner budget wait, structured timeout result). Harness kept out of the repo per contribution guidelines.\n\nOn `origin/main` (6e79ca3cbc) — the reported bug, `timeoutSeconds` ignored:\n\n```\nScenario 1: sessions_send {timeoutSeconds: 2}, target run outlasts budget\n  resolved watchdog: 90000ms (inner tool budget: 2000ms)\n  [FAIL] watchdog is derived from the 2s budget (bounded, not the unrelated 90s default) — 90000ms\n  ...\n1 FAILED (5 checks)\n```\n\nOn the previous head of this branch (4806bd5db5) — why the verbatim mapping was not enough:\n\n```\nScenario 1: sessions_send {timeoutSeconds: 2}, target run outlasts budget\n  resolved watchdog: 2000ms (inner tool budget: 2000ms)\n  [PASS] watchdog is derived from the 2s budget (bounded, not the unrelated 90s default) — 2000ms\n  [FAIL] watchdog has grace headroom over the 2000ms inner budget — 2000ms\n  [FAIL] tool's graceful timeout result (with runId) beats the watchdog — {\"contentItems\":[{\"type\":\"inputText\",\"text\":\"OpenClaw dynamic tool call timed out after 2000ms while running tool sessions_send.\"}],\"success\n\nScenario 2: {timeoutSeconds: 0.5} from unvalidated model JSON\n  resolved watchdog: 1ms\n  [FAIL] falls back to the 90s default instead of a ~1ms watchdog — 1ms\n  [FAIL] a 300ms tool call survives instead of being killed instantly — {\"contentItems\":[{\"type\":\"inputText\",\"text\":\"OpenClaw dynamic tool call timed out after 1ms while running tool sessions_\n\n4 FAILED (5 checks)\n```\n\nOn this branch — fixed:\n\n```\nScenario 1: sessions_send {timeoutSeconds: 2}, target run outlasts budget\n  resolved watchdog: 32000ms (inner tool budget: 2000ms)\n  [PASS] watchdog is derived from the 2s budget (bounded, not the unrelated 90s default) — 32000ms\n  [PASS] watchdog has grace headroom over the 2000ms inner budget — 32000ms\n  [PASS] tool's graceful timeout result (with runId) beats the watchdog — {\"contentItems\":[{\"type\":\"inputText\",\"text\":\"{\\\"status\\\":\\\"timeout\\\",\\\"runId\\\":\\\"run-123\\\"}\"}],\"success\":true}\n\nScenario 2: {timeoutSeconds: 0.5} from unvalidated model JSON\n  resolved watchdog: 90000ms\n  [PASS] falls back to the 90s default instead of a ~1ms watchdog — 90000ms\n  [PASS] a 300ms tool call survives instead of being killed instantly — {\"contentItems\":[{\"type\":\"inputText\",\"text\":\"ok\"}],\"success\":true}\n\nALL PASS (5 checks)\n```\n\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/dynamic-tool-execution.test.ts extensions/codex/src/app-server/side-question.test.ts` — 2 files, 55 tests passed, including a new fractional-seconds regression case\n- `git diff --check` clean; `oxfmt --check` clean; oxlint clean on the four changed files\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main` — clean (\"patch is correct\", no actionable findings); an earlier autoreview run on the previous head independently flagged the zero-grace race fixed here\n\nWhat was not tested: live end-to-end gateway + real Codex model traffic. Behavior above the pre-existing 600 s watchdog cap is unchanged (a larger budget is still capped; that cap predates this PR and applies equally to `timeoutMs`).\n",
-        "branch": "codex/98864-dynamic-tool-timeout-seconds",
-        "head_sha": "699361282da4df69a901e08aacc78be7fa280380",
-        "author": "harjothkhara",
-        "labels": [
-          "size: S",
-          "extensions: codex",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tool-execution.test.ts",
-            "additions": 58,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tool-execution.ts",
-            "additions": 25,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/side-question.test.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/side-question.ts",
-            "additions": 8,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 107,
-        "deletions": 28,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98880",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98880.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 89,
-          "gatingTotal": 84,
-          "counts": {
-            "SUCCESS": 51,
-            "SKIPPED": 29,
-            "IN_PROGRESS": 9
-          },
-          "blockers": [
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-guards:IN_PROGRESS"
-          ],
-          "pending": [
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-guards:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2094,
+    "total_ms": 1756,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 254
+        "ms": 553
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1564
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -187,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 252
+        "ms": 1188
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
