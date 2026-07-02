@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T19:14:49.309Z",
+  "generated_at": "2026-07-02T19:15:30.996Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T16:14:47.351Z",
+  "since": "2026-07-02T16:15:30.607Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99171
+    99209
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,482 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99171:4868333243:2026-07-02T19:14:43Z:clawsweeper_needs_human",
-      "comment_id": "4868333243",
-      "comment_version_key": "4868333243:2026-07-02T19:14:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99171#issuecomment-4868333243",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99171,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T16:59:14Z",
-      "comment_updated_at": "2026-07-02T19:14:43Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=7545a66a71555b0dbfba4ae9c9d8c9b5ababd440)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "7545a66a71555b0dbfba4ae9c9d8c9b5ababd440",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(discord): limit implicit reply references to first chunk",
-        "body": "## Summary\n- Limit native Discord `message_reference` reuse for implicit `replyToMode: \"first\"` and `\"batched\"` replies to the first physical Discord message chunk.\n- Preserve reusable reply references for `replyToMode: \"all\"`, explicit/direct replies, and `audioAsVoice` follow-up sends that reuse a captured reply id.\n- Add regression coverage for text chunks, media caption chunks, explicit replies, and the `audioAsVoice` payload forwarding path.\n\n## Change Type\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor\n- [ ] Docs\n- [ ] Security\n- [ ] Chore\n\n## Scope\n- [ ] Gateway\n- [ ] Skills\n- [ ] Auth\n- [ ] Memory\n- [x] Integrations\n- [ ] API\n- [ ] UI/UX\n- [ ] CI\n\n## Verification\n- `node scripts/run-vitest.mjs extensions/discord/src/send.sends-basic-channel-messages.test.ts src/infra/outbound/message-plan.test.ts extensions/discord/src/outbound-adapter.test.ts` -> `[test] passed 2 Vitest shards in 52.29s`\n- `pnpm tsgo:extensions:test` -> passed with exit code 0\n- `git diff --check` -> passed\n- Production-path proof below calls the actual `sendMessageDiscord` implementation from this branch.\n\n## Real behavior proof\n\n**Behavior addressed:** Chunked Discord replies with implicit `replyToMode: \"first\"` now attach the native Discord reply reference only to the first physical message, while reusable explicit/all-mode replies still keep the reference on later chunks.\n\n**Environment tested:** Linux workspace on Node v22.22.0, branch `fix/99068-discord-reply-first-chunks`.\n\n**Steps run after the patch:** Called the actual `sendMessageDiscord` function from `extensions/discord/src/send.js` with `node --import tsx`; captured the request bodies sent through a local `RequestClient` implementation.\n\n**Evidence after fix:**\n\n```bash\nnode --import tsx --no-warnings -e '\nimport { sendMessageDiscord } from \"./extensions/discord/src/send.js\";\n\nconst cfg = { channels: { discord: { token: \"t\" } } };\n\nfunction createCaptureRest() {\n  const sends = [];\n  return {\n    rest: {\n      async post(route, options) {\n        if (String(route).includes(\"/messages\")) {\n          sends.push({\n            send: sends.length + 1,\n            route,\n            contentLength: typeof options?.body?.content === \"string\" ? options.body.content.length : 0,\n            fileCount: Array.isArray(options?.body?.files) ? options.body.files.length : 0,\n            hasMessageReference: Boolean(options?.body?.message_reference),\n            messageReferenceId: options?.body?.message_reference?.message_id ?? null,\n          });\n          return { id: `msg-${sends.length}`, channel_id: \"789\" };\n        }\n        return { id: \"789\" };\n      },\n      async get() {\n        return { id: \"789\", type: 0 };\n      },\n    },\n    sends,\n  };\n}\n\nasync function collect(label, text, opts = {}) {\n  const capture = createCaptureRest();\n  await sendMessageDiscord(\"channel:789\", text, {\n    rest: capture.rest,\n    token: \"t\",\n    cfg,\n    replyTo: \"orig-123\",\n    ...opts,\n  });\n  return [label, capture.sends];\n}\n\nconst cases = Object.fromEntries(await Promise.all([\n  collect(\"implicitFirstText\", \"a\".repeat(2001), { replyToIdSource: \"implicit\", replyToMode: \"first\" }),\n  collect(\"implicitFirstMedia\", \"b\".repeat(2500), { replyToIdSource: \"implicit\", replyToMode: \"first\", mediaUrl: \"file:///tmp/openclaw-99068-proof.png\", mediaLocalRoots: [\"/tmp\"] }),\n  collect(\"implicitAllText\", \"c\".repeat(2001), { replyToIdSource: \"implicit\", replyToMode: \"all\" }),\n  collect(\"explicitFirstText\", \"d\".repeat(2001), { replyToIdSource: \"explicit\", replyToMode: \"first\" }),\n]));\n\nconsole.log(JSON.stringify(cases, null, 2));\n'\n```\n\nOutput:\n\n```json\n{\n  \"implicitFirstText\": [\n    {\n      \"send\": 1,\n      \"route\": \"/channels/789/messages\",\n      \"contentLength\": 2000,\n      \"fileCount\": 0,\n      \"hasMessageReference\": true,\n      \"messageReferenceId\": \"orig-123\"\n    },\n    {\n      \"send\": 2,\n      \"route\": \"/channels/789/messages\",\n      \"contentLength\": 1,\n      \"fileCount\": 0,\n      \"hasMessageReference\": false,\n      \"messageReferenceId\": null\n    }\n  ],\n  \"implicitFirstMedia\": [\n    {\n      \"send\": 1,\n      \"route\": \"/channels/789/messages\",\n      \"contentLength\": 2000,\n      \"fileCount\": 1,\n      \"hasMessageReference\": true,\n      \"messageReferenceId\": \"orig-123\"\n    },\n    {\n      \"send\": 2,\n      \"route\": \"/channels/789/messages\",\n      \"contentLength\": 500,\n      \"fileCount\": 0,\n      \"hasMessageReference\": false,\n      \"messageReferenceId\": null\n    }\n  ],\n  \"implicitAllText\": [\n    {\n      \"send\": 1,\n      \"route\": \"/channels/789/messages\",\n      \"contentLength\": 2000,\n      \"fileCount\": 0,\n      \"hasMessageReference\": true,\n      \"messageReferenceId\": \"orig-123\"\n    },\n    {\n      \"send\": 2,\n      \"route\": \"/channels/789/messages\",\n      \"contentLength\": 1,\n      \"fileCount\": 0,\n      \"hasMessageReference\": true,\n      \"messageReferenceId\": \"orig-123\"\n    }\n  ],\n  \"explicitFirstText\": [\n    {\n      \"send\": 1,\n      \"route\": \"/channels/789/messages\",\n      \"contentLength\": 2000,\n      \"fileCount\": 0,\n      \"hasMessageReference\": true,\n      \"messageReferenceId\": \"orig-123\"\n    },\n    {\n      \"send\": 2,\n      \"route\": \"/channels/789/messages\",\n      \"contentLength\": 1,\n      \"fileCount\": 0,\n      \"hasMessageReference\": true,\n      \"messageReferenceId\": \"orig-123\"\n    }\n  ]\n}\n```\n\n**Observed result:** Implicit first-mode text and media sends only include `message_reference` on send 1, while all-mode and explicit first-mode sends include `message_reference` on both chunks.\n\n**Not tested:** Live Discord API delivery with real credentials and real voice-message media conversion were not exercised locally.\n\n## Root Cause\n- The Discord send path treated every `replyTo` passed into chunked sends as reusable, so an implicit `replyToMode: \"first\"` logical reply could become multiple native Discord replies after text/media splitting.\n- The `audioAsVoice` payload path intentionally captures one reply id for its internal voice/text/media sends, so that captured id must be treated as explicit when passed to chunked follow-up sends.\n\n## Regression Test Plan\n- `send.sends-basic-channel-messages.test.ts` covers implicit first-mode text chunks, implicit first-mode media caption chunks, all-mode chunks, explicit first-mode chunks, and direct chunked replies.\n- `outbound-adapter.test.ts` covers `audioAsVoice` forwarding so captured reply ids are marked explicit before reaching chunked message sends.\n- `message-plan.test.ts` remains in the targeted run to cover upstream implicit reply consumption behavior.\n\n## User-visible / Behavior Changes\n- Discord replies using `replyToMode: \"first\"` or `\"batched\"` no longer create reply-thread references on every split chunk.\n- Explicit/direct reply sends and `replyToMode: \"all\"` keep the previous reusable reference behavior.\n\n## Impact Assessment\n- Scope: Discord outbound message delivery only; the change is applied at the shared Discord send layer and the Discord payload forwarding layer.\n- Downstream: text sends, media caption sends, component/media payloads, and `audioAsVoice` payloads were traced and covered by targeted tests.\n- Edge cases: empty `replyTo`, direct sends without policy metadata, explicit reply ids, all-mode replies, and media caption follow-ups were considered.\n- Hard-coded values: no new runtime constants or configuration defaults were introduced.\n- Existing fixes: no open competing PR for #99068 was found before implementation.\n- Import paths: existing project imports are used.\n\n## Security Impact\n- New permissions: No\n- Secret handling changed: No\n- New network calls: No\n\nCloses #99068\n",
-        "branch": "fix/99068-discord-reply-first-chunks",
-        "head_sha": "7545a66a71555b0dbfba4ae9c9d8c9b5ababd440",
-        "author": "lilan0125",
-        "labels": [
-          "channel: discord",
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/discord/src/outbound-adapter.test.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/outbound-adapter.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/outbound-payload.ts",
-            "additions": 9,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/send.outbound.ts",
-            "additions": 24,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/send.sends-basic-channel-messages.test.ts",
-            "additions": 43,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/send.shared.ts",
-            "additions": 31,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 122,
-        "deletions": 11,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99171",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99171.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 93,
-          "gatingTotal": 88,
-          "counts": {
-            "SUCCESS": 58,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/crabbox:680:4796048454:2026-06-25T05:03:16Z:re_review",
-      "comment_id": "4796048454",
-      "comment_version_key": "4796048454:2026-06-25T05:03:16Z",
-      "comment_url": "https://github.com/openclaw/crabbox/pull/680#issuecomment-4796048454",
-      "repo": "openclaw/crabbox",
-      "target_branch": null,
-      "issue_number": 680,
-      "author": "coygeek",
-      "author_id": 65363919,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T05:03:16Z",
-      "comment_updated_at": "2026-06-25T05:03:16Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(vast): add Vast.ai SSH lease provider",
-        "body": "## Summary\n\nCloses https://github.com/openclaw/crabbox/issues/363\n\n- Add the Vast.ai direct SSH-lease provider with config/env/flag handling, provider registration, guarded auth, and provider matrix/docs/live-smoke coverage.\n- Implement Vast offer search, create/show/list/manage/destroy/SSH-key API flows, ownership labels, per-lease SSH key handling, release-action handling, recovery/rollback, and cleanup safety checks.\n- Address closeout review findings around documented Vast API payload shapes, v1 paginated instance listing, retained stopped claims, status-ready probes, numeric slug resolution, Tailscale preflight rejection, unsafe custom API URL components, and race-test timing stability.\n- Use Vast's rentable `ask_contract_id` for provisioning, bind destructive cleanup to the authenticated account and API endpoint, and bootstrap required SSH tools before applying the full readiness gate.\n\n## Verification\n\nExact head: `19523ad1eaf9d4e087c927805b7a28aa7e334c82` (rebased onto the 0.34.1 development head; exact-head CI is running).\n\n- `go vet ./... && go test -race ./... && go build -trimpath -o bin/crabbox ./cmd/crabbox`\n- `go test -race ./internal/providers/vast` after each accepted review fix\n- `scripts/check-docs.sh` — 51 command docs, 70 providers, 203 Markdown files, and the generated docs site\n- `bash -n scripts/live-vast-smoke.sh`\n- `CRABBOX_LIVE=0 CRABBOX_LIVE_PROVIDERS=vast scripts/live-vast-smoke.sh` -> `classification=environment_blocked reason=CRABBOX_LIVE_not_enabled`\n- `CRABBOX_LIVE=1 CRABBOX_LIVE_PROVIDERS=vast CRABBOX_VAST_API_KEY= VAST_API_KEY= scripts/live-vast-smoke.sh` -> `classification=environment_blocked reason=VAST_API_KEY_missing`\n- `node --test scripts/live-vast-smoke.test.js` — 7 tests passed\n- `git diff --check`\n- Whole-branch autoreview found and fixed three actionable lifecycle defects: wrong offer identifier, cross-account 404 cleanup orphaning, and missing default-image tool bootstrap. Focused fix reviews and the final whole-branch review are clean with no accepted/actionable findings.\n- The pre-release-boundary head was terminal green, 6/6; the rebased exact head is running the same public gate.\n\n## Remaining live gate\n\nNo billable Vast lifecycle was run because the credential session remains locked. Before merge, run the guarded smoke with an explicit conservative hourly cap and prove doctor, empty owned inventory, create/readiness, SSH `nvidia-smi`, list/status, stop/destroy, key cleanup, and final empty inventory.\n",
-        "branch": "vast-provider",
-        "head_sha": "19523ad1eaf9d4e087c927805b7a28aa7e334c82",
-        "author": "coygeek",
-        "labels": [
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof",
-          "P2",
-          "merge-risk: 🚨 security-boundary",
-          "merge-risk: 🚨 other"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/providers/README.md",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/providers/provider-metadata.json",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/providers/vast.md",
-            "additions": 302,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "docs/source-map.md",
-            "additions": 5,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/applevzhelper/cli_darwin_arm64_test.go",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/bootstrap_test.go",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/config.go",
-            "additions": 212,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/config_cmd.go",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/config_cmd_test.go",
-            "additions": 97,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/config_test.go",
-            "additions": 70,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/connect_test.go",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/controller_subprocess_test.go",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/credential_provenance.go",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/credential_provenance_test.go",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/provider_categories_generated.go",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/providers_builtin_test.go",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/providers_test.go",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/providers/all/all.go",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/providers/all/all_test.go",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/providers/vast/backend.go",
-            "additions": 900,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/backend_test.go",
-            "additions": 689,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/client.go",
-            "additions": 661,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/client_test.go",
-            "additions": 313,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/core.go",
-            "additions": 59,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/flags.go",
-            "additions": 104,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/labels.go",
-            "additions": 60,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/labels_test.go",
-            "additions": 52,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/provider.go",
-            "additions": 132,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/provider_test.go",
-            "additions": 230,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scripts/live-vast-smoke.sh",
-            "additions": 324,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scripts/live-vast-smoke.test.js",
-            "additions": 368,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "worker/vitest.config.ts",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 33,
-        "additions": 4771,
-        "deletions": 13,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-crabbox-680",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-680.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 8,
-          "gatingTotal": 8,
-          "counts": {
-            "IN_PROGRESS": 5,
-            "SUCCESS": 3
-          },
-          "blockers": [
-            "Go:IN_PROGRESS",
-            "Apple VZ:IN_PROGRESS",
-            "Scripts:IN_PROGRESS",
-            "Docs:IN_PROGRESS",
-            "Release Check:IN_PROGRESS"
-          ],
-          "pending": [
-            "Go:IN_PROGRESS",
-            "Apple VZ:IN_PROGRESS",
-            "Scripts:IN_PROGRESS",
-            "Docs:IN_PROGRESS",
-            "Release Check:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/crabbox:680:4795930208:2026-06-25T04:39:51Z:re_review",
-      "comment_id": "4795930208",
-      "comment_version_key": "4795930208:2026-06-25T04:39:51Z",
-      "comment_url": "https://github.com/openclaw/crabbox/pull/680#issuecomment-4795930208",
-      "repo": "openclaw/crabbox",
-      "target_branch": null,
-      "issue_number": 680,
-      "author": "coygeek",
-      "author_id": 65363919,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-25T04:39:51Z",
-      "comment_updated_at": "2026-06-25T04:39:51Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2188,
+    "total_ms": 714,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 336
+        "ms": 375
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1603
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -516,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 220
+        "ms": 325
       },
       {
         "name": "append_ledger",
