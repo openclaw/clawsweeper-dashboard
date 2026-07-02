@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T18:31:40.022Z",
+  "generated_at": "2026-07-02T18:32:15.900Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T15:31:37.364Z",
+  "since": "2026-07-02T15:32:14.078Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99194
+    99196
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99194:4869281969:2026-07-02T18:31:33Z:clawsweeper_auto_repair",
-      "comment_id": "4869281969",
-      "comment_version_key": "4869281969:2026-07-02T18:31:33Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99194#issuecomment-4869281969",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99196:4869289304:2026-07-02T18:32:10Z:clawsweeper_auto_repair",
+      "comment_id": "4869289304",
+      "comment_version_key": "4869289304:2026-07-02T18:32:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99196#issuecomment-4869289304",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99194,
+      "issue_number": 99196,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T18:25:41Z",
-      "comment_updated_at": "2026-07-02T18:31:33Z",
+      "comment_created_at": "2026-07-02T18:26:40Z",
+      "comment_updated_at": "2026-07-02T18:32:10Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=13e8f3146ee44cfa0c3710e87cb2e734c58d9bdd)",
-      "review_summary": "The PR re-reads session state during model fallback and retries a cleared reused Claude CLI session once with a fresh session, with focused CLI attempt tests.\n\nPR surface: Source +55, Tests +49. Total +104 across 3 files.\n\nReproducibility: yes. at source level. Current main captures one sessionEntry snapshot before the fallback loop while clearCliSessionInStore replaces the live sessionStore entry, so a fallback retry must re-read the store to observe a cleared CLI binding; I did not run a live provider reproduction.",
-      "review_followup": "- [P1] Needs contributor or maintainer revision because a blocking runtime finding and missing real behavior proof remain; automation should not take over this external PR while the proof gate requires contributor action.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=59b5cbfe8531211440675c55366e3e895072aad7)",
+      "review_summary": "The PR changes installed-index manifest registry reconstruction to rediscover `plugins.load.paths` candidates and append them to index-derived candidates.\n\nPR surface: Source +27. Total +27 across 1 file.\n\nReproducibility: Do we have a high-confidence way to reproduce the issue? Yes at source level: current main's installed-index branch passes only index candidates, and `loadPluginManifestRegistry` skips discovery when candidates are supplied; no live managed-install proof was run in this read-only review.",
+      "review_followup": "- [P1] The PR needs contributor real behavior proof and a maintainer decision on repairing this branch versus the alternate scoped candidate, so it is not a safe automated repair marker right now.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "13e8f3146ee44cfa0c3710e87cb2e734c58d9bdd",
+      "expected_head_sha": "59b5cbfe8531211440675c55366e3e895072aad7",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,63 +70,48 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): stop a single reused-CLI-session death from cascading to \"All models failed\"",
-        "body": "## Problem\n\nA single transient failure on a reused Claude CLI session can cascade into a full `All models failed (2)` dispatch failure, even though the underlying failure is transient and normally self-heals on the *next* dispatch (fresh session).\n\nTwo compounding defects:\n\n1. **`src/agents/agent-command.ts`** — the model-fallback `run` closure captures the session entry (`sessionEntryForAttempt`) once, before the fallback candidate loop starts, and reuses that same snapshot for every candidate. When candidate N's reused CLI session dies and gets cleared from the shared session store (`clearCliSessionInStore`), candidate N+1 never sees that clear — it's handed the same pre-loop snapshot, still carrying the dead session binding. It resumes the already-dead session and fails near-instantly (observed 127–450ms in production, vs. seconds-to-minutes for a real turn), exhausting all fallback candidates.\n\n2. **`src/agents/command/attempt-execution.ts`** — the outer catch around a CLI attempt already clears a poisoned reused session from the store on a qualifying failure (`shouldClearReusedCliSessionAfterError`), but never retries — it just rethrows. For single-candidate sessions (no fallback list configured) this means a purely transient failure has *no* recovery path at all.\n\n### Evidence\n\nProduction gateway journal (7 days): 4 concrete `All models failed` incidents matching this exact pattern — e.g. a `claude-sonnet-4-6` fallback candidate dispatched with `resumeSession=<id>` identical to the just-cleared primary candidate's session, dying in 127ms. The existing pattern of \"the *next* dispatch (fresh session) succeeds\" is what makes this diagnosable — a fresh store read/session always recovers, but nothing re-reads the store or retries fresh *within* the same dispatch.\n\n## Fix\n\n- **`agent-command.ts`**: on a fallback retry (`isFallbackRetry === true`), re-read the live `sessionStore` entry (already updated by a prior candidate's clear) instead of the stale pre-loop snapshot. The primary attempt is untouched — this only changes behavior when a fallback candidate is about to run.\n- **`attempt-execution.ts`**: after clearing a reused-and-dead CLI session, retry once in-process with a brand-new session (no `resumeSession` id) before rethrowing. Scoped via a new `shouldRetryFreshCliSessionAfterClear` predicate to failure reasons that indicate transient/reused-session poisoning (`timeout`, `unknown`, `session_expired`, `empty_response`, `AbortError`) — `auth`/`billing`/`rate_limit` failures are deliberately excluded since an instant retry would just fail identically and burn an extra attempt for nothing.\n\nBoth fixes are narrowly scoped (guarded by `isFallbackRetry` / the new reason allowlist) and additive — the happy path (primary attempt succeeds, or a genuinely non-recoverable failure) is unchanged.\n\n## Tests\n\n- Updated `attempt-execution.cli.test.ts`'s AbortError case: it previously asserted the failure propagated \"without retrying\" — that was the bug being fixed, so it now asserts the outer-catch retry recovers the turn with a fresh session.\n- Added a case for `FailoverError` with `reason: \"unknown\"`, which is explicitly *outside* `cli-runner.ts`'s existing internal `shouldRetryFreshCliSessionAfterFailover` allowlist (it only retries `unknown` when `error.code === \"cli_unknown_empty_failure\"`) — this was the most common real-world trigger in the production journal, and previously had zero recovery path.\n- The existing `auth`/`billing`/`rate_limit` \"without retrying\" parametrized tests are untouched and still pass — confirms the new retry gate correctly excludes those reasons.\n- `pnpm tsgo:core` and `pnpm tsgo:core:test` pass (typecheck).\n- `node scripts/run-oxlint.mjs` clean on all three changed files.\n- Full suite for the affected files: `attempt-execution.cli.test.ts` (50 tests), `attempt-execution.test.ts`, `attempt-execution.error-propagation.test.ts`, `attempt-execution.shared.test.ts`, `model-fallback.test.ts`, `model-fallback.probe.test.ts` — 178 tests total, all passing.\n\n## Context\n\nRoot-caused and tracked internally as SCRUM-3256. A cron-layer retry mitigation is already in place upstream of this and stays as defense-in-depth for the dispatch paths it covers (cron/sweep). This PR is the durable, in-process fix that covers *every* dispatch path (n8n webhook, manual `openclaw agent`, all crons) permanently, without needing any local runtime restart or config change.",
-        "branch": "fix/scrum-3256-fresh-session-fallback",
-        "head_sha": "13e8f3146ee44cfa0c3710e87cb2e734c58d9bdd",
-        "author": "hkhamis1975",
+        "title": "fix(plugins): discover config load.paths plugins when index has entries",
+        "body": "## What Problem This Solves\n\nInstalling a managed npm plugin (`openclaw plugins install npm:@openclaw/llama-cpp-provider@2026.6.10`) populates the persisted plugin index. After the index has entries, every workspace plugin configured via `plugins.load.paths` is dropped at startup with:\n\n```\nplugins.entries.<id>: plugin not found: <id> (stale config entry ignored; remove it from plugins config)\nplugins.allow: plugin not found: <id> (stale config entry ignored; remove it from plugins config)\n```\n\nPlugin files are present and unchanged on disk. Reverting the config restores them.\n\nFixes #99185\n\n## Root Cause\n\nIn `loadPluginMetadataSnapshotImpl` (`src/plugins/plugin-metadata-snapshot.ts:699-715`), the manifest registry is built via two paths:\n\n- **Index empty** (`index.plugins.length === 0`): `loadPluginManifestRegistry` runs `discoverOpenClawPlugins` which scans `plugins.load.paths` → workspace plugins found ✅\n- **Index has entries**: `loadPluginManifestRegistryForInstalledIndex` converts index records to candidates and passes them to `loadPluginManifestRegistry` → since candidates are provided, `discoverOpenClawPlugins` is **never called** and `plugins.load.paths` is never scanned\n\nIf workspace plugins are missing from the persisted index (which can happen in certain install/refresh sequences), they are silently dropped and never discovered again.\n\n## Change Summary\n\nIn `loadPluginManifestRegistryForInstalledIndex` (`src/plugins/manifest-registry-installed.ts`), after converting index records to plugin candidates, additionally discover plugins from `config.plugins.load.paths` using `discoverOpenClawPlugins` and merge any candidates that are not already represented in the index-based list (deduplicated by `rootDir`).\n\nThis ensures config-origin workspace plugins are always included in the manifest registry regardless of index completeness.\n\n## After-fix evidence\n\n```\n✓ |plugins| manifest-registry-installed.test.ts (16 tests, 1 skipped)\n  Tests  16 passed | 1 skipped (17)\n```\n\n## Test plan\n\n- Existing tests pass: all 16 `loadPluginManifestRegistryForInstalledIndex` tests green\n- TypeScript compilation: `pnpm tsgo:core` clean\n- No behavioral change when `load.paths` is empty (early return)\n- No duplicate plugins when `load.paths` entries are already in the index (dedup by rootDir)\n- `loadPluginManifestRegistry` has built-in duplicate ID detection as second line of defense",
+        "branch": "fix/issue-99185-clean",
+        "head_sha": "59b5cbfe8531211440675c55366e3e895072aad7",
+        "author": "leonidaslux",
         "labels": [
-          "agents",
-          "size: S",
-          "P1",
+          "size: XS",
+          "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
+          "merge-risk: 🚨 compatibility",
           "status: 📣 needs proof",
           "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "src/agents/agent-command.ts",
-            "additions": 17,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/attempt-execution.cli.test.ts",
-            "additions": 60,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/attempt-execution.ts",
-            "additions": 44,
+            "path": "src/plugins/manifest-registry-installed.ts",
+            "additions": 30,
             "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 121,
-        "deletions": 17,
+        "changedFiles": 1,
+        "additions": 30,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99194",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99194.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99196",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99196.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 102,
-          "gatingTotal": 97,
+          "total": 19,
+          "gatingTotal": 14,
           "counts": {
             "CANCELLED": 2,
-            "SKIPPED": 34,
-            "SUCCESS": 65,
-            "NEUTRAL": 1
+            "SKIPPED": 10,
+            "SUCCESS": 7
           },
           "blockers": [
             "Real behavior proof:CANCELLED"
@@ -145,15 +130,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3002,
+    "total_ms": 2164,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 423
+        "ms": 428
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2221
+        "ms": 1376
       },
       {
         "name": "classify_comment_commands",
@@ -169,7 +154,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 307
+        "ms": 330
       },
       {
         "name": "append_ledger",
