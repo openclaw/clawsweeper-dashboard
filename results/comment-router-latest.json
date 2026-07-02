@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T17:14:46.960Z",
+  "generated_at": "2026-07-02T17:15:08.013Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T14:14:44.864Z",
+  "since": "2026-07-02T14:15:04.096Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99177
+    98343
+  ],
+  "comment_ids": [
+    4868500253
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99177:4868455919:2026-07-02T17:14:41Z:clawsweeper_auto_repair",
-      "comment_id": "4868455919",
-      "comment_version_key": "4868455919:2026-07-02T17:14:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99177#issuecomment-4868455919",
+      "idempotency_key": "comment-router:openclaw/openclaw:98343:4868500253:2026-07-02T17:12:24Z:re_review",
+      "comment_id": "4868500253",
+      "comment_version_key": "4868500253:2026-07-02T17:12:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98343#issuecomment-4868500253",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99177,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 98343,
+      "author": "jason-allen-oneal",
+      "author_id": 8335428,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T17:08:43Z",
-      "comment_updated_at": "2026-07-02T17:14:41Z",
+      "comment_created_at": "2026-07-02T17:12:24Z",
+      "comment_updated_at": "2026-07-02T17:12:24Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -68,136 +71,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): cache plugin inventory to prevent repeated disk I/O (#99071)",
-        "body": "## Problem\n\nDuring complex multi-turn tasks, `buildCodexPluginThreadConfig` calls `readCodexPluginInventory` up to **4 times** per request cycle. Each call issues a `plugin/list` RPC to the Codex app-server, which scans ~180 `plugin.json` files from disk. This produces **1.3–1.4 GB of disk reads in 30 seconds** and drives disk utilization to **99%** on resource-constrained cloud servers (2 vCPU / 4 GB RAM Ubuntu 24.04.4), making the server unresponsive.\n\nReported in #99071.\n\n## Root Cause\n\nThe existing `CodexAppInventoryCache` only caches `app/list` responses. The `plugin/list` and `plugin/read` RPC paths — the ones that trigger the heavy disk scanning — had **no cache at all**. Every call to `readCodexPluginInventory` resulted in a fresh `plugin/list` RPC, and `buildCodexPluginThreadConfig` calls it up to 4 times:\n\n1. Initial inventory read (line 126)\n2. After waiting for initial app inventory (line 147)\n3. After post-install refresh (line 197)\n4. After not-ready plugin apps refresh (line 216)\n\nAdditionally, `ensureCodexPluginActivation` in `plugin-activation.ts` makes its own `plugin/list` call for each plugin that needs activation.\n\n## Fix\n\nIntroduces `CodexPluginListCache` — a process-local in-memory cache for `plugin/list` responses with:\n- **5-minute TTL** (shorter than app inventory's 1-hour TTL since plugin install/enable state changes are more disruptive)\n- **Coalesced refreshes** per cache key (concurrent callers share the same in-flight request)\n- **Refresh generation tokens** to prevent older in-flight refreshes from overwriting newer snapshots\n- **Invalidation API** for post-install state changes\n\n### Wiring\n\n| File | Change |\n|------|--------|\n| `plugin-list-cache.ts` | New file — `CodexPluginListCache` class + `defaultCodexPluginListCache` singleton |\n| `plugin-inventory.ts` | `readCodexPluginInventory` uses `readOrRefresh()` for `plugin/list` when cache is provided |\n| `plugin-thread-config.ts` | All 4 `readCodexPluginInventory` calls + `ensureCodexPluginActivation` pass the shared cache |\n| `attempt-startup.ts` | `buildCodexPluginThreadConfig` callback passes `defaultCodexPluginListCache` |\n| `plugin-activation.ts` | Cache invalidated on plugin install and during `refreshCodexPluginRuntimeState` |\n\n### Design Decision: Activation Path Stays Uncached\n\n`ensureCodexPluginActivation` intentionally does **NOT** use the cache for its initial `plugin/list` read. It needs fresh install/enable state to decide whether `plugin/install` is needed. Using a cached response could show a plugin as not-yet-installed when it actually was just installed by a concurrent process, leading to a redundant `plugin/install` call. The cache **is** invalidated after install so subsequent reads see the new state.\n\n## Impact\n\n**Before:** 4+ `plugin/list` RPCs per `buildCodexPluginThreadConfig` call × ~180 `plugin.json` file reads each = 1.3–1.4 GB disk I/O in 30 seconds.\n\n**After:** 1 `plugin/list` RPC per cache TTL window (5 minutes). Subsequent calls within that window return the cached snapshot. Cache is invalidated on plugin install/activation so post-install state changes are always observed.\n\n## Tests\n\n- **10 new tests** in `plugin-list-cache.test.ts`: cache reads, refreshes, coalescing, invalidation, forced refetch, error propagation, revision tracking, clear\n- **2 new tests** in `plugin-inventory.test.ts`: verify repeated `readCodexPluginInventory` calls use the cached `plugin/list` response, and `forcePluginListRefetch` bypasses the cache\n- **`plugin-thread-config.test.ts`**: `beforeEach` clears `defaultCodexPluginListCache` to prevent cross-test cache pollution\n- All **73 existing + new tests** pass across 6 test files\n\nFixes #99071",
-        "branch": "fix/codex-plugin-discovery-io",
-        "head_sha": "7eac710bbb346272cd70c78987987d2e852f7899",
-        "author": "jtcole",
-        "labels": [
-          "size: L",
-          "extensions: codex",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/attempt-startup.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/plugin-activation.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/plugin-inventory.test.ts",
-            "additions": 138,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/plugin-inventory.ts",
-            "additions": 24,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/plugin-list-cache.test.ts",
-            "additions": 193,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/plugin-list-cache.ts",
-            "additions": 199,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/plugin-thread-config.test.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/plugin-thread-config.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 8,
-        "additions": 597,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99177",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99177.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 92,
-          "gatingTotal": 87,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 35,
-            "SUCCESS": 52,
-            "FAILURE": 3
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2374,
+    "total_ms": 5963,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 366
+        "ms": 3898
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1715
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -205,7 +100,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 268
+        "ms": 2046
       },
       {
         "name": "append_ledger",
