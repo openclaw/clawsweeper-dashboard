@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T08:28:56.985Z",
+  "generated_at": "2026-07-02T08:29:05.380Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T05:28:53.707Z",
+  "since": "2026-07-02T05:29:02.811Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
     98940
   ],
-  "comment_ids": [
-    4863729372
-  ],
-  "status_comment_id": 4863729837,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 7,
+  "commands_seen": 4,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +31,123 @@
   "lookup_concurrency": 8,
   "commands": [
     {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98940:4862666060:2026-07-02T08:28:58Z:clawsweeper_auto_repair",
+      "comment_id": "4862666060",
+      "comment_version_key": "4862666060:2026-07-02T08:28:58Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98940#issuecomment-4862666060",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98940,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-02T06:00:50Z",
+      "comment_updated_at": "2026-07-02T08:28:58Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=1e2057608c2f25089f8d3a96d77d178f6dcbf196)",
+      "review_summary": "The PR replaces browser responsebody's Playwright text/body read with a Chromium CDP Fetch stream path plus a body-subarray fallback and expands responsebody tests.\n\nPR surface: Source +197, Tests +411. Total +608 across 2 files.\n\nReproducibility: yes. source-reproducible: current main reads the full Playwright response text before final truncation, and Playwright text delegates to body. I did not run a live large-response browser repro in this read-only review.",
+      "review_followup": "- [P1] The remaining blocker is a browser-owner design and proof decision for CDP response delivery, not a narrow mechanical automation repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "1e2057608c2f25089f8d3a96d77d178f6dcbf196",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(browser): bound Playwright response body reads to prevent OOM",
+        "body": "## What Problem This Solves\n\n`responseBodyViaPlaywright` in `extensions/browser/src/browser/pw-tools-core.responses.ts` previously used `resp.text()` which loads the entire response as a JavaScript string (unbounded memory allocation) before checking `maxChars`. On a 500 MB response this allocated 500 MB+ before truncation.\n\nPlaywright's `Response` API doesn't expose streaming — both `body()` and `text()` buffer the full payload. Truly bounded capture requires CDP-level `Fetch.takeResponseBodyAsStream`.\n\n## Why This Change Was Made\n\nReplaced `resp.text()` (and `resp.body()`) with a dual-path architecture:\n\n1. **CDP `Fetch.takeResponseBodyAsStream` (primary, Chromium):** `Fetch.enable` → `Fetch.requestPaused` → `Fetch.takeResponseBodyAsStream` → `IO.read` 64KB chunks → `IO.close` at cap. Default cap: 800 KB (= maxChars 200K × 4 UTF-8 max). No full-response Buffer allocation.\n\n2. **`body()`+`subarray()` fallback (Firefox/WebKit):** Falls through when `newCDPSession()` fails. Uses `resp.body()` but decodes only `buf.subarray(0, maxBytes)` to avoid full-string allocation.\n\nThis eliminates the OOM risk from large Playwright responses while keeping backward compatibility for all existing callers.\n\n## User Impact\n\n- **No user-visible behavior change** — oversized responses still return truncated prefix matching `maxChars`. URL, status, and headers are returned unchanged.\n- **Memory improvement:** CDP streaming allocates only 832 KB vs 20 MB+ for the old path on a 10 MB response.\n- **Larger responses see proportionally larger savings** since CDP always caps at ~832 KB regardless of response size.\n- **Firefox/WebKit users** see the same behavior as before (fallback path with `body()`+`subarray()` but no full-string decode).\n\n## Evidence\n\n### Real browser proof (required for external PRs)\n\nReal Google Chrome 138 headless, real HTTP server with 10 MB response:\n\n```\n=== MEMORY COMPARISON ===\n| Method                  | Data buffered   | Output  | Bounded? |\n|-------------------------|-----------------|---------|----------|\n| CDP Fetch stream        | 832 KB           | 200K ch | YES      |\n| resp.body()+toString()  | 10.00MB Buffer + 10.00MB str | 200K ch | NO       |\n| Memory reduction        | 25x                        |         |          |\n```\n\nFull log: `docs/.local/issue-browser-bound-reads/cdp-streaming-proof.log`\n\n### Test results\n\n- **19 tests pass** (15 original + 4 new CDP path tests):\n  - CDP stream reads full body when under cap\n  - CDP stream truncates at maxBytes cap (IO.read stops early)\n  - Non-matching URL continued immediately without body read\n  - Falls back to body()+subarray when CDP session unavailable\n  - Negative control proving old text() path unbounded\n  - Mutation test proving subarray() is load-bearing\n- **122/123 test files** pass in full browser extension suite (1 pre-existing env failure, unrelated)\n- **TypeScript compiles cleanly** (`pnpm tsgo:core`)\n\n### Risk checklist\n\n- **User-visible behavior change?** No — oversized responses still return truncated prefix.\n- **Config/env/migration change?** No.\n- **Security/auth/network change?** No — CDP is a debug-protocol optimization; response metadata unchanged.\n- **Highest-risk area:** CDP session creation failing mid-flight — handled via try/catch + fallback to body()+subarray (unchanged behavior for non-Chromium).\n- **Risk mitigation:** CDP session creation wrapped in try/catch; `bodySubarrayFallback` preserved for Firefox/WebKit.\n\n## Linked context\n\nPattern from PR #98496 (bounded response body reads to prevent OOM).\n",
+        "branch": "fix/browser-bound-pw-tools-response-reads",
+        "head_sha": "1e2057608c2f25089f8d3a96d77d178f6dcbf196",
+        "author": "pandah97",
+        "labels": [
+          "size: L",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/browser/src/browser/pw-tools-core.responses.ts",
+            "additions": 211,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/browser/pw-tools-core.waits-next-download-saves-it.test.ts",
+            "additions": 412,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 623,
+        "deletions": 15,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98940",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98940.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 92,
+          "gatingTotal": 87,
+          "counts": {
+            "SUCCESS": 57,
+            "SKIPPED": 33,
+            "FAILURE": 2
+          },
+          "blockers": [
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
       "idempotency_key": "comment-router:openclaw/openclaw:98940:4863729372:2026-07-02T08:27:36Z:re_review",
       "comment_id": "4863729372",
       "comment_version_key": "4863729372:2026-07-02T08:27:36Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/98940#issuecomment-4863729372",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 98940,
       "author": "Pandah97",
       "author_id": 80405497,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-02T08:27:36Z",
       "comment_updated_at": "2026-07-02T08:27:36Z",
-      "status_comment_id": 4863729837,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,25 +170,8 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-07-02T08:28:58.129Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 98940
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-02T08:28:59.430Z",
-          "response_comment_id": "4863729837",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
@@ -151,24 +236,105 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:98940:4862842027:2026-07-02T06:30:49Z:re_review",
+      "comment_id": "4862842027",
+      "comment_version_key": "4862842027:2026-07-02T06:30:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98940#issuecomment-4862842027",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98940,
+      "author": "Pandah97",
+      "author_id": 80405497,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-02T06:30:49Z",
+      "comment_updated_at": "2026-07-02T06:30:49Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:98940:4862790986:2026-07-02T06:22:14Z:re_review",
+      "comment_id": "4862790986",
+      "comment_version_key": "4862790986:2026-07-02T06:22:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98940#issuecomment-4862790986",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98940,
+      "author": "Pandah97",
+      "author_id": 80405497,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-02T06:22:14Z",
+      "comment_updated_at": "2026-07-02T06:22:14Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6509,
+    "total_ms": 3436,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 760
+        "ms": 410
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2504
+        "ms": 2143
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -180,7 +346,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3221
+        "ms": 855
       },
       {
         "name": "append_ledger",
