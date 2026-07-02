@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T18:44:12.710Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-02T18:44:21.350Z",
+  "repo": "openclaw/clawhub",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T15:44:10.552Z",
+  "since": "2026-07-02T15:44:17.851Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    92509
+    2949
   ],
   "comment_ids": [
-    4869404055
+    4869417172
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4869417553,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,20 +33,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92509:4869404055:2026-07-02T18:41:23Z:re_review",
-      "comment_id": "4869404055",
-      "comment_version_key": "4869404055:2026-07-02T18:41:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92509#issuecomment-4869404055",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 92509,
-      "author": "Dazlarus",
-      "author_id": 84022781,
+      "idempotency_key": "comment-router:openclaw/clawhub:2949:4869417172:2026-07-02T18:43:04Z:re_review",
+      "comment_id": "4869417172",
+      "comment_version_key": "4869417172:2026-07-02T18:43:04Z",
+      "comment_url": "https://github.com/openclaw/clawhub/pull/2949#issuecomment-4869417172",
+      "repo": "openclaw/clawhub",
+      "target_branch": "main",
+      "issue_number": 2949,
+      "author": "giodl73-repo",
+      "author_id": 235387111,
       "author_association": "NONE",
-      "comment_created_at": "2026-07-02T18:41:23Z",
-      "comment_updated_at": "2026-07-02T18:41:23Z",
-      "status_comment_id": null,
-      "trigger": "slash",
+      "comment_created_at": "2026-07-02T18:43:04Z",
+      "comment_updated_at": "2026-07-02T18:43:04Z",
+      "status_comment_id": 4869417553,
+      "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
@@ -68,123 +68,154 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-02T18:44:22.070Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 2949
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-02T18:44:23.092Z",
+          "response_comment_id": "4869417553",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(memory-core): WAL checkpoint after writeMeta + stale index file cleanup",
-        "body": "## Summary\n\nOne focused fix: `writeMeta()` now runs `PRAGMA wal_checkpoint(TRUNCATE)` after writing the `memory_index_meta_v1` row, ensuring it survives process crashes.\n\n## Problem\n\nWhen the gateway process is killed between `writeMeta()` and `closeMemoryDatabase()`, the meta row exists only in the SQLite WAL file. On next startup, the manager reads no meta and declares the index \"missing\" — even though chunks are still present in the DB.\n\nThis puts the system into a permanent degraded state: `memory_search` returns `\"index metadata is missing\"`, normal syncs cannot self-heal (depending on provider availability), and the only recovery is `openclaw memory index --force`.\n\n## Real behavior proof\n\nMinimal reproduction using Node v24.16.0 native SQLite in WAL mode on Windows 11, with child processes killed via `taskkill /F` (SIGKILL equivalent):\n\n```\n=== WAL Meta Durability Reproduction ===\n\nPhase 1: Normal close (baseline)\n  WAL size after writes: 0 bytes\n  Meta in main file: PRESENT\n\nPhase 2: Hard kill WITHOUT fix\n  WAL size: 0 bytes\n  Meta in main file: MISSING (no meta table — data was WAL-only)\n\nPhase 3: Hard kill WITH wal_checkpoint fix\n  WAL size: 0 bytes\n  Meta in main file: PRESENT\n```\n\n**Method:** Each phase creates a fresh WAL-mode SQLite DB, creates schema, inserts a chunk, and writes `memory_index_meta_v1`. After each phase, the main `.sqlite` file is **copied** to an isolated directory (no `-wal` or `-shm` sidecar) and opened read-only — this ensures we read the checkpointed main file, not replayed WAL.\n\n**Phase 2 proves the bug:** after a hard kill without checkpoint, the main DB file has NO `meta` table — the entire schema was WAL-only. On next startup, the manager sees an empty DB, auto-creates it, and declares `\"index metadata is missing\"`.\n\n**Phase 3 proves the fix:** with `PRAGMA wal_checkpoint(TRUNCATE)` after `writeMeta`, the meta row is in the main file and survives the kill.\n\nThis corresponds to the production failure path: gateway process killed (OOM, Ctrl-C, power loss) between `writeMeta()` and `closeMemoryDatabase()` → meta lost → `memory_search` returns `\"index metadata is missing\"` permanently.\n\n## Fix\n\nAfter writing the meta row, immediately run `PRAGMA wal_checkpoint(TRUNCATE)`. This forces all WAL data to be flushed to the main database file, so the meta row survives even if the process is killed before `closeMemoryDatabase()`.\n\n## What this PR does NOT do\n\n- ❌ No stale file cleanup (belongs in `manager-atomic-reindex.ts` lifecycle — filed as follow-up)\n- ❌ No changes to the atomic reindex swap protocol\n- ❌ No new dependencies or schema migrations\n\n## Related issues\n\n- #90361 — Canonical bug: intermittent \"index metadata is missing\"\n- #90650 — CLI works but agent tool fails\n- #91497 — Meta not written during --force reindex\n- #92187 — OOM during rebuild leaves empty DB\n\nThe `needsMissingIdentityReindex` auto-recovery path (already on main) can eventually heal this when the provider is available. This checkpoint fix prevents the meta loss in the first place, avoiding unnecessary full reindex cycles after crashes.\n\n## Testing\n\n- **Spy test**: verifies `writeMeta` calls `wal_checkpoint(TRUNCATE)` independently of `closeMemoryDatabase` — this test fails on current main\n- **Integration test**: verifies meta durability across manager close/reopen cycles",
-        "branch": "fix/memory-meta-recovery",
-        "head_sha": "05572d21cbe98bb2ca130fb87e2af214a025366c",
-        "author": "dazlarus",
-        "labels": [
-          "extensions: memory-core",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
+        "title": "feat: add publisher state facts",
+        "body": "## Summary\n\n- Adds `specs/claim-official-state.md` for ClawHub claim, verification, official, suspension, and revocation state boundaries.\n- Adds derived publisher state facts for the existing official-publisher admin path: `claimState`, `officialState`, and `restrictionState` stay separate instead of collapsing into one trust badge.\n- Updates official-publisher add/remove audit metadata with prior and new official state, and extends the admin client schema to accept the optional state object while staying compatible with older server responses.\n\n## Trust boundary\n\nThis PR does not add self-service claim approval, verified state grants, follow state, profile UX, account-feed status fields, OpenClaw registry review, scan authority, install authority, or feed signing. `official` remains publisher-scoped and derived from ClawHub-managed `officialPublishers` rows only. Legacy personal publishers without `linkedUserId` still derive claimed state from owner membership compatibility rows.\n\n## Validation\n\n- `git diff --check`\n- `git diff --cached --check`\n- `npx --yes oxfmt@0.56.0 --check convex/lib/publisherState.ts convex/lib/publisherState.test.ts convex/publishers.ts convex/publishers.test.ts packages/clawhub/src/schema/schemas.ts packages/clawhub/src/schema/schemas.test.ts specs/claim-official-state.md`\n- `rg -n \"Microsoft|micorosf|tenant|MOS3|M365|enterprise\" specs/claim-official-state.md convex/lib/publisherState.ts packages/clawhub/src/schema/schemas.ts` returned no matches\n- `codex review --base origin/main` reported no actionable findings after the legacy personal-publisher claim-state fix.\n- `bun --version` was not run successfully: `bun` is not installed in this Windows shell.\n- Targeted Vitest/tsc/Convex codegen were not run locally because this checkout has no `node_modules` and no local `vitest`, `tsc`, or `convex` binaries.\r\n",
+        "branch": "claim-official-state",
+        "head_sha": "dab68ea64ed5ff5e8940fb743d54682fff1391ea",
+        "author": "giodl73-repo",
+        "labels": [],
         "files": [
           {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
-            "additions": 10,
+            "path": "convex/_generated/api.d.ts",
+            "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/memory-core/src/memory/manager.wal-checkpoint.test.ts",
-            "additions": 174,
+            "path": "convex/lib/publisherState.test.ts",
+            "additions": 132,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "convex/lib/publisherState.ts",
+            "additions": 55,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "convex/publishers.test.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/publishers.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/clawhub/src/schema/schemas.test.ts",
+            "additions": 47,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/clawhub/src/schema/schemas.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "specs/README.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "specs/claim-official-state.md",
+            "additions": 173,
             "deletions": 0,
             "changeType": "ADDED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 184,
-        "deletions": 0,
+        "changedFiles": 9,
+        "additions": 427,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92509",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92509.md",
+        "automerge_cluster_id": "automerge-openclaw-clawhub-2949",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawhub-2949.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 91,
-          "gatingTotal": 86,
+          "total": 13,
+          "gatingTotal": 11,
           "counts": {
-            "FAILURE": 2,
-            "SKIPPED": 34,
-            "SUCCESS": 40,
-            "IN_PROGRESS": 15
+            "IN_PROGRESS": 4,
+            "SKIPPED": 1,
+            "SUCCESS": 5,
+            "QUEUED": 2,
+            "ACTION_REQUIRED": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:FAILURE",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
+            "pr-gates:IN_PROGRESS",
+            "playwright-local-auth / account-cleanup:IN_PROGRESS",
+            "playwright-local-auth / moderation-star:IN_PROGRESS",
+            "playwright-local-auth / inspector-version:IN_PROGRESS",
+            "playwright-local-auth / publish-generated-card:QUEUED",
+            "playwright-local-auth / publish-new-version:QUEUED",
+            "Vercel – clawhub:ACTION_REQUIRED"
           ],
           "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
+            "pr-gates:IN_PROGRESS",
+            "playwright-local-auth / account-cleanup:IN_PROGRESS",
+            "playwright-local-auth / moderation-star:IN_PROGRESS",
+            "playwright-local-auth / inspector-version:IN_PROGRESS",
+            "playwright-local-auth / publish-generated-card:QUEUED",
+            "playwright-local-auth / publish-new-version:QUEUED"
           ],
           "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-compact-small-whole-2:FAILURE"
+            "Vercel – clawhub:ACTION_REQUIRED"
           ],
-          "externalBlockers": []
+          "externalBlockers": [
+            "Vercel – clawhub:ACTION_REQUIRED"
+          ]
         }
       },
       "maintainer_authorized": true,
-      "author_readonly_authorized": false,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": false
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2504,
+    "total_ms": 5785,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 646
+        "ms": 2368
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1497
+        "ms": 1108
       },
       {
         "name": "classify_comment_commands",
@@ -200,7 +231,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 347
+        "ms": 2275
       },
       {
         "name": "append_ledger",
