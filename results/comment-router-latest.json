@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T07:16:31.928Z",
+  "generated_at": "2026-07-02T07:17:01.531Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T04:16:29.311Z",
+  "since": "2026-07-02T04:16:58.743Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    89039
+    98372
   ],
-  "comment_ids": [
-    4863157526
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 4,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,18 +31,129 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89039:4863157526:2026-07-02T07:14:02Z:re_review",
-      "comment_id": "4863157526",
-      "comment_version_key": "4863157526:2026-07-02T07:14:02Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4863157526",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98372:4850017732:2026-07-02T07:16:56Z:clawsweeper_needs_human",
+      "comment_id": "4850017732",
+      "comment_version_key": "4850017732:2026-07-02T07:16:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98372#issuecomment-4850017732",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 89039,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 98372,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T07:14:02Z",
-      "comment_updated_at": "2026-07-02T07:14:02Z",
+      "comment_created_at": "2026-07-01T03:35:05Z",
+      "comment_updated_at": "2026-07-02T07:16:56Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No automated repair is needed; maintainer review should decide whether the sufficient live proof plus classifier tests are enough for this availability-sensitive retry change.; Cleared: No concrete security or supply-chain concern was found; the diff changes Telegram error handling and tests without new dependencies, permissions, scripts, or credential handling. (sha=b976ad491a2d553925701310fb67b777162dabee)",
+      "review_summary": "The PR wraps Telegram ingress getUpdates JSON.parse failures on HTTP 200 into a retry-classified error and adds Telegram network-error classifier regression tests.\n\nPR surface: Source +9, Tests +32. Total +41 across 3 files.\n\nReproducibility: yes. at source level: current main rethrows raw JSON.parse errors for HTTP 200 malformed getUpdates bodies, and the worker rethrows errors the retry classifier rejects. I did not run local tests in this read-only review.",
+      "review_followup": "- No automated repair is needed; maintainer review should decide whether the sufficient live proof plus classifier tests are enough for this availability-sensitive retry change.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "b976ad491a2d553925701310fb67b777162dabee",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(telegram): guard ingress worker JSON.parse against malformed Bot API bodies",
+        "body": "## What Problem This Solves\n\n`fetchJson` in `extensions/telegram/src/telegram-ingress-worker.runtime.ts` parsed the Bot API response body with `JSON.parse` but did not catch the `SyntaxError`. A non-JSON body (HTML error page, empty, or truncated from a CDN, reverse proxy, or TLS MITM) made the `SyntaxError` bubble out of `fetchJson` into the long-poll loop, where `isRecoverableTelegramNetworkError` judged it non-recoverable (`SyntaxError` is not in the recoverable code/name/message sets). The loop re-threw, the isolated ingress worker exited, and the Telegram channel went silent until manual restart.\n\n## Why This Change Was Made\n\nThis is the same JSON.parse guard pattern already shipped for the other bundled surfaces this week: matrix (#97973), sms (#97999), signal (#98073), plugin-sdk (#98125), nodes. The Telegram isolated ingress worker was the remaining unguarded surface, and its failure mode is worse than a single failed message — it takes down the whole inbound channel.\n\nThe matrix-style guard alone (try/catch + throw a descriptive Error) is not sufficient here, because the long-poll loop decides retry vs exit via `isRecoverableTelegramNetworkError`. So the guard is split: a non-2xx response throws `createTelegramGetUpdatesError({ errorCode })` so the loop preserves Bot API HTTP status semantics (5xx/429 -> retry, 409 -> propagate, 401/404 -> fatal), and an HTTP 200 with a non-JSON body throws a descriptive Error whose message matches the `\"malformed json\"` entry in `RECOVERABLE_MESSAGE_SNIPPETS` so polling/webhook contexts (`allowMessageMatch: true`) back off and retry while `send` context (`allowMessageMatch: false`) stays conservative.\n\n## User Impact\n\nA Telegram Bot API endpoint that temporarily returns a non-JSON body (Cloudflare/intermediary HTML error, empty body, truncated response) no longer kills the isolated ingress worker. The worker backs off and retries like it does for other transient network errors, keeping the channel connected. Legitimate JSON responses, send-path behavior, and the happy path are unchanged.\n\n## Real behavior proof\n\n- **Behavior addressed:** A non-JSON Bot API body (HTML error page / empty / truncated) threw an uncaught `SyntaxError` out of `fetchJson`; the long-poll loop judged it non-recoverable and the isolated ingress worker exited, silently dropping the Telegram channel.\n- **Real environment tested:** Linux x86_64, Node v24.14.0, commit `b976ad491a` on branch `fix/telegram-ingress-malformed-json` (current head, after the 4xx-control follow-up).\n- **Exact steps or command run after this patch:** `node --import tsx verify-ingress-real.mjs` — stands up a **real local HTTP server** standing in for the Telegram Bot API that returns a non-JSON `503` HTML body on every `getUpdates` call, then calls the real exported `runTelegramIngressWorkerRuntime`. `globalThis.fetch` is **not** replaced, so the production fetch path handles the request over a real socket. The port records every message the worker emits.\n- **Evidence after fix:** Terminal capture of `node` runtime verification (live stdout, copied verbatim — non-mocked, real sockets):\n\n  ```text\n  $ node --import tsx verify-ingress-real.mjs\n  real local HTTP server standing in for the Telegram Bot API (returns non-JSON 503 body)\n  calling the real exported runTelegramIngressWorkerRuntime (globalThis.fetch is NOT mocked)\n\n    [worker -> port] poll-start  offset=null\n    [server recv] GET /bot000:fake-test-token/getUpdates  -> 503 non-JSON (HTML error page)\n    [worker -> port] poll-error  message=\"Telegram getUpdates failed with HTTP 503\"  errorCode=503\n    [worker -> port] poll-start  offset=null\n    [server recv] GET /bot000:fake-test-token/getUpdates  -> 503 non-JSON (HTML error page)\n    [worker -> port] poll-error  message=\"Telegram getUpdates failed with HTTP 503\"  errorCode=503\n    [worker -> port] poll-start  offset=null\n    [server recv] GET /bot000:fake-test-token/getUpdates  -> 503 non-JSON (HTML error page)\n    [worker -> port] poll-error  message=\"Telegram getUpdates failed with HTTP 503\"  errorCode=503\n\n  HTTP requests received by server : 3\n  poll-error events emitted        : 3\n  verdict: worker SURVIVES the malformed Bot API body -> backs off and retries (channel NOT dropped)\n  ```\n\n- **Observed result after fix:** Against real sockets (no mocked fetch), a non-JSON `503` Bot API body makes `fetchJson` throw `createTelegramGetUpdatesError({ errorCode: 503 })` (message `Telegram getUpdates failed with HTTP 503`), which `isTelegramServerError` recognizes as 5xx, so the long-poll loop backs off and retries instead of exiting. Three consecutive malformed responses produced three `poll-error` events and three real HTTP requests — the worker stayed alive and kept the channel connected. The `errorCode=503` carried on the emitted `poll-error` confirms Bot API HTTP status semantics are preserved across the worker boundary (409 would propagate, 401/404 stay fatal) — the 4xx-control behavior on the current head.\n- **What was not tested:** Live end-to-end against the real `api.telegram.org` edge returning HTML (the local HTTP server standing in for the Bot API is the closest non-mocked reproduction of the network path; the worker is the real production entry point with `globalThis.fetch` untouched).\n\n## Tests and validation\n\n```text\n$ pnpm test extensions/telegram/src/network-errors.test.ts\n Test Files  1 passed (1)\n      Tests  60 passed (60)\n\n$ pnpm tsgo:extensions:test\nEXIT=0 (type check passed)\n```\n\nAdded two regression cases to `network-errors.test.ts`: the malformed-JSON Error thrown by `fetchJson` for an HTTP 200 non-JSON body is recoverable for `polling`/`webhook` (backoff) and non-recoverable for `send` (conservative); and a 4xx malformed-body error stays non-recoverable (client error, no indefinite retry). `fetchJson` itself is a file-local worker entry, so its end-to-end guard behavior is covered by the non-mocked `runTelegramIngressWorkerRuntime` runtime proof above.\n\n## Risk checklist\n\n- User-visible behavior: Yes (intended) - a non-JSON Bot API body during polling now backs off and retries instead of killing the ingress worker; legitimate JSON and the send path are unchanged.\n- Config/env/migration behavior: No - no config or env surface touched.\n- Security/auth/secrets/network/tool execution: No - only error-handling around an existing JSON.parse; no new credential, network, or command-execution path.\n- Plugins/providers/channels/SDK: Yes (bounded) - touches the Telegram ingress worker (`extensions/telegram/`) and one snippet in the shared `network-errors.ts`; no public/plugin SDK API change. The `\"malformed json\"` snippet only matches the descriptive Error this same PR adds, and `send` context keeps `allowMessageMatch=false` so it cannot widen send-path retries.\n- Highest-risk area: the `\"malformed json\"` snippet lives in shared `network-errors.ts` - but it only matches a message string no existing caller produces today, and only takes effect when `allowMessageMatch` is true (polling/webhook/unknown), never in `send`.\n- Mitigation: 60 network-errors tests (incl. the malformed-JSON + 4xx regression cases asserting send stays false) + non-mocked `runTelegramIngressWorkerRuntime` runtime verification showing the worker survives repeated malformed Bot API bodies.\n\nCloses: N/A (no existing issue)\n",
+        "branch": "fix/telegram-ingress-malformed-json",
+        "head_sha": "b976ad491a2d553925701310fb67b777162dabee",
+        "author": "miorbnli",
+        "labels": [
+          "channel: telegram",
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/telegram/src/network-errors.test.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/network-errors.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/telegram-ingress-worker.runtime.ts",
+            "additions": 10,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 43,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98372",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98372.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "gatingTotal": 90,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 34,
+            "SUCCESS": 58,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:98372:4863044386:2026-07-02T07:01:36Z:re_review",
+      "comment_id": "4863044386",
+      "comment_version_key": "4863044386:2026-07-02T07:01:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98372#issuecomment-4863044386",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98372,
+      "author": "miorbnli",
+      "author_id": 35856959,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-02T07:01:36Z",
+      "comment_updated_at": "2026-07-02T07:01:36Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -71,23 +180,63 @@
       "status": "skipped",
       "actions": [],
       "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:98372:4861421555:2026-07-02T01:35:37Z:re_review",
+      "comment_id": "4861421555",
+      "comment_version_key": "4861421555:2026-07-02T01:35:37Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98372#issuecomment-4861421555",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98372,
+      "author": "miorbnli",
+      "author_id": 35856959,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-02T01:35:37Z",
+      "comment_updated_at": "2026-07-02T01:35:37Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 4477,
+    "total_ms": 3965,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2605
+        "ms": 256
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2516
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -99,7 +248,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1859
+        "ms": 1166
       },
       {
         "name": "append_ledger",
