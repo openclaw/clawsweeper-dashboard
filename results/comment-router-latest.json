@@ -1,23 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T16:05:13.514Z",
+  "generated_at": "2026-07-02T16:05:18.155Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T13:05:09.755Z",
+  "since": "2026-07-02T13:05:15.233Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    89965
+    99148
   ],
   "comment_ids": [
-    4867756460
+    4867745577
   ],
-  "status_comment_id": 4867757028,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 59,
-  "commands_seen": 27,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89965:4867756460:2026-07-02T16:03:56Z:re_review",
-      "comment_id": "4867756460",
-      "comment_version_key": "4867756460:2026-07-02T16:03:56Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89965#issuecomment-4867756460",
+      "idempotency_key": "comment-router:openclaw/openclaw:99148:4867745577:2026-07-02T16:02:39Z:re_review",
+      "comment_id": "4867745577",
+      "comment_version_key": "4867745577:2026-07-02T16:02:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99148#issuecomment-4867745577",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 89965,
-      "author": "spencer2211",
-      "author_id": 28957500,
+      "target_branch": null,
+      "issue_number": 99148,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T16:03:56Z",
-      "comment_updated_at": "2026-07-02T16:03:56Z",
-      "status_comment_id": 4867757028,
+      "comment_created_at": "2026-07-02T16:02:39Z",
+      "comment_updated_at": "2026-07-02T16:02:39Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -90,1254 +90,89 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): emit user-visible notice when a turn exhausts its time budget",
-        "body": "## Update — rebased onto current `main` (2026-06-25)\n\nThe branch had drifted ~5,800 commits behind `main` (ClawSweeper flagged it conflicting). It is now rebased; the 3-commit series applies on current `main`:\n\n- `run.ts` and `run/incomplete-turn.ts` resolved cleanly — the `resolveTurnBudgetTimeoutNotice` signature is reconciled to the current `allowSilentReply` form, and the integration tests were re-seated inside the runner describe block.\n- **Re-verified on current `main` (Node 22):** `run.incomplete-turn.test.ts` **244/244 passing** (the 3 turn-budget integration tests through the real `runEmbeddedAgent` terminal path + the 8-case `resolveTurnBudgetTimeoutNotice` decision matrix); **`tsgo:core` clean**; **`tsgo:test:src` clean**.\n\nThe committed fault-injection regression tests drive the **real** `runEmbeddedAgent` terminal path (not a mock of it). A live gateway/channel recording of a ≥`timeoutSeconds` tool-execution timeout remains the one artifact reproducible only on a long-running real agent.\n\n---\n\n## Problem\n\nWhen an agent turn exhausts its time budget (`agents.defaults.timeoutSeconds`) or a run-level deadline **while no assistant reply has been produced**, the gateway can go completely silent — no message reaches the channel, no indication a limit was hit. From a user's seat this is indistinguishable from a hung process.\n\nThis is not the prompt/provider timeout case, which already surfaces *\"Request timed out before a response was generated…\"*. It's the timeout that fires **outside a model prompt** — most commonly while a tool is executing on a complex turn:\n\n- `attempt.timedOut` is `true`, but because `countActiveToolExecutions(...) > 0` the runner also sets `timedOutDuringToolExecution = true`;\n- `timedOutDuringPrompt = timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution` is therefore `false`, so the existing prompt-timeout notice is skipped;\n- with no partial assistant text there's no `incompleteTurnText`, so the run falls through to the terminal \"embedded run done\" path, returns `payloads: undefined`, and the reply layer returns silently on the empty payload array.\n\n## Fix\n\nAdd one terminal branch in `runEmbeddedAgent` that surfaces a recoverable, user-visible notice when a turn timed out and is about to deliver nothing visible — mirroring the prompt-level timeout copy already emitted from the same function. Because the branch returns a non-empty payload, it flows through the normal gateway-agnostic reply path (Discord, Matrix, etc.) and never reaches the silent return.\n\nThe decision is a small pure helper, `resolveTurnBudgetTimeoutNotice(...)`, returning the notice only when correct and `null` otherwise. It keys on **`timedOut`** (distinct from a user cancel) and is suppressed for the turns that are silent/handled by design:\n\n- `timedOutDuringCompaction` — compaction timeouts are **paused/resumable**, not abandoned; emitting a notice (passed as `incompleteTurnText`) would also override the `paused` liveness state the terminal path preserves;\n- `allowEmptyAssistantReplyAsSilent` (the **raw** flag — note the derived `shouldTreatEmptyAssistantReplyAsSilent` is always `false` for timed-out attempts, so it cannot protect this case) — cron/heartbeat/autonomous contexts;\n- a messaging tool already delivered out-of-band (`hasMessagingToolDeliveryEvidence`);\n- a deterministic approval prompt was delivered out-of-band (`didSendDeterministicApprovalPrompt`; payload building intentionally suppresses assistant artifacts there).\n\nA separate copy variant covers an idle (no-output) model timeout. Net change is additive: it only produces output where there is currently none.\n\n## Proof\n\n**1. Committed real-`runEmbeddedAgent` regression tests** (`run.incomplete-turn.test.ts`) drive the real terminal path via the existing harness loader:\n\n- tool-execution timeout, empty reply → notice delivered, `livenessState: \"abandoned\"`;\n- same, in a silent-reply context (`allowEmptyAssistantReplyAsSilent: true`) → **no notice** (stays silent);\n- compaction timeout → **no notice**, `livenessState: \"paused\"` preserved.\n\nPlus full unit coverage of the helper's decision matrix. Suite: **123 passing**; `tsgo:core` and oxlint clean.\n\n**2. Before/after through the real terminal path** (fault-injected timed-out attempt, real `runEmbeddedAgent`):\n\n```\n# tool-execution timeout, empty reply\nBEFORE (origin/main):  result.payloads = undefined                 livenessState = blocked   → silent\nAFTER  (this PR):       result.payloads = [{ text: \"⚠️ I hit my time budget on this request and\n                        stopped before finishing. Ask me to continue, or simplify the request.\n                        If this happens often, raise `agents.defaults.timeoutSeconds` in your\n                        config.\", isError: true }]                  livenessState = abandoned → delivered\n\n# compaction timeout, empty reply  (regression guard)\nAFTER:                  result.payloads = undefined                 livenessState = paused    → correctly silent\n```\n\n**On a live gateway/channel capture:** the trigger is a ≥`agents.defaults.timeoutSeconds` (default 600s) budget exhausted *during tool execution* — not reproducible against a real channel in CI or by an external contributor without a long-running live agent. The fault-injection harness drives the **real** `runEmbeddedAgent` terminal path (`makeAttemptResult({ timedOut: true, timedOutDuringToolExecution: true, assistantTexts: [] })`) and the committed tests assert end-to-end behavior through the same function; the harness itself is kept out of the committed diff to keep the patch narrow.\n\n",
-        "branch": "fix/emit-user-message-on-turn-timeout",
-        "head_sha": "bc0a34ff93c9ee12e3103f37ae4f704fcebd08c0",
-        "author": "spencer2211",
+        "title": "fix(config): use Object.hasOwn instead of in operator in unsetConfigValueAtPath",
+        "body": "## Summary\nUse `Object.hasOwn()` instead of the `in` operator in `unsetConfigValueAtPath()` to prevent prototype chain pollution when checking whether a config key exists before deletion.\n\n## What Problem This Solves\nWhen calling `unsetConfigValueAtPath(root, [\"foo\", \"toString\"])` on a config object that does **not** have a `toString` key, the function returns `true` (claiming success) because `\"toString\" in cursor` matches `Object.prototype.toString`.\n\n**The function lies to its caller** — it reports \"key found and deleted\" when the key never existed. This can cause config management tools (CLI `config unset`, config merge logic) to silently skip error handling for non-existent keys.\n\n**Code evidence**: In `src/config/config-paths.ts:63`, `if (!(leafKey in cursor))` checks the prototype chain. `cursor` is a plain `PathNode` object (`Record<string, unknown>`), and `leafKey` comes from user-provided dot-notation paths like `foo.toString`.\n\n## Root Cause\n- The `in` operator checks the entire prototype chain, not just own properties\n- `Object.hasOwn()` (ES2022+) correctly checks only the object's own properties\n- `Object.hasOwn` is already used 15+ times across the codebase — this was a missed instance\n\n## Why This Fix\n- **Minimal**: 1-line change, same pattern as #99129\n- **Consistent**: matches existing `Object.hasOwn` usage in the codebase\n- **Regression-safe**: normal keys pass unchanged; only prototype keys are affected\n\n## Evidence\n- **Before**: `unsetConfigValueAtPath({foo:{bar:\"v\"}}, [\"foo\",\"toString\"])` returns `true` (wrong — key doesn't exist)\n- **After**: returns `false` (correct — key is not an own property)\n- All 3 prototype keys tested: toString, constructor, valueOf — all correctly return false\n- Existing non-prototype key deletion: unaffected\n- Parent pruning: unaffected\n\n## Real Behavior Proof\n\n### Before (on main)\n```bash\n$ node --import tsx proof.mjs\nFAIL: unsetConfigValueAtPath({bar:\"v\"}, [\"foo\",\"toString\"]) returned true\n  Object.hasOwn(foo, \"toString\") = false\n  Expected: false (key doesn't exist, should not report success)\nFAIL: unsetConfigValueAtPath({bar:\"v\"}, [\"foo\",\"constructor\"]) returned true\nFAIL: unsetConfigValueAtPath({bar:\"v\"}, [\"foo\",\"valueOf\"]) returned true\nPASS Test 4: existing toString correctly deleted\nFAIL: prototype pollution affected parent pruning\nSOME FAILED\n```\n\n### After (with fix)\n```bash\n$ node --import tsx proof.mjs\nPASS Test 1: non-existent toString correctly returns false\nPASS Test 2: non-existent constructor correctly returns false\nPASS Test 3: non-existent valueOf correctly returns false\nPASS Test 4: existing toString correctly deleted\nPASS Test 5: parent not incorrectly pruned\nALL PASS\n```\n\n## Tests and Validation\n- Regression test added: `src/config/config-paths.test.ts` covers 3 prototype keys + normal deletion + parent pruning\n- Fix verified with standalone `node --import tsx` proof script\n- Diff: 1 line changed, 1 file + 1 new test file\n",
+        "branch": "fix/prototype-pollution-config-paths",
+        "head_sha": "29260c971c6ddad6f1b8f1c9dc70cf5bf8f46c52",
+        "author": "zenglingbiao",
         "labels": [
-          "agents",
-          "size: M",
-          "triage: needs-real-behavior-proof",
+          "size: XS",
           "proof: sufficient",
-          "extensions: xai",
           "P2",
           "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author",
-          "triage: needs-pr-context"
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
-            "additions": 156,
+            "path": "src/config/config-paths.test.ts",
+            "additions": 33,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 76,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts",
-            "additions": 72,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.ts",
-            "additions": 182,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.generated.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.sql",
-            "additions": 27,
-            "deletions": 0,
+            "path": "src/config/config-paths.ts",
+            "additions": 2,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 304,
-        "deletions": 0,
+        "changedFiles": 2,
+        "additions": 35,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89965",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89965.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99148",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99148.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 93,
-          "gatingTotal": 88,
+          "total": 99,
+          "gatingTotal": 94,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 26,
-            "IN_PROGRESS": 30,
-            "SKIPPED": 25,
-            "QUEUED": 10,
+            "SUCCESS": 62,
+            "SKIPPED": 33,
+            "IN_PROGRESS": 3,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE",
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "pnpm-store-warmup:QUEUED",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:QUEUED",
-            "checks-fast-bun-launcher:QUEUED",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:QUEUED",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:QUEUED",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:QUEUED",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:QUEUED",
-            "check-additional-boundaries-a:QUEUED",
-            "check-session-transcript-reader-boundary:QUEUED",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:QUEUED"
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
           ],
           "pending": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "pnpm-store-warmup:QUEUED",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:QUEUED",
-            "checks-fast-bun-launcher:QUEUED",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:QUEUED",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:QUEUED",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:QUEUED",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:QUEUED",
-            "check-additional-boundaries-a:QUEUED",
-            "check-session-transcript-reader-boundary:QUEUED",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:QUEUED"
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
           ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:77158:4556797643:2026-05-27T17:07:58Z:freeform_assist",
-      "comment_id": "4556797643",
-      "comment_version_key": "4556797643:2026-05-27T17:07:58Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/77158#issuecomment-4556797643",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 77158,
-      "author": "zeroaltitude",
-      "author_id": 102749,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-27T17:07:58Z",
-      "comment_updated_at": "2026-05-27T17:07:58Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "please re-review.",
-      "intent": "freeform_assist",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "please re-review.",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(qmd): persistent export-state cache + stat fast path in exportSessions",
-        "body": "## Summary\n\n- **Problem:** For agents with thousands of session transcripts, `QmdMemoryManager.exportSessions()` was the dominant gateway CPU consumer. Every boot and every QMD sync interval walked every session JSONL and called `buildSessionEntry()` per file, which performs full read + parse + redaction + hash/render work even when the transcript export was unchanged.\n- **Why it matters:** The previous in-memory skip state only avoided some markdown rewrites after a manager instance had already rebuilt each entry. It did not survive gateway restart, so cold starts and periodic syncs could still create large CPU and GC spikes on production-sized transcript sets.\n- **What changed:**\n  1. Added a per-agent SQLite cache table, `qmd_session_export_cache`, in `openclaw-agent.sqlite`, keyed by `(session_file, export_dir, render_version)`.\n  2. Added a stat + full-content-fingerprint fast path before `buildSessionEntry()`. When cached `size`, `mtimeMs`, `ino`, full content fingerprint, and cached markdown target all match, QMD skips the expensive full-session rebuild.\n  3. Preserved the slow path for changed transcripts, missing markdown targets, mismatched cached targets, retention pruning, export-dir changes, and render-version changes.\n  4. Kept raw per-agent DB/Kysely access inside the core state owner and exposed only QMD-specific cache helpers through a private local-only SDK subpath, `openclaw/plugin-sdk/memory-core-qmd-export-cache-internal`, scoped to the bundled `memory-core` plugin.\n  5. Batch-loaded the current export scope cache rows once per `exportSessions()` pass and reused an in-memory lookup map, so large transcript sets do not reopen/refresh the per-agent DB accessor once per session file.\n  6. Excluded the generated private QMD SDK helper artifacts from npm package output: `!dist/plugin-sdk/memory-core-qmd-export-cache-internal.js` and `!dist/plugin-sdk/memory-core-qmd-export-cache-internal.d.ts`.\n\n**Scope boundary:** `renderSessionMarkdown()`, session redaction, line wrapping, and the markdown format QMD consumes are unchanged. `buildSessionEntry()` remains the authoritative slow path. The cache is scoped by export directory and `SESSION_EXPORT_RENDER_VERSION`, so config moves and render-byte changes invalidate cleanly.\n\n**Effect on Eddie's main agent (4,052 sessions / 158 MB) — prior-head context, not current-head proof:**\n- Boot QMD sync: **312s -> single-digit seconds**\n- Interval QMD sync: **38s -> ~50-500 ms**\n- The every-5-min CPU spike + GC tail collapses\n\n> ⚠️ **Benchmark provenance:** these numbers were measured on an early head of\n> this branch and were **not** re-run after the SQLite-backed cache rewrite,\n> the private-SDK boundary work, the full-content-hash fast path, the\n> target-byte fingerprint validation, or the latest `origin/main` merge. They\n> remain a faithful description of the *mechanism's* impact (eliminating the\n> per-file `buildSessionEntry()` rebuild on unchanged transcripts) but should\n> be treated as **observational context, not current-head benchmark proof**.\n> Re-running them requires Eddie's live 4,052-session production corpus on the\n> running gateway, which is not reproducible from an agent worktree. The\n> `## Real Behavior Proof` section below is the authoritative current-head\n> behavioral evidence.\n\n## Linked Issue\n\n- Closes openclaw-ys0 (Beads tracking issue)\n\n## Test Coverage\n\nNew and updated tests cover the cache contract:\n\n- `extensions/memory-core/src/memory/qmd-manager.test.ts`\n  - persists session-export state across manager restarts\n  - rebuilds after same-size transcript rewrites, proving content changes are not hidden by matching stat fields\n  - ignores cache rows scoped to a previous `exportDir`\n  - rebuilds markdown when the cached target has been deleted\n  - rebuilds the expected markdown when a current-scope cache row points at another target\n  - preserves existing session-export behavior for checkpoint/session filtering\n- `src/state/openclaw-agent-db.test.ts`\n  - schema shape includes the new derived-state cache table\n  - per-agent DB schema metadata and `user_version` remain at version 1\n  - newer-schema refusal still protects downgrade safety\n- `test/release-check.test.ts`\n  - package output rejects private local-only plugin SDK artifacts\n  - package `files` exclusions include every private local-only SDK artifact, including the new QMD cache helper\n\n## Tradeoffs / Known Caveats\n\n- The fast path still uses stat identity to avoid hashing obviously changed files, but it verifies a full SHA-1 content fingerprint before skipping the rebuild. Same-size rewrites with preserved or seeded stat identity do not suppress updated markdown.\n- `SESSION_EXPORT_RENDER_VERSION` must be bumped when changing `renderSessionMarkdown()`, redaction, line wrapping, or any other logic that changes the bytes written to `qmd/sessions/*.md`.\n- The cache table is derived state; the per-agent DB `user_version` remains at 1 for rollback safety.\n- No hand-written `CHANGELOG.md` entry is included; current repo policy keeps release notes out of normal PRs and derives them during release generation.\n\n## Real Behavior Proof\n\n- **Behavior addressed:** QMD session export persists its unchanged-transcript fast-path state in the per-agent SQLite DB without exposing raw per-agent DB/Kysely access through the public plugin SDK. It must still rebuild markdown when a cached target is missing, when the cached target points elsewhere, when stat identity matches but the transcript content fingerprint changed, **and when the export target's own bytes were externally modified/corrupted while the source transcript stayed unchanged** (target-byte fingerprint validation; self-heals on the next sync). The private QMD SDK artifact must also stay out of package output.\n\n- **Canonical current-head proof script:** `scripts/proof-77158-qmd-export-target-validation.ts` (run with `pnpm tsx scripts/proof-77158-qmd-export-target-validation.ts`). It drives the **real private `QmdMemoryManager.exportSessions()` method** — not a re-implementation — on a real `QmdMemoryManager.create({ mode: \"status\" })` instance against real per-agent SQLite + the real session-transcript corpus accessor + real fs (no Vitest, no mocked cache seam). `mode: \"status\"` initializes collections without spawning the `qmd` binary, and `exportSessions()` shells out to nothing, so the entire seam (stat fast path, source content fingerprint, target-byte fingerprint, slow-path rebuild, cache upsert, stale-entry deletion, artifact-mapping write) runs as shipped. Scenarios: (a) cold cache → builds + persists a non-null target fingerprint (asserted == SHA-1 of the written bytes); (b) clean hit → skip with no rewrite (target mtime preserved); (c) corrupted target bytes → rebuild + self-heal (the pinned regression); (d) source changed → rebuild with new content; (e.1) legacy NULL `target_fingerprint` + correct bytes → repopulate the fingerprint, then verified skip; (e.2) legacy NULL + corrupted target → rebuild. Output ends `All runtime assertions passed.` Focused vitest regressions in `qmd-manager.test.ts` pin the same paths in the unit suite.\n- **Real environment tested:** Current PR head `3c923479bc` in the `perf/qmd-export-stat-fast-path` worktree, using the real `QmdMemoryManager`, real `resolveMemoryBackendConfig`, the real `listSessionTranscriptCorpusEntriesForAgent` accessor (resolved through the real runtime-config snapshot), the private local-only QMD cache subpath, and real per-agent `openclaw-agent.sqlite` storage. The proof ran against an isolated `OPENCLAW_STATE_DIR` under `/tmp`; no Vitest harness or mocked QMD export cache was used, and the `qmd` binary was never invoked (it is not on the export path).\n- **Exact steps run:** `pnpm tsx scripts/proof-77158-qmd-export-target-validation.ts` from the topic worktree. The script seeds one session JSONL + a `sessions.json` identity, then calls the real `exportSessions()` repeatedly while mutating the source transcript, the on-disk markdown target, and the cache row's `target_fingerprint` to exercise each scenario; every SKIP-vs-REBUILD decision is made by the shipped method.\n- **Evidence after fix:** Captured terminal output from the live run (also saved under `~/reports/proof-77158/run-output.txt`):\n\n```text\n[a] cold export -> built target and persisted target fingerprint\n[b] clean cache hit -> skipped rebuild (target untouched)\n[c] corrupted target bytes -> rebuilt and self-healed (regression pinned)\n[d] source changed -> rebuilt with new content\n[e.1] legacy NULL fingerprint + correct bytes -> repopulated, then verified skip\n[e.2] legacy NULL fingerprint + corrupted target -> rebuilt (corruption healed)\nAll runtime assertions passed.\n```\n\n- **Observed result after fix:** (a) the cold export built the markdown and persisted a non-null target fingerprint equal to the SHA-1 of the written bytes; (b) the clean hit left the target's mtime and content untouched, proving the verified fast path; (c) a corrupted target was rebuilt and self-healed, with the next round skipping again; (d) a changed source rebuilt with the new content; (e.1) a legacy NULL-fingerprint row (correct bytes) re-entered the slow path and repopulated the fingerprint, then the next round was a verified skip; (e.2) a legacy NULL-fingerprint row over a corrupted target rebuilt rather than trusting the unverifiable bytes. Final cache state tracks exactly the one exported session.\n- **What was not tested:** I did not rerun a benchmark against Eddie's full 4,052-session production corpus after the SDK-boundary rewrite, base-branch merge, package exclusion fix, cached-target validation fix, target-byte fingerprint validation, and batch-read follow-up. That corpus lives on Eddie's running gateway and is not reproducible from an agent worktree. The proof above (and `scripts/proof-77158-qmd-export-target-validation.ts`) validates the current SQLite cache behavior and all regression paths on real runtime code; the original production-sized timing numbers remain observational context, not current-head benchmark proof (see the ⚠️ caveat under Summary).\n\n## Verification\n\nCurrent head `3c923479bc` includes:\n\n- `3c923479bc` (`perf(qmd): real exportSessions() integration proof; drop changelog edit (review feedback)`) — the latest review round: (1) the proof script now drives the **real private `exportSessions()`** method end to end (see `## Real Behavior Proof` above) instead of re-implementing the cache decision inline; (2) the release-owned `CHANGELOG.md` `## Unreleased` block is removed (restored byte-identical to `main`).\n- `2d3cc42a55` (`perf(qmd): validate cached export target bytes before skip (review feedback)`) — the [P2] target-byte fingerprint validation fix: the fast path now reads the export target and compares its SHA-1 against the cached rendered-markdown fingerprint before skipping; on drift (or a legacy NULL fingerprint) it falls through to the slow path, which self-heals the corrupted target. Adds a nullable `target_fingerprint` column via additive `ALTER` (no schema-version bump).\n- `33a9ac2566` (`chore(qmd): refresh plugin SDK API baseline after main merge (review feedback)`) — regenerated `docs/.generated/plugin-sdk-api-baseline.sha256` (tracked file only; `.json`/`.jsonl` are gitignored) after the latest `origin/main` merge shifted the generated SDK surface (corpus refactor #96162 and adjacent memory-host-sdk work). Deterministic across repeated `pnpm plugin-sdk:api:gen` runs.\n- `3468c322a6` (`fix(qmd): exclude private cache SDK artifact from package`)\n- signed base-refresh merges from current `openclaw/main` to clear the PR's dirty/conflicting merge state\n- cleanup restoring unrelated Slack/Telegram/installer/test formatter churn back to current `openclaw/main`, leaving exactly the QMD/cache/SDK/package diff\n\n**Corpus-entry preservation ([P2] #2 in the latest Codex review): verified, no change needed.** Current head's `exportSessions()` already iterates `listSessionTranscriptCorpusEntriesForAgent(this.agentId)` and threads each `corpusEntry` into both `buildSessionEntry()` (`generatedByDreamingNarrative` / `generatedByCronRun`) and `buildSessionArtifactMapping()` — in the fast path AND the slow path — then calls `replaceQmdSessionArtifactMappings(...)`. The `buildSessionArtifactMapping` body is byte-identical to `origin/main`. The accessor-backed corpus identity flow from #96162 is fully preserved; the cache layer short-circuits only the expensive rebuild, never the corpus identity mapping.\n\n**Schema-version-1 derived-cache table — maintainer acceptance item (not a code bug):** the new per-agent `qmd_session_export_cache` table (and its additive `target_fingerprint` column) intentionally keeps `OPENCLAW_AGENT_SCHEMA_VERSION = 1` because it is disposable derived state — a cold/older build simply rebuilds the cache; there is no migration to roll back. This is a deliberate rollback-safety decision that needs a maintainer's explicit acceptance, not a version bump. Flagged for maintainer judgment rather than changed unilaterally.\n\n**Prior art for the version-1 additive-table strategy:** every table ever added to `openclaw-agent.sqlite` has followed the same convention — `CREATE TABLE IF NOT EXISTS` at `user_version = 1`, no version bump, no migration required. The full history on `origin/main`:\n\n| PR / commit | Tables added | Schema version after |\n|---|---|---|\n| `#88349` (Add per-agent SQLite cache store) | `schema_meta`, `cache_entries` | 1 |\n| `#89102` (store auth profiles in sqlite) | `auth_profile_store`, `auth_profile_state` | 1 |\n| memory index PRs | `memory_index_meta`, `memory_index_sources`, `memory_index_chunks`, `memory_embedding_cache`, `memory_index_state` | 1 |\n| **this PR** | `qmd_session_export_cache` | **1** |\n\nThe only time a version bump was attempted (`fix/heartbeat-claude-auth-schema-v2`, a compat shim for v2-stamped agent DBs) it was reverted. The project has consistently treated additive derived-state tables as rollback-safe at version 1; a version bump is reserved for changes that require forward-only migration and must block rollback. `qmd_session_export_cache` contains no user data and can be silently orphaned by a downgrade with no behavioral consequence, which is exactly the class of change this strategy is designed for.\n\n**Base status (GitHub `mergeable: CONFLICTING`):** the branch already contains all of the fork's `main`; the conflict is pure base drift — upstream `main` is currently a few hours / ~31 commits ahead of the fork `main` this branch is built from. A trial merge of current upstream `main` produced exactly one auto-resolvable conflict (the generated `docs/.generated/plugin-sdk-api-baseline.sha256`), with `qmd-manager.ts`, its test, and `package.json` all auto-merging cleanly — so this is a clean base-advance that clears once the routine fork sync lands and the baseline is regenerated. No substantive code conflict exists.\n\nCommands run after the package exclusion fix and/or after the base merge:\n\n```text\nnode scripts/run-vitest.mjs test/release-check.test.ts\n# 56 passed\n\nnode scripts/check-plugin-sdk-subpath-exports.mjs\n# OK: all referenced openclaw/plugin-sdk/<subpath> imports are exported\n\nnode scripts/check-extension-plugin-sdk-boundary.mjs --mode=src-outside-plugin-sdk\n# no violations; baseline matches\n\nnode scripts/check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal\n# no violations; baseline matches\n\npnpm plugin-sdk:api:check\n# OK docs/.generated/plugin-sdk-api-baseline.sha256\n\npnpm plugin-sdk:surface:check\n# all SDK entrypoints: 339; public package SDK entrypoints: 321; local-only entrypoints: 18; package-exported forbidden subpaths: 0\n\npnpm exec oxfmt --check package.json docs/.generated/plugin-sdk-api-baseline.sha256 extensions/memory-core/src/memory/qmd-manager.ts extensions/memory-core/src/memory/qmd-manager.test.ts src/plugin-sdk/memory-core-qmd-export-cache-internal.ts src/plugins/sdk-alias.ts scripts/lib/plugin-sdk-private-local-only-subpaths.json\n# clean\n\npnpm tsgo:core\n# exited 0\n\npnpm tsgo:core:test\n# exited 0\n\ngit diff --check\n# clean\n\nnode --import tsx --input-type=module\n# real-runtime QMD/SQLite proof above; All runtime assertions passed.\n```",
-        "branch": "perf/qmd-export-stat-fast-path",
-        "head_sha": "8b12c343058fd8c5134a66e8790ea24d9afa2978",
-        "author": "zeroaltitude",
-        "labels": [
-          "docs",
-          "extensions: memory-core",
-          "scripts",
-          "size: XL",
-          "triage: refactor-only",
-          "triage: blank-template",
-          "triage: dirty-candidate",
-          "proof: supplied",
-          "proof: sufficient",
-          "extensions: xai",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/sdk-subpaths.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
-            "additions": 590,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
-            "additions": 194,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/tsconfig.package-boundary.paths.json",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/xai/tsconfig.json",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "package.json",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-entrypoints.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/prepare-extension-package-boundary-artifacts.mjs",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/proof-77158-qmd-export-target-validation.ts",
-            "additions": 493,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/memory-core-qmd-export-cache-internal.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugins/sdk-alias.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.generated.d.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.ts",
-            "additions": 182,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.generated.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.sql",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 18,
-        "additions": 1574,
-        "deletions": 28,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-77158",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77158.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 24,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-7:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-7:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:77158:4425625445:2026-05-11T22:19:11Z:freeform_assist",
-      "comment_id": "4425625445",
-      "comment_version_key": "4425625445:2026-05-11T22:19:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/77158#issuecomment-4425625445",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 77158,
-      "author": "zeroaltitude",
-      "author_id": 102749,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-11T22:19:11Z",
-      "comment_updated_at": "2026-05-11T22:19:11Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "please re-review.",
-      "intent": "freeform_assist",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "please re-review.",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(qmd): persistent export-state cache + stat fast path in exportSessions",
-        "body": "## Summary\n\n- **Problem:** For agents with thousands of session transcripts, `QmdMemoryManager.exportSessions()` was the dominant gateway CPU consumer. Every boot and every QMD sync interval walked every session JSONL and called `buildSessionEntry()` per file, which performs full read + parse + redaction + hash/render work even when the transcript export was unchanged.\n- **Why it matters:** The previous in-memory skip state only avoided some markdown rewrites after a manager instance had already rebuilt each entry. It did not survive gateway restart, so cold starts and periodic syncs could still create large CPU and GC spikes on production-sized transcript sets.\n- **What changed:**\n  1. Added a per-agent SQLite cache table, `qmd_session_export_cache`, in `openclaw-agent.sqlite`, keyed by `(session_file, export_dir, render_version)`.\n  2. Added a stat + full-content-fingerprint fast path before `buildSessionEntry()`. When cached `size`, `mtimeMs`, `ino`, full content fingerprint, and cached markdown target all match, QMD skips the expensive full-session rebuild.\n  3. Preserved the slow path for changed transcripts, missing markdown targets, mismatched cached targets, retention pruning, export-dir changes, and render-version changes.\n  4. Kept raw per-agent DB/Kysely access inside the core state owner and exposed only QMD-specific cache helpers through a private local-only SDK subpath, `openclaw/plugin-sdk/memory-core-qmd-export-cache-internal`, scoped to the bundled `memory-core` plugin.\n  5. Batch-loaded the current export scope cache rows once per `exportSessions()` pass and reused an in-memory lookup map, so large transcript sets do not reopen/refresh the per-agent DB accessor once per session file.\n  6. Excluded the generated private QMD SDK helper artifacts from npm package output: `!dist/plugin-sdk/memory-core-qmd-export-cache-internal.js` and `!dist/plugin-sdk/memory-core-qmd-export-cache-internal.d.ts`.\n\n**Scope boundary:** `renderSessionMarkdown()`, session redaction, line wrapping, and the markdown format QMD consumes are unchanged. `buildSessionEntry()` remains the authoritative slow path. The cache is scoped by export directory and `SESSION_EXPORT_RENDER_VERSION`, so config moves and render-byte changes invalidate cleanly.\n\n**Effect on Eddie's main agent (4,052 sessions / 158 MB) — prior-head context, not current-head proof:**\n- Boot QMD sync: **312s -> single-digit seconds**\n- Interval QMD sync: **38s -> ~50-500 ms**\n- The every-5-min CPU spike + GC tail collapses\n\n> ⚠️ **Benchmark provenance:** these numbers were measured on an early head of\n> this branch and were **not** re-run after the SQLite-backed cache rewrite,\n> the private-SDK boundary work, the full-content-hash fast path, the\n> target-byte fingerprint validation, or the latest `origin/main` merge. They\n> remain a faithful description of the *mechanism's* impact (eliminating the\n> per-file `buildSessionEntry()` rebuild on unchanged transcripts) but should\n> be treated as **observational context, not current-head benchmark proof**.\n> Re-running them requires Eddie's live 4,052-session production corpus on the\n> running gateway, which is not reproducible from an agent worktree. The\n> `## Real Behavior Proof` section below is the authoritative current-head\n> behavioral evidence.\n\n## Linked Issue\n\n- Closes openclaw-ys0 (Beads tracking issue)\n\n## Test Coverage\n\nNew and updated tests cover the cache contract:\n\n- `extensions/memory-core/src/memory/qmd-manager.test.ts`\n  - persists session-export state across manager restarts\n  - rebuilds after same-size transcript rewrites, proving content changes are not hidden by matching stat fields\n  - ignores cache rows scoped to a previous `exportDir`\n  - rebuilds markdown when the cached target has been deleted\n  - rebuilds the expected markdown when a current-scope cache row points at another target\n  - preserves existing session-export behavior for checkpoint/session filtering\n- `src/state/openclaw-agent-db.test.ts`\n  - schema shape includes the new derived-state cache table\n  - per-agent DB schema metadata and `user_version` remain at version 1\n  - newer-schema refusal still protects downgrade safety\n- `test/release-check.test.ts`\n  - package output rejects private local-only plugin SDK artifacts\n  - package `files` exclusions include every private local-only SDK artifact, including the new QMD cache helper\n\n## Tradeoffs / Known Caveats\n\n- The fast path still uses stat identity to avoid hashing obviously changed files, but it verifies a full SHA-1 content fingerprint before skipping the rebuild. Same-size rewrites with preserved or seeded stat identity do not suppress updated markdown.\n- `SESSION_EXPORT_RENDER_VERSION` must be bumped when changing `renderSessionMarkdown()`, redaction, line wrapping, or any other logic that changes the bytes written to `qmd/sessions/*.md`.\n- The cache table is derived state; the per-agent DB `user_version` remains at 1 for rollback safety.\n- No hand-written `CHANGELOG.md` entry is included; current repo policy keeps release notes out of normal PRs and derives them during release generation.\n\n## Real Behavior Proof\n\n- **Behavior addressed:** QMD session export persists its unchanged-transcript fast-path state in the per-agent SQLite DB without exposing raw per-agent DB/Kysely access through the public plugin SDK. It must still rebuild markdown when a cached target is missing, when the cached target points elsewhere, when stat identity matches but the transcript content fingerprint changed, **and when the export target's own bytes were externally modified/corrupted while the source transcript stayed unchanged** (target-byte fingerprint validation; self-heals on the next sync). The private QMD SDK artifact must also stay out of package output.\n\n- **Canonical current-head proof script:** `scripts/proof-77158-qmd-export-target-validation.ts` (run with `pnpm tsx scripts/proof-77158-qmd-export-target-validation.ts`). It drives the **real private `QmdMemoryManager.exportSessions()` method** — not a re-implementation — on a real `QmdMemoryManager.create({ mode: \"status\" })` instance against real per-agent SQLite + the real session-transcript corpus accessor + real fs (no Vitest, no mocked cache seam). `mode: \"status\"` initializes collections without spawning the `qmd` binary, and `exportSessions()` shells out to nothing, so the entire seam (stat fast path, source content fingerprint, target-byte fingerprint, slow-path rebuild, cache upsert, stale-entry deletion, artifact-mapping write) runs as shipped. Scenarios: (a) cold cache → builds + persists a non-null target fingerprint (asserted == SHA-1 of the written bytes); (b) clean hit → skip with no rewrite (target mtime preserved); (c) corrupted target bytes → rebuild + self-heal (the pinned regression); (d) source changed → rebuild with new content; (e.1) legacy NULL `target_fingerprint` + correct bytes → repopulate the fingerprint, then verified skip; (e.2) legacy NULL + corrupted target → rebuild. Output ends `All runtime assertions passed.` Focused vitest regressions in `qmd-manager.test.ts` pin the same paths in the unit suite.\n- **Real environment tested:** Current PR head `3c923479bc` in the `perf/qmd-export-stat-fast-path` worktree, using the real `QmdMemoryManager`, real `resolveMemoryBackendConfig`, the real `listSessionTranscriptCorpusEntriesForAgent` accessor (resolved through the real runtime-config snapshot), the private local-only QMD cache subpath, and real per-agent `openclaw-agent.sqlite` storage. The proof ran against an isolated `OPENCLAW_STATE_DIR` under `/tmp`; no Vitest harness or mocked QMD export cache was used, and the `qmd` binary was never invoked (it is not on the export path).\n- **Exact steps run:** `pnpm tsx scripts/proof-77158-qmd-export-target-validation.ts` from the topic worktree. The script seeds one session JSONL + a `sessions.json` identity, then calls the real `exportSessions()` repeatedly while mutating the source transcript, the on-disk markdown target, and the cache row's `target_fingerprint` to exercise each scenario; every SKIP-vs-REBUILD decision is made by the shipped method.\n- **Evidence after fix:** Captured terminal output from the live run (also saved under `~/reports/proof-77158/run-output.txt`):\n\n```text\n[a] cold export -> built target and persisted target fingerprint\n[b] clean cache hit -> skipped rebuild (target untouched)\n[c] corrupted target bytes -> rebuilt and self-healed (regression pinned)\n[d] source changed -> rebuilt with new content\n[e.1] legacy NULL fingerprint + correct bytes -> repopulated, then verified skip\n[e.2] legacy NULL fingerprint + corrupted target -> rebuilt (corruption healed)\nAll runtime assertions passed.\n```\n\n- **Observed result after fix:** (a) the cold export built the markdown and persisted a non-null target fingerprint equal to the SHA-1 of the written bytes; (b) the clean hit left the target's mtime and content untouched, proving the verified fast path; (c) a corrupted target was rebuilt and self-healed, with the next round skipping again; (d) a changed source rebuilt with the new content; (e.1) a legacy NULL-fingerprint row (correct bytes) re-entered the slow path and repopulated the fingerprint, then the next round was a verified skip; (e.2) a legacy NULL-fingerprint row over a corrupted target rebuilt rather than trusting the unverifiable bytes. Final cache state tracks exactly the one exported session.\n- **What was not tested:** I did not rerun a benchmark against Eddie's full 4,052-session production corpus after the SDK-boundary rewrite, base-branch merge, package exclusion fix, cached-target validation fix, target-byte fingerprint validation, and batch-read follow-up. That corpus lives on Eddie's running gateway and is not reproducible from an agent worktree. The proof above (and `scripts/proof-77158-qmd-export-target-validation.ts`) validates the current SQLite cache behavior and all regression paths on real runtime code; the original production-sized timing numbers remain observational context, not current-head benchmark proof (see the ⚠️ caveat under Summary).\n\n## Verification\n\nCurrent head `3c923479bc` includes:\n\n- `3c923479bc` (`perf(qmd): real exportSessions() integration proof; drop changelog edit (review feedback)`) — the latest review round: (1) the proof script now drives the **real private `exportSessions()`** method end to end (see `## Real Behavior Proof` above) instead of re-implementing the cache decision inline; (2) the release-owned `CHANGELOG.md` `## Unreleased` block is removed (restored byte-identical to `main`).\n- `2d3cc42a55` (`perf(qmd): validate cached export target bytes before skip (review feedback)`) — the [P2] target-byte fingerprint validation fix: the fast path now reads the export target and compares its SHA-1 against the cached rendered-markdown fingerprint before skipping; on drift (or a legacy NULL fingerprint) it falls through to the slow path, which self-heals the corrupted target. Adds a nullable `target_fingerprint` column via additive `ALTER` (no schema-version bump).\n- `33a9ac2566` (`chore(qmd): refresh plugin SDK API baseline after main merge (review feedback)`) — regenerated `docs/.generated/plugin-sdk-api-baseline.sha256` (tracked file only; `.json`/`.jsonl` are gitignored) after the latest `origin/main` merge shifted the generated SDK surface (corpus refactor #96162 and adjacent memory-host-sdk work). Deterministic across repeated `pnpm plugin-sdk:api:gen` runs.\n- `3468c322a6` (`fix(qmd): exclude private cache SDK artifact from package`)\n- signed base-refresh merges from current `openclaw/main` to clear the PR's dirty/conflicting merge state\n- cleanup restoring unrelated Slack/Telegram/installer/test formatter churn back to current `openclaw/main`, leaving exactly the QMD/cache/SDK/package diff\n\n**Corpus-entry preservation ([P2] #2 in the latest Codex review): verified, no change needed.** Current head's `exportSessions()` already iterates `listSessionTranscriptCorpusEntriesForAgent(this.agentId)` and threads each `corpusEntry` into both `buildSessionEntry()` (`generatedByDreamingNarrative` / `generatedByCronRun`) and `buildSessionArtifactMapping()` — in the fast path AND the slow path — then calls `replaceQmdSessionArtifactMappings(...)`. The `buildSessionArtifactMapping` body is byte-identical to `origin/main`. The accessor-backed corpus identity flow from #96162 is fully preserved; the cache layer short-circuits only the expensive rebuild, never the corpus identity mapping.\n\n**Schema-version-1 derived-cache table — maintainer acceptance item (not a code bug):** the new per-agent `qmd_session_export_cache` table (and its additive `target_fingerprint` column) intentionally keeps `OPENCLAW_AGENT_SCHEMA_VERSION = 1` because it is disposable derived state — a cold/older build simply rebuilds the cache; there is no migration to roll back. This is a deliberate rollback-safety decision that needs a maintainer's explicit acceptance, not a version bump. Flagged for maintainer judgment rather than changed unilaterally.\n\n**Prior art for the version-1 additive-table strategy:** every table ever added to `openclaw-agent.sqlite` has followed the same convention — `CREATE TABLE IF NOT EXISTS` at `user_version = 1`, no version bump, no migration required. The full history on `origin/main`:\n\n| PR / commit | Tables added | Schema version after |\n|---|---|---|\n| `#88349` (Add per-agent SQLite cache store) | `schema_meta`, `cache_entries` | 1 |\n| `#89102` (store auth profiles in sqlite) | `auth_profile_store`, `auth_profile_state` | 1 |\n| memory index PRs | `memory_index_meta`, `memory_index_sources`, `memory_index_chunks`, `memory_embedding_cache`, `memory_index_state` | 1 |\n| **this PR** | `qmd_session_export_cache` | **1** |\n\nThe only time a version bump was attempted (`fix/heartbeat-claude-auth-schema-v2`, a compat shim for v2-stamped agent DBs) it was reverted. The project has consistently treated additive derived-state tables as rollback-safe at version 1; a version bump is reserved for changes that require forward-only migration and must block rollback. `qmd_session_export_cache` contains no user data and can be silently orphaned by a downgrade with no behavioral consequence, which is exactly the class of change this strategy is designed for.\n\n**Base status (GitHub `mergeable: CONFLICTING`):** the branch already contains all of the fork's `main`; the conflict is pure base drift — upstream `main` is currently a few hours / ~31 commits ahead of the fork `main` this branch is built from. A trial merge of current upstream `main` produced exactly one auto-resolvable conflict (the generated `docs/.generated/plugin-sdk-api-baseline.sha256`), with `qmd-manager.ts`, its test, and `package.json` all auto-merging cleanly — so this is a clean base-advance that clears once the routine fork sync lands and the baseline is regenerated. No substantive code conflict exists.\n\nCommands run after the package exclusion fix and/or after the base merge:\n\n```text\nnode scripts/run-vitest.mjs test/release-check.test.ts\n# 56 passed\n\nnode scripts/check-plugin-sdk-subpath-exports.mjs\n# OK: all referenced openclaw/plugin-sdk/<subpath> imports are exported\n\nnode scripts/check-extension-plugin-sdk-boundary.mjs --mode=src-outside-plugin-sdk\n# no violations; baseline matches\n\nnode scripts/check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal\n# no violations; baseline matches\n\npnpm plugin-sdk:api:check\n# OK docs/.generated/plugin-sdk-api-baseline.sha256\n\npnpm plugin-sdk:surface:check\n# all SDK entrypoints: 339; public package SDK entrypoints: 321; local-only entrypoints: 18; package-exported forbidden subpaths: 0\n\npnpm exec oxfmt --check package.json docs/.generated/plugin-sdk-api-baseline.sha256 extensions/memory-core/src/memory/qmd-manager.ts extensions/memory-core/src/memory/qmd-manager.test.ts src/plugin-sdk/memory-core-qmd-export-cache-internal.ts src/plugins/sdk-alias.ts scripts/lib/plugin-sdk-private-local-only-subpaths.json\n# clean\n\npnpm tsgo:core\n# exited 0\n\npnpm tsgo:core:test\n# exited 0\n\ngit diff --check\n# clean\n\nnode --import tsx --input-type=module\n# real-runtime QMD/SQLite proof above; All runtime assertions passed.\n```",
-        "branch": "perf/qmd-export-stat-fast-path",
-        "head_sha": "8b12c343058fd8c5134a66e8790ea24d9afa2978",
-        "author": "zeroaltitude",
-        "labels": [
-          "docs",
-          "extensions: memory-core",
-          "scripts",
-          "size: XL",
-          "triage: refactor-only",
-          "triage: blank-template",
-          "triage: dirty-candidate",
-          "proof: supplied",
-          "proof: sufficient",
-          "extensions: xai",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/sdk-subpaths.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
-            "additions": 590,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
-            "additions": 194,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/tsconfig.package-boundary.paths.json",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/xai/tsconfig.json",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "package.json",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-entrypoints.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/prepare-extension-package-boundary-artifacts.mjs",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/proof-77158-qmd-export-target-validation.ts",
-            "additions": 493,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/memory-core-qmd-export-cache-internal.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugins/sdk-alias.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.generated.d.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.ts",
-            "additions": 182,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.generated.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.sql",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 18,
-        "additions": 1574,
-        "deletions": 28,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-77158",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77158.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 24,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-7:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-7:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:77158:4425574505:2026-05-11T22:10:10Z:freeform_assist",
-      "comment_id": "4425574505",
-      "comment_version_key": "4425574505:2026-05-11T22:10:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/77158#issuecomment-4425574505",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 77158,
-      "author": "zeroaltitude",
-      "author_id": 102749,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-11T22:10:10Z",
-      "comment_updated_at": "2026-05-11T22:10:10Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "please re-review current head `35f741f541a38ced5d788134bd6e1d8cf97f4735` after the branch refresh merged current `origin/main` and cleared the prior dirty merge-state blocker. the focused local qmd validation gate passed and the real-behavior proof comment was updated for the refreshed head.",
-      "intent": "freeform_assist",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "please re-review current head `35f741f541a38ced5d788134bd6e1d8cf97f4735` after the branch refresh merged current `origin/main` and cleared the prior DIRTY merge-state blocker. The focused local QMD validation gate passed and the real-behavior proof comment was updated for the refreshed head.",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(qmd): persistent export-state cache + stat fast path in exportSessions",
-        "body": "## Summary\n\n- **Problem:** For agents with thousands of session transcripts, `QmdMemoryManager.exportSessions()` was the dominant gateway CPU consumer. Every boot and every QMD sync interval walked every session JSONL and called `buildSessionEntry()` per file, which performs full read + parse + redaction + hash/render work even when the transcript export was unchanged.\n- **Why it matters:** The previous in-memory skip state only avoided some markdown rewrites after a manager instance had already rebuilt each entry. It did not survive gateway restart, so cold starts and periodic syncs could still create large CPU and GC spikes on production-sized transcript sets.\n- **What changed:**\n  1. Added a per-agent SQLite cache table, `qmd_session_export_cache`, in `openclaw-agent.sqlite`, keyed by `(session_file, export_dir, render_version)`.\n  2. Added a stat + full-content-fingerprint fast path before `buildSessionEntry()`. When cached `size`, `mtimeMs`, `ino`, full content fingerprint, and cached markdown target all match, QMD skips the expensive full-session rebuild.\n  3. Preserved the slow path for changed transcripts, missing markdown targets, mismatched cached targets, retention pruning, export-dir changes, and render-version changes.\n  4. Kept raw per-agent DB/Kysely access inside the core state owner and exposed only QMD-specific cache helpers through a private local-only SDK subpath, `openclaw/plugin-sdk/memory-core-qmd-export-cache-internal`, scoped to the bundled `memory-core` plugin.\n  5. Batch-loaded the current export scope cache rows once per `exportSessions()` pass and reused an in-memory lookup map, so large transcript sets do not reopen/refresh the per-agent DB accessor once per session file.\n  6. Excluded the generated private QMD SDK helper artifacts from npm package output: `!dist/plugin-sdk/memory-core-qmd-export-cache-internal.js` and `!dist/plugin-sdk/memory-core-qmd-export-cache-internal.d.ts`.\n\n**Scope boundary:** `renderSessionMarkdown()`, session redaction, line wrapping, and the markdown format QMD consumes are unchanged. `buildSessionEntry()` remains the authoritative slow path. The cache is scoped by export directory and `SESSION_EXPORT_RENDER_VERSION`, so config moves and render-byte changes invalidate cleanly.\n\n**Effect on Eddie's main agent (4,052 sessions / 158 MB) — prior-head context, not current-head proof:**\n- Boot QMD sync: **312s -> single-digit seconds**\n- Interval QMD sync: **38s -> ~50-500 ms**\n- The every-5-min CPU spike + GC tail collapses\n\n> ⚠️ **Benchmark provenance:** these numbers were measured on an early head of\n> this branch and were **not** re-run after the SQLite-backed cache rewrite,\n> the private-SDK boundary work, the full-content-hash fast path, the\n> target-byte fingerprint validation, or the latest `origin/main` merge. They\n> remain a faithful description of the *mechanism's* impact (eliminating the\n> per-file `buildSessionEntry()` rebuild on unchanged transcripts) but should\n> be treated as **observational context, not current-head benchmark proof**.\n> Re-running them requires Eddie's live 4,052-session production corpus on the\n> running gateway, which is not reproducible from an agent worktree. The\n> `## Real Behavior Proof` section below is the authoritative current-head\n> behavioral evidence.\n\n## Linked Issue\n\n- Closes openclaw-ys0 (Beads tracking issue)\n\n## Test Coverage\n\nNew and updated tests cover the cache contract:\n\n- `extensions/memory-core/src/memory/qmd-manager.test.ts`\n  - persists session-export state across manager restarts\n  - rebuilds after same-size transcript rewrites, proving content changes are not hidden by matching stat fields\n  - ignores cache rows scoped to a previous `exportDir`\n  - rebuilds markdown when the cached target has been deleted\n  - rebuilds the expected markdown when a current-scope cache row points at another target\n  - preserves existing session-export behavior for checkpoint/session filtering\n- `src/state/openclaw-agent-db.test.ts`\n  - schema shape includes the new derived-state cache table\n  - per-agent DB schema metadata and `user_version` remain at version 1\n  - newer-schema refusal still protects downgrade safety\n- `test/release-check.test.ts`\n  - package output rejects private local-only plugin SDK artifacts\n  - package `files` exclusions include every private local-only SDK artifact, including the new QMD cache helper\n\n## Tradeoffs / Known Caveats\n\n- The fast path still uses stat identity to avoid hashing obviously changed files, but it verifies a full SHA-1 content fingerprint before skipping the rebuild. Same-size rewrites with preserved or seeded stat identity do not suppress updated markdown.\n- `SESSION_EXPORT_RENDER_VERSION` must be bumped when changing `renderSessionMarkdown()`, redaction, line wrapping, or any other logic that changes the bytes written to `qmd/sessions/*.md`.\n- The cache table is derived state; the per-agent DB `user_version` remains at 1 for rollback safety.\n- No hand-written `CHANGELOG.md` entry is included; current repo policy keeps release notes out of normal PRs and derives them during release generation.\n\n## Real Behavior Proof\n\n- **Behavior addressed:** QMD session export persists its unchanged-transcript fast-path state in the per-agent SQLite DB without exposing raw per-agent DB/Kysely access through the public plugin SDK. It must still rebuild markdown when a cached target is missing, when the cached target points elsewhere, when stat identity matches but the transcript content fingerprint changed, **and when the export target's own bytes were externally modified/corrupted while the source transcript stayed unchanged** (target-byte fingerprint validation; self-heals on the next sync). The private QMD SDK artifact must also stay out of package output.\n\n- **Canonical current-head proof script:** `scripts/proof-77158-qmd-export-target-validation.ts` (run with `pnpm tsx scripts/proof-77158-qmd-export-target-validation.ts`). It drives the **real private `QmdMemoryManager.exportSessions()` method** — not a re-implementation — on a real `QmdMemoryManager.create({ mode: \"status\" })` instance against real per-agent SQLite + the real session-transcript corpus accessor + real fs (no Vitest, no mocked cache seam). `mode: \"status\"` initializes collections without spawning the `qmd` binary, and `exportSessions()` shells out to nothing, so the entire seam (stat fast path, source content fingerprint, target-byte fingerprint, slow-path rebuild, cache upsert, stale-entry deletion, artifact-mapping write) runs as shipped. Scenarios: (a) cold cache → builds + persists a non-null target fingerprint (asserted == SHA-1 of the written bytes); (b) clean hit → skip with no rewrite (target mtime preserved); (c) corrupted target bytes → rebuild + self-heal (the pinned regression); (d) source changed → rebuild with new content; (e.1) legacy NULL `target_fingerprint` + correct bytes → repopulate the fingerprint, then verified skip; (e.2) legacy NULL + corrupted target → rebuild. Output ends `All runtime assertions passed.` Focused vitest regressions in `qmd-manager.test.ts` pin the same paths in the unit suite.\n- **Real environment tested:** Current PR head `3c923479bc` in the `perf/qmd-export-stat-fast-path` worktree, using the real `QmdMemoryManager`, real `resolveMemoryBackendConfig`, the real `listSessionTranscriptCorpusEntriesForAgent` accessor (resolved through the real runtime-config snapshot), the private local-only QMD cache subpath, and real per-agent `openclaw-agent.sqlite` storage. The proof ran against an isolated `OPENCLAW_STATE_DIR` under `/tmp`; no Vitest harness or mocked QMD export cache was used, and the `qmd` binary was never invoked (it is not on the export path).\n- **Exact steps run:** `pnpm tsx scripts/proof-77158-qmd-export-target-validation.ts` from the topic worktree. The script seeds one session JSONL + a `sessions.json` identity, then calls the real `exportSessions()` repeatedly while mutating the source transcript, the on-disk markdown target, and the cache row's `target_fingerprint` to exercise each scenario; every SKIP-vs-REBUILD decision is made by the shipped method.\n- **Evidence after fix:** Captured terminal output from the live run (also saved under `~/reports/proof-77158/run-output.txt`):\n\n```text\n[a] cold export -> built target and persisted target fingerprint\n[b] clean cache hit -> skipped rebuild (target untouched)\n[c] corrupted target bytes -> rebuilt and self-healed (regression pinned)\n[d] source changed -> rebuilt with new content\n[e.1] legacy NULL fingerprint + correct bytes -> repopulated, then verified skip\n[e.2] legacy NULL fingerprint + corrupted target -> rebuilt (corruption healed)\nAll runtime assertions passed.\n```\n\n- **Observed result after fix:** (a) the cold export built the markdown and persisted a non-null target fingerprint equal to the SHA-1 of the written bytes; (b) the clean hit left the target's mtime and content untouched, proving the verified fast path; (c) a corrupted target was rebuilt and self-healed, with the next round skipping again; (d) a changed source rebuilt with the new content; (e.1) a legacy NULL-fingerprint row (correct bytes) re-entered the slow path and repopulated the fingerprint, then the next round was a verified skip; (e.2) a legacy NULL-fingerprint row over a corrupted target rebuilt rather than trusting the unverifiable bytes. Final cache state tracks exactly the one exported session.\n- **What was not tested:** I did not rerun a benchmark against Eddie's full 4,052-session production corpus after the SDK-boundary rewrite, base-branch merge, package exclusion fix, cached-target validation fix, target-byte fingerprint validation, and batch-read follow-up. That corpus lives on Eddie's running gateway and is not reproducible from an agent worktree. The proof above (and `scripts/proof-77158-qmd-export-target-validation.ts`) validates the current SQLite cache behavior and all regression paths on real runtime code; the original production-sized timing numbers remain observational context, not current-head benchmark proof (see the ⚠️ caveat under Summary).\n\n## Verification\n\nCurrent head `3c923479bc` includes:\n\n- `3c923479bc` (`perf(qmd): real exportSessions() integration proof; drop changelog edit (review feedback)`) — the latest review round: (1) the proof script now drives the **real private `exportSessions()`** method end to end (see `## Real Behavior Proof` above) instead of re-implementing the cache decision inline; (2) the release-owned `CHANGELOG.md` `## Unreleased` block is removed (restored byte-identical to `main`).\n- `2d3cc42a55` (`perf(qmd): validate cached export target bytes before skip (review feedback)`) — the [P2] target-byte fingerprint validation fix: the fast path now reads the export target and compares its SHA-1 against the cached rendered-markdown fingerprint before skipping; on drift (or a legacy NULL fingerprint) it falls through to the slow path, which self-heals the corrupted target. Adds a nullable `target_fingerprint` column via additive `ALTER` (no schema-version bump).\n- `33a9ac2566` (`chore(qmd): refresh plugin SDK API baseline after main merge (review feedback)`) — regenerated `docs/.generated/plugin-sdk-api-baseline.sha256` (tracked file only; `.json`/`.jsonl` are gitignored) after the latest `origin/main` merge shifted the generated SDK surface (corpus refactor #96162 and adjacent memory-host-sdk work). Deterministic across repeated `pnpm plugin-sdk:api:gen` runs.\n- `3468c322a6` (`fix(qmd): exclude private cache SDK artifact from package`)\n- signed base-refresh merges from current `openclaw/main` to clear the PR's dirty/conflicting merge state\n- cleanup restoring unrelated Slack/Telegram/installer/test formatter churn back to current `openclaw/main`, leaving exactly the QMD/cache/SDK/package diff\n\n**Corpus-entry preservation ([P2] #2 in the latest Codex review): verified, no change needed.** Current head's `exportSessions()` already iterates `listSessionTranscriptCorpusEntriesForAgent(this.agentId)` and threads each `corpusEntry` into both `buildSessionEntry()` (`generatedByDreamingNarrative` / `generatedByCronRun`) and `buildSessionArtifactMapping()` — in the fast path AND the slow path — then calls `replaceQmdSessionArtifactMappings(...)`. The `buildSessionArtifactMapping` body is byte-identical to `origin/main`. The accessor-backed corpus identity flow from #96162 is fully preserved; the cache layer short-circuits only the expensive rebuild, never the corpus identity mapping.\n\n**Schema-version-1 derived-cache table — maintainer acceptance item (not a code bug):** the new per-agent `qmd_session_export_cache` table (and its additive `target_fingerprint` column) intentionally keeps `OPENCLAW_AGENT_SCHEMA_VERSION = 1` because it is disposable derived state — a cold/older build simply rebuilds the cache; there is no migration to roll back. This is a deliberate rollback-safety decision that needs a maintainer's explicit acceptance, not a version bump. Flagged for maintainer judgment rather than changed unilaterally.\n\n**Prior art for the version-1 additive-table strategy:** every table ever added to `openclaw-agent.sqlite` has followed the same convention — `CREATE TABLE IF NOT EXISTS` at `user_version = 1`, no version bump, no migration required. The full history on `origin/main`:\n\n| PR / commit | Tables added | Schema version after |\n|---|---|---|\n| `#88349` (Add per-agent SQLite cache store) | `schema_meta`, `cache_entries` | 1 |\n| `#89102` (store auth profiles in sqlite) | `auth_profile_store`, `auth_profile_state` | 1 |\n| memory index PRs | `memory_index_meta`, `memory_index_sources`, `memory_index_chunks`, `memory_embedding_cache`, `memory_index_state` | 1 |\n| **this PR** | `qmd_session_export_cache` | **1** |\n\nThe only time a version bump was attempted (`fix/heartbeat-claude-auth-schema-v2`, a compat shim for v2-stamped agent DBs) it was reverted. The project has consistently treated additive derived-state tables as rollback-safe at version 1; a version bump is reserved for changes that require forward-only migration and must block rollback. `qmd_session_export_cache` contains no user data and can be silently orphaned by a downgrade with no behavioral consequence, which is exactly the class of change this strategy is designed for.\n\n**Base status (GitHub `mergeable: CONFLICTING`):** the branch already contains all of the fork's `main`; the conflict is pure base drift — upstream `main` is currently a few hours / ~31 commits ahead of the fork `main` this branch is built from. A trial merge of current upstream `main` produced exactly one auto-resolvable conflict (the generated `docs/.generated/plugin-sdk-api-baseline.sha256`), with `qmd-manager.ts`, its test, and `package.json` all auto-merging cleanly — so this is a clean base-advance that clears once the routine fork sync lands and the baseline is regenerated. No substantive code conflict exists.\n\nCommands run after the package exclusion fix and/or after the base merge:\n\n```text\nnode scripts/run-vitest.mjs test/release-check.test.ts\n# 56 passed\n\nnode scripts/check-plugin-sdk-subpath-exports.mjs\n# OK: all referenced openclaw/plugin-sdk/<subpath> imports are exported\n\nnode scripts/check-extension-plugin-sdk-boundary.mjs --mode=src-outside-plugin-sdk\n# no violations; baseline matches\n\nnode scripts/check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal\n# no violations; baseline matches\n\npnpm plugin-sdk:api:check\n# OK docs/.generated/plugin-sdk-api-baseline.sha256\n\npnpm plugin-sdk:surface:check\n# all SDK entrypoints: 339; public package SDK entrypoints: 321; local-only entrypoints: 18; package-exported forbidden subpaths: 0\n\npnpm exec oxfmt --check package.json docs/.generated/plugin-sdk-api-baseline.sha256 extensions/memory-core/src/memory/qmd-manager.ts extensions/memory-core/src/memory/qmd-manager.test.ts src/plugin-sdk/memory-core-qmd-export-cache-internal.ts src/plugins/sdk-alias.ts scripts/lib/plugin-sdk-private-local-only-subpaths.json\n# clean\n\npnpm tsgo:core\n# exited 0\n\npnpm tsgo:core:test\n# exited 0\n\ngit diff --check\n# clean\n\nnode --import tsx --input-type=module\n# real-runtime QMD/SQLite proof above; All runtime assertions passed.\n```",
-        "branch": "perf/qmd-export-stat-fast-path",
-        "head_sha": "8b12c343058fd8c5134a66e8790ea24d9afa2978",
-        "author": "zeroaltitude",
-        "labels": [
-          "docs",
-          "extensions: memory-core",
-          "scripts",
-          "size: XL",
-          "triage: refactor-only",
-          "triage: blank-template",
-          "triage: dirty-candidate",
-          "proof: supplied",
-          "proof: sufficient",
-          "extensions: xai",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/sdk-subpaths.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
-            "additions": 590,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
-            "additions": 194,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/tsconfig.package-boundary.paths.json",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/xai/tsconfig.json",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "package.json",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-entrypoints.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/prepare-extension-package-boundary-artifacts.mjs",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/proof-77158-qmd-export-target-validation.ts",
-            "additions": 493,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/memory-core-qmd-export-cache-internal.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugins/sdk-alias.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.generated.d.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.ts",
-            "additions": 182,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.generated.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.sql",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 18,
-        "additions": 1574,
-        "deletions": 28,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-77158",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77158.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 24,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-7:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-7:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:77158:4413950577:2026-05-09T23:31:07Z:freeform_assist",
-      "comment_id": "4413950577",
-      "comment_version_key": "4413950577:2026-05-09T23:31:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/77158#issuecomment-4413950577",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 77158,
-      "author": "zeroaltitude",
-      "author_id": 102749,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-09T23:31:07Z",
-      "comment_updated_at": "2026-05-09T23:31:07Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "please re-review.",
-      "intent": "freeform_assist",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "please re-review.",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(qmd): persistent export-state cache + stat fast path in exportSessions",
-        "body": "## Summary\n\n- **Problem:** For agents with thousands of session transcripts, `QmdMemoryManager.exportSessions()` was the dominant gateway CPU consumer. Every boot and every QMD sync interval walked every session JSONL and called `buildSessionEntry()` per file, which performs full read + parse + redaction + hash/render work even when the transcript export was unchanged.\n- **Why it matters:** The previous in-memory skip state only avoided some markdown rewrites after a manager instance had already rebuilt each entry. It did not survive gateway restart, so cold starts and periodic syncs could still create large CPU and GC spikes on production-sized transcript sets.\n- **What changed:**\n  1. Added a per-agent SQLite cache table, `qmd_session_export_cache`, in `openclaw-agent.sqlite`, keyed by `(session_file, export_dir, render_version)`.\n  2. Added a stat + full-content-fingerprint fast path before `buildSessionEntry()`. When cached `size`, `mtimeMs`, `ino`, full content fingerprint, and cached markdown target all match, QMD skips the expensive full-session rebuild.\n  3. Preserved the slow path for changed transcripts, missing markdown targets, mismatched cached targets, retention pruning, export-dir changes, and render-version changes.\n  4. Kept raw per-agent DB/Kysely access inside the core state owner and exposed only QMD-specific cache helpers through a private local-only SDK subpath, `openclaw/plugin-sdk/memory-core-qmd-export-cache-internal`, scoped to the bundled `memory-core` plugin.\n  5. Batch-loaded the current export scope cache rows once per `exportSessions()` pass and reused an in-memory lookup map, so large transcript sets do not reopen/refresh the per-agent DB accessor once per session file.\n  6. Excluded the generated private QMD SDK helper artifacts from npm package output: `!dist/plugin-sdk/memory-core-qmd-export-cache-internal.js` and `!dist/plugin-sdk/memory-core-qmd-export-cache-internal.d.ts`.\n\n**Scope boundary:** `renderSessionMarkdown()`, session redaction, line wrapping, and the markdown format QMD consumes are unchanged. `buildSessionEntry()` remains the authoritative slow path. The cache is scoped by export directory and `SESSION_EXPORT_RENDER_VERSION`, so config moves and render-byte changes invalidate cleanly.\n\n**Effect on Eddie's main agent (4,052 sessions / 158 MB) — prior-head context, not current-head proof:**\n- Boot QMD sync: **312s -> single-digit seconds**\n- Interval QMD sync: **38s -> ~50-500 ms**\n- The every-5-min CPU spike + GC tail collapses\n\n> ⚠️ **Benchmark provenance:** these numbers were measured on an early head of\n> this branch and were **not** re-run after the SQLite-backed cache rewrite,\n> the private-SDK boundary work, the full-content-hash fast path, the\n> target-byte fingerprint validation, or the latest `origin/main` merge. They\n> remain a faithful description of the *mechanism's* impact (eliminating the\n> per-file `buildSessionEntry()` rebuild on unchanged transcripts) but should\n> be treated as **observational context, not current-head benchmark proof**.\n> Re-running them requires Eddie's live 4,052-session production corpus on the\n> running gateway, which is not reproducible from an agent worktree. The\n> `## Real Behavior Proof` section below is the authoritative current-head\n> behavioral evidence.\n\n## Linked Issue\n\n- Closes openclaw-ys0 (Beads tracking issue)\n\n## Test Coverage\n\nNew and updated tests cover the cache contract:\n\n- `extensions/memory-core/src/memory/qmd-manager.test.ts`\n  - persists session-export state across manager restarts\n  - rebuilds after same-size transcript rewrites, proving content changes are not hidden by matching stat fields\n  - ignores cache rows scoped to a previous `exportDir`\n  - rebuilds markdown when the cached target has been deleted\n  - rebuilds the expected markdown when a current-scope cache row points at another target\n  - preserves existing session-export behavior for checkpoint/session filtering\n- `src/state/openclaw-agent-db.test.ts`\n  - schema shape includes the new derived-state cache table\n  - per-agent DB schema metadata and `user_version` remain at version 1\n  - newer-schema refusal still protects downgrade safety\n- `test/release-check.test.ts`\n  - package output rejects private local-only plugin SDK artifacts\n  - package `files` exclusions include every private local-only SDK artifact, including the new QMD cache helper\n\n## Tradeoffs / Known Caveats\n\n- The fast path still uses stat identity to avoid hashing obviously changed files, but it verifies a full SHA-1 content fingerprint before skipping the rebuild. Same-size rewrites with preserved or seeded stat identity do not suppress updated markdown.\n- `SESSION_EXPORT_RENDER_VERSION` must be bumped when changing `renderSessionMarkdown()`, redaction, line wrapping, or any other logic that changes the bytes written to `qmd/sessions/*.md`.\n- The cache table is derived state; the per-agent DB `user_version` remains at 1 for rollback safety.\n- No hand-written `CHANGELOG.md` entry is included; current repo policy keeps release notes out of normal PRs and derives them during release generation.\n\n## Real Behavior Proof\n\n- **Behavior addressed:** QMD session export persists its unchanged-transcript fast-path state in the per-agent SQLite DB without exposing raw per-agent DB/Kysely access through the public plugin SDK. It must still rebuild markdown when a cached target is missing, when the cached target points elsewhere, when stat identity matches but the transcript content fingerprint changed, **and when the export target's own bytes were externally modified/corrupted while the source transcript stayed unchanged** (target-byte fingerprint validation; self-heals on the next sync). The private QMD SDK artifact must also stay out of package output.\n\n- **Canonical current-head proof script:** `scripts/proof-77158-qmd-export-target-validation.ts` (run with `pnpm tsx scripts/proof-77158-qmd-export-target-validation.ts`). It drives the **real private `QmdMemoryManager.exportSessions()` method** — not a re-implementation — on a real `QmdMemoryManager.create({ mode: \"status\" })` instance against real per-agent SQLite + the real session-transcript corpus accessor + real fs (no Vitest, no mocked cache seam). `mode: \"status\"` initializes collections without spawning the `qmd` binary, and `exportSessions()` shells out to nothing, so the entire seam (stat fast path, source content fingerprint, target-byte fingerprint, slow-path rebuild, cache upsert, stale-entry deletion, artifact-mapping write) runs as shipped. Scenarios: (a) cold cache → builds + persists a non-null target fingerprint (asserted == SHA-1 of the written bytes); (b) clean hit → skip with no rewrite (target mtime preserved); (c) corrupted target bytes → rebuild + self-heal (the pinned regression); (d) source changed → rebuild with new content; (e.1) legacy NULL `target_fingerprint` + correct bytes → repopulate the fingerprint, then verified skip; (e.2) legacy NULL + corrupted target → rebuild. Output ends `All runtime assertions passed.` Focused vitest regressions in `qmd-manager.test.ts` pin the same paths in the unit suite.\n- **Real environment tested:** Current PR head `3c923479bc` in the `perf/qmd-export-stat-fast-path` worktree, using the real `QmdMemoryManager`, real `resolveMemoryBackendConfig`, the real `listSessionTranscriptCorpusEntriesForAgent` accessor (resolved through the real runtime-config snapshot), the private local-only QMD cache subpath, and real per-agent `openclaw-agent.sqlite` storage. The proof ran against an isolated `OPENCLAW_STATE_DIR` under `/tmp`; no Vitest harness or mocked QMD export cache was used, and the `qmd` binary was never invoked (it is not on the export path).\n- **Exact steps run:** `pnpm tsx scripts/proof-77158-qmd-export-target-validation.ts` from the topic worktree. The script seeds one session JSONL + a `sessions.json` identity, then calls the real `exportSessions()` repeatedly while mutating the source transcript, the on-disk markdown target, and the cache row's `target_fingerprint` to exercise each scenario; every SKIP-vs-REBUILD decision is made by the shipped method.\n- **Evidence after fix:** Captured terminal output from the live run (also saved under `~/reports/proof-77158/run-output.txt`):\n\n```text\n[a] cold export -> built target and persisted target fingerprint\n[b] clean cache hit -> skipped rebuild (target untouched)\n[c] corrupted target bytes -> rebuilt and self-healed (regression pinned)\n[d] source changed -> rebuilt with new content\n[e.1] legacy NULL fingerprint + correct bytes -> repopulated, then verified skip\n[e.2] legacy NULL fingerprint + corrupted target -> rebuilt (corruption healed)\nAll runtime assertions passed.\n```\n\n- **Observed result after fix:** (a) the cold export built the markdown and persisted a non-null target fingerprint equal to the SHA-1 of the written bytes; (b) the clean hit left the target's mtime and content untouched, proving the verified fast path; (c) a corrupted target was rebuilt and self-healed, with the next round skipping again; (d) a changed source rebuilt with the new content; (e.1) a legacy NULL-fingerprint row (correct bytes) re-entered the slow path and repopulated the fingerprint, then the next round was a verified skip; (e.2) a legacy NULL-fingerprint row over a corrupted target rebuilt rather than trusting the unverifiable bytes. Final cache state tracks exactly the one exported session.\n- **What was not tested:** I did not rerun a benchmark against Eddie's full 4,052-session production corpus after the SDK-boundary rewrite, base-branch merge, package exclusion fix, cached-target validation fix, target-byte fingerprint validation, and batch-read follow-up. That corpus lives on Eddie's running gateway and is not reproducible from an agent worktree. The proof above (and `scripts/proof-77158-qmd-export-target-validation.ts`) validates the current SQLite cache behavior and all regression paths on real runtime code; the original production-sized timing numbers remain observational context, not current-head benchmark proof (see the ⚠️ caveat under Summary).\n\n## Verification\n\nCurrent head `3c923479bc` includes:\n\n- `3c923479bc` (`perf(qmd): real exportSessions() integration proof; drop changelog edit (review feedback)`) — the latest review round: (1) the proof script now drives the **real private `exportSessions()`** method end to end (see `## Real Behavior Proof` above) instead of re-implementing the cache decision inline; (2) the release-owned `CHANGELOG.md` `## Unreleased` block is removed (restored byte-identical to `main`).\n- `2d3cc42a55` (`perf(qmd): validate cached export target bytes before skip (review feedback)`) — the [P2] target-byte fingerprint validation fix: the fast path now reads the export target and compares its SHA-1 against the cached rendered-markdown fingerprint before skipping; on drift (or a legacy NULL fingerprint) it falls through to the slow path, which self-heals the corrupted target. Adds a nullable `target_fingerprint` column via additive `ALTER` (no schema-version bump).\n- `33a9ac2566` (`chore(qmd): refresh plugin SDK API baseline after main merge (review feedback)`) — regenerated `docs/.generated/plugin-sdk-api-baseline.sha256` (tracked file only; `.json`/`.jsonl` are gitignored) after the latest `origin/main` merge shifted the generated SDK surface (corpus refactor #96162 and adjacent memory-host-sdk work). Deterministic across repeated `pnpm plugin-sdk:api:gen` runs.\n- `3468c322a6` (`fix(qmd): exclude private cache SDK artifact from package`)\n- signed base-refresh merges from current `openclaw/main` to clear the PR's dirty/conflicting merge state\n- cleanup restoring unrelated Slack/Telegram/installer/test formatter churn back to current `openclaw/main`, leaving exactly the QMD/cache/SDK/package diff\n\n**Corpus-entry preservation ([P2] #2 in the latest Codex review): verified, no change needed.** Current head's `exportSessions()` already iterates `listSessionTranscriptCorpusEntriesForAgent(this.agentId)` and threads each `corpusEntry` into both `buildSessionEntry()` (`generatedByDreamingNarrative` / `generatedByCronRun`) and `buildSessionArtifactMapping()` — in the fast path AND the slow path — then calls `replaceQmdSessionArtifactMappings(...)`. The `buildSessionArtifactMapping` body is byte-identical to `origin/main`. The accessor-backed corpus identity flow from #96162 is fully preserved; the cache layer short-circuits only the expensive rebuild, never the corpus identity mapping.\n\n**Schema-version-1 derived-cache table — maintainer acceptance item (not a code bug):** the new per-agent `qmd_session_export_cache` table (and its additive `target_fingerprint` column) intentionally keeps `OPENCLAW_AGENT_SCHEMA_VERSION = 1` because it is disposable derived state — a cold/older build simply rebuilds the cache; there is no migration to roll back. This is a deliberate rollback-safety decision that needs a maintainer's explicit acceptance, not a version bump. Flagged for maintainer judgment rather than changed unilaterally.\n\n**Prior art for the version-1 additive-table strategy:** every table ever added to `openclaw-agent.sqlite` has followed the same convention — `CREATE TABLE IF NOT EXISTS` at `user_version = 1`, no version bump, no migration required. The full history on `origin/main`:\n\n| PR / commit | Tables added | Schema version after |\n|---|---|---|\n| `#88349` (Add per-agent SQLite cache store) | `schema_meta`, `cache_entries` | 1 |\n| `#89102` (store auth profiles in sqlite) | `auth_profile_store`, `auth_profile_state` | 1 |\n| memory index PRs | `memory_index_meta`, `memory_index_sources`, `memory_index_chunks`, `memory_embedding_cache`, `memory_index_state` | 1 |\n| **this PR** | `qmd_session_export_cache` | **1** |\n\nThe only time a version bump was attempted (`fix/heartbeat-claude-auth-schema-v2`, a compat shim for v2-stamped agent DBs) it was reverted. The project has consistently treated additive derived-state tables as rollback-safe at version 1; a version bump is reserved for changes that require forward-only migration and must block rollback. `qmd_session_export_cache` contains no user data and can be silently orphaned by a downgrade with no behavioral consequence, which is exactly the class of change this strategy is designed for.\n\n**Base status (GitHub `mergeable: CONFLICTING`):** the branch already contains all of the fork's `main`; the conflict is pure base drift — upstream `main` is currently a few hours / ~31 commits ahead of the fork `main` this branch is built from. A trial merge of current upstream `main` produced exactly one auto-resolvable conflict (the generated `docs/.generated/plugin-sdk-api-baseline.sha256`), with `qmd-manager.ts`, its test, and `package.json` all auto-merging cleanly — so this is a clean base-advance that clears once the routine fork sync lands and the baseline is regenerated. No substantive code conflict exists.\n\nCommands run after the package exclusion fix and/or after the base merge:\n\n```text\nnode scripts/run-vitest.mjs test/release-check.test.ts\n# 56 passed\n\nnode scripts/check-plugin-sdk-subpath-exports.mjs\n# OK: all referenced openclaw/plugin-sdk/<subpath> imports are exported\n\nnode scripts/check-extension-plugin-sdk-boundary.mjs --mode=src-outside-plugin-sdk\n# no violations; baseline matches\n\nnode scripts/check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal\n# no violations; baseline matches\n\npnpm plugin-sdk:api:check\n# OK docs/.generated/plugin-sdk-api-baseline.sha256\n\npnpm plugin-sdk:surface:check\n# all SDK entrypoints: 339; public package SDK entrypoints: 321; local-only entrypoints: 18; package-exported forbidden subpaths: 0\n\npnpm exec oxfmt --check package.json docs/.generated/plugin-sdk-api-baseline.sha256 extensions/memory-core/src/memory/qmd-manager.ts extensions/memory-core/src/memory/qmd-manager.test.ts src/plugin-sdk/memory-core-qmd-export-cache-internal.ts src/plugins/sdk-alias.ts scripts/lib/plugin-sdk-private-local-only-subpaths.json\n# clean\n\npnpm tsgo:core\n# exited 0\n\npnpm tsgo:core:test\n# exited 0\n\ngit diff --check\n# clean\n\nnode --import tsx --input-type=module\n# real-runtime QMD/SQLite proof above; All runtime assertions passed.\n```",
-        "branch": "perf/qmd-export-stat-fast-path",
-        "head_sha": "8b12c343058fd8c5134a66e8790ea24d9afa2978",
-        "author": "zeroaltitude",
-        "labels": [
-          "docs",
-          "extensions: memory-core",
-          "scripts",
-          "size: XL",
-          "triage: refactor-only",
-          "triage: blank-template",
-          "triage: dirty-candidate",
-          "proof: supplied",
-          "proof: sufficient",
-          "extensions: xai",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/sdk-subpaths.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
-            "additions": 590,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
-            "additions": 194,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/tsconfig.package-boundary.paths.json",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/xai/tsconfig.json",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "package.json",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-entrypoints.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/prepare-extension-package-boundary-artifacts.mjs",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/proof-77158-qmd-export-target-validation.ts",
-            "additions": 493,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/memory-core-qmd-export-cache-internal.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugins/sdk-alias.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.generated.d.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.ts",
-            "additions": 182,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.generated.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.sql",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 18,
-        "additions": 1574,
-        "deletions": 28,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-77158",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77158.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 24,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-7:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-7:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:77158:4393299387:2026-05-07T00:58:49Z:freeform_assist",
-      "comment_id": "4393299387",
-      "comment_version_key": "4393299387:2026-05-07T00:58:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/77158#issuecomment-4393299387",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 77158,
-      "author": "zeroaltitude",
-      "author_id": 102749,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-07T00:58:49Z",
-      "comment_updated_at": "2026-05-07T00:58:49Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "please re-review. round 2 follow-up commits (2a92f914 + 6705d6ed) addressed all clawsweeper p2 findings: export-cache storage verification via cached path existance check, zero-value fast-path guard (null stats or size=0), and real-behavior proof via node driver using actual qmdmemorymanager instantiation. full validation gate clean.",
-      "intent": "freeform_assist",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "please re-review. Round 2 follow-up commits (2a92f914 + 6705d6ed) addressed all Clawsweeper P2 findings: export-cache storage verification via cached path existance check, zero-value fast-path guard (null stats or size=0), and real-behavior proof via Node driver using actual QmdMemoryManager instantiation. Full validation gate clean.",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(qmd): persistent export-state cache + stat fast path in exportSessions",
-        "body": "## Summary\n\n- **Problem:** For agents with thousands of session transcripts, `QmdMemoryManager.exportSessions()` was the dominant gateway CPU consumer. Every boot and every QMD sync interval walked every session JSONL and called `buildSessionEntry()` per file, which performs full read + parse + redaction + hash/render work even when the transcript export was unchanged.\n- **Why it matters:** The previous in-memory skip state only avoided some markdown rewrites after a manager instance had already rebuilt each entry. It did not survive gateway restart, so cold starts and periodic syncs could still create large CPU and GC spikes on production-sized transcript sets.\n- **What changed:**\n  1. Added a per-agent SQLite cache table, `qmd_session_export_cache`, in `openclaw-agent.sqlite`, keyed by `(session_file, export_dir, render_version)`.\n  2. Added a stat + full-content-fingerprint fast path before `buildSessionEntry()`. When cached `size`, `mtimeMs`, `ino`, full content fingerprint, and cached markdown target all match, QMD skips the expensive full-session rebuild.\n  3. Preserved the slow path for changed transcripts, missing markdown targets, mismatched cached targets, retention pruning, export-dir changes, and render-version changes.\n  4. Kept raw per-agent DB/Kysely access inside the core state owner and exposed only QMD-specific cache helpers through a private local-only SDK subpath, `openclaw/plugin-sdk/memory-core-qmd-export-cache-internal`, scoped to the bundled `memory-core` plugin.\n  5. Batch-loaded the current export scope cache rows once per `exportSessions()` pass and reused an in-memory lookup map, so large transcript sets do not reopen/refresh the per-agent DB accessor once per session file.\n  6. Excluded the generated private QMD SDK helper artifacts from npm package output: `!dist/plugin-sdk/memory-core-qmd-export-cache-internal.js` and `!dist/plugin-sdk/memory-core-qmd-export-cache-internal.d.ts`.\n\n**Scope boundary:** `renderSessionMarkdown()`, session redaction, line wrapping, and the markdown format QMD consumes are unchanged. `buildSessionEntry()` remains the authoritative slow path. The cache is scoped by export directory and `SESSION_EXPORT_RENDER_VERSION`, so config moves and render-byte changes invalidate cleanly.\n\n**Effect on Eddie's main agent (4,052 sessions / 158 MB) — prior-head context, not current-head proof:**\n- Boot QMD sync: **312s -> single-digit seconds**\n- Interval QMD sync: **38s -> ~50-500 ms**\n- The every-5-min CPU spike + GC tail collapses\n\n> ⚠️ **Benchmark provenance:** these numbers were measured on an early head of\n> this branch and were **not** re-run after the SQLite-backed cache rewrite,\n> the private-SDK boundary work, the full-content-hash fast path, the\n> target-byte fingerprint validation, or the latest `origin/main` merge. They\n> remain a faithful description of the *mechanism's* impact (eliminating the\n> per-file `buildSessionEntry()` rebuild on unchanged transcripts) but should\n> be treated as **observational context, not current-head benchmark proof**.\n> Re-running them requires Eddie's live 4,052-session production corpus on the\n> running gateway, which is not reproducible from an agent worktree. The\n> `## Real Behavior Proof` section below is the authoritative current-head\n> behavioral evidence.\n\n## Linked Issue\n\n- Closes openclaw-ys0 (Beads tracking issue)\n\n## Test Coverage\n\nNew and updated tests cover the cache contract:\n\n- `extensions/memory-core/src/memory/qmd-manager.test.ts`\n  - persists session-export state across manager restarts\n  - rebuilds after same-size transcript rewrites, proving content changes are not hidden by matching stat fields\n  - ignores cache rows scoped to a previous `exportDir`\n  - rebuilds markdown when the cached target has been deleted\n  - rebuilds the expected markdown when a current-scope cache row points at another target\n  - preserves existing session-export behavior for checkpoint/session filtering\n- `src/state/openclaw-agent-db.test.ts`\n  - schema shape includes the new derived-state cache table\n  - per-agent DB schema metadata and `user_version` remain at version 1\n  - newer-schema refusal still protects downgrade safety\n- `test/release-check.test.ts`\n  - package output rejects private local-only plugin SDK artifacts\n  - package `files` exclusions include every private local-only SDK artifact, including the new QMD cache helper\n\n## Tradeoffs / Known Caveats\n\n- The fast path still uses stat identity to avoid hashing obviously changed files, but it verifies a full SHA-1 content fingerprint before skipping the rebuild. Same-size rewrites with preserved or seeded stat identity do not suppress updated markdown.\n- `SESSION_EXPORT_RENDER_VERSION` must be bumped when changing `renderSessionMarkdown()`, redaction, line wrapping, or any other logic that changes the bytes written to `qmd/sessions/*.md`.\n- The cache table is derived state; the per-agent DB `user_version` remains at 1 for rollback safety.\n- No hand-written `CHANGELOG.md` entry is included; current repo policy keeps release notes out of normal PRs and derives them during release generation.\n\n## Real Behavior Proof\n\n- **Behavior addressed:** QMD session export persists its unchanged-transcript fast-path state in the per-agent SQLite DB without exposing raw per-agent DB/Kysely access through the public plugin SDK. It must still rebuild markdown when a cached target is missing, when the cached target points elsewhere, when stat identity matches but the transcript content fingerprint changed, **and when the export target's own bytes were externally modified/corrupted while the source transcript stayed unchanged** (target-byte fingerprint validation; self-heals on the next sync). The private QMD SDK artifact must also stay out of package output.\n\n- **Canonical current-head proof script:** `scripts/proof-77158-qmd-export-target-validation.ts` (run with `pnpm tsx scripts/proof-77158-qmd-export-target-validation.ts`). It drives the **real private `QmdMemoryManager.exportSessions()` method** — not a re-implementation — on a real `QmdMemoryManager.create({ mode: \"status\" })` instance against real per-agent SQLite + the real session-transcript corpus accessor + real fs (no Vitest, no mocked cache seam). `mode: \"status\"` initializes collections without spawning the `qmd` binary, and `exportSessions()` shells out to nothing, so the entire seam (stat fast path, source content fingerprint, target-byte fingerprint, slow-path rebuild, cache upsert, stale-entry deletion, artifact-mapping write) runs as shipped. Scenarios: (a) cold cache → builds + persists a non-null target fingerprint (asserted == SHA-1 of the written bytes); (b) clean hit → skip with no rewrite (target mtime preserved); (c) corrupted target bytes → rebuild + self-heal (the pinned regression); (d) source changed → rebuild with new content; (e.1) legacy NULL `target_fingerprint` + correct bytes → repopulate the fingerprint, then verified skip; (e.2) legacy NULL + corrupted target → rebuild. Output ends `All runtime assertions passed.` Focused vitest regressions in `qmd-manager.test.ts` pin the same paths in the unit suite.\n- **Real environment tested:** Current PR head `3c923479bc` in the `perf/qmd-export-stat-fast-path` worktree, using the real `QmdMemoryManager`, real `resolveMemoryBackendConfig`, the real `listSessionTranscriptCorpusEntriesForAgent` accessor (resolved through the real runtime-config snapshot), the private local-only QMD cache subpath, and real per-agent `openclaw-agent.sqlite` storage. The proof ran against an isolated `OPENCLAW_STATE_DIR` under `/tmp`; no Vitest harness or mocked QMD export cache was used, and the `qmd` binary was never invoked (it is not on the export path).\n- **Exact steps run:** `pnpm tsx scripts/proof-77158-qmd-export-target-validation.ts` from the topic worktree. The script seeds one session JSONL + a `sessions.json` identity, then calls the real `exportSessions()` repeatedly while mutating the source transcript, the on-disk markdown target, and the cache row's `target_fingerprint` to exercise each scenario; every SKIP-vs-REBUILD decision is made by the shipped method.\n- **Evidence after fix:** Captured terminal output from the live run (also saved under `~/reports/proof-77158/run-output.txt`):\n\n```text\n[a] cold export -> built target and persisted target fingerprint\n[b] clean cache hit -> skipped rebuild (target untouched)\n[c] corrupted target bytes -> rebuilt and self-healed (regression pinned)\n[d] source changed -> rebuilt with new content\n[e.1] legacy NULL fingerprint + correct bytes -> repopulated, then verified skip\n[e.2] legacy NULL fingerprint + corrupted target -> rebuilt (corruption healed)\nAll runtime assertions passed.\n```\n\n- **Observed result after fix:** (a) the cold export built the markdown and persisted a non-null target fingerprint equal to the SHA-1 of the written bytes; (b) the clean hit left the target's mtime and content untouched, proving the verified fast path; (c) a corrupted target was rebuilt and self-healed, with the next round skipping again; (d) a changed source rebuilt with the new content; (e.1) a legacy NULL-fingerprint row (correct bytes) re-entered the slow path and repopulated the fingerprint, then the next round was a verified skip; (e.2) a legacy NULL-fingerprint row over a corrupted target rebuilt rather than trusting the unverifiable bytes. Final cache state tracks exactly the one exported session.\n- **What was not tested:** I did not rerun a benchmark against Eddie's full 4,052-session production corpus after the SDK-boundary rewrite, base-branch merge, package exclusion fix, cached-target validation fix, target-byte fingerprint validation, and batch-read follow-up. That corpus lives on Eddie's running gateway and is not reproducible from an agent worktree. The proof above (and `scripts/proof-77158-qmd-export-target-validation.ts`) validates the current SQLite cache behavior and all regression paths on real runtime code; the original production-sized timing numbers remain observational context, not current-head benchmark proof (see the ⚠️ caveat under Summary).\n\n## Verification\n\nCurrent head `3c923479bc` includes:\n\n- `3c923479bc` (`perf(qmd): real exportSessions() integration proof; drop changelog edit (review feedback)`) — the latest review round: (1) the proof script now drives the **real private `exportSessions()`** method end to end (see `## Real Behavior Proof` above) instead of re-implementing the cache decision inline; (2) the release-owned `CHANGELOG.md` `## Unreleased` block is removed (restored byte-identical to `main`).\n- `2d3cc42a55` (`perf(qmd): validate cached export target bytes before skip (review feedback)`) — the [P2] target-byte fingerprint validation fix: the fast path now reads the export target and compares its SHA-1 against the cached rendered-markdown fingerprint before skipping; on drift (or a legacy NULL fingerprint) it falls through to the slow path, which self-heals the corrupted target. Adds a nullable `target_fingerprint` column via additive `ALTER` (no schema-version bump).\n- `33a9ac2566` (`chore(qmd): refresh plugin SDK API baseline after main merge (review feedback)`) — regenerated `docs/.generated/plugin-sdk-api-baseline.sha256` (tracked file only; `.json`/`.jsonl` are gitignored) after the latest `origin/main` merge shifted the generated SDK surface (corpus refactor #96162 and adjacent memory-host-sdk work). Deterministic across repeated `pnpm plugin-sdk:api:gen` runs.\n- `3468c322a6` (`fix(qmd): exclude private cache SDK artifact from package`)\n- signed base-refresh merges from current `openclaw/main` to clear the PR's dirty/conflicting merge state\n- cleanup restoring unrelated Slack/Telegram/installer/test formatter churn back to current `openclaw/main`, leaving exactly the QMD/cache/SDK/package diff\n\n**Corpus-entry preservation ([P2] #2 in the latest Codex review): verified, no change needed.** Current head's `exportSessions()` already iterates `listSessionTranscriptCorpusEntriesForAgent(this.agentId)` and threads each `corpusEntry` into both `buildSessionEntry()` (`generatedByDreamingNarrative` / `generatedByCronRun`) and `buildSessionArtifactMapping()` — in the fast path AND the slow path — then calls `replaceQmdSessionArtifactMappings(...)`. The `buildSessionArtifactMapping` body is byte-identical to `origin/main`. The accessor-backed corpus identity flow from #96162 is fully preserved; the cache layer short-circuits only the expensive rebuild, never the corpus identity mapping.\n\n**Schema-version-1 derived-cache table — maintainer acceptance item (not a code bug):** the new per-agent `qmd_session_export_cache` table (and its additive `target_fingerprint` column) intentionally keeps `OPENCLAW_AGENT_SCHEMA_VERSION = 1` because it is disposable derived state — a cold/older build simply rebuilds the cache; there is no migration to roll back. This is a deliberate rollback-safety decision that needs a maintainer's explicit acceptance, not a version bump. Flagged for maintainer judgment rather than changed unilaterally.\n\n**Prior art for the version-1 additive-table strategy:** every table ever added to `openclaw-agent.sqlite` has followed the same convention — `CREATE TABLE IF NOT EXISTS` at `user_version = 1`, no version bump, no migration required. The full history on `origin/main`:\n\n| PR / commit | Tables added | Schema version after |\n|---|---|---|\n| `#88349` (Add per-agent SQLite cache store) | `schema_meta`, `cache_entries` | 1 |\n| `#89102` (store auth profiles in sqlite) | `auth_profile_store`, `auth_profile_state` | 1 |\n| memory index PRs | `memory_index_meta`, `memory_index_sources`, `memory_index_chunks`, `memory_embedding_cache`, `memory_index_state` | 1 |\n| **this PR** | `qmd_session_export_cache` | **1** |\n\nThe only time a version bump was attempted (`fix/heartbeat-claude-auth-schema-v2`, a compat shim for v2-stamped agent DBs) it was reverted. The project has consistently treated additive derived-state tables as rollback-safe at version 1; a version bump is reserved for changes that require forward-only migration and must block rollback. `qmd_session_export_cache` contains no user data and can be silently orphaned by a downgrade with no behavioral consequence, which is exactly the class of change this strategy is designed for.\n\n**Base status (GitHub `mergeable: CONFLICTING`):** the branch already contains all of the fork's `main`; the conflict is pure base drift — upstream `main` is currently a few hours / ~31 commits ahead of the fork `main` this branch is built from. A trial merge of current upstream `main` produced exactly one auto-resolvable conflict (the generated `docs/.generated/plugin-sdk-api-baseline.sha256`), with `qmd-manager.ts`, its test, and `package.json` all auto-merging cleanly — so this is a clean base-advance that clears once the routine fork sync lands and the baseline is regenerated. No substantive code conflict exists.\n\nCommands run after the package exclusion fix and/or after the base merge:\n\n```text\nnode scripts/run-vitest.mjs test/release-check.test.ts\n# 56 passed\n\nnode scripts/check-plugin-sdk-subpath-exports.mjs\n# OK: all referenced openclaw/plugin-sdk/<subpath> imports are exported\n\nnode scripts/check-extension-plugin-sdk-boundary.mjs --mode=src-outside-plugin-sdk\n# no violations; baseline matches\n\nnode scripts/check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal\n# no violations; baseline matches\n\npnpm plugin-sdk:api:check\n# OK docs/.generated/plugin-sdk-api-baseline.sha256\n\npnpm plugin-sdk:surface:check\n# all SDK entrypoints: 339; public package SDK entrypoints: 321; local-only entrypoints: 18; package-exported forbidden subpaths: 0\n\npnpm exec oxfmt --check package.json docs/.generated/plugin-sdk-api-baseline.sha256 extensions/memory-core/src/memory/qmd-manager.ts extensions/memory-core/src/memory/qmd-manager.test.ts src/plugin-sdk/memory-core-qmd-export-cache-internal.ts src/plugins/sdk-alias.ts scripts/lib/plugin-sdk-private-local-only-subpaths.json\n# clean\n\npnpm tsgo:core\n# exited 0\n\npnpm tsgo:core:test\n# exited 0\n\ngit diff --check\n# clean\n\nnode --import tsx --input-type=module\n# real-runtime QMD/SQLite proof above; All runtime assertions passed.\n```",
-        "branch": "perf/qmd-export-stat-fast-path",
-        "head_sha": "8b12c343058fd8c5134a66e8790ea24d9afa2978",
-        "author": "zeroaltitude",
-        "labels": [
-          "docs",
-          "extensions: memory-core",
-          "scripts",
-          "size: XL",
-          "triage: refactor-only",
-          "triage: blank-template",
-          "triage: dirty-candidate",
-          "proof: supplied",
-          "proof: sufficient",
-          "extensions: xai",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/sdk-subpaths.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
-            "additions": 590,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
-            "additions": 194,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/tsconfig.package-boundary.paths.json",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/xai/tsconfig.json",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "package.json",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-entrypoints.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/prepare-extension-package-boundary-artifacts.mjs",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/proof-77158-qmd-export-target-validation.ts",
-            "additions": 493,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/memory-core-qmd-export-cache-internal.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugins/sdk-alias.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.generated.d.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-db.ts",
-            "additions": 182,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.generated.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-agent-schema.sql",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 18,
-        "additions": 1574,
-        "deletions": 28,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-77158",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77158.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 24,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-7:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-7:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6115,
+    "total_ms": 3294,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2503
+        "ms": 712
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1236
+        "ms": 2198
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -1349,11 +184,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2342
+        "ms": 372
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
