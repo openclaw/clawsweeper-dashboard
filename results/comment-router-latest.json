@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T18:46:36.100Z",
+  "generated_at": "2026-07-02T18:46:43.129Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T15:46:33.583Z",
+  "since": "2026-07-02T15:46:40.717Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     99194
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4869425723
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -37,16 +39,16 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/99194#issuecomment-4869281969",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99194,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T18:25:41Z",
-      "comment_updated_at": "2026-07-02T18:46:27Z",
+      "issue_number": 98791,
+      "author": "jesse-merhi",
+      "author_id": 79823012,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-07-02T18:44:11Z",
+      "comment_updated_at": "2026-07-02T18:44:11Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "slash",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -68,90 +70,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): stop a single reused-CLI-session death from cascading to \"All models failed\"",
-        "body": "## What Problem This Solves\n\nA single transient failure on a reused Claude CLI session can cascade into a full `All models failed (2)` dispatch failure, even though the underlying failure is transient and normally self-heals on the *next* dispatch (fresh session).\n\nTwo compounding defects:\n\n1. **`src/agents/agent-command.ts`** — the model-fallback `run` closure captures the session entry (`sessionEntryForAttempt`) once, before the fallback candidate loop starts, and reuses that same snapshot for every candidate. When candidate N's reused CLI session dies and gets cleared from the shared session store (`clearCliSessionInStore`), candidate N+1 never sees that clear — it's handed the same pre-loop snapshot, still carrying the dead session binding. It resumes the already-dead session and fails near-instantly (observed 127–450ms in production, vs. seconds-to-minutes for a real turn), exhausting all fallback candidates.\n\n2. **`src/agents/command/attempt-execution.ts`** — the outer catch around a CLI attempt already clears a poisoned reused session from the store on a qualifying failure (`shouldClearReusedCliSessionAfterError`), but never retries — it just rethrows. For single-candidate sessions (no fallback list configured) this means a purely transient failure has *no* recovery path at all.\n\n### Evidence\n\nProduction gateway journal (7 days): 4 concrete `All models failed` incidents matching this exact pattern — e.g. a `claude-sonnet-4-6` fallback candidate dispatched with `resumeSession=<id>` identical to the just-cleared primary candidate's session, dying in 127ms. The existing pattern of \"the *next* dispatch (fresh session) succeeds\" is what makes this diagnosable — a fresh store read/session always recovers, but nothing re-reads the store or retries fresh *within* the same dispatch.\n\n## Fix\n\n- **`agent-command.ts`**: on a fallback retry (`isFallbackRetry === true`), re-read the live `sessionStore` entry (already updated by a prior candidate's clear) instead of the stale pre-loop snapshot. The primary attempt is untouched — this only changes behavior when a fallback candidate is about to run.\n- **`attempt-execution.ts`**: after clearing a reused-and-dead CLI session, retry once in-process with a brand-new session (no `resumeSession` id) before rethrowing. Scoped via a new `shouldRetryFreshCliSessionAfterClear` predicate to failure reasons that indicate transient/reused-session poisoning (`timeout`, `unknown`, `session_expired`, `empty_response`, `AbortError`) — `auth`/`billing`/`rate_limit` failures are deliberately excluded since an instant retry would just fail identically and burn an extra attempt for nothing.\n\nBoth fixes are narrowly scoped (guarded by `isFallbackRetry` / the new reason allowlist) and additive — the happy path (primary attempt succeeds, or a genuinely non-recoverable failure) is unchanged.\n\n## Tests\n\n- Updated `attempt-execution.cli.test.ts`'s AbortError case: it previously asserted the failure propagated \"without retrying\" — that was the bug being fixed, so it now asserts the outer-catch retry recovers the turn with a fresh session.\n- Added a case for `FailoverError` with `reason: \"unknown\"`, which is explicitly *outside* `cli-runner.ts`'s existing internal `shouldRetryFreshCliSessionAfterFailover` allowlist (it only retries `unknown` when `error.code === \"cli_unknown_empty_failure\"`) — this was the most common real-world trigger in the production journal, and previously had zero recovery path.\n- The existing `auth`/`billing`/`rate_limit` \"without retrying\" parametrized tests are untouched and still pass — confirms the new retry gate correctly excludes those reasons.\n- `pnpm tsgo:core` and `pnpm tsgo:core:test` pass (typecheck).\n- `node scripts/run-oxlint.mjs` clean on all three changed files.\n- Full suite for the affected files: `attempt-execution.cli.test.ts` (50 tests), `attempt-execution.test.ts`, `attempt-execution.error-propagation.test.ts`, `attempt-execution.shared.test.ts`, `model-fallback.test.ts`, `model-fallback.probe.test.ts` — 178 tests total, all passing.\n\n## Context\n\nRoot-caused and tracked internally as SCRUM-3256. A cron-layer retry mitigation is already in place upstream of this and stays as defense-in-depth for the dispatch paths it covers (cron/sweep). This PR is the durable, in-process fix that covers *every* dispatch path (n8n webhook, manual `openclaw agent`, all crons) permanently, without needing any local runtime restart or config change.\n",
-        "branch": "fix/scrum-3256-fresh-session-fallback",
-        "head_sha": "13e8f3146ee44cfa0c3710e87cb2e734c58d9bdd",
-        "author": "hkhamis1975",
-        "labels": [
-          "agents",
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 17,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/attempt-execution.cli.test.ts",
-            "additions": 60,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/attempt-execution.ts",
-            "additions": 44,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 121,
-        "deletions": 17,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99194",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99194.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "gatingTotal": 97,
-          "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2862,
+    "total_ms": 4128,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 445
+        "ms": 2396
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2055
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -163,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 335
+        "ms": 1716
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
