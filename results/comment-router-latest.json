@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T20:40:47.178Z",
+  "generated_at": "2026-07-02T20:42:15.007Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T17:40:45.184Z",
+  "since": "2026-07-02T17:42:14.319Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4870278820
   ],
-  "status_comment_id": 4870279217,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4870278820:2026-07-02T20:39:36Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/98994#issuecomment-4870278820",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 98994,
       "author": "LEXES7",
       "author_id": 172931264,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-02T20:39:36Z",
       "comment_updated_at": "2026-07-02T20:39:36Z",
-      "status_comment_id": 4870279217,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,239 +68,30 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-07-02T20:40:47.858Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 98994
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-02T20:40:48.759Z",
-          "response_comment_id": "4870279217",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(line): truncate outbound altText, location, menu, and code fields on code point boundaries",
-        "body": "## What Problem This Solves\r\n\r\nFixes an issue where several LINE outbound fields can be sent to the LINE API with a **broken character (a lone UTF-16 surrogate)** when an emoji straddles the field's hard length cap. Sixteen call sites across six files still capped user-facing strings with a raw `.slice(0, N)`:\r\n\r\n- flex message `altText` (400-char cap) — `outbound.ts`, `send.ts`, `auto-reply-delivery.ts`, `card-command.ts` (×4)\r\n- location `title`/`address` (100) — `outbound.ts`, `send.ts`\r\n- rich-menu `name` (300) and `chatBarText` (14) — `rich-menu.ts`\r\n- code-block display text (2000) — `markdown-to-line.ts`\r\n\r\nA raw slice cuts an emoji's surrogate pair in half, leaving a dangling surrogate in the payload (rendered as a broken glyph; serializes as an invalid lone `\\uD83D`, which the LINE API can reject). The 14-char `chatBarText` cap is especially easy to hit with emoji menu labels.\r\n\r\n## Why This Change Was Made\r\n\r\nEach cap now goes through `truncateUtf16Safe` — the same helper this plugin's own merged fixes already use for the sibling fields: action `label`/`data` (`actions.ts`, \"fix(line): truncate action fields on code-point boundaries\") and template `title`/`text`/`altText` (#97428). This PR brings the remaining outbound fields in line with those precedents; it is a mechanical 1:1 replacement of `.slice(0, N)` with `truncateUtf16Safe(x, N)` using the same limits — no behavior change for any string that fits or ends on a complete character.\r\n\r\n## User Impact\r\n\r\nLINE users whose flex alt text, location titles/addresses, rich-menu labels, or shared code blocks contain an emoji near a field's length cap get clean, valid messages instead of a broken glyph or a rejected API call. No configuration changes.\r\n\r\n## Evidence\r\n\r\n### Real terminal proof (standalone, non-test)\r\n\r\nDrove the real caps (and the real `convertCodeBlockToFlexBubble`) from a standalone script, inspecting trailing UTF-16 code units:\r\n\r\n```\r\n[1] flex altText @ LINE's 400-char cap (emoji straddles index 400)\r\n  BEFORE raw slice : len=400 tail=0x0061 0xd83d loneSurrogate=true\r\n  AFTER  this PR   : len=399 tail=0x0061 0x0061 loneSurrogate=false\r\n[2] rich-menu chatBarText @ 14-char cap (emoji straddles index 14)\r\n  BEFORE raw slice : \"Menu options \\ud83d\" tail=0x0020 0xd83d loneSurrogate=true\r\n  AFTER  this PR   : \"Menu options \" tail=0x0073 0x0020 loneSurrogate=false\r\n[3] real convertCodeBlockToFlexBubble @ 2000-char code cap\r\n  flex code text: len=2003 endsWith \"\\n...\": true loneSurrogate=false\r\n\r\nRESULT: PASS — raw caps were broken; fixed fields are valid within LINE limits\r\n```\r\n\r\n`0xd83d` is the high-surrogate half of `😀` (`U+1F600`); on `main` it is left dangling at the end of the field.\r\n\r\n### Regression tests (fail on unpatched code, pass here)\r\n\r\nAdded two focused tests driving the real production paths:\r\n\r\n- `markdown-to-line.test.ts` — `does not split a surrogate pair at the truncation boundary`: code whose emoji straddles index 2000 through the real `convertCodeBlockToFlexBubble`.\r\n- `auto-reply-delivery.test.ts` — `truncates flex altText on a surrogate boundary`: altText whose emoji straddles index 400 through the real `deliverLineAutoReply`, asserting the altText handed to the LINE message builder is ≤400 with no lone surrogate.\r\n\r\nOn unpatched `main` both fail (`expected true to be false` — a lone surrogate is present); with this PR both pass.\r\n\r\nTouched-module suites all green: `markdown-to-line` (25), `auto-reply-delivery` (6), `rich-menu` + `channel.sendPayload` + `reply-payload-transform` (43), `message-cards` + `outbound-media` (51). oxlint and `oxfmt --check` clean on all eight files.\r\n\r\nAI-assisted (Claude Code); change reviewed and understood by the author.",
-        "branch": "fix/line-field-surrogate-truncation",
-        "head_sha": "8fd9e7d7f90bf9ae9f47317649b90161a5c97834",
-        "author": "lexes7",
-        "labels": [
-          "channel: line",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "extensions/line/src/auto-reply-delivery.test.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/auto-reply-delivery.ts",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/card-command.ts",
-            "additions": 10,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/markdown-to-line.test.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/client.go",
-            "additions": 661,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/client_test.go",
-            "additions": 313,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/core.go",
-            "additions": 59,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/flags.go",
-            "additions": 104,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/labels.go",
-            "additions": 60,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/labels_test.go",
-            "additions": 52,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/provider.go",
-            "additions": 132,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/vast/provider_test.go",
-            "additions": 230,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scripts/live-vast-smoke.sh",
-            "additions": 361,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scripts/live-vast-smoke.test.js",
-            "additions": 525,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "worker/vitest.config.ts",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/markdown-to-line.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/message-cards.test.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/outbound.ts",
-            "additions": 5,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/rich-menu.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/send.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 9,
-        "additions": 91,
-        "deletions": 18,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98994",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98994.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 88,
-          "gatingTotal": 83,
-          "counts": {
-            "SUCCESS": 51,
-            "SKIPPED": 25,
-            "IN_PROGRESS": 11,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS"
-          ],
-          "pending": [
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4057,
+    "total_ms": 2736,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 552
+        "ms": 675
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1424
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -308,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2052
+        "ms": 2048
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
