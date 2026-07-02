@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T17:57:29.726Z",
+  "generated_at": "2026-07-02T17:57:48.223Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T14:57:27.509Z",
+  "since": "2026-07-02T14:57:47.609Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4868962313
   ],
-  "status_comment_id": 4868997669,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4868962313:2026-07-02T17:56:12Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/99180#issuecomment-4868962313",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 99180,
-      "author": "VectorPeak",
-      "author_id": 73048950,
+      "target_branch": null,
+      "issue_number": 99107,
+      "author": "steipete",
+      "author_id": 58493,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T17:52:59Z",
-      "comment_updated_at": "2026-07-02T17:56:12Z",
-      "status_comment_id": 4868997669,
+      "comment_created_at": "2026-07-02T17:55:12Z",
+      "comment_updated_at": "2026-07-02T17:55:12Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,102 +68,26 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-07-02T17:57:30.601Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 99180
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-02T17:57:31.661Z",
-          "response_comment_id": "4868997669",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(mcp): reject tools/call requests with non-object arguments",
-        "body": "## What Problem This Solves\n\nFixes an issue where malformed MCP `tools/call` requests could pass a non-object `arguments` value into Gateway tool handling.\n\nThe MCP loopback handler previously read `params.arguments` with a type assertion:\n\n```ts\nconst toolArgs = (methodParams?.arguments ?? {}) as Record<string, unknown>;\n```\n\nThat meant a client request such as:\n\n```json\n{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"message\",\n    \"arguments\": \"bad\"\n  }\n}\n```\n\ncould continue into `runBeforeToolCallHook()` and the tool executor even though the gateway code around this path expects an object-shaped argument record.\n\n## Why This Change Was Made\n\nThis change makes the MCP loopback request boundary explicit: omitted `arguments` still behaves as `{}`, but present non-object values are rejected before tool hooks or tool execution run.\n\nThe fix is intentionally narrow. It does not add full JSON Schema validation for every tool input, and it does not change valid `tools/call` requests whose `arguments` value is already an object.\n\n## User Impact\n\nMCP clients now get a clear invalid-parameter response for malformed tool-call payloads instead of allowing arrays, strings, numbers, or other non-object values to reach gateway hooks and tool implementations.\n\nThis keeps audit/capture data and tool execution inputs aligned with the advertised object argument contract.\n\nCompatibility note: malformed clients that intentionally send primitive, `null`, or array `arguments` now need to omit `arguments` or send an object. Valid object-shaped tool calls are unchanged.\n\n## Evidence\n\n### Raw loopback HTTP behavior proof\n\nI exercised the Gateway MCP loopback HTTP path with a raw `POST /mcp` request carrying `params.arguments: \"bad\"`. The request goes through the real loopback HTTP handler and is rejected before `runBeforeToolCallHook()` or the tool executor can run.\n\nObserved payload from the focused loopback run:\n\n```json\n{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"error\": {\n    \"code\": -32602,\n    \"message\": \"Invalid params: tools/call arguments must be an object\"\n  }\n}\n```\n\nThe same focused proof asserts the two side-effect guards requested by review:\n\n```text\nrunBeforeToolCallHook calls: 0\nmessage tool execute calls: 0\n```\n\nThe raw request shape used for the proof was:\n\n```json\n{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"message\",\n    \"arguments\": \"bad\"\n  }\n}\n```\n\n### Regression coverage\n\nAdded a focused regression test in `src/gateway/mcp-http.test.ts` that posts the raw malformed `tools/call` request and verifies that:\n\n- the HTTP response is `200` with a JSON-RPC `-32602` invalid params error\n- `runBeforeToolCallHook` is not called\n- the target tool executor is not called\n\nValidation run:\n\n```powershell\n$env:CI='true'\npnpm exec vitest run --config test/vitest/vitest.gateway.config.ts src/gateway/mcp-http.test.ts\n```\n\nResult:\n\n```text\nTest Files  3 passed (3)\nTests       168 passed (168)\n```\n\nRelevant call chain:\n\n```text\nHTTP /mcp\n  -> parse MCP JSON-RPC body\n  -> handleMcpJsonRpc(...)\n  -> tools/call\n  -> params.arguments validation\n  -> runBeforeToolCallHook(...)\n  -> tool.execute(...)\n```\n\nAI-assisted: Yes, prepared with Codex GPT-5.5 xhigh review assistance.",
-        "branch": "fix/mcp-tools-call-arguments",
-        "head_sha": "42ee56e7dfff91f3305c9b95f7041c9667288650",
-        "author": "vectorpeak",
-        "labels": [
-          "gateway",
-          "size: XS",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/mcp-http.handlers.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/mcp-http.test.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 38,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99180",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99180.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 100,
-          "gatingTotal": 95,
-          "counts": {
-            "SUCCESS": 64,
-            "SKIPPED": 35,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4784,
+    "total_ms": 1937,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 560
+        "ms": 602
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1644
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -175,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2556
+        "ms": 1323
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
