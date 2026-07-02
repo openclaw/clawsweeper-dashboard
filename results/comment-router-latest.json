@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T07:42:31.054Z",
+  "generated_at": "2026-07-02T07:43:49.176Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T04:42:28.889Z",
+  "since": "2026-07-02T04:43:46.561Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    98977
+    98679
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 5,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,18 +31,127 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98977:4863330279:2026-07-02T07:42:22Z:clawsweeper_needs_human",
-      "comment_id": "4863330279",
-      "comment_version_key": "4863330279:2026-07-02T07:42:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98977#issuecomment-4863330279",
+      "idempotency_key": "comment-router:openclaw/openclaw:98679:4863224935:2026-07-02T07:23:33Z:re_review",
+      "comment_id": "4863224935",
+      "comment_version_key": "4863224935:2026-07-02T07:23:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98679#issuecomment-4863224935",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 98977,
+      "issue_number": 98679,
+      "author": "cxbAsDev",
+      "author_id": 294098203,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-02T07:23:33Z",
+      "comment_updated_at": "2026-07-02T07:23:33Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(minimax-vlm): bound VLM API response reads",
+        "body": "## What Problem This Solves\n\n`minimaxUnderstandImage` calls `await res.json()` on the MiniMax VLM API response without a read limit. An oversized response could buffer arbitrarily large payloads before parsing, risking OOM.\n\n## Why This Change Was Made\n\nAll provider response reads should use `readProviderJsonResponse` (16 MiB cap). Trace-Id diagnostics are preserved through the error chain.\n\n## User Impact\n\nMiniMax VLM image understanding is now protected against oversized JSON responses. Normal responses work identically. Oversized responses fail with a clear error including the Trace-Id.\n\n## Evidence\n\n### Real HTTP server loopback proof (committed test)\n\nThe test creates a real `http.createServer` that writes an oversized JSON stream. The bounded reader cancels the socket mid-flight — proves the 16 MiB cap is enforced against a real TCP connection, not just a mock:\n\n```ts\nit(\"rejects oversized VLM responses from a real HTTP server (behavior proof)\", async () => {\n  let socketDestroyed = false;\n  const server = http.createServer((_req, res) => {\n    res.writeHead(200, { \"Content-Type\": \"application/json\" });\n    const chunk = Buffer.alloc(1024 * 1024, 0x41);\n    const writeMore = () => {\n      if (socketDestroyed) return;\n      for (let i = 0; i < 4 && !socketDestroyed; i++) {\n        if (!res.write(chunk)) { res.once(\"drain\", writeMore); return; }\n      }\n      if (!socketDestroyed) setImmediate(writeMore);\n    };\n    writeMore();\n  });\n  server.on(\"connection\", (s) => { s.on(\"close\", () => { socketDestroyed = true; }); });\n  await new Promise<void>((r) => server.listen(0, \"127.0.0.1\", r));\n  const port = (server.address() as { port: number }).port;\n\n  try {\n    await expect(\n      minimaxUnderstandImage({\n        apiKey: \"test-key\", prompt: \"hi\",\n        imageDataUrl: \"data:image/png;base64,AAAA\",\n        apiHost: `http://127.0.0.1:${port}`,\n      }),\n    ).rejects.toThrow(\"MiniMax VLM: JSON response exceeds\");\n  } finally {\n    await new Promise<void>((r) => server.close(() => r()));\n  }\n});\n```\n\n### ReadableStream cancellation proof (committed test)\n\n```ts\nit(\"rejects oversized VLM response bodies, preserves Trace-Id, and cancels the stream\", async () => {\n  let canceled = false;\n  const ONE_MIB = 1024 * 1024;\n  const body = new ReadableStream<Uint8Array>({\n    start(controller) {\n      for (let i = 0; i < 18; i++) controller.enqueue(new Uint8Array(ONE_MIB));\n      controller.close();\n    },\n    cancel() { canceled = true; },\n  });\n  // ...\n  await expect(\n    minimaxUnderstandImage({ apiKey: \"minimax-test-key\", prompt: \"hi\", ... }),\n  ).rejects.toThrow(\"MiniMax VLM: JSON response exceeds 16777216 bytes. Trace-Id: trace-abc\");\n  expect(canceled).toBe(true);\n});\n```\n\n### Local test run — 14/14 passed\n\n```\npnpm test src/agents/minimax-vlm.normalizes-api-key.test.ts\n\n ✓ minimaxUnderstandImage apiKey normalization > strips embedded CR/LF before sending Authorization header 236ms\n ✓ minimaxUnderstandImage apiKey normalization > drops non-Latin1 characters from apiKey 3ms\n ✓ minimaxUnderstandImage apiKey normalization > keeps trusted MINIMAX_API_HOST env fallback for VLM routing 4ms\n ✓ minimaxUnderstandImage apiKey normalization > routes minimax-cn to the CN VLM host by default 3ms\n ✓ minimaxUnderstandImage apiKey normalization > routes minimax-portal-cn to the CN VLM host by default 2ms\n ✓ minimaxUnderstandImage apiKey normalization > keeps minimax-cn on the CN VLM host when the configured host is malformed 3ms\n ✓ minimaxUnderstandImage apiKey normalization > keeps minimax-portal-cn on the CN VLM host when the configured host is malformed 2ms\n ✓ minimaxUnderstandImage apiKey normalization > uses the caller-provided request timeout 5ms\n ✓ minimaxUnderstandImage apiKey normalization > uses the default request timeout for non-positive caller timeouts 3ms\n ✓ minimaxUnderstandImage apiKey normalization > clamps oversized caller request timeouts before creating the abort signal 3ms\n ✓ minimaxUnderstandImage apiKey normalization > rejects oversized VLM response bodies, preserves Trace-Id, and cancels the stream 60ms\n ✓ minimaxUnderstandImage apiKey normalization > rejects oversized VLM responses from a real HTTP server (behavior proof) 210ms\n ✓ minimaxUnderstandImage apiKey normalization > bounds large provider error response bodies 9ms\n ✓ isMinimaxVlmModel > only matches the canonical MiniMax VLM model id 1ms\n\n Test Files  1 passed (1)\n      Tests  14 passed (14)\n```\n\n### What changed\n\n- `minimax-vlm.ts`: replaced `res.json()` with `readProviderJsonResponse` (16 MiB cap), preserves Trace-Id in error messages\n- `minimax-vlm.normalizes-api-key.test.ts`: added real HTTP server loopback proof + ReadableStream cancellation proof\n\n## Risk\n\nLow. 16 MiB cap is generous for MiniMax VLM API responses. Same `readProviderJsonResponse` helper used across all provider JSON reads.",
+        "branch": "fix/bound-minimax-vlm-response",
+        "head_sha": "7e606b0e3cf2039c507ec8cc02aa0a9e348e5be9",
+        "author": "cxbasdev",
+        "labels": [
+          "agents",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/minimax-vlm.normalizes-api-key.test.ts",
+            "additions": 75,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/minimax-vlm.ts",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 84,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98679",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98679.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 61,
+            "SKIPPED": 34,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-compact-large-whole-1:FAILURE",
+            "checks-node-compact-small-whole-1:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-compact-large-whole-1:FAILURE",
+            "checks-node-compact-small-whole-1:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98679:4856859385:2026-07-02T06:22:19Z:clawsweeper_needs_human",
+      "comment_id": "4856859385",
+      "comment_version_key": "4856859385:2026-07-02T06:22:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98679#issuecomment-4856859385",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98679,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T07:36:37Z",
-      "comment_updated_at": "2026-07-02T07:42:22Z",
+      "comment_created_at": "2026-07-01T15:19:48Z",
+      "comment_updated_at": "2026-07-02T06:22:19Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,12 +162,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=c02e8f03ccfe48c76db25fa136d3d7525ef910ca)",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=7e606b0e3cf2039c507ec8cc02aa0a9e348e5be9)",
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "c02e8f03ccfe48c76db25fa136d3d7525ef910ca",
+      "expected_head_sha": "7e606b0e3cf2039c507ec8cc02aa0a9e348e5be9",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,41 +179,43 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(config): guard session transcript JSON.parse against malformed lines",
-        "body": "## What Problem This Solves\n\n`src/config/sessions/transcript.ts` has two functions that call bare `JSON.parse(line)` on session transcript file lines:\n- `parseAssistantTranscriptText()` (line 108)\n- `parseRecentConversationText()` (line 169)\n\nMalformed or corrupted transcript files would throw raw `SyntaxError` instead of gracefully returning `undefined` (which is the existing behavior for other invalid cases like unknown roles).\n\n## Changes\n\n- `transcript.ts`: wrap both `JSON.parse(line)` calls in try/catch → return `undefined` on malformed JSON (consistent with existing fallback behavior)\n- `transcript-parse.test.ts`: 8 colocated vitest tests covering malformed JSON, empty string, and valid parsing for both functions\n\n## Evidence\n\n### Vitest — colocated with source\n\n```\npnpm exec vitest run src/config/sessions/transcript-parse.test.ts\n\n ✓ parseAssistantTranscriptText > returns undefined on malformed JSON\n ✓ parseAssistantTranscriptText > returns undefined on empty string\n ✓ parseAssistantTranscriptText > returns undefined for non-assistant role\n ✓ parseAssistantTranscriptText > parses a valid assistant transcript line\n ✓ parseRecentConversationText > returns undefined on malformed JSON\n ✓ parseRecentConversationText > returns undefined on empty string\n ✓ parseRecentConversationText > returns undefined for non-user/non-assistant role\n ✓ parseRecentConversationText > parses a valid user conversation line\n```\n\nBefore: `JSON.parse(\"NOT JSON {{{\")` → raw `SyntaxError` crashes transcript reader\nAfter: `parseAssistantTranscriptText(\"NOT JSON {{{\")` → `undefined` (graceful skip, consistent behavior)\n\n### Call chain\n\n`streamSessionTranscriptLinesReverse()` → reads session transcript file → for each line → `parseAssistantTranscriptText(line)` / `parseRecentConversationText(line)` → now tolerant of malformed JSON\n\nLabel: bugfix | merge-risk: 🟢 minimal | AI-assisted",
-        "branch": "fix/transcript-json-parse-guard",
-        "head_sha": "c02e8f03ccfe48c76db25fa136d3d7525ef910ca",
-        "author": "lsr911",
+        "title": "fix(minimax-vlm): bound VLM API response reads",
+        "body": "## What Problem This Solves\n\n`minimaxUnderstandImage` calls `await res.json()` on the MiniMax VLM API response without a read limit. An oversized response could buffer arbitrarily large payloads before parsing, risking OOM.\n\n## Why This Change Was Made\n\nAll provider response reads should use `readProviderJsonResponse` (16 MiB cap). Trace-Id diagnostics are preserved through the error chain.\n\n## User Impact\n\nMiniMax VLM image understanding is now protected against oversized JSON responses. Normal responses work identically. Oversized responses fail with a clear error including the Trace-Id.\n\n## Evidence\n\n### Real HTTP server loopback proof (committed test)\n\nThe test creates a real `http.createServer` that writes an oversized JSON stream. The bounded reader cancels the socket mid-flight — proves the 16 MiB cap is enforced against a real TCP connection, not just a mock:\n\n```ts\nit(\"rejects oversized VLM responses from a real HTTP server (behavior proof)\", async () => {\n  let socketDestroyed = false;\n  const server = http.createServer((_req, res) => {\n    res.writeHead(200, { \"Content-Type\": \"application/json\" });\n    const chunk = Buffer.alloc(1024 * 1024, 0x41);\n    const writeMore = () => {\n      if (socketDestroyed) return;\n      for (let i = 0; i < 4 && !socketDestroyed; i++) {\n        if (!res.write(chunk)) { res.once(\"drain\", writeMore); return; }\n      }\n      if (!socketDestroyed) setImmediate(writeMore);\n    };\n    writeMore();\n  });\n  server.on(\"connection\", (s) => { s.on(\"close\", () => { socketDestroyed = true; }); });\n  await new Promise<void>((r) => server.listen(0, \"127.0.0.1\", r));\n  const port = (server.address() as { port: number }).port;\n\n  try {\n    await expect(\n      minimaxUnderstandImage({\n        apiKey: \"test-key\", prompt: \"hi\",\n        imageDataUrl: \"data:image/png;base64,AAAA\",\n        apiHost: `http://127.0.0.1:${port}`,\n      }),\n    ).rejects.toThrow(\"MiniMax VLM: JSON response exceeds\");\n  } finally {\n    await new Promise<void>((r) => server.close(() => r()));\n  }\n});\n```\n\n### ReadableStream cancellation proof (committed test)\n\n```ts\nit(\"rejects oversized VLM response bodies, preserves Trace-Id, and cancels the stream\", async () => {\n  let canceled = false;\n  const ONE_MIB = 1024 * 1024;\n  const body = new ReadableStream<Uint8Array>({\n    start(controller) {\n      for (let i = 0; i < 18; i++) controller.enqueue(new Uint8Array(ONE_MIB));\n      controller.close();\n    },\n    cancel() { canceled = true; },\n  });\n  // ...\n  await expect(\n    minimaxUnderstandImage({ apiKey: \"minimax-test-key\", prompt: \"hi\", ... }),\n  ).rejects.toThrow(\"MiniMax VLM: JSON response exceeds 16777216 bytes. Trace-Id: trace-abc\");\n  expect(canceled).toBe(true);\n});\n```\n\n### Local test run — 14/14 passed\n\n```\npnpm test src/agents/minimax-vlm.normalizes-api-key.test.ts\n\n ✓ minimaxUnderstandImage apiKey normalization > strips embedded CR/LF before sending Authorization header 236ms\n ✓ minimaxUnderstandImage apiKey normalization > drops non-Latin1 characters from apiKey 3ms\n ✓ minimaxUnderstandImage apiKey normalization > keeps trusted MINIMAX_API_HOST env fallback for VLM routing 4ms\n ✓ minimaxUnderstandImage apiKey normalization > routes minimax-cn to the CN VLM host by default 3ms\n ✓ minimaxUnderstandImage apiKey normalization > routes minimax-portal-cn to the CN VLM host by default 2ms\n ✓ minimaxUnderstandImage apiKey normalization > keeps minimax-cn on the CN VLM host when the configured host is malformed 3ms\n ✓ minimaxUnderstandImage apiKey normalization > keeps minimax-portal-cn on the CN VLM host when the configured host is malformed 2ms\n ✓ minimaxUnderstandImage apiKey normalization > uses the caller-provided request timeout 5ms\n ✓ minimaxUnderstandImage apiKey normalization > uses the default request timeout for non-positive caller timeouts 3ms\n ✓ minimaxUnderstandImage apiKey normalization > clamps oversized caller request timeouts before creating the abort signal 3ms\n ✓ minimaxUnderstandImage apiKey normalization > rejects oversized VLM response bodies, preserves Trace-Id, and cancels the stream 60ms\n ✓ minimaxUnderstandImage apiKey normalization > rejects oversized VLM responses from a real HTTP server (behavior proof) 210ms\n ✓ minimaxUnderstandImage apiKey normalization > bounds large provider error response bodies 9ms\n ✓ isMinimaxVlmModel > only matches the canonical MiniMax VLM model id 1ms\n\n Test Files  1 passed (1)\n      Tests  14 passed (14)\n```\n\n### What changed\n\n- `minimax-vlm.ts`: replaced `res.json()` with `readProviderJsonResponse` (16 MiB cap), preserves Trace-Id in error messages\n- `minimax-vlm.normalizes-api-key.test.ts`: added real HTTP server loopback proof + ReadableStream cancellation proof\n\n## Risk\n\nLow. 16 MiB cap is generous for MiniMax VLM API responses. Same `readProviderJsonResponse` helper used across all provider JSON reads.",
+        "branch": "fix/bound-minimax-vlm-response",
+        "head_sha": "7e606b0e3cf2039c507ec8cc02aa0a9e348e5be9",
+        "author": "cxbasdev",
         "labels": [
+          "agents",
           "size: S",
-          "P3",
+          "P2",
           "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/config/sessions/transcript-parse.test.ts",
-            "additions": 65,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "src/agents/minimax-vlm.normalizes-api-key.test.ts",
+            "additions": 75,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/config/sessions/transcript.ts",
-            "additions": 16,
-            "deletions": 10,
+            "path": "src/agents/minimax-vlm.ts",
+            "additions": 9,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 81,
-        "deletions": 10,
+        "additions": 84,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98977",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98977.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98679",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98679.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -113,21 +224,21 @@
           "total": 99,
           "gatingTotal": 94,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 34,
             "SUCCESS": 61,
-            "FAILURE": 1,
+            "SKIPPED": 34,
+            "FAILURE": 3,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:FAILURE"
+            "checks-node-compact-large-whole-1:FAILURE",
+            "checks-node-compact-small-whole-1:FAILURE",
+            "check-lint:FAILURE"
           ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
+          "pending": [],
           "terminalBlockers": [
-            "QA Smoke CI:FAILURE"
+            "checks-node-compact-large-whole-1:FAILURE",
+            "checks-node-compact-small-whole-1:FAILURE",
+            "check-lint:FAILURE"
           ],
           "externalBlockers": []
         }
@@ -135,19 +246,59 @@
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "target is not open"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:98679:4861145768:2026-07-02T00:31:34Z:re_review",
+      "comment_id": "4861145768",
+      "comment_version_key": "4861145768:2026-07-02T00:31:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98679#issuecomment-4861145768",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98679,
+      "author": "cxbAsDev",
+      "author_id": 294098203,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-02T00:31:34Z",
+      "comment_updated_at": "2026-07-02T00:31:34Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2418,
+    "total_ms": 3332,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 325
+        "ms": 460
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1826
+        "ms": 2139
       },
       {
         "name": "classify_comment_commands",
@@ -163,11 +314,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 238
+        "ms": 706
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
