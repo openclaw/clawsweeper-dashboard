@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T13:04:49.982Z",
+  "generated_at": "2026-07-02T13:04:49.921Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T10:04:47.590Z",
+  "since": "2026-07-02T10:04:47.845Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    98940
+    99004
   ],
   "comment_ids": [
-    4865965191
+    4865979293
   ],
-  "status_comment_id": 4865968151,
+  "status_comment_id": 4865979764,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98940:4865965191:2026-07-02T13:02:11Z:re_review",
-      "comment_id": "4865965191",
-      "comment_version_key": "4865965191:2026-07-02T13:02:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98940#issuecomment-4865965191",
+      "idempotency_key": "comment-router:openclaw/openclaw:99004:4865979293:2026-07-02T13:03:39Z:re_review",
+      "comment_id": "4865979293",
+      "comment_version_key": "4865979293:2026-07-02T13:03:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99004#issuecomment-4865979293",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 98940,
-      "author": "Pandah97",
-      "author_id": 80405497,
+      "issue_number": 99004,
+      "author": "SunnyShu0925",
+      "author_id": 265248434,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T13:02:11Z",
-      "comment_updated_at": "2026-07-02T13:02:11Z",
-      "status_comment_id": 4865968151,
+      "comment_created_at": "2026-07-02T13:03:39Z",
+      "comment_updated_at": "2026-07-02T13:03:39Z",
+      "status_comment_id": 4865979764,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,57 +68,76 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-02T13:04:50.621Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 99004
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-02T13:04:51.707Z",
+          "response_comment_id": "4865979764",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(browser): bound Playwright response body reads to prevent OOM",
-        "body": "## Summary\n\n**Problem:** `responseBodyViaPlaywright` calls `resp.text()` which decodes the entire response string (OOM risk on multi-MB responses).\n\n**Solution:** Replace with `buf.subarray(0, maxBytes)` decode window — full Buffer allocation stays but full-string decoding is bounded. Same memory-bound guarantee without CDP complexity.\n\n**What changed:** Removed CDP `Fetch.takeResponseBodyAsStream` path entirely (page-delivery truncation issue). Unified to single `body()+subarray()` path for all browsers (Chromium, Firefox, WebKit).\n\n**What did NOT change:** Public API, return types, existing caller behavior, browser support matrix.\n\n## What Problem This Solves\n\n`responseBodyViaPlaywright` previously used `resp.text()` which loads the entire response as a JavaScript string (unbounded memory allocation) before checking `maxChars`. On a 500 MB response this allocated 500 MB+ string before truncation.\n\n`resp.body()` returns a `Buffer` (Node.js native, no encoding cost). Combined with `buf.subarray(0, maxBytes)`, only the bounded prefix is decoded to string — the full 500 MB allocation becomes a 500 MB Buffer + ~800 KB string instead of a 500 MB string.\n\n## Why This Change Was Made\n\nThe original PR introduced CDP `Fetch.takeResponseBodyAsStream` for truly bounded memory capture (no full Buffer). However, CDP intercept-at-Response-stage forces `Fetch.fulfillRequest` with the captured (truncated) body, which disrupts page network behavior — the page receives a bounded prefix instead of the original response. This is fundamental to CDP's design: once the body is taken from the stream, the original response can't be forwarded.\n\nRemoving the CDP path eliminates this class of bug entirely:\n- Page always receives the original response (body, status, headers untouched)\n- No CDP session management (Fetch.enable/disable, cleanup timing)\n- Single code path for all browsers (simpler to maintain)\n- 200 lines of CDP code deleted, 4 CDP-specific tests deleted\n\n## Real behavior proof\n\n**Behavior addressed:** Verify `resp.body()` + `buf.subarray(0, maxBytes)` returns a bounded text body while the page receives the original response.\n\n**Real environment tested:** Node.js 22 with Vitest, Playwright browser test harness. Code path: `page.on('response')` → `resp.body()` → `Buffer.subarray(0, maxBytes)` → `TextDecoder.decode()`.\n\n**Exact steps or command run after this patch:**\n\n```bash\npnpm test extensions/browser/src/browser/pw-tools-core.waits-next-download-saves-it.test.ts\n```\n\n**After-fix evidence:**\n\nBEFORE FIX — CDP `Fetch.takeResponseBodyAsStream` + `Fetch.fulfillRequest`: 200 lines, CDP intercepts at Response stage → page receives truncated body\n\nAFTER FIX — `body()` + `subarray()`: 80 lines, no interception → page receives original response untouched\n\nReal browser proof (Playwright Chromium, Google Chrome 138, headless, via `page.on('response')` passive observer):\n\n```bash\n# node browser-proof.mjs\nSERVER=http://127.0.0.1:43573\n\n| Metric              | Tool (body()+subarray) | Page JS (full response) |\n|---------------------|------------------------|-------------------------|\n| Status              | 200                    | 200                     |\n| Body length         | 8000 chars (bounded)   | 520000 chars (original) |\n| Truncated?          | true                   | No                      |\n| Original response   | 520000 chars           | 520000 chars            |\n\nVerdict:\nTool returns bounded prefix (8000 < 520000): ✅\nPage receives full original body (520000 === 520000): ✅\nPage receives correct status (200): ✅\npage.on('response') is passive — page delivery unaffected: ✅\n```\n\n**Observed result after the fix:** All 15 tests pass. `resp.body()` is called but only `subarray(0, maxBytes)` is decoded to string. No page delivery disruption — the code is a passive observer via `page.on('response')`.\n\n**What was not tested:** Extremely large responses (>500 MB) — `resp.body()` still allocates a full Buffer, which is a memory cost we accept vs. the full-string cost of `resp.text()`. CDP-level zero-copy capture was removed because it can't preserve page delivery.\n\n## Tests and validation\n\n- **15 tests pass** covering: bounded decode for small/large/chunked responses, negative control (text() would decode full body), mutation test (subarray bounded regardless of Buffer size)\n- **Lint clean** (`npx oxlint`)\n- **128 lines added, 580 removed** across source + test files\n\n## Risk checklist\n\n- **Risk level:** Low — removed the risky CDP path, unified to passive observer pattern.\n- **Mitigation:** No CDP session management. No Fetch domain manipulation. No page response interception.\n- **Merge-risk explanation:** None — removed the code that caused the merge risk (CDP fulfill path). No config/env/API changes.\n- **User-visible behavior change?** No.\n- **Config/env/migration change?** No.\n- **Security/auth/network change?** No.\n\n## Linked context\n\nPattern from PR #98496 (bounded response body reads to prevent OOM). CDP approach attempted in earlier revisions of this PR, removed after ClawSweeper review identified page-delivery truncation.",
-        "branch": "fix/browser-bound-pw-tools-response-reads",
-        "head_sha": "194d9dec8173a2737415c66d0b86f3682b3d20c5",
-        "author": "pandah97",
+        "title": "docs(irc): document missing markdown, chunkMode, and responsePrefix fields",
+        "body": "## What Problem This Solves\n\n`extensions/irc/src/config-schema.ts` includes `markdown` (MarkdownConfigSchema) and spreads `ReplyRuntimeConfigSchemaShape` which provides `chunkMode` and `responsePrefix`, but `docs/channels/irc.md` does not document these reply-formatting fields. Users configuring IRC cannot discover these formatting options from the docs.\n\n- Problem: Three reply-formatting fields exist in the IRC config schema/types but are absent from the docs\n- Solution: Add a \"Message formatting\" section documenting `markdown`, `chunkMode`, and `responsePrefix`\n- What changed: `docs/channels/irc.md` (+7 lines — new H2 section), `docs/docs_map.md` (+1 line)\n- What did NOT change: No code or behavior changes. Documentation only.\n\n**Missing fields**:\n1. **`markdown`** (MarkdownConfigSchema) — table rendering: `tables: \"off\" | \"bullets\" | \"code\" | \"block\"`\n2. **`chunkMode`** (`\"length\"` (default) | `\"newline\"`) — message splitting strategy\n3. **`responsePrefix`** (string) — prepended to every outbound reply\n\n## Evidence\n\n### Schema — `markdown` field (`extensions/irc/src/config-schema.ts:67`)\n\n```typescript\nmarkdown: MarkdownConfigSchema,\n```\n\n### Schema — `chunkMode` + `responsePrefix` via spread (`extensions/irc/src/config-schema.ts:68`)\n\n```typescript\n...ReplyRuntimeConfigSchemaShape,\n```\n\n### Core schema — `ReplyRuntimeConfigSchemaShape` (`src/config/zod-schema.core.ts:679-682`)\n\n```typescript\nchunkMode: z.enum([\"length\", \"newline\"]).optional(),\nresponsePrefix: z.string().optional(),\n```\n\n### Core schema — `MarkdownTableModeSchema` (`src/config/zod-schema.core.ts:696`)\n\n```typescript\nexport const MarkdownTableModeSchema = z.enum([\"off\", \"bullets\", \"code\", \"block\"]);\n```\n\n### Runtime — `DEFAULT_CHUNK_MODE` (`src/auto-reply/chunk.ts:33`)\n\n```typescript\nconst DEFAULT_CHUNK_MODE: ChunkMode = \"length\";\n```\n\n### Runtime consumption — IRC markdown table mode (`extensions/irc/src/send.ts:6`)\n\n```typescript\nimport { resolveMarkdownTableMode } from \"openclaw/plugin-sdk/markdown-table-runtime\";\n```\n\n### Runtime consumption — chunkMode (`src/auto-reply/reply/block-streaming.ts:179`)\n\n```typescript\nconst chunkMode = resolveChunkMode(cfg, providerKey, accountId);\n// …\nflushOnParagraph: chunkMode === \"newline\",\n```\n\n## User Impact\n\nUsers can now discover three reply-formatting options from the IRC channel docs: Markdown table rendering (off/bullets/code/block), message chunking strategy (length/newline with length default), and reply prefix. All three were already functional — they were simply invisible to users who configure via docs.",
+        "branch": "docs/irc-markdown-reply-fields",
+        "head_sha": "106d7d29e2ce830f5ef6352e5e565dda18018882",
+        "author": "sunnyshu0925",
         "labels": [
-          "size: M",
-          "P1",
+          "docs",
+          "channel: irc",
+          "size: XS",
+          "triage: low-signal-docs",
+          "P3",
           "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "extensions/browser/src/browser/pw-tools-core.responses.ts",
-            "additions": 31,
-            "deletions": 14,
+            "path": "docs/channels/irc.md",
+            "additions": 7,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/browser/src/browser/pw-tools-core.waits-next-download-saves-it.test.ts",
-            "additions": 186,
-            "deletions": 1,
+            "path": "docs/docs_map.md",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 217,
-        "deletions": 15,
+        "additions": 8,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98940",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98940.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99004",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99004.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 92,
-          "gatingTotal": 87,
+          "total": 30,
+          "gatingTotal": 25,
           "counts": {
-            "SUCCESS": 56,
-            "SKIPPED": 34,
-            "FAILURE": 2
+            "SUCCESS": 16,
+            "SKIPPED": 14
           },
           "blockers": [
             "checks-node-compact-large-whole-1:FAILURE",
@@ -133,25 +152,24 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2606,
+    "total_ms": 4329,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 521
+        "ms": 588
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1856
+        "ms": 1470
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -163,7 +181,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 215
+        "ms": 2240
       },
       {
         "name": "append_ledger",
