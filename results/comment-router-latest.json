@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T07:11:16.075Z",
+  "generated_at": "2026-07-02T07:11:13.599Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T04:11:15.430Z",
+  "since": "2026-07-02T04:11:10.657Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    98966
+    98941
   ],
   "comment_ids": [
-    4863102008
+    4863115053
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4863115643,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98966:4863075626:2026-07-02T07:11:14Z:clawsweeper_needs_human",
-      "comment_id": "4863075626",
-      "comment_version_key": "4863075626:2026-07-02T07:11:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98966#issuecomment-4863075626",
+      "idempotency_key": "comment-router:openclaw/openclaw:98941:4863115053:2026-07-02T07:09:55Z:re_review",
+      "comment_id": "4863115053",
+      "comment_version_key": "4863115053:2026-07-02T07:09:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98941#issuecomment-4863115053",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98889,
+      "target_branch": "main",
+      "issue_number": 98941,
       "author": "miorbnli",
       "author_id": 35856959,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-02T07:08:49Z",
-      "comment_updated_at": "2026-07-02T07:08:49Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-02T07:09:55Z",
+      "comment_updated_at": "2026-07-02T07:09:55Z",
+      "status_comment_id": 4863115643,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,26 +68,117 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-02T07:11:14.677Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 98941
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-02T07:11:17.066Z",
+          "response_comment_id": "4862957028",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(extensions): bound success-path JSON response reads",
+        "body": "## What Problem This Solves\n\nThree success-path response reads still used unbounded `response.json()` / `resp.json()`. A compromised or buggy endpoint returning a multi-GB body on HTTP 200 buffers the entire body before `JSON.parse` even runs, OOMing the agent. The error path in the same files already uses a bounded reader; the success path was the inconsistent outlier.\n\n## Why This Change Was Made\n\nThis is the same partial-hardening pattern already shipped across `comfy`, `anthropic-oauth`, `sms`, `matrix`, `telegram`, and `discord/api.ts`. The three remaining sites are the obvious next batch (the other two sites in the source triage — minimax/oauth and mattermost/client — were already bounded on `main`).\n\n## User Impact\n\nNo behavior change for well-formed responses (small, valid JSON still parses). A huge or non-JSON success body is now truncated at a cap and handled gracefully instead of buffering in full and OOMing. thread-ownership (409 conflict body, 8 KB cap — still cancels on a truncated/malformed body), discord webhook ({id, channel_id}, 8 KB cap — fallback to {}), and huggingface model discovery (/v1/models, 256 KB cap — fallback to bundled catalog) all apply the same `readResponseTextLimited + JSON.parse` pattern already used by their error paths.\n\n## Real behavior proof\n\n- **Behavior addressed:** Three success-path reads used unbounded `.json()`, buffering the full body with no size cap — a huge body could OOM before parsing.\n- **Real environment tested:** Linux x86_64, Node v24.14.0, commit `162c068257` on branch `fix/unbounded-success-json-reads`.\n- **Exact steps or command run after this patch:** `node --import tsx verify-per-site.mjs` — imports the real `readResponseTextLimited` (the helper now used by all three patched sites) and exercises each site's changed code path over real `Response` objects.\n- **Evidence after fix:** Terminal capture of `node` runtime verification (live stdout, copied verbatim):\n\n  ```text\n  $ node --import tsx verify-per-site.mjs\n\n  --- [thread-ownership] 409 conflict body (8 KB cap) ---\n    well-formed 409: owner=\"other-agent\" -> cancel (owner parsed)\n    truncated 409 : owner=undefined -> cancel (409 semantics preserved)\n\n  --- [discord/send.webhook.ts] webhook response (8 KB cap) ---\n    well-formed response: id=\"msg-1\" channel_id=\"C123\"\n    non-JSON response  : payload={} (fallback to {})\n\n  --- [huggingface/models.ts] /v1/models body (256 KB cap) ---\n    well-formed /v1/models: data.length=1 -> process\n    oversize /v1/models : read capped, parse failed -> fell back to bundled catalog: true\n\n  Verdict: all three patched sites enforce a read cap with a graceful fallback;\n    thread-ownership 409 still cancels on a truncated body.\n  ```\n\n- **Observed result after fix:** At every site, a small well-formed body still parses cleanly. A huge or non-JSON body is capped by `readResponseTextLimited`; the resulting JSON.parse failure is handled by each site's fallback logic. thread-ownership (8 KB cap): a truncated 409 body still cancels (the 409 status itself means another agent owns the thread; owner is logged as \"unknown\"). discord webhook (8 KB cap): a non-JSON webhook response falls back to `{}`, preserving the prior `.catch(() => ({}))` tolerance. huggingface (256 KB cap): an oversize /v1/models body falls back to the bundled catalog, matching the `!response.ok` branch.\n- **What was not tested:** A live huge response from each real upstream (the real `readResponseTextLimited` helper over real `Response` objects is the faithful unit). Regression coverage: thread-ownership/index.test.ts (22 tests, incl. truncated-409-cancels), huggingface/models.test.ts (8 tests), discord send.webhook tests (3 shards, all passed).\n\n## Tests and validation\n\n```text\n$ pnpm test extensions/thread-ownership/index.test.ts     (22 passed)\n$ pnpm test extensions/huggingface/models.test.ts          (8 passed)\n$ pnpm test extensions/discord/src/send.webhook.proxy.test.ts  (all passed)\n```\n\n## Risk checklist\n\n- Cap sizes: thread-ownership 8 KB (409 body is ~30 bytes); discord webhook 8 KB (reuses existing error-body cap; id+channel_id is tiny); huggingface 256 KB (real /v1/models ~150 KB, 256 KB gives generous headroom while still bounding a compromised endpoint).\n- User-visible behavior: Yes (intended, bounded) — a huge/non-JSON success body is now capped + handled instead of buffering in full; well-formed responses unchanged.\n- Config/env/migration behavior: No.\n- Security/auth/secrets/network/tool execution: Yes (improvement) — bounds response-body reads on three success paths, mitigating OOM from a compromised/buggy upstream.\n- Plugins/providers/channels/SDK: Yes (bounded) — touches three extensions; each uses the shared `readResponseTextLimited` already used by its own error path.\n- Highest-risk area: a legitimately large-but-valid success body exceeding the cap would fall back — but all three success payloads are tiny in practice (well under their caps), and the prior behavior was an OOM crash, so the fallback is strictly safer.\n- Mitigation: existing thread-ownership (22) + huggingface (8) + discord webhook tests pass + node runtime verification proving the cap is applied per site.\n\nCloses: N/A (no existing issue)\n",
+        "branch": "fix/unbounded-success-json-reads",
+        "head_sha": "162c068257d9e7600d3387558ce6f9db214155c2",
+        "author": "miorbnli",
+        "labels": [
+          "channel: discord",
+          "size: S",
+          "extensions: huggingface",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof",
+          "extensions: thread-ownership"
+        ],
+        "files": [
+          {
+            "path": "extensions/discord/src/send.webhook.ts",
+            "additions": 10,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/huggingface/models.ts",
+            "additions": 15,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/thread-ownership/index.test.ts",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/thread-ownership/index.ts",
+            "additions": 15,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 57,
+        "deletions": 7,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98941",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98941.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 93,
+          "gatingTotal": 88,
+          "counts": {
+            "SUCCESS": 58,
+            "SKIPPED": 34,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2650,
+    "total_ms": 7086,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 633
+        "ms": 707
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 2220
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -99,11 +190,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2006
+        "ms": 4132
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
