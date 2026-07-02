@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-02T06:26:24.451Z",
+  "generated_at": "2026-07-02T06:26:52.019Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T03:26:24.084Z",
+  "since": "2026-07-02T03:26:50.312Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    98943
+    98664
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4862811292
+  ],
+  "status_comment_id": 4862811631,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,18 +31,141 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:98664:4862811292:2026-07-02T06:25:43Z:re_review",
+      "comment_id": "4862811292",
+      "comment_version_key": "4862811292:2026-07-02T06:25:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98664#issuecomment-4862811292",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 98664,
+      "author": "LeonidasLux",
+      "author_id": 294038793,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-02T06:25:43Z",
+      "comment_updated_at": "2026-07-02T06:25:43Z",
+      "status_comment_id": 4862811631,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-02T06:26:52.622Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 98664
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-02T06:26:53.519Z",
+          "response_comment_id": "4862811631",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cli): bound batch-file read size in config-set-input",
+        "body": "## What Problem This Solves\n\nThe `--batch-file` path in `parseBatchSource()` at `src/cli/config-set-input.ts` reads an unbounded `fs.readFileSync()` when processing user-specified batch files. A user that accidentally passes a very large file (e.g., a multi-GB log instead of a config batch JSON) will trigger Node to buffer the entire payload, causing OOM pressure. The `--stdin` path in `config-cli.ts` and `exec-approvals-cli.ts` already have 1 MB bounds (`CONFIG_PATCH_STDIN_MAX_BYTES`, `EXEC_APPROVALS_STDIN_MAX_BYTES`), but the `--batch-file` path had no equivalent guard.\n\nThis is a defense-in-depth fix: in practice batch files for `openclaw config set --batch-file` are small JSON arrays of config entries, but an unbounded disk read from a user-specified path is a standard OOM surface.\n\n## Changes\n\n- Define `MAX_BATCH_FILE_BYTES = 52_428_800` (50 MB) in `config-set-input.ts`. This is deliberately higher than the 1 MB stdin limits because batch files on disk can be larger than typed piped input, while 50 MB still safely prevents OOM from accidentally reading multi-GB files. No real `--batch-file` workload produces a 50 MB JSON config array.\n- Replace the unbounded `fs.readFileSync()` with a bounded `fs.openSync()` + `fs.readSync()` that allocates a buffer of `MAX_BATCH_FILE_BYTES + 1` and reads at most that many bytes. If the read fills the buffer beyond the limit, a descriptive error is thrown. This caps memory for all inputs, including special files like `/dev/zero` whose `stat.size` is 0 but produce unbounded reads.\n- Add focused regression tests: oversized rejection, exact-limit boundary acceptance with valid parsed assertion, empty-file parse error.\n- Preserve all existing behavior: valid files under the limit continue to parse through the same `parseBatchEntries()` path.\n- Update CLI `--help` text to advertise the cap.\n\n## Why 50 MB, not 1 MB\n\nThe `--stdin` paths are capped at 1 MB because stdin input is typed directly and has no reason to exceed that. Batch files on disk (`--batch-file`) are a different surface: a config batch with thousands of entries can legitimately be larger than 1 MB. Setting the same tight cap would break existing users. 50 MB is a safe defense-in-depth ceiling — a JSON config array of that size (~500K individual entries) far exceeds any real use case — while eliminating the compatibility concern.\n\n## Real behavior proof\n\n- **Behavior addressed**: An oversized `--batch-file` must be rejected before parsing with a `Batch file too large` error. A normal-sized (valid) batch file must continue to parse as before.\n- **Real environment tested**: Local Vitest run on Node v22.22.0, exercising real `fs.openSync`/`readSync`/`closeSync` against real temp files on an ext4 filesystem, **plus** a real `openclaw config set --batch-file` CLI invocation against actual batch files.\n- **Exact steps**: \n  1. `pnpm test src/cli/config-set-input.test.ts` — 12 tests pass including the new oversized-file regression and the exact-limit boundary test with valid payload assertion.\n  2. `node openclaw.mjs config set --batch-file <file> --dry-run` — three scenarios (valid, oversized, empty).\n- **Observed result**: All 12 tests pass. Real CLI behavior confirms the bounded read works end-to-end:\n\n  ```\n  $ node openclaw.mjs config set --batch-file batch-valid.json --dry-run\n  Dry run successful: 3 update(s) validated against $OPENCLAW_HOME/.openclaw/openclaw.json.\n\n  $ node openclaw.mjs config set --batch-file batch-oversized.json --dry-run\n  Error: Batch file too large: /tmp/batch-oversized.json (max 52,428,800 bytes / 50 MB)\n\n  $ node openclaw.mjs config set --batch-file batch-empty.json --dry-run\n  Error: Failed to parse --batch-file: SyntaxError: JSON5: invalid end of input at 1:1\n  ```\n\n## Evidence\n\nFocused Vitest:\n\n$ pnpm test src/cli/config-set-input.test.ts\n\nRUN  v4.1.8\n\nTest Files  1 passed (1)\nTests  12 passed (12)\n\n\n\nType checks (tsgo, only our file — pre-existing @openclaw/* module-resolution errors elsewhere):\n\n$ node scripts/run-tsgo.mjs -p src/cli/config-set-input.ts\n(no errors from config-set-input.ts)\n\n\n\nLint (oxlint):\n\n$ node scripts/run-oxlint.mjs src/cli/config-set-input.ts src/cli/config-set-input.test.ts\n(no output — no issues)\n\n\n\nFormat (oxfmt):\n\n$ ./node_modules/.bin/oxfmt --check src/cli/config-set-input.ts src/cli/config-set-input.test.ts\nAll matched files use the correct format.\n\n\n\n**Label**: security\n\n_AI-assisted._\n",
+        "branch": "fix/bound-batch-file-read",
+        "head_sha": "c355c63bc1b8ae53f4ede2e8fbf0e54c085a92b3",
+        "author": "leonidaslux",
+        "labels": [
+          "cli",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/cli/config-cli.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/config-set-input.test.ts",
+            "additions": 34,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/config-set-input.ts",
+            "additions": 25,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 63,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98664",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98664.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 11,
+          "gatingTotal": 6,
+          "counts": {
+            "SUCCESS": 8,
+            "SKIPPED": 3
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 661,
+    "total_ms": 3629,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 355
+        "ms": 493
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1201
       },
       {
         "name": "classify_comment_commands",
@@ -56,7 +181,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 294
+        "ms": 1909
       },
       {
         "name": "append_ledger",
