@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T03:32:56.646Z",
+  "generated_at": "2026-07-03T03:33:23.859Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T00:32:56.003Z",
+  "since": "2026-07-03T00:33:21.771Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99083
+    98940
   ],
   "comment_ids": [
-    4872327560
+    4872334777
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4872334931,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99083:4865964906:2026-07-03T03:32:25Z:clawsweeper_needs_human",
-      "comment_id": "4865964906",
-      "comment_version_key": "4865964906:2026-07-03T03:32:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99083#issuecomment-4865964906",
+      "idempotency_key": "comment-router:openclaw/openclaw:98940:4872334777:2026-07-03T03:32:14Z:re_review",
+      "comment_id": "4872334777",
+      "comment_version_key": "4872334777:2026-07-03T03:32:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98940#issuecomment-4872334777",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99335,
-      "author": "momothemage",
-      "author_id": 35096042,
+      "target_branch": "main",
+      "issue_number": 98940,
+      "author": "Pandah97",
+      "author_id": 80405497,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-03T03:30:26Z",
-      "comment_updated_at": "2026-07-03T03:30:26Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-03T03:32:14Z",
+      "comment_updated_at": "2026-07-03T03:32:14Z",
+      "status_comment_id": 4872334931,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,26 +68,137 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-03T03:33:24.490Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 98940
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-03T03:33:25.353Z",
+          "response_comment_id": "4872334931",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(browser): bound Playwright response body reads to prevent OOM",
+        "body": "## Summary\n\n**Problem:** `responseBodyViaPlaywright` calls `resp.text()` which decodes the entire response string (OOM risk on multi-MB responses).\n\n**Solution:** Replace with `buf.subarray(0, maxBytes)` decode window — full Buffer allocation stays but full-string decoding is bounded. Same memory-bound guarantee without CDP complexity.\n\n**What changed:** Removed CDP `Fetch.takeResponseBodyAsStream` path entirely (page-delivery truncation issue). Unified to single `body()+subarray()` path for all browsers (Chromium, Firefox, WebKit).\n\n**What did NOT change:** Public API, return types, existing caller behavior, browser support matrix.\n\n## What Problem This Solves\n\n`responseBodyViaPlaywright` previously used `resp.text()` which loads the entire response as a JavaScript string (unbounded memory allocation) before checking `maxChars`. On a 500 MB response this allocated 500 MB+ string before truncation.\n\n`resp.body()` returns a `Buffer` (Node.js native, no encoding cost). Combined with `buf.subarray(0, maxBytes)`, only the bounded prefix is decoded to string — the full 500 MB allocation becomes a 500 MB Buffer + ~800 KB string instead of a 500 MB string.\n\n## Why This Change Was Made\n\nThe original PR introduced CDP `Fetch.takeResponseBodyAsStream` for truly bounded memory capture (no full Buffer). However, CDP intercept-at-Response-stage forces `Fetch.fulfillRequest` with the captured (truncated) body, which disrupts page network behavior — the page receives a bounded prefix instead of the original response. This is fundamental to CDP's design: once the body is taken from the stream, the original response can't be forwarded.\n\nRemoving the CDP path eliminates this class of bug entirely:\n- Page always receives the original response (body, status, headers untouched)\n- No CDP session management (Fetch.enable/disable, cleanup timing)\n- Single code path for all browsers (simpler to maintain)\n- 200 lines of CDP code deleted, 4 CDP-specific tests deleted\n\n## Real behavior proof\n\n**Behavior addressed:** Verify `resp.body()` + `buf.subarray(0, maxBytes)` returns a bounded text body while the page receives the original response.\n\n**Real environment tested:** Node.js 22 with Vitest, Playwright browser test harness. Code path: `page.on('response')` → `resp.body()` → `Buffer.subarray(0, maxBytes)` → `TextDecoder.decode()`.\n\n**Exact steps or command run after this patch:**\n\n```bash\npnpm test extensions/browser/src/browser/pw-tools-core.waits-next-download-saves-it.test.ts\n```\n\n**After-fix evidence:**\n\nBEFORE FIX — CDP `Fetch.takeResponseBodyAsStream` + `Fetch.fulfillRequest`: 200 lines, CDP intercepts at Response stage → page receives truncated body\n\nAFTER FIX — `body()` + `subarray()`: 80 lines, no interception → page receives original response untouched\n\nReal browser proof (Playwright Chromium, Google Chrome 138, headless, via `page.on('response')` passive observer):\n\n```bash\n# node browser-proof.mjs\nSERVER=http://127.0.0.1:43573\n\n| Metric              | Tool (body()+subarray) | Page JS (full response) |\n|---------------------|------------------------|-------------------------|\n| Status              | 200                    | 200                     |\n| Body length         | 8000 chars (bounded)   | 520000 chars (original) |\n| Truncated?          | true                   | No                      |\n| Original response   | 520000 chars           | 520000 chars            |\n\nVerdict:\nTool returns bounded prefix (8000 < 520000): ✅\nPage receives full original body (520000 === 520000): ✅\nPage receives correct status (200): ✅\npage.on('response') is passive — page delivery unaffected: ✅\n```\n\n**Observed result after the fix:** All 15 tests pass. `resp.body()` is called but only `subarray(0, maxBytes)` is decoded to string. No page delivery disruption — the code is a passive observer via `page.on('response')`.\n\n**What was not tested:** Extremely large responses (>500 MB) — `resp.body()` still allocates a full Buffer, which is a memory cost we accept vs. the full-string cost of `resp.text()`. CDP-level zero-copy capture was removed because it can't preserve page delivery.\n\n## Tests and validation\n\n- **15 tests pass** covering: bounded decode for small/large/chunked responses, negative control (text() would decode full body), mutation test (subarray bounded regardless of Buffer size)\n- **Lint clean** (`npx oxlint`)\n- **128 lines added, 580 removed** across source + test files\n\n## Risk checklist\n\n- **Risk level:** Low — removed the risky CDP path, unified to passive observer pattern.\n- **Mitigation:** No CDP session management. No Fetch domain manipulation. No page response interception.\n- **Merge-risk explanation:** None — removed the code that caused the merge risk (CDP fulfill path). No config/env/API changes.\n- **User-visible behavior change?** No.\n- **Config/env/migration change?** No.\n- **Security/auth/network change?** No.\n\n## Linked context\n\nPattern from PR #98496 (bounded response body reads to prevent OOM). CDP approach attempted in earlier revisions of this PR, removed after ClawSweeper review identified page-delivery truncation.",
+        "branch": "fix/browser-bound-pw-tools-response-reads",
+        "head_sha": "2fb140a7ef23b660052796e0b76459dfac6740b8",
+        "author": "pandah97",
+        "labels": [
+          "size: M",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/browser/src/browser/pw-tools-core.responses.ts",
+            "additions": 36,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/browser/pw-tools-core.waits-next-download-saves-it.test.ts",
+            "additions": 186,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 222,
+        "deletions": 16,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98940",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98940.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 85,
+          "gatingTotal": 80,
+          "counts": {
+            "SUCCESS": 41,
+            "SKIPPED": 27,
+            "IN_PROGRESS": 17
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2389,
+    "total_ms": 4059,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 628
+        "ms": 537
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1536
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -99,7 +210,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1746
+        "ms": 1960
       },
       {
         "name": "append_ledger",
