@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T13:00:01.121Z",
+  "generated_at": "2026-07-03T13:00:35.355Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T10:00:00.319Z",
+  "since": "2026-07-03T10:00:33.192Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    389
+    99501
   ],
-  "comment_ids": [
-    4876557044
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,34 +31,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98343:4876557044:2026-07-03T12:57:26Z:re_review",
-      "comment_id": "4876557044",
-      "comment_version_key": "4876557044:2026-07-03T12:57:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98343#issuecomment-4876557044",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99501:4875362656:2026-07-03T13:00:30Z:clawsweeper_needs_human",
+      "comment_id": "4875362656",
+      "comment_version_key": "4875362656:2026-07-03T13:00:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99501#issuecomment-4875362656",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 98343,
-      "author": "jason-allen-oneal",
-      "author_id": 8335428,
+      "issue_number": 99501,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-03T12:57:26Z",
-      "comment_updated_at": "2026-07-03T12:57:26Z",
+      "comment_created_at": "2026-07-03T10:45:03Z",
+      "comment_updated_at": "2026-07-03T13:00:30Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=01d73876b06952a0bf67ad9f62e4c36c79d933b3)",
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "01d73876b06952a0bf67ad9f62e4c36c79d933b3",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,24 +68,90 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): deliberate fallback for malformed compaction boundary timestamps",
+        "body": "## Summary\n\n- Fix classification: Root-cause fix for compaction boundary timestamp validation.\n- Maintainer-ready confidence: High after focused regressions, typecheck, real compaction-path proof, and build verification.\n- Root cause: `checkCompaction()` parsed `compactionEntry.timestamp` with `new Date(...).getTime()` without validating the result. An unparseable timestamp returns `NaN`, and `<= NaN` always evaluates to `false` in JavaScript — silently deactivating the pre-compaction guard.\n- Why this is a root-cause fix: the timestamp→epoch-ms contract is now enforced through a single `resolveCompactionTime()` helper. Invalid strings return `undefined` instead of `NaN`, and callers use an explicit `!== undefined` check instead of the fragile `!Number.isNaN()` pattern.\n- Dependency graph status: no dependency changes. The helper lives in `compaction-time.ts`, an internal module not re-exported from the public plugin SDK.\n\n## Linked context\n\n- Linked issue: #99444 — \"guard NaN timestamp in compaction boundary check\".\n- Out of scope: no migration/backfill for historical compaction entries, no change to compaction logic beyond the timestamp guard, no new dependency, no config or schema changes.\n\n## What Problem This Solves\n\nFixes #99444: `checkCompaction()` (`src/agents/sessions/agent-session.ts`) parsed `compactionEntry.timestamp` with `new Date(...).getTime()` at two call sites. An unparseable timestamp returns `NaN`, and `<= NaN` always evaluates to `false`, so:\n\n1. `assistantIsFromBeforeCompaction` never activates → stale pre-compaction messages re-trigger compaction\n2. Usage-message staleness check silently fails → stale usage data can falsely trigger post-compaction compaction\n\n## Root Cause\n\nThe old code used `Number.NaN` as an implicit sentinel and checked with `!Number.isNaN()`:\n\n```ts\n// Before: NaN sentinel — intent is hidden\ncompactionEntry !== null && !Number.isNaN(compactionTime) && timestamp <= compactionTime\n```\n\nThis conflated \"no entry\" with \"unparseable timestamp\", and the lint rule `unicorn/prefer-number-properties` rejects the global `NaN`. More importantly, the guard's behavior when `NaN` is encountered is implicit — it relies on the JS language semantics of `<= NaN` being `false`.\n\n## Strategy: Deliberate Fallback\n\nWhen the compaction entry timestamp is unparseable, the boundary is **treated as unreliable** and the guard is skipped so compaction is checked normally. This is a deliberate fallback: a missing guard may trigger one extra compaction cycle, but a stuck guard would silently suppress compaction forever.\n\nThe new `resolveCompactionTime()` helper returns `number | undefined`:\n- `null` entry → `undefined` (no boundary)\n- Valid ISO timestamp → epoch ms\n- Unparseable timestamp → `undefined` (boundary unreliable)\n\nCallers check `compactionTime !== undefined` — explicit intent, no sentinel, no lint violation.\n\n## Why This Change Was Made\n\n| Scenario | Before | After |\n|----------|--------|-------|\n| Valid timestamp | Guard works correctly | Guard works correctly (unchanged) |\n| `null` compactionEntry | Guard skipped → check compaction | Guard skipped → check compaction (unchanged) |\n| **Malformed timestamp** | `NaN` → `<= NaN` → `false` → guard silently skipped | `undefined` → `!== undefined` → `false` → guard explicitly skipped |\n\nThe behavioral outcome is the same for malformed timestamps (proceed to check compaction — the safe default), but the intent is now explicit and the `Number.NaN` sentinel is eliminated.\n\n## User Impact\n\n- Malformed compaction entry timestamps no longer silently suppress the pre-compaction guard\n- One extra compaction cycle at worst (vs. runaway context growth at worst before)\n- No `Number.NaN` lint violations\n- Transparent to users; no config or behavior changes in the normal path\n\n## What did NOT change\n\n- Compaction logic beyond the timestamp guard\n- Compaction settings, thresholds, or overflow recovery\n- Session transcript format or storage\n- Config defaults, schema files, or provider behavior\n- No new public plugin SDK API surface\n\n## Changes\n\n- `src/agents/sessions/compaction-time.ts`: +18 lines (new file)\n  - `resolveCompactionTime()` helper: returns `number | undefined`, handles null entry and `Number.isNaN()` fallback\n  - Not re-exported from `index.ts` — stays off the public SDK surface\n- `src/agents/sessions/agent-session.ts`: +16 −4 lines\n  - Imports `resolveCompactionTime` from the internal module\n  - Both call sites: `compactionTime !== undefined` instead of old pattern\n- `src/agents/sessions/agent-session.resolve-compaction-time.test.ts`: +56 lines (new file)\n  - 9 focused regression tests: valid ISO, null entry, empty string, non-date strings, whitespace, bare numbers, round-trip, NaN-producing inputs, timezone offsets\n\n## Evidence\n\n### Verification environment\n\n| Item    | Value                 |\n| ------- | --------------------- |\n| OS      | Linux 4.19.112 x86_64 |\n| Node.js | v22.19.0              |\n| Vitest  | v4.1.8                |\n\n### Regression tests — resolveCompactionTime (9/9)\n\n```\n ✓ returns epoch ms for a valid ISO timestamp\n ✓ returns undefined for null entry (no compaction boundary)\n ✓ returns undefined when the timestamp is an empty string\n ✓ returns undefined when the timestamp is a non-date string\n ✓ returns undefined when the timestamp is whitespace only\n ✓ returns undefined when the timestamp is a bare number\n ✓ round-trips a known timestamp correctly\n ✓ returns undefined for timestamp strings that produce NaN in Date\n ✓ handles timestamps with timezone offsets\n Test Files  1 passed (1) | Tests  9 passed (9)\n```\n\n### Regression tests — compaction integration (9/9)\n\n```\n ✓ compacts when context exceeds threshold\n ✓ skips compaction for pre-compaction assistant messages\n ✓ skips compaction when usage source is pre-compaction\n ✓ handles overflow recovery with one retry\n ✓ skips compaction when no usage data available\n ✓ respects compaction settings thresholds\n ✓ skips compaction for different model/provider\n ✓ handles error messages with estimated context tokens\n ✓ aborts overflow recovery after one failed attempt\n Test Files  1 passed (1) | Tests  9 passed (9)\n```\n\n### Real behavior proof: malformed compaction boundary\n\nA redacted runtime proof imports the production `resolveCompactionTime` via `node --import tsx` and exercises 5 phases covering valid timestamps, null entries, 7 malformed variants, caller-site simulation, and stale message detection. **This is NOT a Vitest mock** — the only code under test is the production helper.\n\n```text\n========================================================================\nOpenClaw Compaction Boundary — Malformed Timestamp Proof (#99444)\n========================================================================\nPID:       542427\nNode:      v22.19.0\nPlatform:  linux x64\n\n── Phase 1: Valid timestamp — guard works normally ──\n  PASS  returns a number for valid ISO timestamp\n  PASS  returns > 0 (epoch ms)\n  PASS  round-trips correctly\n  PASS  recent message (after compaction) passes guard → proceeds to check\n  PASS  old message (before compaction) triggers guard → returns false\n\n── Phase 2: Null entry — no boundary ──\n  PASS  returns undefined for null entry\n  PASS  undefined skips guard → proceeds to check\n\n── Phase 3: Malformed timestamps — deliberate fallback ──\n  PASS  \"empty string\" → undefined, guard skipped\n  PASS  \"non-date string\" → undefined, guard skipped\n  PASS  \"whitespace only\" → undefined, guard skipped\n  PASS  \"garbage bytes\" → undefined, guard skipped\n  PASS  \"null\" string → undefined, guard skipped\n  PASS  \"undefined\" string → undefined, guard skipped\n  PASS  \"true\" string → undefined, guard skipped\n\n── Phase 4: Caller behavior ──\n  valid compaction entry         time=1783080000000   → proceed to check\n  malformed timestamp            time=undefined       → proceed to check\n  null (no compaction entry)     time=undefined       → proceed to check\n\n── Phase 5: Stale message detection ──\n  PASS  valid boundary: stale message IS detected (guard active)\n  PASS  malformed boundary: stale message NOT misidentified (guard skipped safely)\n  PASS  malformed boundary: proceeds to check (deliberate fallback)\n\n========================================================================\nVERDICT: PASS (30/30 checks)\n========================================================================\n```\n\n### Built artifact verification\n\nProduction bundle at `dist/sessions-BzRPvP7J.js:9513`:\n```js\nfunction resolveCompactionTime(entry) {\n    if (!entry) return void 0;               // null → undefined\n    const time = new Date(entry.timestamp).getTime();\n    if (Number.isNaN(time)) return void 0;    // malformed → undefined\n    return time;                              // valid → epoch ms\n}\n```\n\n## Risk checklist\n\n- **Session-state risk**: malformed compaction entry timestamps now explicitly skip the guard (same safe behavior as before, but intentional rather than relying on JS `<= NaN` semantics). One extra compaction cycle at worst.\n- **Availability risk**: none — compaction is checked normally when the boundary is unreliable, same as before.\n- **Dependency risk**: none — no dependency changes.\n- **Public contract risk**: none — `resolveCompactionTime` is in an internal module not re-exported from the plugin SDK.\n- **Patch quality**: new `undefined` returns are deliberate fallback signals used by callers; they are not silent defaults or fabricated values.\n- **Diff size**: 3 files, +86 −4 lines, no config/schema/storage changes.\n\n## Maintainer-ready checklist\n\n- **Behavior addressed**: `checkCompaction()` now uses a deliberate `undefined` fallback for malformed compaction entry timestamps instead of a `Number.NaN` sentinel.\n- **Why root-cause fix**: the fix enforces the timestamp→epoch-ms contract at the parsing boundary through a single helper; invalid strings produce `undefined` instead of `NaN`, and callers use an explicit `!== undefined` check.\n- **Exact steps after this patch**: `node --import tsx scripts/verify-malformed-compaction-boundary.mjs`, `pnpm test src/agents/sessions/agent-session.resolve-compaction-time.test.ts --run`, `pnpm test src/agents/compaction-partial-summary.test.ts --run`\n- **Evidence after fix**: real console output shows 30/30 checks pass across 5 phases; built artifact confirms `void 0` fallback.\n- **Observed result**: malformed timestamps → `undefined` → guard explicitly skipped → compaction checked normally. Valid timestamps unchanged.\n- **What was not tested**: no end-to-end agent run with genuinely corrupted session transcript — the change is exercised through the production `resolveCompactionTime` export and compaction integration tests.\n- **Architecture check**: the helper is an internal module (`compaction-time.ts`) consumed by `agent-session.ts`; it is not re-exported from `index.ts` or the plugin SDK.\n- **Target test files**: `agent-session.resolve-compaction-time.test.ts`, `compaction-partial-summary.test.ts`\n- **Scenario locked in**: empty strings, non-date strings, whitespace, garbage bytes, \"null\"/\"undefined\"/\"true\" strings all return `undefined`; valid ISO and null entries unchanged.\n- **Risk labels**: session-state (one extra cycle at worst vs. stuck guard before).\n- **Why acceptable**: the behavioral outcome for malformed data is the same safe default (proceed to check compaction), but the intent is now explicit and lint-compliant.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "fix/issue-99444-nan-timestamp-guard",
+        "head_sha": "01d73876b06952a0bf67ad9f62e4c36c79d933b3",
+        "author": "chenyangjun-xy",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/sessions/agent-session.resolve-compaction-time.test.ts",
+            "additions": 63,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/sessions/agent-session.ts",
+            "additions": 12,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sessions/compaction-time.ts",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 106,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99501",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99501.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "SUCCESS": 66,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2743,
+    "total_ms": 2516,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 790
+        "ms": 392
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1764
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -99,11 +163,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1941
+        "ms": 332
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
