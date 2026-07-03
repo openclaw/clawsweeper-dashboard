@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T19:09:38.696Z",
+  "generated_at": "2026-07-03T19:10:40.347Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T16:09:38.499Z",
+  "since": "2026-07-03T16:10:38.775Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99627
+    99610
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,121 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99610:4878486510:2026-07-03T19:10:35Z:clawsweeper_auto_repair",
+      "comment_id": "4878486510",
+      "comment_version_key": "4878486510:2026-07-03T19:10:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99610#issuecomment-4878486510",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99610,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-03T18:00:26Z",
+      "comment_updated_at": "2026-07-03T19:10:35Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=0aeb43d2cc692fd33c79c6788c622af2e9e5fbcb)",
+      "review_summary": "The PR adds a build-readiness helper, deferred polling, an exit-handler guard, and watch-node tests to avoid restarting gateway watch when `dist/entry.js` or its build stamp is not ready.\n\nPR surface: Tests +277, Other +108. Total +385 across 2 files.\n\nReproducibility: yes. from source: current main stops the watched child before `run-node` rebuilds, and this PR can wait for a matching build stamp without starting the process that creates it. I did not run a destructive live systemd reproduction in this read-only review.",
+      "review_followup": "- [P1] Manual review is needed because the remaining blocker is lifecycle design plus contributor real-setup proof, not a small mechanical cleanup that automation can safely finish.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "0aeb43d2cc692fd33c79c6788c622af2e9e5fbcb",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(watch-node): defer restart when dist/entry.js is missing mid-rebuild",
+        "body": "## Summary\n\n**Problem**: When a git pull triggers source file changes while `dist/` is mid-rebuild, the hot-reload watcher (`watch-node.mjs`) kills the current healthy gateway process and restarts into a missing `dist/entry.js`, causing an 8x crash-loop that exhausts systemd's restart limit.\n\n**Solution**: Before killing the child process, validate that the build output is valid for the **current checkout** — check both `dist/entry.js` presence and the build stamp git HEAD match. If the entry is missing or the stamp HEAD doesn't match the current checkout HEAD, defer the restart and poll until a valid build completes.\n\n**What changed**: `scripts/watch-node.mjs` (isBuildReadyForRestart guard + exit handler guard) and `test/scripts/watch-node.test.ts` (16 tests, up from 9).\n\n**What did NOT change**: Build logic (`tsdown-build.mjs`), source watch paths, the `dist/` IGNORE segment, or `run-node.mjs`.\n\nFixes #99603\n\n## What Problem This Solves\n\nProduction gateway deployments using a git checkout with hot-reload (via systemd) are vulnerable to a crash-loop when a `git pull` triggers a rebuild while `dist/` is mid-build. The watcher kills the currently-healthy gateway and restarts into a missing entrypoint. This caused a 37-minute production outage on 2026-07-03.\n\n## Root Cause\n\n`watch-node.mjs:requestRestart()` unconditionally sends SIGTERM to the healthy gateway child process whenever chokidar detects a relevant source file change. During a rebuild, `tsdown-build.mjs` cleans `dist/`, removing `dist/entry.js`. The new child crashes and `shouldRestartAfterChildExit()` treats SIGTERM/143 as restartable — forming a crash-loop.\n\nEven when `dist/entry.js` exists (old build), the build may be stale for the new checkout. Without checking the build stamp git HEAD, the watcher kills the healthy child and restarts into a stale build.\n\n## Changes in this iteration (ClawSweeper review response)\n\n### `isBuildReadyForRestart(cwd, fs, resolveHead)` — three-layer guard\n\n1. **entry.js existence**: If `dist/entry.js` is missing, build is not ready\n2. **Build stamp git HEAD match**: If the build stamp's git HEAD doesn't match the current checkout HEAD, `run-node` would rebuild and clean `dist/`, so restart is deferred\n3. **Conservative fallback**: When git is unavailable or the stamp is unreadable, falls back to entry.js existence check only\n\n### Exit handler guard\n\nAfter a child exits with SIGTERM/143 (restartable code), verify build readiness before spawning a new child. Without this, a stale build causes a self-reinforcing crash-loop.\n\n### Tests\n\n16 tests (up from 9): 5 pure-function tests for `isBuildReadyForRestart`, 2 exit-handler guard tests, plus the original 9 deferred-restart tests updated for the stamp check.\n\n## Real behavior proof\n\n**Behavior addressed**: The hot-reload watcher (`watch-node.mjs`) no longer kills the current healthy gateway child process when `dist/entry.js` is missing (mid-rebuild) or the build stamp git HEAD doesn't match the current checkout HEAD. Instead, it defers the restart and polls until fresh build output appears.\n\n**Real environment tested**: Linux x64, Node v22 — real filesystem temp directory with actual `dist/entry.js` and `.buildstamp` file operations, using the real `runWatchMain()` function from `watch-node.mjs`.\n\n**Exact steps or command run after this patch**:\n```terminal\npnpm test -- test/scripts/watch-node.test.ts\n```\n\n**After-fix evidence**:\n```terminal\n=== PHASE 1: Normal restart (entry exists + stamp matches) ===\nSignal count after change: 1\n✅ Normal restart: SIGTERM sent immediately\n\n=== PHASE 2: Deferred restart (entry missing) ===\n[openclaw] Build output missing or stale for current checkout; \ndeferring restart until fresh build completes.\nSignal count after change with missing entry: 1\n✅ Deferred: child NOT killed.\n\n=== PHASE 3: Polling while missing ===  \nSignal count after 2s poll (still missing): 1\n✅ Polling: still deferred (entry still missing)\n\n=== PHASE 4: Entry + stamp appear → deferred restart fires ===\n[openclaw] Build output is now ready; triggering deferred restart.\nSignal count after entry reappears: 2\n✅ Deferred restart fired after build output appeared!\n```\n\n**Observed result after the fix**: The deferred restart + stamp validation mechanism works correctly:\n1. Normal restart (entry.js fresh + stamp matches) → immediate SIGTERM\n2. Entry missing → child NOT killed; deferral logging emitted\n3. Continued polling while still missing → still deferred\n4. Entry + stamp appear → \"Build output is now ready\" → SIGTERM sent\n\n**What was not tested**: Full systemd-managed source-checkout gateway with live git pull race. The stamp+HEAD check has been verified at the unit/integration level but the environment does not have the required gateway config dependencies for a full gateway startup.\n\n```terminal\n=== PHASE 1: Normal restart (entry exists + stamp matches) ===\nSignal count after change: 1\n✅ Normal restart: SIGTERM sent immediately\n\n=== PHASE 2: Deferred restart (entry missing) ===\n[openclaw] Build output missing or stale for current checkout; \ndeferring restart until fresh build completes.\nSignal count after change with missing entry: 1\n✅ Deferred: child NOT killed.\n\n=== PHASE 3: Polling while missing ===  \nSignal count after 2s poll (still missing): 1\n✅ Polling: still deferred (entry still missing)\n\n=== PHASE 4: Entry + stamp appear → deferred restart fires ===\n[openclaw] Build output is now ready; triggering deferred restart.\nSignal count after entry reappears: 2\n✅ Deferred restart fired after build output appeared!\n```\n\n### Unit tests (16/16 passed)\n\n```terminal\npnpm test -- test/scripts/watch-node.test.ts\n\nTest Files  1 passed (1)\n     Tests  16 passed (16)\n```\n\n### What was not tested\n\n- Full systemd-managed source-checkout gateway with live git pull race\n- The stamp+HEAD check requires a real git environment to validate end-to-end; our environment does not have the required gateway config dependencies for a full gateway startup\n\n## Risk checklist\n\nmerge-risk: Low (partial guard)\n\n- [x] Low risk — change is constrained to `requestRestart()` and exit handler guard logic; no impact on build, runtime, or non-watch paths\n- [x] All behaviors are additive (check before kill); when build is fresh, behavior is identical to current code\n- [x] Conservative fallback when git is unavailable — guard never blocks restart when it can't verify\n- [x] 16 tests covering pure function, exit handler, deferred restart, and shutdown races\n- [x] No config, API, or dependency changes\n- [x] Does not affect production (non-watch) gateway usage\n",
+        "branch": "fix/issue-99603-hot-reload-crash-loop-guard",
+        "head_sha": "0aeb43d2cc692fd33c79c6788c622af2e9e5fbcb",
+        "author": "leonidaslux",
+        "labels": [
+          "scripts",
+          "size: M",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/watch-node.mjs",
+            "additions": 108,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/watch-node.test.ts",
+            "additions": 279,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 387,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99610",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99610.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 11,
+          "gatingTotal": 6,
+          "counts": {
+            "SUCCESS": 8,
+            "SKIPPED": 3
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 331,
+    "total_ms": 1774,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 186
+        "ms": 223
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1334
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,7 +155,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 134
+        "ms": 191
       },
       {
         "name": "append_ledger",
