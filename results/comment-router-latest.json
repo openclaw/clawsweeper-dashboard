@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T12:38:51.638Z",
+  "generated_at": "2026-07-03T12:38:57.439Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T09:38:51.361Z",
+  "since": "2026-07-03T09:38:55.802Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99534
+    99533
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,128 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99533:4876290393:2026-07-03T12:38:51Z:clawsweeper_auto_repair",
+      "comment_id": "4876290393",
+      "comment_version_key": "4876290393:2026-07-03T12:38:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99533#issuecomment-4876290393",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99533,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-03T12:33:10Z",
+      "comment_updated_at": "2026-07-03T12:38:51Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=ade31058062304a645638d8f47053d4ee43755d5)",
+      "review_summary": "The PR moves `pricingFingerprint` from each usage-cost cache entry to the top-level cache object, bumps the cache version from 4 to 5, and updates freshness checks to use the cache-level fingerprint.\n\nPR surface: Source +17. Total +17 across 1 file.\n\nReproducibility: yes. at source level: current main stores `pricingFingerprint` on each `UsageCostCacheFileEntry` and writes it for every scanned cache entry. I did not run a large-cache replay in this read-only review.",
+      "review_followup": "- [P1] The remaining blockers are contributor-owned real behavior proof, schema/upgrade coverage, and maintainer choice among sibling candidate PRs, so this should stay in human review rather than a repair lane.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "ade31058062304a645638d8f47053d4ee43755d5",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(usage-cost-cache): deduplicate pricingFingerprint by storing it at cache-object level (#99511)",
+        "body": "## What Problem This Solves\n\nThe per-agent usage-cost cache (`.usage-cost-cache.json`) stores the full `pricingFingerprint` JSON string (~2.7 KB) on every file entry. The fingerprint is a normalized pricing table that is identical across all entries within one config, so on a large cache it dominates the file — ~57% of a 142 MB cache as pure duplicated data. Every cache read/parse/atomic-rewrite cycle pays this overhead.\n\nFixes #99511.\n\n## Why This Change Was Made\n\nMove the `pricingFingerprint` from the per-entry level to the cache-object level, storing it once instead of N times. This follows the same pattern as `version` and `updatedAt` — global cache metadata stored at the top level.\n\n**Backward compatibility**: Bumping `USAGE_COST_CACHE_VERSION` from 4 to 5 makes older caches rebuild automatically on next refresh via `normalizeUsageCostCache`. No migration code is needed.\n\n**Pricing change detection**: `invalidateUsageCostCacheIfPricingChanged` compares the stored cache-level fingerprint against the current config's fingerprint on every entry-point read. If pricing config changed between runs (e.g. model cost updates), the stale cache is discarded and rebuilt from scratch, the same way the old per-entry comparison worked.\n\n**Not modified**: The `pricingFingerprint` parameter is retained in all function signatures — only the internal storage wire format changed. Session summary building, transcript scanning, cost estimation, and checkpoint throttling are untouched.\n\n## User Impact\n\nUsers with large session histories (thousands of sessions) see smaller cache files and faster cache load/checkpoint cycles. No user-visible behavior change — cost reporting and session summaries are identical.\n\n## Evidence\n\n**Behavior addressed**: `pricingFingerprint` duplicated on every cache entry, occupying ~57% of cache file size\n\n**Real environment tested**: `node` + `vitest`, local Node.js runtime, no external credentials required\n\n**Exact steps or command run after this patch**:\n```\n$ npx vitest run src/infra/session-cost-usage.test.ts --run\n```\n\n**Evidence after fix**:\n```\n Test Files  1 passed (1)\n      Tests  58 passed (58)\n   Duration  11.97s\n```\n\n**Observed result after fix**: All 58 session-cost-usage tests pass with the restructured cache format. The cache JSON now writes `pricingFingerprint` once at the object root alongside `version` and `updatedAt`, eliminating the `entries × 2.7 KB` duplication. Old-format caches (version < 5) are automatically discarded and rebuilt on next refresh.\n\nDisk savings — measured on a representative cache with 31,433 entries:\n- **Before**: `pricingFingerprint` = ~2,720 bytes/entry × 31,433 entries ≈ **81.5 MB of 142 MB (57%)**\n- **After**: `pricingFingerprint` = ~2,720 bytes × 1 ≈ **2.7 KB**\n\n**What was not tested**: Cache file size reduction on a live gateway with thousands of real session files, cache behavior during concurrent refreshes with pricing config changes.\n\n## Regression Test Plan\n\n```\n$ npx vitest run src/infra/session-cost-usage.test.ts --run\n Test Files  1 passed (1)\n      Tests  58 passed (58)\n\n$ npx oxlint --tsconfig tsconfig.json src/infra/session-cost-usage.ts\n→ exit 0\n```\n\n## AI Assistance\n\nThis PR was created with assistance from Claude Opus 4.8 (Anthropic). The author understands and takes responsibility for all code changes.\n",
+        "branch": "fix/usage-cost-cache-fingerprint-dedup-99511",
+        "head_sha": "9a9a0d348b9e2daf1a1b307781bf0f676ef94a87",
+        "author": "maweibin",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/infra/session-cost-usage.ts",
+            "additions": 40,
+            "deletions": 23,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 40,
+        "deletions": 23,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99533",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99533.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 15,
+          "gatingTotal": 10,
+          "counts": {
+            "CANCELLED": 3,
+            "QUEUED": 3,
+            "IN_PROGRESS": 2,
+            "SKIPPED": 7
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "Select Critical Quality shards:QUEUED",
+            "Detect iOS scan scope:QUEUED",
+            "dependency-guard-detect:IN_PROGRESS",
+            "security-sensitive-guard-detect:IN_PROGRESS"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "Select Critical Quality shards:QUEUED",
+            "Detect iOS scan scope:QUEUED",
+            "dependency-guard-detect:IN_PROGRESS",
+            "security-sensitive-guard-detect:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 479,
+    "total_ms": 1827,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 266
+        "ms": 350
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1274
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +162,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 202
+        "ms": 181
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
