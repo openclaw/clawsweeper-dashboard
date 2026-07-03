@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T11:39:33.893Z",
-  "repo": "openclaw/clawhub",
+  "generated_at": "2026-07-03T11:39:36.656Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T08:39:32.360Z",
+  "since": "2026-07-03T08:39:33.878Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    2956
+    95545
   ],
   "comment_ids": [
-    4875741457
+    4875740863
   ],
-  "status_comment_id": 4875741743,
+  "status_comment_id": 4875741158,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,20 +33,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/clawhub:2956:4875741457:2026-07-03T11:38:22Z:re_review",
-      "comment_id": "4875741457",
-      "comment_version_key": "4875741457:2026-07-03T11:38:22Z",
-      "comment_url": "https://github.com/openclaw/clawhub/pull/2956#issuecomment-4875741457",
-      "repo": "openclaw/clawhub",
+      "idempotency_key": "comment-router:openclaw/openclaw:95545:4875740863:2026-07-03T11:38:17Z:re_review",
+      "comment_id": "4875740863",
+      "comment_version_key": "4875740863:2026-07-03T11:38:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95545#issuecomment-4875740863",
+      "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 2956,
-      "author": "jesse-merhi",
-      "author_id": 79823012,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-07-03T11:38:22Z",
-      "comment_updated_at": "2026-07-03T11:38:22Z",
-      "status_comment_id": 4875741743,
-      "trigger": "slash",
+      "issue_number": 95545,
+      "author": "anyech",
+      "author_id": 8743351,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-03T11:38:17Z",
+      "comment_updated_at": "2026-07-03T11:38:17Z",
+      "status_comment_id": 4875741158,
+      "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
@@ -74,108 +74,137 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-07-03T11:39:34.625Z",
+          "dispatched_at": "2026-07-03T11:39:37.685Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 2956
+          "item_number": 95545
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-03T11:39:36.508Z",
-          "response_comment_id": "4875560361",
+          "commented_at": "2026-07-03T11:39:38.836Z",
+          "response_comment_id": "4875741158",
           "response_comment_mode": "updated"
         }
       ],
-      "author_repository_permission": "write",
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix: improve publisher abuse scan resilience",
-        "body": "## Summary\n\nPublisher-abuse pressure scoring was spending most of its runtime asleep between continuation actions. The old cron processed 5 pages of 250 publishers, then waited 60 seconds before the next continuation, which adds roughly 6 hours of scheduler idle time for a ~475k-publisher run before counting the actual scoring work.\n\nThis keeps the existing serial cursor-based scan design, but makes the continuation cadence match the work: 20 pages per action, the same 250-publisher mutation page size, and a 5-second delay between score-run continuations. It also adds bounded retry/resume for transient Convex failures so a long run does not fail permanently on a single generic platform retry error, run-doc OCC failure, or retryable state-load failure.\n\n## What Changed\n\n- Pressure score cron throughput: runs `maxPages: 20` instead of `5`, so each action can process up to 5,000 publishers while each mutation still only handles 250 publishers.\n- Pressure score continuation delay: score-run continuations now wait 5 seconds instead of sharing the generic 60-second action delay used by other workflows.\n- Bounded transient retries: generic Convex transient errors and `changed while this mutation was being run` now record telemetry and reschedule the same run with exponential backoff from 30 seconds to 5 minutes, capped at 5 retry attempts.\n- State-load resilience: scheduled continuations now use the same retry path when loading run state fails with a retryable transient.\n- Observability: score-run docs now record transient error count, last transient error, last transient error time, and next retry time; the action also logs retry and exhausted-budget events.\n- Failure semantics: deterministic failures still mark the score run failed, and exhausted transient retries also fail the run instead of looping forever.\n\n## Convex Capacity Check\n\nRead-only production investigation found the bottleneck and the current resource shape:\n\n- Current batching was 1,250 publishers per action followed by 60 seconds of idle delay. At ~475,000 publishers, that creates about 380 continuations and about 6.3 hours of scheduler delay alone.\n- Keeping the 250-publisher mutation page avoids increasing individual transaction read/write pressure. The same corpus still uses roughly the same number of 250-publisher page mutations; this PR reduces action continuations to about 95 and scheduled idle time to under 8 minutes.\n- Production Convex insights over the last 72 hours show read/byte-limit and OCC noise in other surfaces, especially search, package release/version reads, rate limits, security scan claiming, and auth/user writes.\n- The publisher-abuse score path appears only in OCC retry warnings: `collectPublisherAbuseScoresPageInternal` had 3 retry warnings on `users` and 51 retry warnings on `publishers`. It did not appear in production read-limit, byte-limit, or permanent OCC failure buckets.\n- The increased cadence is still serial. It does not shard, parallelize, or increase the per-mutation publisher page size.\n- Parallel sharding is intentionally not part of this PR because the current pressure model accumulates `sumLogPressure` and `sumSquaredLogPressure` during collection, then finalizes scores by ordered cursor/rank. Sharding that safely would require a separate aggregation/ranking design.\n\nThis should be within the existing deployment quota shape because the transaction size stays bounded and only scheduler idle time is compressed. The first production run should still be watched in Convex logs/insights because it will concentrate the existing scan work into a shorter wall-clock window.\n\nNo screenshot is included because this is backend-only cron/action/schema behavior; the management UI surface is unchanged.\n\n## Verification\n\nReviewer-checkable behavior:\n\n- The cron now schedules pressure scoring with `batchSize: 250`, `maxPages: 20`, `trigger: \"cron\"`.\n- A retryable collection failure records transient telemetry and schedules the same run after 30 seconds without marking it failed.\n- A retryable state-load failure for a scheduled continuation records transient telemetry and schedules the same run after 30 seconds without marking it failed.\n- A retryable collection failure at `retryAttempt: 5` marks the run failed and does not schedule another retry.\n- A normal incomplete score-run action schedules its continuation after 5 seconds.\n\nChecks run:\n\n- `bunx vitest run convex/publisherAbuse.test.ts convex/crons.test.ts --testNamePattern 'publisher abuse|score run|cron jobs|transient|continuation'` passed, 121 passed / 8 skipped.\n- `bunx vitest run convex/publisherAbuse.test.ts convex/crons.test.ts` passed, 126 passed.\n- `bunx tsc --noEmit --pretty false` passed.\n- `git diff --check` passed.\n- `bunx convex dev --once --typecheck=disable` passed against development deployment `dev:admired-dodo-615`; Convex functions/schema ready in 8.82s on the latest run.\n- `bunx convex insights --prod --details` passed/read-only; publisher-abuse appeared only in OCC retry warnings and not read-limit, byte-limit, or permanent OCC failure buckets.\n- `$code-review` completed: native review clean, cold-review found one retryability gap, the gap was fixed, and both follow-up native and cold-review passes were clean.\n- GitHub CI on head `3e61d5efcaf2fba8d2dc96bd52ad6530cf5cef96` passed (`pr-gates`, static, unit, packages, types-build, e2e-http, Playwright shards, CodeQL, Vercel).\n\n## Operational Rollout\n\n- Merge does not deploy production by itself.\n- Deploy backend when ready, then watch the first production publisher-abuse score refresh in Convex logs/insights.\n- Expected runtime shape: same total number of 250-publisher page mutations, fewer action continuations, and materially less scheduler idle time.\n- Rollback lever: revert this PR or deploy the previous backend if the first production scan shows unexpected Convex resource pressure.\n",
-        "branch": "jesse/publisher-abuse-scan-resilience",
-        "head_sha": "3e61d5efcaf2fba8d2dc96bd52ad6530cf5cef96",
-        "author": "jesse-merhi",
+        "title": "Guard Skill Workshop update applies against delta drafts",
+        "body": "## Summary\n\nFixes a Skill Workshop update-apply footgun where an update proposal that contains a delta/proposal note can be applied as the full replacement `SKILL.md`.\n\nFor update proposals, `applySkillProposal()` strips proposal frontmatter and writes the proposal body as the live skill content. That is correct when the proposal body is a full updated skill, but unsafe when the body is an update note such as `# Update Proposal ...` with \"proposed changes\" instructions. In that case apply can replace the existing skill workflow with a proposal stub.\n\nThis PR adds an apply-time guard for update proposals before the live write, while still allowing intentional complete rewrites of a skill body.\n\n## What Problem This Solves\n\nSkill Workshop `action=update` proposals are meant to carry a complete replacement `SKILL.md`. Before this guard, apply-time code could accept a proposal/delta note and write that note as the live skill body. That risks destroying the actual skill procedure.\n\nThe guard should reject obvious non-skill update notes and identity swaps, but it should not block valid complete rewrites just because the new skill reorganizes or consolidates sections. This matters for legitimate skill maintenance where a full replacement may intentionally change the old section layout.\n\n## What changed\n\n- Reject update proposal bodies that have no replacement skill body / no top-level skill heading.\n- Reject update proposal bodies that look like delta/proposal notes instead of complete skill bodies, using multiple proposal-note markers instead of a single broad substring match.\n- Reject update proposal bodies that change the existing skill identity heading.\n- Allow complete replacement `SKILL.md` bodies that intentionally reorganize or consolidate old `##` sections.\n- Preserve compatibility for existing valid skills that have frontmatter plus prose but no top-level H1 heading.\n- Add regression coverage for:\n  - delta/proposal-note update drafts;\n  - empty replacement bodies;\n  - complete section rewrites;\n  - single proposal-like section headings inside an otherwise complete skill;\n  - emoji-decorated preserved headings.\n\n## Duplicate/adjacent work check\n\nI checked current `origin/main` and searched open/closed issues and PRs before opening this PR.\n\nNot duplicates:\n\n- #92733 touches `applySkillProposal()` for openclaw-managed skill roots, but it still writes `stripProposalFrontmatterForSkill(content)` directly and does not validate that update content is a complete skill body.\n- #94315 / #94249 cover large-proposal apply timeout behavior.\n- #90421 / #90388 cover stale proposal reconciliation when a target skill already exists or disappears.\n- #95395 / #94947 cover `action=create` proposals that should have targeted existing skills.\n\nThis PR is specifically about update-apply content-shape validation before overwriting an existing `SKILL.md`.\n\n## Evidence\n\nCurrent pushed head: `e0656e666cb5f36e1e55cec8b32b8a95b7ba6cd0`, rebased on `2a8db1fc93cf0c7a683a49076f10f9e1aec7b9e5`.\n\nExact validation run after the latest fix:\n\n```bash\nnode scripts/run-vitest.mjs run src/skills/workshop/service.test.ts\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo\ngit diff --check\n```\n\nObserved results on the exact pushed head:\n\n```text\nsrc/skills/workshop/service.test.ts: 30 passed\ntsgo core-test: passed\ngit diff --check: passed\n```\n\nReal apply-time proof outside the unit test shard:\n\n```text\nA temporary isolated workspace used the actual Skill Workshop service apply path.\n\nbad delta-note update -> rejected\noriginal SKILL.md body preserved -> true\nvalid H1-less complete update -> applied\nupdated H1-less body present -> true\ninjected H1 heading -> false\ntemporary workspace -> removed\n```\n\nRedacted terminal output from that proof:\n\n```json\n{\n  \"event\": \"delta-note-apply\",\n  \"workspaceDir\": \"<temp-workspace-root>/workspace\",\n  \"rejected\": true,\n  \"rejection\": \"Skill update proposal content appears to be a delta/proposal note, not a complete replacement SKILL.md. Revise the proposal with the full updated skill body before applying.\",\n  \"originalBodyPreserved\": true,\n  \"proposalStillPending\": true\n}\n{\n  \"event\": \"h1-less-complete-update\",\n  \"workspaceDir\": \"<temp-workspace-root>/workspace\",\n  \"applied\": true,\n  \"updatedBodyPresent\": true,\n  \"hasInjectedH1\": false\n}\n{\n  \"event\": \"cleanup\",\n  \"removed\": \"<temp-workspace-root>\"\n}\n```\n\nAdditional behavior covered by the focused test shard:\n\n```text\nempty replacement body -> rejected with the existing SKILL.md preserved\ncomplete section rewrite -> applied and replaced the old section structure\nsingle proposal-like section heading in a complete skill -> allowed\nemoji-decorated preserved H1 -> applied as the same skill identity\nexisting valid H1-less skill -> complete update applied without injecting H1\n```\n\nWhat was not tested:\n\n- Full repository CI is expected to run on GitHub for the pushed head.\n",
+        "branch": "skill-workshop-apply-guard",
+        "head_sha": "a4aab033fa8ac4a798efca00787b0db2298e6f2c",
+        "author": "anyech",
         "labels": [
-          "status: 👀 ready for maintainer look",
-          "rating: 🐚 platinum hermit"
+          "size: M",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "convex/crons.test.ts",
-            "additions": 1,
-            "deletions": 1,
+            "path": "src/skills/workshop/service.test.ts",
+            "additions": 325,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "convex/crons.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "convex/publisherAbuse.test.ts",
-            "additions": 205,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "convex/publisherAbuse.ts",
-            "additions": 174,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "convex/schema.ts",
-            "additions": 4,
+            "path": "src/skills/workshop/service.ts",
+            "additions": 117,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 385,
-        "deletions": 15,
+        "changedFiles": 2,
+        "additions": 442,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-clawhub-2956",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawhub-2956.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95545",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95545.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 27,
-          "gatingTotal": 25,
+          "total": 93,
+          "gatingTotal": 88,
           "counts": {
-            "SUCCESS": 27
+            "SUCCESS": 47,
+            "SKIPPED": 26,
+            "IN_PROGRESS": 19,
+            "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4711,
+    "total_ms": 5609,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 480
+        "ms": 712
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1042
+        "ms": 2051
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -187,7 +216,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3171
+        "ms": 2820
       },
       {
         "name": "append_ledger",
