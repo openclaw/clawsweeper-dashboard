@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T13:41:53.830Z",
+  "generated_at": "2026-07-03T13:42:28.916Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T10:41:51.725Z",
+  "since": "2026-07-03T10:42:28.702Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99549
+    99551
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,130 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99549:4876866108:2026-07-03T13:41:48Z:clawsweeper_needs_human",
-      "comment_id": "4876866108",
-      "comment_version_key": "4876866108:2026-07-03T13:41:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99549#issuecomment-4876866108",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99549,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-03T13:35:59Z",
-      "comment_updated_at": "2026-07-03T13:41:48Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] The remaining blocker is contributor/maintainer proof and acceptance of the async transcript-mirror contract, not a safe ClawSweeper code repair.; Cleared: The diff is a single runtime TypeScript control-flow change and does not alter dependencies, workflows, credentials, permissions, package metadata, or code-execution surfaces. (sha=a8fbe9f3125b80fe2cf69fc711a22998cf5300a5)",
-      "review_summary": "The PR changes final auto-reply delivery so transcript mirroring runs in the background instead of being awaited before reply operation completion.\n\nPR surface: Source +16. Total +16 across 1 file.\n\nReproducibility: no. high-confidence local reproduction was run in this read-only review. Source inspection does show current main awaits a dispatcher-idle transcript mirror before the reply operation completion path can run, and the contributor reports live queueDepth 2/3 stalls across backends.",
-      "review_followup": "- [P1] The remaining blocker is contributor/maintainer proof and acceptance of the async transcript-mirror contract, not a safe ClawSweeper code repair.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "a8fbe9f3125b80fe2cf69fc711a22998cf5300a5",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(auto-reply): don't block reply completion on transcript mirror",
-        "body": "## Problem\n\nSending a second message while the first is still being processed (`queueDepth >= 2` — e.g. a clarification typed while the agent is thinking) hangs the session for ~15 minutes. The follow-up stays `queued_behind_active_work` and the first reply's operation is stuck at `phase=running`:\n\n```\nstalled session: ... queueDepth=2 reason=active_work_without_progress\nclassification=stalled_agent_run activeWorkKind=embedded_run\nlastProgress=<backend>:result recovery=none\n```\n\n…until the stuck-session abort finally fires. The user gets no reply to either message and the whole session lane is frozen.\n\n## Root cause\n\n`mirrorTranscriptAfterDispatcherDelivery()` in `src/auto-reply/reply/dispatch-from-config.ts` opens with `await params.dispatcher.waitForIdle()` and is awaited from `sendFinalPayload` — i.e. **while still inside the reply dispatch, before the reply operation completes**.\n\nWhen a follow-up is queued, `dispatcher.waitForIdle()` cannot resolve until this operation clears (the dispatcher isn't idle — the queued follow-up is waiting), and the operation cannot clear until `sendFinalPayload` returns, which is blocked here. **Circular deadlock: op-completion ⇄ dispatcher-idle.** The reply operation stays `phase=running` (confirmed live: `stuckOp=[phase=running result=null inRegistry=y]`), surfacing as `stalled_agent_run recovery=none`.\n\nThis lives in the shared reply-dispatch layer, so it is **backend-agnostic** — reproduced on the claude-cli, LMStudio (OpenAI-completions) and DeepSeek backends. It is just most visible with backends whose turns run long enough to widen the `queueDepth >= 2` timing window.\n\n## Fix\n\nRun the transcript mirror **fire-and-forget**. It is post-delivery bookkeeping — an idempotent, delivered-form reconciliation (`appendAssistantMessageToSessionTranscript` with an `idempotencyKey`); the primary assistant message is already written synchronously by the agent run — so it does not need to gate the operation's completion. Detaching it lets the op complete immediately: the queued follow-up proceeds, the dispatcher goes idle, and the background mirror then records the transcript. No timeout, no added latency; the other (routed-reply) mirror call site, which has no `waitForIdle`, is unchanged.\n\n## Validation\n\nDeployed live on a real install and exercised `queueDepth` 2 and 3 repeatedly across three backends (LMStudio openai-completions, claude-cli, DeepSeek cloud): **zero stalls**, replies complete, transcript mirrored, no background-mirror errors — where the same scenario reliably hung before.\n\n## Workaround (for anyone hitting this before merge)\n\nSerialize inbound messages per conversation so a second message is not admitted until the first reply operation completes — this avoids the `queueDepth >= 2` window entirely (at the cost of not interleaving follow-ups).\n\n## Relation to other issues\n\n- **Distinct from #98416 / #98835** — that is the *reply-session-initialization conflict* (`reply session initialization conflicted`, a per-message `outcome=error` drop triggered by `/new` + rapid messages). Different symptom, different code path.\n- **Different root than #96703** — that stall is the *context-engine post-turn maintenance* wedge (`lastProgress=embedded_run:started`, fixed by #97175). This one wedges *after* the run finishes, in the delivery/mirror step (`lastProgress=<backend>:result`), with the context engine disabled.\n\nBoth share the generic `stalled_agent_run recovery=none` symptom, so this is one more distinct root in that family.\n",
-        "branch": "fix/mirror-transcript-deadlock",
-        "head_sha": "a8fbe9f3125b80fe2cf69fc711a22998cf5300a5",
-        "author": "shagrat2",
-        "labels": [
-          "size: XS",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 17,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 17,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99549",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99549.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 99,
-          "gatingTotal": 94,
-          "counts": {
-            "FAILURE": 1,
-            "CANCELLED": 1,
-            "SKIPPED": 33,
-            "SUCCESS": 60,
-            "IN_PROGRESS": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2431,
+    "total_ms": 470,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 353
+        "ms": 204
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1738
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -164,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 316
+        "ms": 256
       },
       {
         "name": "append_ledger",
