@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T22:02:44.471Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-03T22:03:35.893Z",
+  "repo": "openclaw/clawsweeper",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T19:02:44.203Z",
+  "since": "2026-07-03T19:03:34.526Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99657
+    384
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,144 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/clawsweeper:384:4861299594:2026-07-03T22:03:23Z:clawsweeper_auto_repair",
+      "comment_id": "4861299594",
+      "comment_version_key": "4861299594:2026-07-03T22:03:23Z",
+      "comment_url": "https://github.com/openclaw/clawsweeper/pull/384#issuecomment-4861299594",
+      "repo": "openclaw/clawsweeper",
+      "target_branch": null,
+      "issue_number": 384,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-02T01:08:15Z",
+      "comment_updated_at": "2026-07-03T22:03:23Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=be31edb98842eb3721e79fbffc7896d81886935c)",
+      "review_summary": "The PR adds a bounded durable-comment review-history ledger, exposes prior review cycles to review context, and adds optional late-finding metadata through schema, report rendering, prompt policy, docs, and tests.\n\nReproducibility: yes. from source inspection: a stale-head durable comment starts with a `Codex review:` line and has only a `clawsweeper-review-status:stale` marker, while the new helper will turn that body into a cycle with `unknown` reviewedAt and sha. I did not execute it because this review is read-only.",
+      "review_followup": "- [P2] A narrow automated repair can address the stale-status ledger bug; maintainer acceptance of the ledger semantics remains a normal review decision after that.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "be31edb98842eb3721e79fbffc7896d81886935c",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(review): carry re-review finding history and flag late findings",
+        "body": "## Problem\n\nClawSweeper keeps one durable review comment per item and edits it in place on every sync (`docs/pr-review-comments.md`). That makes each re-review destroy the visible record of what earlier cycles found: `extractLatestClawSweeperReview` parses only the latest comment body, durable review comments are filtered out of the review context comment window as noise, and `prompts/review-item.md` gives the reviewer no instruction about how to treat a follow-up cycle.\n\nThe result is serial one-concern-per-cycle churn. A PR can go through four re-review cycles where each cycle resolves the previous finding and then surfaces exactly one new concern that was equally visible in cycle one (this happened on openclaw/openclaw PR 90468, which took four consecutive single-axis re-review cycles). Each extra cycle costs a full Codex session plus a contributor round trip, and nothing in the pipeline can even measure that this is happening, because the earlier cycles leave no trace.\n\n## Fix\n\nThree connected pieces, all read-side or prompt/report policy; no new GitHub mutation paths:\n\n1. New `src/review-history.ts` module: a compact review-history ledger embedded in the durable comment under a collapsed `Review history` block anchored by `<!-- clawsweeper-review-history v=1 -->`. Each line records one completed earlier cycle: reviewed-at, head sha, verdict, and finding titles. When the apply lane syncs a fresh review over an existing comment, `renderReviewCommentFromReport` parses the existing ledger, appends the review it is replacing as the newest earlier cycle, caps the ledger at eight cycles, and skips appending when the existing comment carries the same `reviewed_at` (same-review re-syncs stay idempotent). Ledger fields are sanitized so separator tokens in titles cannot corrupt parsing.\n2. Review context continuity: `previousClawSweeperReview` now exposes `earlierReviewCycles` (the parsed ledger) and `completedReviewCycles`, so a re-review sees the full cycle history instead of only the latest comment.\n3. Prompt contract plus churn accountability: `prompts/review-item.md` gains a re-review continuity section (verify prior findings first, report every remaining blocking concern in one pass, never hold a visible concern for a later cycle), and `reviewFindings` items gain an optional `lateFinding` boolean for findings raised on code unchanged since an earlier reviewed head where the concern was equally visible. The flag round-trips through decision parsing, report markdown, and the durable comment, so late-finding churn becomes measurable per repo.\n\n`docs/pr-review-comments.md` documents the ledger and the continuity contract.\n\n## Real behavior proof\n\nDriven with the production `renderReviewCommentFromReport` and `extractLatestClawSweeperReview` code paths on identical inputs: a cycle-1 review with a P1 finding synced to the durable comment, then a cycle-2 review (different finding) synced over it in place, then the extraction the cycle-3 reviewer receives. Same script on pristine base and the patched tree.\n\nBefore (pristine main `0c85aae`): the cycle-1 finding is erased by the in-place edit and the next reviewer cannot see it.\n\n```text\n=== durable comment after the cycle-2 sync (edited in place over cycle 1) ===\nno review history section: cycle-1 findings are erased by the in-place edit\n\n=== what the cycle-3 reviewer receives as previousClawSweeperReview ===\n{\n  \"findings\": [\n    { \"priority\": \"P2\", \"title\": \"Fix the remaining finding before merge.\" },\n    { \"priority\": \"P1\", \"title\": \"Handle unmatched double quotes without swallowing words\" },\n    { \"priority\": \"P1\", \"title\": \"Handle unmatched double quotes without swallowing words\" }\n  ],\n  \"earlierReviewCycles\": \"(field does not exist)\",\n  \"completedReviewCycles\": \"(field does not exist)\"\n}\n```\n\nAfter (this branch): the cycle-2 sync carries cycle 1 forward in the ledger, and the cycle-3 reviewer receives the full history.\n\n```text\n=== durable comment after the cycle-2 sync (edited in place over cycle 1) ===\n<details>\n<summary>Review history (1 earlier review cycle)</summary>\n\n<!-- clawsweeper-review-history v=1 -->\n- reviewed 2026-06-20T10:00:00.000Z sha aaa111cycle1 :: found issues before merge. :: [P2] Fix the remaining finding before merge. | [P1] Preserve irregular contractions in prose args\n\n</details>\n\n=== what the cycle-3 reviewer receives as previousClawSweeperReview ===\n{\n  \"findings\": [\n    { \"priority\": \"P2\", \"title\": \"Fix the remaining finding before merge.\" },\n    { \"priority\": \"P1\", \"title\": \"Handle unmatched double quotes without swallowing words\" },\n    { \"priority\": \"P1\", \"title\": \"Handle unmatched double quotes without swallowing words\" }\n  ],\n  \"earlierReviewCycles\": [\n    {\n      \"reviewedAt\": \"2026-06-20T10:00:00.000Z\",\n      \"sha\": \"aaa111cycle1\",\n      \"verdict\": \"found issues before merge.\",\n      \"findings\": [\n        \"[P2] Fix the remaining finding before merge.\",\n        \"[P1] Preserve irregular contractions in prose args\"\n      ]\n    }\n  ],\n  \"completedReviewCycles\": 2\n}\n```\n\nThe duplicated cycle-2 finding title and the P2 next-step bullet inside `findings` are pre-existing `previousReviewFindings` scanning behavior, identical before and after, and untouched here.\n\n## Tests\n\nNew `test/review-history.test.ts` (11 tests): ledger render/parse round-trip, separator sanitization, eight-cycle cap, same-cycle dedupe, cycle extraction from a realistic durable comment (placeholder and non-review bodies return null), keep-open comment integration including multi-sync ledger accumulation and same-`reviewed_at` idempotence, issue comments never carrying a ledger, `earlierReviewCycles`/`completedReviewCycles` extraction, `lateFinding` decision and report round-trip with the durable-comment late note, and prompt/schema continuity coverage.\n\nLocal gates: `pnpm run build`, `pnpm run lint`, `pnpm run format:check`, and `node --test test/*.test.ts` pass (559 pass; the 3 `dashboard-worker` event-loop cancellations and 2 repair notify cancellations reproduce identically on pristine main under node 22 on this machine, which is below the repo's node >= 24 engine requirement).\n\n## Notes\n\n- The ledger renders only on pull request keep-open comments; close comments and issues are unchanged.\n- Rendering without `previousReviewCommentBody` (first sync, counterpart pair renders) is unchanged, so no other call sites are affected.\n- `lateFinding` is optional in the schema and absent from required fields, so existing recorded decisions and reports parse unchanged.\n",
+        "branch": "feat/rereview-finding-continuity",
+        "head_sha": "be31edb98842eb3721e79fbffc7896d81886935c",
+        "author": "yetval",
+        "labels": [
+          "P2",
+          "merge-risk: 🚨 automation",
+          "status: ⏳ waiting on author",
+          "rating: 🦐 gold shrimp",
+          "proof: sufficient",
+          "merge-risk: 🚨 compatibility"
+        ],
+        "files": [
+          {
+            "path": "docs/pr-review-comments.md",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "prompts/review-item.md",
+            "additions": 18,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "schema/clawsweeper-decision.schema.json",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/clawsweeper.ts",
+            "additions": 52,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/review-history.ts",
+            "additions": 172,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/review-history.test.ts",
+            "additions": 320,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 591,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-clawsweeper-384",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawsweeper-384.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 6,
+          "gatingTotal": 5,
+          "counts": {
+            "SUCCESS": 6
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 476,
+    "total_ms": 1632,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 258
+        "ms": 356
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 995
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +178,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 208
+        "ms": 252
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
