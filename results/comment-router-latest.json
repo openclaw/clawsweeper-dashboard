@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T17:41:52.504Z",
+  "generated_at": "2026-07-03T17:43:04.624Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T14:41:50.047Z",
+  "since": "2026-07-03T14:43:04.017Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4878392151
   ],
-  "status_comment_id": 4878392420,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4878392151:2026-07-03T17:40:39Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/98699#issuecomment-4878392151",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 98699,
       "author": "yetval",
       "author_id": 102706514,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-03T17:40:39Z",
       "comment_updated_at": "2026-07-03T17:40:39Z",
-      "status_comment_id": 4878392420,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-run",
       "intent": "re_review",
@@ -68,98 +68,26 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-07-03T17:41:53.141Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 98699
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-03T17:41:54.885Z",
-          "response_comment_id": "4859998255",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): preserve delivery thread id type across SQLite round-trip",
-        "body": "## What Problem This Solves\n\nA cron job's delivery target can carry a `threadId` that is legitimately either a string or a number (`string | number`). The input schema (`src/cron/delivery-field-schemas.ts`) accepts `z.union([TrimmedNonEmptyStringFieldSchema, z.number().finite()])` and `normalizeCronJobInput` deliberately preserves a numeric thread id. Numeric thread ids are real: for example a Telegram forum/topic id like `1008013`.\n\nThe runtime store lost that type on reload, in two ways:\n\n1. The split `delivery_thread_id` column is TEXT: on write it is stored as `String(...)`, and `deliveryFromRow` (the reader that `rowToCronJob` uses to build the runtime job) handed the raw TEXT column straight back:\n\n```ts\n// src/cron/store/delivery-codec.ts read path (before)\n...(row.delivery_thread_id ? { threadId: row.delivery_thread_id } : {}),\n```\n\nSo a persistence round-trip silently changed the type:\n\n```\nINPUT  threadId: 1008013   (number)\nLOADED threadId: \"1008013\" (string)\n```\n\n2. Early SQLite rows can lose the thread id entirely. The split-column backfill migration (`backfillCronJobsFromJobJson` in `src/state/openclaw-state-db.ts`) binds `delivery_thread_id` with `textField(delivery, \"threadId\")`, which returns `NULL` for a numeric thread id. Such a row carries the typed id only in `job_json`, and the reader above skips it because the split column is null, so the runtime job has no `threadId` at all.\n\nThis matters because the reloaded value is what the live delivery path consumes. `resolveCronDeliveryPlan` runs the thread id through `normalizeOptionalThreadValue`, which keeps the string-versus-number distinction rather than re-normalizing it. A freshly created in-memory job carries `threadId: 1008013` (number); the same job after a save/reload carries `\"1008013\"` (string), or nothing for an early backfilled row. Telegram native approval delivery only sets `messageThreadId` when `typeof threadId === \"number\"` (`extensions/telegram/src/approval-handler.runtime.ts:140-142`), so a reloaded string-typed or missing topic id is dropped there and the approval posts to the general chat instead of the configured topic.\n\n## Why This Change Was Made\n\nThe typed value already exists in the row. `job_json` is the canonical config projection for a cron row (`src/cron/store/row-codec.ts`: \"job_json stores config shape only; runtime state lives in split columns\"), and `normalizeCronJobForSqlite` preserves the `string | number` thread id when it serializes `job_json`. The `configJobs` projection already reconstructs from `job_json`; only the runtime `store.jobs` projection went through the type-lossy split column.\n\nThe fix sources the thread id from that canonical config on read, before the split-column presence gate, falling back to the raw column text when the config has no typed thread id:\n\n```ts\n// src/cron/store/delivery-codec.ts (after)\nfunction threadIdFromRow(row: CronJobRow): string | number | undefined {\n  const config = parseJsonObject<{ delivery?: { threadId?: unknown } }>(row.job_json, {});\n  const typed = config.delivery?.threadId;\n  if (typeof typed === \"number\" || (typeof typed === \"string\" && typed)) {\n    return typed;\n  }\n  return row.delivery_thread_id || undefined;\n}\n// deliveryFromRow computes threadId once, uses it in the presence gate, and emits\n// ...(threadId !== undefined ? { threadId } : {}),\n```\n\nThe write path is left exactly as shipped (`String(delivery.threadId)`), so the on-disk column format is unchanged and no migration is introduced. Because the type oracle is the typed `job_json` config rather than a parse of the ambiguous bare column, this is correct for both freshly written rows and legacy bare-text rows written by earlier releases: a legacy numeric-looking string id such as `\"42\"` or a Slack-style `\"1737500000.123456\"` stays a string, and a numeric id comes back as a number. This addresses the earlier review concern that decoding the bare column with `JSON.parse` would reinterpret legacy string ids as numbers. Consulting `job_json` before the split-column presence gate additionally covers the early-row case the follow-up review flagged: a row whose numeric thread id exists only in `job_json` (because the backfill's `textField` bound `NULL`) now reloads with its typed id instead of losing it.\n\n## Why this is the right boundary\n\n`deliveryFromRow` is the canonical reader for the runtime delivery columns and `rowToCronJob` reconstructs the runtime job from it, so the runtime round-trip is covered end to end. Sourcing the thread id type from `job_json` makes the runtime `store.jobs` projection consistent with the existing `configJobs` projection, which already trusts `job_json`. No column format changes, so every previously written row (including `v2026.6.11` bare-text rows and pre-split-column rows that were backfilled) keeps working with no migration, and string versus number identity is preserved on upgrade. String thread ids and all other delivery fields are unchanged.\n\n## User Impact\n\nCron jobs configured with a numeric delivery thread id (for example a Telegram forum/topic id) now deliver to the same thread whether the job is served from memory or reloaded from SQLite. Previously a save/reload silently retyped the id to a string, and an early backfilled row dropped it entirely; downstream paths that require a numeric thread id (such as Telegram native approval delivery) would then post to the general chat instead of the topic. String thread ids, including numeric-looking ones, are unchanged.\n\n## Evidence\n\nVerification:\n- `node scripts/run-vitest.mjs src/cron/store.test.ts` -> 44 passed, including the new numeric-id, numeric-looking-string, same-text-disambiguation, and early-row (null split column) cases.\n- `node scripts/run-oxlint.mjs src/cron/store/delivery-codec.ts src/cron/store.test.ts` -> clean.\n- `oxfmt --check src/cron/store/delivery-codec.ts src/cron/store.test.ts` -> clean.\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json` -> no errors.\n- Added colocated regression tests in `src/cron/store.test.ts`: a numeric id reloads as a number; numeric-looking strings `\"42\"`, `\"1737500000.123456\"`, and `\"007\"` stay strings; two jobs whose thread ids serialize to the identical column text `42` reload as the number `42` and the string `\"42\"` respectively (disambiguated by the stored config); and an early-row shape with a numeric `job_json` thread id and a `NULL` `delivery_thread_id` column recovers the number `1008013`. The numeric assertion fails on pristine main (reloads as the string `\"1008013\"`), and the early-row test fails on the prior head of this PR (thread id lost entirely), so both review findings are pinned by red-to-green tests.\n\n## Real behavior proof\nBehavior addressed: a numeric cron delivery thread id (e.g. a Telegram topic id 1008013) is retyped to a string by a SQLite save/reload, and an early SQLite row whose typed id exists only in `job_json` (split `delivery_thread_id` column NULL, as the backfill migration produces for numeric ids) loses the thread id entirely, while a numeric-looking string id such as \"42\" must stay a string.\nReal environment tested: drove the real `saveCronStore`/`loadCronStore` and the real `resolveCronDeliveryPlan` against a real temp SQLite state DB, on pristine main 44e88f550b and on the patched tree af780e97b8. Nothing was stubbed: the real codec, the real Kysely-backed store, and the real delivery-plan resolver all ran; only the state directory was a throwaway temp dir. The early-row shape was produced by saving through the real store, then nulling that job's `delivery_thread_id` column in the same state DB, matching the post-backfill state of a pre-split-column row.\nExact steps or command run after this patch: save two jobs with `delivery.threadId` of `1008013` (number) and `\"42\"` (string), reload and inspect each `delivery.threadId` plus `resolveCronDeliveryPlan(job).threadId`; then save a third job with `threadId: 1008013`, set its `delivery_thread_id` column to NULL, reload, and inspect the same two values.\nEvidence after fix:\n```\n# BEFORE (pristine main 44e88f550b)\ncurrent-writer numeric 1008013: loaded threadId=\"1008013\" (string); resolveCronDeliveryPlan threadId=\"1008013\" (string)\nlegacy string \"42\": loaded threadId=\"42\" (string); resolveCronDeliveryPlan threadId=\"42\" (string)\nearly row (job_json numeric 1008013, split column NULL): loaded threadId=undefined (undefined); resolveCronDeliveryPlan threadId=undefined (undefined)\n# AFTER (this patch af780e97b8, identical inputs)\ncurrent-writer numeric 1008013: loaded threadId=1008013 (number); resolveCronDeliveryPlan threadId=1008013 (number)\nlegacy string \"42\": loaded threadId=\"42\" (string); resolveCronDeliveryPlan threadId=\"42\" (string)\nearly row (job_json numeric 1008013, split column NULL): loaded threadId=1008013 (number); resolveCronDeliveryPlan threadId=1008013 (number)\n```\nObserved result after fix: the reloaded numeric thread id and the resolved delivery-plan thread id come back as the number 1008013 (they were the string \"1008013\" before), the early row recovers its numeric id from `job_json` (it was dropped entirely before), and the \"42\" id stays a string in both runs, so the persistence round-trip no longer changes or loses the value's type and a numeric-looking string id is never retyped to a number.\nWhat was not tested: no live Telegram send (the downstream drop is shown by reading `approval-handler.runtime.ts:140-142`, not by a live topic post); full build was not run in this checkout.\n",
-        "branch": "fix/cron-delivery-threadid-roundtrip",
-        "head_sha": "af780e97b85101aed169068be4509099c6eefdfc",
-        "author": "yetval",
-        "labels": [
-          "size: S",
-          "P2"
-        ],
-        "files": [
-          {
-            "path": "src/cron/store.test.ts",
-            "additions": 79,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/store/delivery-codec.ts",
-            "additions": 13,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 92,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98699",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98699.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 35,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5249,
+    "total_ms": 1898,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 473
+        "ms": 595
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1971
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -171,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2782
+        "ms": 1292
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
