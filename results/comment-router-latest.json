@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T15:33:00.405Z",
+  "generated_at": "2026-07-03T15:33:12.430Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T12:32:57.891Z",
+  "since": "2026-07-03T12:33:10.393Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    99565
+    92509
   ],
-  "comment_ids": [
-    4877688158
-  ],
-  "status_comment_id": 4877688451,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 6,
+  "commands_seen": 3,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +31,131 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:99565:4877688158:2026-07-03T15:31:47Z:re_review",
-      "comment_id": "4877688158",
-      "comment_version_key": "4877688158:2026-07-03T15:31:47Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99565#issuecomment-4877688158",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92509:4694123377:2026-07-03T15:33:06Z:clawsweeper_needs_human",
+      "comment_id": "4694123377",
+      "comment_version_key": "4694123377:2026-07-03T15:33:06Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92509#issuecomment-4694123377",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 99565,
-      "author": "ZOOWH",
-      "author_id": 265460861,
+      "target_branch": null,
+      "issue_number": 92509,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-03T15:31:47Z",
-      "comment_updated_at": "2026-07-03T15:31:47Z",
-      "status_comment_id": 4877688451,
+      "comment_created_at": "2026-06-12T18:28:14Z",
+      "comment_updated_at": "2026-07-03T15:33:06Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=05572d21cbe98bb2ca130fb87e2af214a025366c)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +10, Tests +174. Total +184 across 2 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "05572d21cbe98bb2ca130fb87e2af214a025366c",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-core): WAL checkpoint after writeMeta + stale index file cleanup",
+        "body": "## Summary\n\nOne focused fix: `writeMeta()` now runs `PRAGMA wal_checkpoint(TRUNCATE)` after writing the `memory_index_meta_v1` row, ensuring it survives process crashes.\n\n## Problem\n\nWhen the gateway process is killed between `writeMeta()` and `closeMemoryDatabase()`, the meta row exists only in the SQLite WAL file. On next startup, the manager reads no meta and declares the index \"missing\" — even though chunks are still present in the DB.\n\nThis puts the system into a permanent degraded state: `memory_search` returns `\"index metadata is missing\"`, normal syncs cannot self-heal (depending on provider availability), and the only recovery is `openclaw memory index --force`.\n\n## Real behavior proof\n\nMinimal reproduction using Node v24.16.0 native SQLite in WAL mode on Windows 11, with child processes killed via `taskkill /F` (SIGKILL equivalent):\n\n```\n=== WAL Meta Durability Reproduction ===\n\nPhase 1: Normal close (baseline)\n  WAL size after writes: 0 bytes\n  Meta in main file: PRESENT\n\nPhase 2: Hard kill WITHOUT fix\n  WAL size: 0 bytes\n  Meta in main file: MISSING (no meta table — data was WAL-only)\n\nPhase 3: Hard kill WITH wal_checkpoint fix\n  WAL size: 0 bytes\n  Meta in main file: PRESENT\n```\n\n**Method:** Each phase creates a fresh WAL-mode SQLite DB, creates schema, inserts a chunk, and writes `memory_index_meta_v1`. After each phase, the main `.sqlite` file is **copied** to an isolated directory (no `-wal` or `-shm` sidecar) and opened read-only — this ensures we read the checkpointed main file, not replayed WAL.\n\n**Phase 2 proves the bug:** after a hard kill without checkpoint, the main DB file has NO `meta` table — the entire schema was WAL-only. On next startup, the manager sees an empty DB, auto-creates it, and declares `\"index metadata is missing\"`.\n\n**Phase 3 proves the fix:** with `PRAGMA wal_checkpoint(TRUNCATE)` after `writeMeta`, the meta row is in the main file and survives the kill.\n\nThis corresponds to the production failure path: gateway process killed (OOM, Ctrl-C, power loss) between `writeMeta()` and `closeMemoryDatabase()` → meta lost → `memory_search` returns `\"index metadata is missing\"` permanently.\n\n## Fix\n\nAfter writing the meta row, immediately run `PRAGMA wal_checkpoint(TRUNCATE)`. This forces all WAL data to be flushed to the main database file, so the meta row survives even if the process is killed before `closeMemoryDatabase()`.\n\n## What this PR does NOT do\n\n- ❌ No stale file cleanup (belongs in `manager-atomic-reindex.ts` lifecycle — filed as follow-up)\n- ❌ No changes to the atomic reindex swap protocol\n- ❌ No new dependencies or schema migrations\n\n## Related issues\n\n- #90361 — Canonical bug: intermittent \"index metadata is missing\"\n- #90650 — CLI works but agent tool fails\n- #91497 — Meta not written during --force reindex\n- #92187 — OOM during rebuild leaves empty DB\n\nThe `needsMissingIdentityReindex` auto-recovery path (already on main) can eventually heal this when the provider is available. This checkpoint fix prevents the meta loss in the first place, avoiding unnecessary full reindex cycles after crashes.\n\n## Testing\n\n- **Spy test**: verifies `writeMeta` calls `wal_checkpoint(TRUNCATE)` independently of `closeMemoryDatabase` — this test fails on current main\n- **Integration test**: verifies meta durability across manager close/reopen cycles",
+        "branch": "fix/memory-meta-recovery",
+        "head_sha": "05572d21cbe98bb2ca130fb87e2af214a025366c",
+        "author": "dazlarus",
+        "labels": [
+          "extensions: memory-core",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager.wal-checkpoint.test.ts",
+            "additions": 174,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 184,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92509",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92509.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 92,
+          "gatingTotal": 87,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 35,
+            "SUCCESS": 52,
+            "FAILURE": 3
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92509:4877542718:2026-07-03T15:09:25Z:re_review",
+      "comment_id": "4877542718",
+      "comment_version_key": "4877542718:2026-07-03T15:09:25Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92509#issuecomment-4877542718",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92509,
+      "author": "Dazlarus",
+      "author_id": 84022781,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-03T15:09:25Z",
+      "comment_updated_at": "2026-07-03T15:09:25Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,98 +178,139 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-07-03T15:33:01.136Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 99565
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-03T15:33:03.024Z",
-          "response_comment_id": "4877492903",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(heartbeat): inject consumed system event text into heartbeat prompt",
-        "body": "## What Problem This Solves\n\nFixes #99544 (follow-up to #61502). Slack interactive button clicks wake the target session and thread, but the clicked action's `value` never reaches the agent as input. The `consumeSelectedSystemEventEntries` call removes the interaction entry from the system event queue, but the event text was never injected into the heartbeat prompt.\n\n## Root Cause / Fix\n\nThe heartbeat runner's prompt resolution has specialized builders for exec-completion and cron events, but the generic fallback path never includes system event text. When a Slack `hook` wake triggers a heartbeat with no exec/cron events, the generic prompt is used and the interaction payload is silently dropped.\n\n**Fix**: Prepend pending system event text to the heartbeat prompt on the generic path, formatted with `System:` event-block semantics (matching `drainFormattedSystemEvents`), guarded by `!hasExecCompletion && !hasCronEvents`.\n\nChanges:\n- `src/infra/heartbeat-runner.ts`: Add `System:`-framed injection block before `ctx` construction\n- `src/infra/heartbeat-runner.system-events.test.ts`: 2 tests\n\n## Evidence\n\n### Real Slack End-to-End Proof\n```\nSlack button click → Socket Mode → heartbeat hook wake → agent run\n\n23:00:18 slack:interaction action=approve_pr type=button value=merge-99544-proof user=U0BEKMZRK9T\n23:00:22 [trace:embedded-run] agent woken by hook interaction, runId=faa792a3\n```\n✅ Interaction value `merge-99544-proof` delivered through the full chain.\n\n### Production Function Proof\n```\nnode --import tsx scripts/proof-99544.ts\n\nChecks:\n  PASS  System: framing\n  PASS  action_id (approve_pr)\n  PASS  action value (merge-99544)\n  PASS  heartbeat prompt present\n\nALL CHECKS PASSED — Slack interaction value reaches the heartbeat prompt\n```\n\n### Test Runner\n```\nnode scripts/run-vitest.mjs src/infra/heartbeat-runner.system-events.test.ts\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n```\n\n### Formatting + Autoreview\n```\noxfmt --check → clean  |  oxlint → clean  |  autoreview → patch is correct (0.95)\n```\n\n### Change Type\n- `fix` — bug fix for message-loss regression\n\n### Security Impact\n- None. Event text is framed with `System:` semantics matching the existing `drainFormattedSystemEvents` contract.",
-        "branch": "fix/99544-slack-interaction-value-inject",
-        "head_sha": "8794bb00d1d1a6629f16444e58e0f3166211ca56",
-        "author": "zoowh",
+        "title": "fix(memory-core): WAL checkpoint after writeMeta + stale index file cleanup",
+        "body": "## Summary\n\nOne focused fix: `writeMeta()` now runs `PRAGMA wal_checkpoint(TRUNCATE)` after writing the `memory_index_meta_v1` row, ensuring it survives process crashes.\n\n## Problem\n\nWhen the gateway process is killed between `writeMeta()` and `closeMemoryDatabase()`, the meta row exists only in the SQLite WAL file. On next startup, the manager reads no meta and declares the index \"missing\" — even though chunks are still present in the DB.\n\nThis puts the system into a permanent degraded state: `memory_search` returns `\"index metadata is missing\"`, normal syncs cannot self-heal (depending on provider availability), and the only recovery is `openclaw memory index --force`.\n\n## Real behavior proof\n\nMinimal reproduction using Node v24.16.0 native SQLite in WAL mode on Windows 11, with child processes killed via `taskkill /F` (SIGKILL equivalent):\n\n```\n=== WAL Meta Durability Reproduction ===\n\nPhase 1: Normal close (baseline)\n  WAL size after writes: 0 bytes\n  Meta in main file: PRESENT\n\nPhase 2: Hard kill WITHOUT fix\n  WAL size: 0 bytes\n  Meta in main file: MISSING (no meta table — data was WAL-only)\n\nPhase 3: Hard kill WITH wal_checkpoint fix\n  WAL size: 0 bytes\n  Meta in main file: PRESENT\n```\n\n**Method:** Each phase creates a fresh WAL-mode SQLite DB, creates schema, inserts a chunk, and writes `memory_index_meta_v1`. After each phase, the main `.sqlite` file is **copied** to an isolated directory (no `-wal` or `-shm` sidecar) and opened read-only — this ensures we read the checkpointed main file, not replayed WAL.\n\n**Phase 2 proves the bug:** after a hard kill without checkpoint, the main DB file has NO `meta` table — the entire schema was WAL-only. On next startup, the manager sees an empty DB, auto-creates it, and declares `\"index metadata is missing\"`.\n\n**Phase 3 proves the fix:** with `PRAGMA wal_checkpoint(TRUNCATE)` after `writeMeta`, the meta row is in the main file and survives the kill.\n\nThis corresponds to the production failure path: gateway process killed (OOM, Ctrl-C, power loss) between `writeMeta()` and `closeMemoryDatabase()` → meta lost → `memory_search` returns `\"index metadata is missing\"` permanently.\n\n## Fix\n\nAfter writing the meta row, immediately run `PRAGMA wal_checkpoint(TRUNCATE)`. This forces all WAL data to be flushed to the main database file, so the meta row survives even if the process is killed before `closeMemoryDatabase()`.\n\n## What this PR does NOT do\n\n- ❌ No stale file cleanup (belongs in `manager-atomic-reindex.ts` lifecycle — filed as follow-up)\n- ❌ No changes to the atomic reindex swap protocol\n- ❌ No new dependencies or schema migrations\n\n## Related issues\n\n- #90361 — Canonical bug: intermittent \"index metadata is missing\"\n- #90650 — CLI works but agent tool fails\n- #91497 — Meta not written during --force reindex\n- #92187 — OOM during rebuild leaves empty DB\n\nThe `needsMissingIdentityReindex` auto-recovery path (already on main) can eventually heal this when the provider is available. This checkpoint fix prevents the meta loss in the first place, avoiding unnecessary full reindex cycles after crashes.\n\n## Testing\n\n- **Spy test**: verifies `writeMeta` calls `wal_checkpoint(TRUNCATE)` independently of `closeMemoryDatabase` — this test fails on current main\n- **Integration test**: verifies meta durability across manager close/reopen cycles",
+        "branch": "fix/memory-meta-recovery",
+        "head_sha": "05572d21cbe98bb2ca130fb87e2af214a025366c",
+        "author": "dazlarus",
         "labels": [
+          "extensions: memory-core",
           "size: S",
-          "P2"
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "src/infra/heartbeat-runner.system-events.test.ts",
-            "additions": 124,
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
+            "additions": 10,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/heartbeat-runner.ts",
-            "additions": 42,
-            "deletions": 8,
-            "changeType": "MODIFIED"
+            "path": "extensions/memory-core/src/memory/manager.wal-checkpoint.test.ts",
+            "additions": 174,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
         "changedFiles": 2,
-        "additions": 166,
-        "deletions": 8,
+        "additions": 184,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99565",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99565.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92509",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92509.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 94,
-          "gatingTotal": 89,
+          "total": 92,
+          "gatingTotal": 87,
           "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
+            "CANCELLED": 2,
+            "SKIPPED": 35,
+            "SUCCESS": 52,
+            "FAILURE": 3
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92509:4869404055:2026-07-02T18:41:23Z:re_review",
+      "comment_id": "4869404055",
+      "comment_version_key": "4869404055:2026-07-02T18:41:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92509#issuecomment-4869404055",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 92509,
+      "author": "Dazlarus",
+      "author_id": 84022781,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-02T18:41:23Z",
+      "comment_updated_at": "2026-07-02T18:41:23Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5583,
+    "total_ms": 2489,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 603
+        "ms": 340
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1895
+        "ms": 1682
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -171,7 +322,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3057
+        "ms": 442
       },
       {
         "name": "append_ledger",
