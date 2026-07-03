@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T10:21:28.013Z",
+  "generated_at": "2026-07-03T10:22:24.479Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T07:21:26.239Z",
+  "since": "2026-07-03T07:22:23.935Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     81306
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4875179920
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 6,
@@ -37,16 +39,16 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/81306#issuecomment-4437550541",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 81306,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 83988,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-13T05:16:07Z",
-      "comment_updated_at": "2026-07-03T10:21:23Z",
+      "comment_created_at": "2026-07-03T10:19:38Z",
+      "comment_updated_at": "2026-07-03T10:19:38Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -68,89 +70,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): keep explicit loopback bind pinned to 127.0.0.1 (#65619)",
-        "body": "## What Problem This Solves\nExplicit `gateway.bind: \"loopback\"` could be demoted to `0.0.0.0` when the best-effort `127.0.0.1` bind preflight failed intermittently on macOS. The downstream runtime guard then correctly rejected startup because a loopback configuration had resolved to a non-loopback host, leaving users with a failed Gateway even though their config explicitly requested local-only binding.\n\n## Evidence\nThe PR body documents the failing path through `src/gateway/net.ts` and `src/gateway/server-runtime-config.ts`: explicit loopback used a fragile `canBindToHost(\"127.0.0.1\")` probe before returning the loopback host. The fix pins explicit loopback to `127.0.0.1`, preserving the documented local-only contract and avoiding accidental exposure or startup rejection.\n\n---\n\n## Summary\n\nOn macOS, the best-effort `canBindToHost(\"127.0.0.1\")` preflight in `resolveGatewayBindHost` can fail intermittently (port temporarily held, IPv4/IPv6 dual-stack quirks). When that probe returned false for an explicit `bind: \"loopback\"` configuration, the resolver silently fell back to `0.0.0.0`, and the downstream guard `resolveGatewayRuntimeConfig` then rejected startup with `gateway bind=loopback resolved to non-loopback host 0.0.0.0`. This change makes explicit loopback always return `127.0.0.1` without any preflight, matching the documented contract.\n\n## Root Cause\n\n- `src/gateway/net.ts:232` (before): `if (mode === \"loopback\") { if (await canBindToHost(\"127.0.0.1\")) return \"127.0.0.1\"; return \"0.0.0.0\"; }`. The best-effort preflight is well-intentioned but creates a \"silent demotion\" path on macOS.\n- `src/gateway/server-runtime-config.ts:64`: `resolveGatewayRuntimeConfig` rejects loopback mode when the resolved bind host is not loopback with the error family `gateway bind=loopback resolved to non-loopback host ...`. This guard is correct — it prevents accidentally exposing a Gateway intended as local-only.\n- Execution path: operator config `{ gateway: { bind: \"loopback\" } }` → `resolveGatewayBindHost(\"loopback\")` → preflight `canBindToHost(\"127.0.0.1\")` returns false (flaky) → resolver returns `\"0.0.0.0\"` → runtime guard sees `bind=loopback` + `host=\"0.0.0.0\"` mismatch → Gateway refuses to start with the reporter's exact error.\n- clawsweeper review on #65619: *\"The narrow maintainable fix is to make explicit loopback return `127.0.0.1` without weakening `auto`, `tailnet`, `custom`, or the runtime guard that prevents unintended network binds.\"*\n- Docs at `docs/gateway/configuration-reference.md:512` document `loopback` as listening on `127.0.0.1`; the runtime guard enforces that contract; the resolver should match.\n\n## Changes\n\n- `src/gateway/net.ts`: in the explicit `loopback` branch of `resolveGatewayBindHost`, always return `\"127.0.0.1\"` — drop the preflight and the `\"0.0.0.0\"` fallback. Update the function-level doc comment to reflect the explicit-user-choice semantics. If `127.0.0.1` is truly unbindable, the OS still surfaces a clear bind error at the actual `listen()` call, which is the correct surface for that rare condition.\n- `src/gateway/net.test.ts`: add `\"keeps explicit loopback pinned to 127.0.0.1 without preflight (#65619)\"` that stubs `net.createServer` so every bind probe errors; explicit `loopback` must still return `127.0.0.1`. Other existing tests (lan, tailnet, custom, auto, default) are unchanged because the resolver's behavior in those branches is unchanged.\n\nOther modes are unchanged: `lan` still returns `0.0.0.0`; `tailnet` / `custom` / `auto` keep their preflight + fallback behavior so container-aware semantics, Tailscale routing, and operator-supplied custom IPs continue to fall back gracefully when they really cannot bind. Only the explicit user-chosen `loopback` mode now bypasses the preflight.\n\nNet diff: **+48 / −6 LOC across 2 files** (+19 production / +35 test).\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: macOS Mac mini operator on OpenClaw 2026.4.11 (also confirmed on 2026.5.7 by clawsweeper) with `gateway.bind: \"loopback\"` configured sees the Gateway refuse to start with `gateway bind=loopback resolved to non-loopback host 0.0.0.0`. clawsweeper confirmed the latest release tag still carries the same source path at `eeef4864494f`. Issue: https://github.com/openclaw/openclaw/issues/65619\n- **Real environment tested**: Local OpenClaw checkout at `../openclaw-65656` on Windows 11. The fix is a 1-branch change to a pure-function resolver; verification is source-pattern proof against the patched file plus the colocated regression test that forces every preflight probe to fail and asserts the resolver still returns `127.0.0.1`. PR head: `a79671c5`.\n- **Exact steps or command run after this patch**: `git diff src/gateway/net.ts` shows the explicit `loopback` branch now contains a single `return \"127.0.0.1\";` with no preflight and no `0.0.0.0` fallback. `sed -n '/if (mode === \"loopback\")/,/^  }/p' src/gateway/net.ts | sha256sum` produces the integrity hash. The new test invokes `resolveGatewayBindHost(\"loopback\")` with `net.createServer` stubbed to always emit `EADDRINUSE`, asserting the resolver still returns `\"127.0.0.1\"`.\n- **Evidence after fix**: Terminal output captured locally on PR head `a79671c5` (Windows 11; patched loopback branch SHA-256 `b0565f6ad64d9bec3fe30858a0ddc8ef031ad9b5de4e206dacdae0426a0ca1df`).\n\n~~~text\n$ sed -n '/if (mode === \"loopback\")/,/^  }/p' src/gateway/net.ts\n  if (mode === \"loopback\") {\n    // Honor the operator's explicit `bind: \"loopback\"` choice unconditionally:\n    // returning `127.0.0.1` keeps the Gateway local-only as documented and as\n    // the downstream runtime guard in `resolveGatewayRuntimeConfig` requires\n    // (#65619). The previous best-effort preflight to `127.0.0.1` could fail\n    // intermittently on macOS (port temporarily held, IPv4/IPv6 dual-stack\n    // quirks, etc.) and then silently fall back to `0.0.0.0`, which the\n    // runtime guard then rejects with `gateway bind=loopback resolved to\n    // non-loopback host 0.0.0.0` and refuses to start. The OS itself returns\n    // a clear bind error if `127.0.0.1` is truly unbindable, which is the\n    // correct surface for that rare condition.\n    return \"127.0.0.1\";\n  }\n\n$ sed -n '/if (mode === \"loopback\")/,/^  }/p' src/gateway/net.ts | sha256sum\nb0565f6ad64d9bec3fe30858a0ddc8ef031ad9b5de4e206dacdae0426a0ca1df *-\n~~~\n\n- **Observed result after fix**: The patched explicit-loopback branch — pinned by SHA-256 `b0565f6ad64d9bec3fe30858a0ddc8ef031ad9b5de4e206dacdae0426a0ca1df` — has a single `return \"127.0.0.1\";` statement with no `canBindToHost` preflight and no `0.0.0.0` fallback. The preflight-failure → silent demotion → runtime-guard-rejection chain that produced the reporter's startup error is no longer reachable for the explicit user-chosen `loopback` mode. Other modes (`lan`, `tailnet`, `custom`, `auto`) keep their existing preflight + fallback chains and their existing tests continue to pass.\n- **What was not tested**: A live macOS Gateway foreground startup with the exact intermittent-preflight condition was not reproduced on the contributor machine; the failure is source-proven from the resolver + runtime-guard arithmetic and clawsweeper's source-level reproduction. The fix surface is a 1-branch change inside a pure-function resolver; downstream consumers (`resolveGatewayRuntimeConfig`, the actual `listen()` call in the Gateway server) are unchanged. Maintainers may apply `proof: override` if a live macOS recording is required.\n\n## Test\n\n- `pnpm test src/gateway/net.test.ts -t \"resolveGatewayBindHost\"` — 5 existing cases (loopback, lan, auto-non-container, auto-container, undefined-default) + 1 new regression case `\"keeps explicit loopback pinned to 127.0.0.1 without preflight (#65619)\"` that stubs every bind probe to error and asserts the resolver still returns `127.0.0.1`. The new test was the natural failing case for the old code path and now passes after the fix.\n- `pnpm test src/gateway/server-runtime-config.test.ts -t \"resolveGatewayRuntimeConfig\"` — unchanged; the runtime guard's behavior is unchanged. With explicit `loopback` now returning `127.0.0.1` deterministically, the guard's mismatch branch is no longer reachable for this user-chosen mode, but it still fires correctly for `tailnet`/`custom` fallbacks to `0.0.0.0`.\n\n## Notes\n\n- Scope: smallest complete fix at the documented seam clawsweeper identified. No public API change; no docs change required because `docs/gateway/configuration-reference.md:512` already documents `loopback` as listening on `127.0.0.1` (the fix brings the runtime behavior in line with the documented contract). No CHANGELOG entry per the AGENTS.md guidance that contributor PRs do not edit CHANGELOG; maintainer/AI adds entries during landing.\n- Compatibility: the only behavioral change is the explicit `loopback` mode no longer silently demotes to `0.0.0.0`. Operators who set `bind: \"loopback\"` AND have `127.0.0.1` permanently unbindable on their box now get a clear OS-level bind error (the listen() syscall) instead of a confusing runtime-guard rejection with a misleading \"resolved to non-loopback\" message. `auto` mode (the default when `bind` is unset) still preflights and falls back, so it continues to handle container/Tailscale/dual-stack edge cases the same way.\n- This follows the conservative direction in clawsweeper's review on #65619: *\"Keep explicit `gateway.bind=\\\"loopback\\\"` pinned to `127.0.0.1` even when the best-effort bind preflight fails, and add focused regression coverage for that path.\"*\n\nCloses #65619\n",
-        "branch": "fix/gateway-explicit-loopback-bind",
-        "head_sha": "c65a4c46bc836a3bfe9c8215ae3a5181fb1e6f73",
-        "author": "moerai",
-        "labels": [
-          "gateway",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/net.test.ts",
-            "additions": 35,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/net.ts",
-            "additions": 13,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 48,
-        "deletions": 6,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-81306",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81306.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 94,
-          "gatingTotal": 89,
-          "counts": {
-            "SUCCESS": 64,
-            "SKIPPED": 28,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "QA Smoke CI:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "QA Smoke CI:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1966,
+    "total_ms": 2513,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 268
+        "ms": 531
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1493
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -162,7 +99,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 179
+        "ms": 1969
       },
       {
         "name": "append_ledger",
