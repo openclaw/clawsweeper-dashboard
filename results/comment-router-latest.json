@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T10:56:52.685Z",
+  "generated_at": "2026-07-03T10:57:06.416Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T07:56:50.524Z",
+  "since": "2026-07-03T07:57:05.811Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     99504
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4875421635
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -37,16 +39,16 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/99504#issuecomment-4875406138",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99504,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 97189,
+      "author": "anyech",
+      "author_id": 8743351,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-03T10:51:56Z",
-      "comment_updated_at": "2026-07-03T10:56:46Z",
+      "comment_created_at": "2026-07-03T10:54:25Z",
+      "comment_updated_at": "2026-07-03T10:54:25Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -68,94 +70,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(sessions): prevent delivery-mirror prompt contamination with adjacent dedup and identity fallback (#99470)",
-        "body": "Fixes #99470.\n\n## What Problem This Solves\n\nChannel-final delivery-mirror assistant entries leaked into model prompts as duplicate assistant messages. When session rebuild / side-branch merge stripped `provider`/`model` metadata from delivery-mirror entries, the existing `isTranscriptOnlyOpenClawAssistantMessage` filter (which keys exclusively on `provider=\"openclaw\"` / `model=\"delivery-mirror\"`) failed to recognize them. The result: the model saw adjacent byte-identical assistant pairs and occasionally mimicked the pattern — emitting the same answer twice inside a single completion.\n\n## Why This Change Was Made\n\nTwo-layer fix:\n\n1. **Identity fallback (Layer 2)**: `isTranscriptOnlyOpenClawAssistantMessage` now also checks for the `openclawDeliveryMirror` field. This field survives serialization even when rebuild/merge strips `provider`/`model`, so delivery-mirror entries are recognized as transcript-only regardless of metadata degradation.\n\n2. **Adjacent duplicate collapse (Layer 1)**: `normalizeAssistantReplayContent` now drops an assistant message whose content is byte-identical to the immediately preceding assistant message when neither carries tool calls. This is defense-in-depth: even if a delivery-mirror entry's identity is lost through every available marker, the content-level dedup prevents it from reaching the model prompt. User turns reset adjacency; tool-call-bearing turns are never collapsed; empty-content messages (legitimate provider states) are preserved.\n\n## User Impact\n\n- Duplicate assistant history (~33% of prompts on busy sessions) is removed from model context, saving context-window tokens.\n- ~2–5% of long replies no longer contain user-visible duplicated content.\n- Delivery-mirror transcript receipts (persisted JSONL entries used for re-delivery idempotency) are unchanged — only the in-memory replay copy is cleaned.\n\n## Evidence\n\n**Behavior addressed**: delivery-mirror entries with stripped `provider`/`model` survive the metadata-only filter and leak into model prompts; adjacent byte-identical assistant pairs are model-visible.\n\n**Real environment tested**: Node 24.13+, local OpenClaw checkout.\n\n**Exact steps or command run after this patch**:\n\n```\nnode --import tsx -e \"\nimport { isTranscriptOnlyOpenClawAssistantMessage } from './src/shared/transcript-only-openclaw-assistant.js';\nconst cases = [\n  { label: 'intact delivery-mirror', msg: { role: 'assistant', provider: 'openclaw', model: 'delivery-mirror' } },\n  { label: 'stripped mirror (openclawDeliveryMirror)', msg: { role: 'assistant', openclawDeliveryMirror: { kind: 'channel-final' } } },\n  { label: 'real assistant (no metadata)', msg: { role: 'assistant', content: 'real reply', usage: { totalTokens: 100 } } },\n];\nfor (const { label, msg } of cases) {\n  console.log((isTranscriptOnlyOpenClawAssistantMessage(msg) ? 'FILTER' : 'KEEP') + ' | ' + label);\n}\n\"\n```\n\n**Evidence after fix**:\n\n```\nFILTER | intact delivery-mirror\nFILTER | stripped mirror (openclawDeliveryMirror)\nKEEP | real assistant (no metadata)\n```\n\nLayer 2: `isTranscriptOnlyOpenClawAssistantMessage` now catches stripped-metadata delivery mirrors via the `openclawDeliveryMirror` field fallback. Real assistant messages without that marker are correctly preserved.\n\n```\nnode scripts/run-vitest.mjs src/agents/embedded-agent-runner/replay-history.test.ts --run\n Test Files  1 passed (1)\n      Tests  35 passed (35)\n\nnode scripts/run-oxlint.mjs src/shared/transcript-only-openclaw-assistant.ts\n (passed, exit 0)\n\nnode scripts/run-oxlint.mjs src/agents/embedded-agent-runner/replay-history.ts\n (passed, exit 0)\n\nnode scripts/run-oxlint.mjs src/agents/embedded-agent-runner/replay-history.test.ts\n (passed, exit 0)\n\nnode scripts/run-vitest.mjs src/config/sessions/transcript.test.ts --run -- -t \"delivery mirror|transcript mirror|normalizeAssistantReplayContent\"\n Test Files  1 passed (1) / Tests  6 passed | 45 skipped (51)\n\nnode scripts/run-vitest.mjs extensions/telegram/src/bot-message-dispatch.test.ts --run -- -t \"delivery mirror|transcript mirror|normalizeAssistantReplayContent\"\n Test Files  1 passed (1) / Tests  2 passed | 165 skipped (167)\n```\n\n**Observed result after fix**: \n- Delivery-mirror entries are recognized via two independent signals: `provider`/`model` and `openclawDeliveryMirror` field.\n- Adjacent byte-identical no-tool assistant duplicates are collapsed before they reach the model.\n- Real assistant replies, tool-call-bearing turns, user-separated duplicates, distinct content, and empty-content provider states are all correctly preserved.\n\n**What was not tested**: Live Telegram E2E with a busy long-lived session going through rebuild cycles. The fix is verified at the transport normalization boundary — the exact point where mirrors survive the metadata filter — with focused regression coverage for both the identity fallback and the adjacent-dedup boundary.\n\n## Regression Test Plan\n\n| Test | Result |\n|------|--------|\n| `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/replay-history.test.ts --run` | 35 passed (35) |\n| `node scripts/run-oxlint.mjs src/shared/transcript-only-openclaw-assistant.ts` | passed |\n| `node scripts/run-oxlint.mjs src/agents/embedded-agent-runner/replay-history.ts` | passed |\n| `node scripts/run-oxlint.mjs src/agents/embedded-agent-runner/replay-history.test.ts` | passed |\n| `node scripts/run-vitest.mjs src/config/sessions/transcript.test.ts --run -- -t \"delivery mirror\\|transcript mirror\\|normalizeAssistantReplayContent\"` | 6 passed (51) |\n| `node scripts/run-vitest.mjs extensions/telegram/src/bot-message-dispatch.test.ts --run -- -t \"delivery mirror\\|transcript mirror\\|normalizeAssistantReplayContent\"` | 2 passed (167) |\n| `git diff --check` | clean |\n\n## Root Cause\n\nIn `isTranscriptOnlyOpenClawAssistantMessage` (`src/shared/transcript-only-openclaw-assistant.ts:17`), delivery-mirror identification keys exclusively on `provider`/`model` metadata. Session rebuild (`buildSuccessorEntries`) and side-branch merge (`mergePromptReleasedSessionEntries`) can re-materialize messages without `provider`/`model`, causing delivery-mirror entries to survive the filter. Only intact `provider=\"openclaw\"` + `model=\"delivery-mirror\"` metadata can identify a mirror; stripped-metadata survivors have no fallback signal and become indistinguishable from real assistant turns. The adjacent-duplicate pattern (real reply + byte-identical mirror) is unique to the mirror machinery — no legitimate model behavior produces it.\n\n## AI Assistance\n\n- **AI-assisted**: Yes\n- **Model used**: Claude Opus 4.8 (1M context)\n- **Co-Authored-By**: Claude Opus 4.8 <noreply@anthropic.com>\n",
-        "branch": "fix/delivery-mirror-prompt-contamination-99470",
-        "head_sha": "049ba1323bf7461c864275ce76fe62043ac1c553",
-        "author": "maweibin",
-        "labels": [
-          "agents",
-          "size: M",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/replay-history.test.ts",
-            "additions": 119,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/replay-history.ts",
-            "additions": 48,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/shared/transcript-only-openclaw-assistant.ts",
-            "additions": 28,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 195,
-        "deletions": 7,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99504",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99504.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 100,
-          "gatingTotal": 95,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 34,
-            "SUCCESS": 63,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2393,
+    "total_ms": 2646,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 403
+        "ms": 594
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1745
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -167,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 221
+        "ms": 2041
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
