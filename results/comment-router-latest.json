@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T13:54:07.656Z",
+  "generated_at": "2026-07-03T13:54:12.394Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T10:54:05.437Z",
+  "since": "2026-07-03T10:54:10.067Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99549
+    99506
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 4,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,34 +31,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99549:4876866108:2026-07-03T13:54:02Z:clawsweeper_needs_human",
-      "comment_id": "4876866108",
-      "comment_version_key": "4876866108:2026-07-03T13:54:02Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99549#issuecomment-4876866108",
+      "idempotency_key": "comment-router:openclaw/openclaw:99506:4876870627:2026-07-03T13:36:37Z:re_review",
+      "comment_id": "4876870627",
+      "comment_version_key": "4876870627:2026-07-03T13:36:37Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99506#issuecomment-4876870627",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99549,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 99506,
+      "author": "LZY3538",
+      "author_id": 293718838,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-03T13:35:59Z",
-      "comment_updated_at": "2026-07-03T13:54:02Z",
+      "comment_created_at": "2026-07-03T13:36:37Z",
+      "comment_updated_at": "2026-07-03T13:36:37Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] The remaining action is maintainer acceptance of background transcript-mirror semantics plus contributor or maintainer real behavior proof, not a narrow ClawSweeper code repair.; Cleared: The patch changes one TypeScript runtime control-flow path and does not alter dependencies, workflows, credentials, permissions, package metadata, or execution sources. (sha=a8fbe9f3125b80fe2cf69fc711a22998cf5300a5)",
-      "review_summary": "The PR changes final auto-reply delivery so transcript mirroring is launched in the background instead of awaited before reply operation completion.\n\nPR surface: Source +16. Total +16 across 1 file.\n\nReproducibility: no. high-confidence live reproduction was run in this read-only review. Source inspection shows the current final-payload path awaits transcript mirroring before reply operation completion while queued follow-ups wait for the active operation, but the exact circular wait still needs real gateway proof.",
-      "review_followup": "- [P1] The remaining action is maintainer acceptance of background transcript-mirror semantics plus contributor or maintainer real behavior proof, not a narrow ClawSweeper code repair.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "a8fbe9f3125b80fe2cf69fc711a22998cf5300a5",
+      "expected_head_sha": null,
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -68,78 +68,258 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(auto-reply): don't block reply completion on transcript mirror",
-        "body": "## Problem\n\nSending a second message while the first is still being processed (`queueDepth >= 2` — e.g. a clarification typed while the agent is thinking) hangs the session for ~15 minutes. The follow-up stays `queued_behind_active_work` and the first reply's operation is stuck at `phase=running`:\n\n```\nstalled session: ... queueDepth=2 reason=active_work_without_progress\nclassification=stalled_agent_run activeWorkKind=embedded_run\nlastProgress=<backend>:result recovery=none\n```\n\n…until the stuck-session abort finally fires. The user gets no reply to either message and the whole session lane is frozen.\n\n## Root cause\n\n`mirrorTranscriptAfterDispatcherDelivery()` in `src/auto-reply/reply/dispatch-from-config.ts` opens with `await params.dispatcher.waitForIdle()` and is awaited from `sendFinalPayload` — i.e. **while still inside the reply dispatch, before the reply operation completes**.\n\nWhen a follow-up is queued, `dispatcher.waitForIdle()` cannot resolve until this operation clears (the dispatcher isn't idle — the queued follow-up is waiting), and the operation cannot clear until `sendFinalPayload` returns, which is blocked here. **Circular deadlock: op-completion ⇄ dispatcher-idle.** The reply operation stays `phase=running` (confirmed live: `stuckOp=[phase=running result=null inRegistry=y]`), surfacing as `stalled_agent_run recovery=none`.\n\nThis lives in the shared reply-dispatch layer, so it is **backend-agnostic** — reproduced on the claude-cli, LMStudio (OpenAI-completions) and DeepSeek backends. It is just most visible with backends whose turns run long enough to widen the `queueDepth >= 2` timing window.\n\n## Fix\n\nRun the transcript mirror **fire-and-forget**. It is post-delivery bookkeeping — an idempotent, delivered-form reconciliation (`appendAssistantMessageToSessionTranscript` with an `idempotencyKey`); the primary assistant message is already written synchronously by the agent run — so it does not need to gate the operation's completion. Detaching it lets the op complete immediately: the queued follow-up proceeds, the dispatcher goes idle, and the background mirror then records the transcript. No timeout, no added latency; the other (routed-reply) mirror call site, which has no `waitForIdle`, is unchanged.\n\n## Validation\n\nDeployed live on a real install and exercised `queueDepth` 2 and 3 repeatedly across three backends (LMStudio openai-completions, claude-cli, DeepSeek cloud): **zero stalls**, replies complete, transcript mirrored, no background-mirror errors — where the same scenario reliably hung before.\n\n## Workaround (for anyone hitting this before merge)\n\nSerialize inbound messages per conversation so a second message is not admitted until the first reply operation completes — this avoids the `queueDepth >= 2` window entirely (at the cost of not interleaving follow-ups).\n\n## Relation to other issues\n\n- **Distinct from #98416 / #98835** — that is the *reply-session-initialization conflict* (`reply session initialization conflicted`, a per-message `outcome=error` drop triggered by `/new` + rapid messages). Different symptom, different code path.\n- **Different root than #96703** — that stall is the *context-engine post-turn maintenance* wedge (`lastProgress=embedded_run:started`, fixed by #97175). This one wedges *after* the run finishes, in the delivery/mirror step (`lastProgress=<backend>:result`), with the context engine disabled.\n\nBoth share the generic `stalled_agent_run recovery=none` symptom, so this is one more distinct root in that family.\n",
-        "branch": "fix/mirror-transcript-deadlock",
-        "head_sha": "a8fbe9f3125b80fe2cf69fc711a22998cf5300a5",
-        "author": "shagrat2",
+        "title": "fix: keep always-on group fallback messages in dispatch",
+        "body": "﻿Closes #99457\n\n## What Problem This Solves\n\nFixes an issue where users with always-on group routes could have ordinary unmentioned group messages dropped after a plugin-bound conversation fell back with `missing_plugin` or `no_handler`.\n\nThe affected workflow is group/channel reply dispatch for plugin-owned bindings, including iMessage-style always-on group routes. Mention-required groups should still stay quiet for unmentioned chatter, but always-on groups should continue into the normal agent dispatch path.\n\n## Why This Change Was Made\n\nThe plugin-bound fallback branch was checking only the raw `WasMentioned === false` flag before returning. This change reuses the existing `resolveGroupRequireMention(...)` policy resolver before suppressing an unmentioned group/channel fallback, so the early return only applies when the effective group policy actually requires a mention.\n\nThis keeps the existing command escape hatch and mention-required suppression behavior intact; it does not add config or change channel-owned mention policy.\n\nProvenance: the suppress branch traces to `b8ea6d2aee fix(telegram): route plugin-bound topic messages`.\n\n## User Impact\n\nAlways-on group routes can now preserve unmentioned plugin-bound fallback messages in the agent/session path instead of silently dropping them. Mention-required groups continue to suppress ordinary unmentioned messages.\n\n## Real Behavior Proof\n\nBehavior addressed: An unmentioned group message in an always-on route (`requireMention=false`) with a plugin-owned conversation binding and a targeted plugin fallback (`no_handler`) now reaches the normal agent dispatch path instead of being suppressed by the plugin-bound fallback early return.\n\nReal environment tested: Local Windows checkout, Node via repo dependencies, temporary `OPENCLAW_HOME`, real OpenClaw state SQLite creation, real plugin runtime registry, real plugin conversation binding request/approval APIs, real group mention-policy resolver, and the `dispatchReplyFromConfig` branch harness for the affected fallback decision.\n\nExact steps or command run after this patch:\n\n```text\n$env:OPENCLAW_HOME=<temp proof home>\nnode --import tsx --input-type=module -\n# script creates an iMessage channel registry, approves a plugin-owned binding,\n# resolves requireMention for an unmentioned group ctx, and calls the targeted\n# inbound claim outcome through the real global hook runner.\n```\n\nEvidence after fix:\n\n```text\n[plugins/binding] plugin binding requested plugin=openclaw-codex-app-server root=/redacted/plugin-root channel=imessage account=default conversation=chat:primary\n[plugins/binding] plugin binding approved plugin=openclaw-codex-app-server root=/redacted/plugin-root decision=allow-once channel=imessage account=default conversation=chat:primary\nproof-home=C:\\Users\\16500\\AppData\\Local\\Temp\\openclaw-99457-binding-proof-78da87cd29f54efb8ebed474a92f4b39\nconversation.channel=imessage\nconversation.id=chat:primary\nctx.ChatType=group\nctx.WasMentioned=false\nbinding.metadata.pluginBindingOwner=plugin\nbinding.metadata.pluginId=openclaw-codex-app-server\ngroup.requireMention=false\ntargetedInboundClaimOutcome=no_handler\nproof=PASS real runtime setup has plugin-owned no_handler fallback in an unmentioned always-on group\n```\n\n```text\nnode node_modules/vitest/vitest.mjs run --config test/vitest/vitest.auto-reply.config.ts src/auto-reply/reply/dispatch-from-config.test.ts -t \"dispatches unmentioned plugin-bound fallback in always-on groups\" --reporter verbose\n✓ src/auto-reply/reply/dispatch-from-config.test.ts > dispatchReplyFromConfig > sendPolicy deny — suppress delivery, not processing (#53328) > dispatches unmentioned plugin-bound fallback in always-on groups\nTest Files 1 passed (1)\nTests 1 passed | 233 skipped (234)\n```\n\nObserved result after fix: The proof setup has `ChatType=group`, `WasMentioned=false`, `pluginBindingOwner=plugin`, `pluginId=openclaw-codex-app-server`, `group.requireMention=false`, and `targetedInboundClaimOutcome=no_handler`. The focused dispatch proof then passes the regression where the same fallback shape calls `replyResolver` once while keeping `message_tool_only` automatic source delivery private.\n\nWhat was not tested: No live external iMessage/Telegram account was used from this workstation. Crabbox/Testbox proof is still blocked locally because the selected Crabbox binary fails `--version/--help` sanity checks and the `blacksmith` CLI is not installed here.\n\n## Verification\n\nTDD RED before restoring the production fix:\n\n```text\nnode node_modules/vitest/vitest.mjs run --config test/vitest/vitest.auto-reply.config.ts src/auto-reply/reply/dispatch-from-config.test.ts -t \"dispatches unmentioned plugin-bound fallback in always-on groups\"\nFAIL: expected replyResolver to be called once, but got 0 times\n```\n\nPassing local proof after the fix:\n\n```text\nnode node_modules/vitest/vitest.mjs run --config test/vitest/vitest.auto-reply.config.ts src/auto-reply/reply/dispatch-from-config.test.ts -t \"dispatches unmentioned plugin-bound fallback|keeps unmentioned plugin-bound fallback|lets authorized control commands without CommandSource escape plugin-bound fallback\"\nTest Files 1 passed; Tests 3 passed\n```\n\n```text\nnode node_modules/vitest/vitest.mjs run --config test/vitest/vitest.auto-reply.config.ts src/auto-reply/inbound.test.ts\nTest Files 1 passed; Tests 61 passed\n```\n\n```text\npnpm exec oxfmt --check --threads=1 src/auto-reply/reply/dispatch-from-config.ts src/auto-reply/reply/dispatch-from-config.test.ts\nAll matched files use the correct format.\n```\n\n```text\npnpm tsgo:core:test\nexit 0\n\npnpm tsgo:core\nexit 0\n\ngit diff --check\nexit 0\n```\n\nAdditional notes:\n\n- Local full raw Vitest for `src/auto-reply/reply/dispatch-from-config.test.ts` on Windows hit two pre-existing path-separator assertions around `.openclaw/workspace` and staged media metadata; targeted affected cases pass locally, and CI/Linux should provide the full-file signal.\n- `node scripts/crabbox-wrapper.mjs ... --provider blacksmith-testbox` was attempted, but the local Crabbox binary failed sanity checks; `blacksmith` CLI is not installed in this environment.\n- `python .agents\\skills\\autoreview\\scripts\\autoreview --mode local` was attempted with `PYTHONUTF8=1`; the Codex reviewer started but returned a usage-limit error before findings were produced. No autoreview result is claimed.\r\n\r\n",
+        "branch": "codex/fix-99457-plugin-fallback",
+        "head_sha": "bc8a2dfcb10d549229594c6a1d792a0eaf7b1b91",
+        "author": "lzy3538",
         "labels": [
-          "size: XS",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
+          "channel: discord",
+          "channel: imessage",
+          "channel: matrix",
+          "channel: telegram",
+          "channel: feishu",
+          "size: S",
+          "P1"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 17,
+            "path": "extensions/discord/src/monitor/message-handler.context.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/message-handler.preflight.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/message-handler.preflight.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/message-handler.preflight.types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/message-handler.process.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/bot.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/bot.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/imessage/src/monitor/inbound-processing.systemPrompt.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/imessage/src/monitor/inbound-processing.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/handler.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/handler.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-message-context.session.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-message-context.thread-binding.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-message-context.ts",
+            "additions": 8,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-from-config.test.ts",
+            "additions": 102,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-from-config.ts",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/templating.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/inbound-event/context.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/inbound-event/context.ts",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 1,
-        "additions": 17,
-        "deletions": 1,
+        "changedFiles": 19,
+        "additions": 147,
+        "deletions": 12,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99549",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99549.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99506",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99506.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 100,
-          "gatingTotal": 95,
+          "total": 50,
+          "gatingTotal": 45,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 64,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
+            "CANCELLED": 2,
+            "IN_PROGRESS": 15,
+            "SKIPPED": 24,
+            "SUCCESS": 9
           },
           "blockers": [
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:CANCELLED",
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Scan changed paths (precise):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "preflight:IN_PROGRESS",
+            "security-sensitive-guard:IN_PROGRESS",
+            "actionlint:IN_PROGRESS",
+            "security-fast:IN_PROGRESS",
+            "dependency-guard:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Scan changed paths (precise):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "preflight:IN_PROGRESS",
+            "security-sensitive-guard:IN_PROGRESS",
+            "actionlint:IN_PROGRESS",
+            "security-fast:IN_PROGRESS",
+            "dependency-guard:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS"
           ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:99506:4875870482:2026-07-03T11:58:39Z:re_review",
+      "comment_id": "4875870482",
+      "comment_version_key": "4875870482:2026-07-03T11:58:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99506#issuecomment-4875870482",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99506,
+      "author": "LZY3538",
+      "author_id": 293718838,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-03T11:58:39Z",
+      "comment_updated_at": "2026-07-03T11:58:39Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2491,
+    "total_ms": 3040,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 271
+        "ms": 394
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1933
+        "ms": 1917
       },
       {
         "name": "classify_comment_commands",
@@ -155,7 +335,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 261
+        "ms": 703
       },
       {
         "name": "append_ledger",
