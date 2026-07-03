@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T12:03:19.940Z",
+  "generated_at": "2026-07-03T12:03:31.746Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T09:03:19.539Z",
+  "since": "2026-07-03T09:03:29.920Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99521
+    99504
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,193 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99504:4875406138:2026-07-03T12:03:26Z:clawsweeper_auto_repair",
+      "comment_id": "4875406138",
+      "comment_version_key": "4875406138:2026-07-03T12:03:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99504#issuecomment-4875406138",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99504,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-03T10:51:56Z",
+      "comment_updated_at": "2026-07-03T12:03:26Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=6db93e66e73e9a06130c58dc9bd6982345e4e024)",
+      "review_summary": "The PR adds delivery-mirror marker fallback filtering, adjacent assistant duplicate collapse in replay normalization, native `tool_use` detection, regression tests, and a local repro script.\n\nPR surface: Source +69, Tests +176, Other +283. Total +528 across 5 files.\n\nReproducibility: yes. at source level: current main filters delivery mirrors only by provider/model and then replays surviving assistant rows without adjacent duplicate collapse. I did not run a live Telegram or provider trace in this read-only review.",
+      "review_followup": "- [P2] There is one narrow test repair an automated worker can attempt; maintainers still need to accept the session-state replay invariant before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "6db93e66e73e9a06130c58dc9bd6982345e4e024",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(sessions): prevent delivery-mirror prompt contamination with adjacent dedup and identity fallback (#99470)",
+        "body": "## What Problem This Solves\n\nWhen a delivery-mirror assistant entry gets stripped of its `provider`/`model` metadata during session rebuild or side-branch merge, it survives the transcript-only filter and leaks into the model prompt as a duplicate assistant message. In the worst case, the entry loses **all** markers (`provider`, `model`, and `openclawDeliveryMirror`), leaving only `{ role, content, usage }` — invisible to any metadata-based filter.\n\n**Production impact**: 33% of submitted prompts were contaminated (108 of 323 `prompt.submitted` trajectory events, 278 duplicate pairs). Downstream, models conditioned on \"the assistant says everything twice\" mimic the pattern and emit their answer twice inside a single completion in ~2–5% of long replies — user-visible duplicated content on chat surfaces.\n\nFixes #99470.\n\n## Why This Change Was Made\n\nThree types of delivery-mirror survivors can appear in the provider-bound prompt after session rebuild, each requiring a different defence:\n\n| Survivor type | Markers present | Caught by |\n|---------------|-----------------|-----------|\n| Live mirror | `provider: \"openclaw\"`, `model: \"delivery-mirror\"` | Existing main filter (Layer 0) |\n| Stripped mirror | `openclawDeliveryMirror: {…}` only | **Layer 1** — identity fallback (new) |\n| Bare mirror | `{ role, content, usage }` only — **no markers** | **Layer 2** — adjacent content dedup (new) |\n\n**Layer 1 — Identity fallback**: `isTranscriptOnlyOpenClawAssistantMessage` on main only checks `role`, `provider`, and `model`. When session rebuild/side-branch merge strips `provider`/`model` from a delivery-mirror entry, the entry becomes invisible to this predicate and survives into replay. Adding an `openclawDeliveryMirror` field check catches these stripped-metadata survivors.\n\n**Layer 2 — Adjacent dedup**: When session rebuild strips **all** markers including `openclawDeliveryMirror`, the bare `{ role, content, usage }` entry is indistinguishable from a real reply to any metadata filter. `normalizeAssistantReplayContent` now collapses adjacent byte-identical assistant messages when neither carries tool calls — this is the only layer that can catch the fully-stripped bare duplicate.\n\n**P1 fix — Native tool_use detection**: In `extractToolCallsFromAssistant()` (`tool-call-id.ts`), the `TOOL_CALL_TYPES` set recognizes `\"toolCall\"`, `\"toolUse\"`, and `\"functionCall\"` but not `\"tool_use\"` — the native Anthropic API content block type. When `isAdjacentAssistantDuplicate()` calls this helper to guard against collapsing tool-call-bearing turns, native `tool_use` blocks are invisible to the guard. Added `\"tool_use\"` to `TOOL_CALL_TYPES`.\n\n**Not modified**: Session persistence logic, gateway message broadcast, user-visible transcript display.\n\n## User Impact\n\nUsers running agents with delivery-mirror channels no longer experience prompt contamination where duplicate assistant messages inflate token usage and degrade model output quality. All three mirror types (live, stripped-marker, fully-bare) are filtered before the provider sees the prompt. Tool-call-bearing assistant turns are preserved regardless of whether the tool call uses camelCase (`toolUse`) or snake_case (`tool_use`) content blocks.\n\n## Evidence\n\n**Behavior addressed**: Delivery-mirror assistant entries of all three types (live, stripped-marker, fully-bare) leak into model prompt after session rebuild\n\n**Real environment tested**: `node --import tsx`, local Node.js runtime, no external credentials required\n\n**Exact steps or command run after this patch**: `node --import tsx scripts/repro/issue-99470-proof.mts`\n\n**Evidence after fix**:\n\nProof script exercises the full `buildSessionContext() → normalizeAssistantReplayContent → provider-bound prompt` path against all 3 mirror types:\n```\nCase 0 — Session rebuild contamination path (all 3 mirror types)\n  Before normalizeAssistantReplayContent (12 messages — 6 are mirrors):\n    [4] LIVE-MIRROR    ← Layer 0 (existing main)\n    [5] STRIPPED-MIRROR ← Layer 1 (identity fallback)\n    [6] BARE-DUP       ← Layer 2 ONLY — no markers at all\n    [9] LIVE-MIRROR\n    [10] STRIPPED-MIRROR\n    [11] BARE-DUP       ← Layer 2 ONLY\n\n  After → 6 clean messages:\n    ✓ 12→6 messages (6 delivery-mirror entries removed)\n    ✓ No mirror entries in provider-bound output\n    ✓ Tool-use turn preserved\n\nCase 2 — Adjacent bare duplicate collapse (Layer 2 only, no marker)\n  Uses bareDuplicate(): NO provider, model, or openclawDeliveryMirror\n  Layer 1 CANNOT see this entry → only Layer 2 can collapse it\n    ✓ 4→3 messages (bare duplicate collapsed)\n    ✓ Real assistant reply preserved\n\nCase 4 — Native tool_use blocks prevent collapse\n    ✓ 3→3 messages (tool_use turn preserved)\n    ✓ Native tool_use block present\n\n✓ ALL PROOF CASES PASSED — provider-bound prompt is clean\n```\n\n**Observed result after fix**: All three mirror types are correctly filtered: live mirrors removed by the existing provider/model filter, stripped-marker mirrors removed by Layer 1 (identity fallback), and — critically — bare marker-free mirrors removed by Layer 2 (adjacent content dedup). Case 2 independently proves Layer 2 on entries with no `openclawDeliveryMirror` marker, addressing the P1 proof gap identified in the previous review.\n\nIssue reporter's production verification — pre-patch: 107 of 322 `prompt.submitted` trajectory events contaminated (33%, 278 adjacent duplicate pairs); post-patch: 0 contaminants.\n\n**What was not tested**: External provider API integration with a live model, gateway message broadcast through delivery-mirror channels, session persistence to disk, side-branch merge on a live running gateway.\n\n## Regression Test Plan\n\n```\n$ npx vitest run src/agents/embedded-agent-runner/replay-history.test.ts --run\n Test Files  1 passed (1)\n      Tests  37 passed (37)\n\n$ npx vitest run src/agents/tool-call-id.test.ts --run\n Test Files  1 passed (1)\n      Tests  26 passed (26)\n\n$ npx vitest run src/agents/sessions/session-manager.test.ts --run\n Test Files  2 passed (2)\n      Tests  96 passed (96)\n\n$ node scripts/run-oxlint.mjs src/agents/tool-call-id.ts \\\n    src/agents/embedded-agent-runner/replay-history.ts \\\n    src/agents/embedded-agent-runner/replay-history.test.ts \\\n    src/shared/transcript-only-openclaw-assistant.ts \\\n    scripts/repro/issue-99470-proof.mts\n→ exit 0\n```\n\n## AI Assistance\n\nThis PR was created with assistance from Claude Opus 4.8 (Anthropic). The author understands and takes responsibility for all code changes.\n",
+        "branch": "fix/delivery-mirror-prompt-contamination-99470",
+        "head_sha": "6db93e66e73e9a06130c58dc9bd6982345e4e024",
+        "author": "maweibin",
+        "labels": [
+          "scripts",
+          "agents",
+          "size: L",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "scripts/repro/issue-99470-proof.mts",
+            "additions": 283,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/replay-history.test.ts",
+            "additions": 176,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/replay-history.ts",
+            "additions": 48,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tool-call-id.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/shared/transcript-only-openclaw-assistant.ts",
+            "additions": 28,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 536,
+        "deletions": 8,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99504",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99504.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 100,
+          "gatingTotal": 95,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 33,
+            "SUCCESS": 62,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:99504:4875647750:2026-07-03T11:25:07Z:re_review",
+      "comment_id": "4875647750",
+      "comment_version_key": "4875647750:2026-07-03T11:25:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99504#issuecomment-4875647750",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99504,
+      "author": "maweibin",
+      "author_id": 18023423,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-03T11:25:07Z",
+      "comment_updated_at": "2026-07-03T11:25:07Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 706,
+    "total_ms": 2966,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 392
+        "ms": 337
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1473
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +227,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 305
+        "ms": 1130
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
