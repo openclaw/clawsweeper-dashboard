@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T01:19:51.267Z",
+  "generated_at": "2026-07-03T01:20:15.388Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-02T22:19:49.434Z",
+  "since": "2026-07-02T22:20:13.021Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    98664
+    98098
   ],
   "comment_ids": [
-    4871754330
+    4871756733
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98664:4871754330:2026-07-03T01:17:10Z:re_review",
-      "comment_id": "4871754330",
-      "comment_version_key": "4871754330:2026-07-03T01:17:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98664#issuecomment-4871754330",
+      "idempotency_key": "comment-router:openclaw/openclaw:98098:4871756733:2026-07-03T01:17:46Z:re_review",
+      "comment_id": "4871756733",
+      "comment_version_key": "4871756733:2026-07-03T01:17:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98098#issuecomment-4871756733",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 98664,
-      "author": "LeonidasLux",
-      "author_id": 294038793,
+      "issue_number": 98098,
+      "author": "lwy-2",
+      "author_id": 294104458,
       "author_association": "NONE",
-      "comment_created_at": "2026-07-03T01:17:10Z",
-      "comment_updated_at": "2026-07-03T01:17:10Z",
+      "comment_created_at": "2026-07-03T01:17:46Z",
+      "comment_updated_at": "2026-07-03T01:17:46Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -73,65 +73,61 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cli): bound batch-file read size in config-set-input",
-        "body": "## What Problem This Solves\n\nThe `--batch-file` path in `parseBatchSource()` at `src/cli/config-set-input.ts` reads an unbounded `fs.readFileSync()` when processing user-specified batch files. A user that accidentally passes a very large file (e.g., a multi-GB log instead of a config batch JSON) will trigger Node to buffer the entire payload, causing OOM pressure. The `--stdin` path in `config-cli.ts` and `exec-approvals-cli.ts` already have 1 MB bounds (`CONFIG_PATCH_STDIN_MAX_BYTES`, `EXEC_APPROVALS_STDIN_MAX_BYTES`), but the `--batch-file` path had no equivalent guard.\n\nThis is a defense-in-depth fix: in practice batch files for `openclaw config set --batch-file` are small JSON arrays of config entries, but an unbounded disk read from a user-specified path is a standard OOM surface.\n\n## Changes\n\n- Define `MAX_BATCH_FILE_BYTES = 52_428_800` (50 MB) in `config-set-input.ts`. This is deliberately higher than the 1 MB stdin limits because batch files on disk can be larger than typed piped input, while 50 MB still safely prevents OOM from accidentally reading multi-GB files. No real `--batch-file` workload produces a 50 MB JSON config array.\n- Replace the unbounded `fs.readFileSync()` with a bounded `fs.openSync()` + `fs.readSync()` that allocates a buffer of `MAX_BATCH_FILE_BYTES + 1` and reads at most that many bytes. If the read fills the buffer beyond the limit, a descriptive error is thrown. This caps memory for all inputs, including special files like `/dev/zero` whose `stat.size` is 0 but produce unbounded reads.\n- Add focused regression tests: oversized rejection, exact-limit boundary acceptance with valid parsed assertion, empty-file parse error.\n- Preserve all existing behavior: valid files under the limit continue to parse through the same `parseBatchEntries()` path.\n- Update CLI `--help` text to advertise the cap.\n\n## Why 50 MB, not 1 MB\n\nThe `--stdin` paths are capped at 1 MB because stdin input is typed directly and has no reason to exceed that. Batch files on disk (`--batch-file`) are a different surface: a config batch with thousands of entries can legitimately be larger than 1 MB. Setting the same tight cap would break existing users. 50 MB is a safe defense-in-depth ceiling — a JSON config array of that size (~500K individual entries) far exceeds any real use case — while eliminating the compatibility concern.\n\n## Real behavior proof\n\n- **Behavior addressed**: An oversized `--batch-file` must be rejected before parsing with a `Batch file too large` error. A normal-sized (valid) batch file must continue to parse as before.\n- **Real environment tested**: Local Vitest run on Node v22.22.0, exercising real `fs.openSync`/`readSync`/`closeSync` against real temp files on an ext4 filesystem, **plus** a real `openclaw config set --batch-file` CLI invocation against actual batch files.\n- **Exact steps**: \n  1. `pnpm test src/cli/config-set-input.test.ts` — 12 tests pass including the new oversized-file regression and the exact-limit boundary test with valid payload assertion.\n  2. `node openclaw.mjs config set --batch-file <file> --dry-run` — three scenarios (valid, oversized, empty).\n- **Observed result**: All 12 tests pass. Real CLI behavior confirms the bounded read works end-to-end:\n\n  ```\n  $ node openclaw.mjs config set --batch-file batch-valid.json --dry-run\n  Dry run successful: 3 update(s) validated against $OPENCLAW_HOME/.openclaw/openclaw.json.\n\n  $ node openclaw.mjs config set --batch-file batch-oversized.json --dry-run\n  Error: Batch file too large: /tmp/batch-oversized.json (max 52,428,800 bytes / 50 MB)\n\n  $ node openclaw.mjs config set --batch-file batch-empty.json --dry-run\n  Error: Failed to parse --batch-file: SyntaxError: JSON5: invalid end of input at 1:1\n  ```\n\n## Evidence\n\nFocused Vitest:\n\n$ pnpm test src/cli/config-set-input.test.ts\n\nRUN  v4.1.8\n\nTest Files  1 passed (1)\nTests  12 passed (12)\n\n\n\nType checks (tsgo, only our file — pre-existing @openclaw/* module-resolution errors elsewhere):\n\n$ node scripts/run-tsgo.mjs -p src/cli/config-set-input.ts\n(no errors from config-set-input.ts)\n\n\n\nLint (oxlint):\n\n$ node scripts/run-oxlint.mjs src/cli/config-set-input.ts src/cli/config-set-input.test.ts\n(no output — no issues)\n\n\n\nFormat (oxfmt):\n\n$ ./node_modules/.bin/oxfmt --check src/cli/config-set-input.ts src/cli/config-set-input.test.ts\nAll matched files use the correct format.\n\n\n\n**Label**: security\n\n_AI-assisted._\n",
-        "branch": "fix/bound-batch-file-read",
-        "head_sha": "7c1fb7baeceecb04ce3a13e6e4846de860d2f137",
-        "author": "leonidaslux",
+        "title": "fix(nextcloud-talk,discord): bound response body reads for webhook and error paths",
+        "body": "## What Problem This Solves\n\nFixes unbounded response body reads in three bundled plugin HTTP paths that can let a hostile or oversized endpoint exhaust gateway memory:\n\n1. **Discord webhook send** — Webhook send response parsed via unbounded `response.json()`, with a `.catch(() => ({}))` that silently swallows overflow errors and a missing 204 No Content guard for `wait:false` mode.\n2. **OpenRouter OAuth key exchange** — Success-path body read via `readResponseTextLimited` which silently truncates JSON, producing confusing parse failures.\n3. **Google OAuth token grant** — Token grant response parsed via unbounded `response.json()` and error body via unbounded `response.text()`.\n\n## Evidence\n\nSee the [## Real behavior proof](#real-behavior-proof) section below for loopback terminal output, SDK cap verification, unit test results, and code-level behavioral proof for all three changed paths (Discord webhook, OpenRouter OAuth, Google OAuth).\n\n## Why This Change Was Made\n\nEach path previously read the full HTTP response body without a size limit. The fix:\n- Success paths: `readProviderJsonResponse` — bounded read with explicit overflow signaling. Default cap: **16 MB** (`PROVIDER_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024`). Overflow error: `\"<label>: JSON response exceeds <maxBytes> bytes\"`. Malformed error: `\"<label>: malformed JSON response\"`.\n- Error path (Google): `readResponseTextLimited(4KB)` — bounded read, truncation acceptable for error diagnostics.\n- Discord 204 preserved: explicit `response.status === 204` guard returns `{}` before bounded JSON parsing.\n- Discord catch removed: the previous `.catch(() => ({}))` silently swallowed overflow errors. Removed so bounded-reader overflow propagates to the caller.\n\n## User Impact\n\n- **Discord webhook (wait:true)**: oversized/malformed response → explicit error propagates (vs silent `{id:\"unknown\"}` fallback)\n- **Discord webhook (wait:false)**: 204 No Content → `{}` fallback, no behavioral change\n- **OpenRouter OAuth**: oversized response → explicit \"JSON response exceeds 16777216 bytes\" error (vs silent truncation → \"unexpected response\")\n- **Google OAuth**: oversized response → explicit error; oversized error body → truncated to 4KB\n\n## Real behavior proof\n\n### Behavior addressed\n\nReplace unbounded HTTP response body reads with bounded SDK readers so oversized responses produce explicit overflow errors instead of unbounded memory allocation or silent JSON truncation. Preserve Discord 204 No Content support for `wait:false` webhook mode.\n\n### Real environment tested\n\n- **OS**: Linux 4.19.112 (x86_64, el8)\n- **Node**: v22.19.0\n- **Build**: OpenClaw 2026.6.11 (commit fbbab0d), `pnpm build` — 0 errors\n\n### SDK constants used by the fix\n\n| Constant | Value | Used by |\n|----------|-------|---------|\n| `PROVIDER_JSON_RESPONSE_MAX_BYTES` | 16,777,216 (16 MB) | `readProviderJsonResponse` default cap |\n| `readResponseTextLimited(4KB)` | 4,096 bytes | Google OAuth error body |\n| `readResponseTextLimited(8KB)` | 8,192 bytes | OpenRouter OAuth error body, Discord webhook error body |\n\n### Loopback evidence (local HTTP server, 6 scenarios)\n\n```\n  [1/6] Discord webhook · wait:true · normal JSON (200)\n  Status: 200\n  Result: id=12345, channel_id=67890\n  ✅ bounded readProviderJsonResponse: success\n\n  [2/6] Discord webhook · wait:false · 204 No Content\n  Status: 204\n  → 204 detected, returns {} fallback (no JSON parse)\n  ✅ no regression: wait:false webhooks still succeed\n\n  [3/6] Discord webhook · oversized response >16MB\n  Status: 200\n  Result: Discord webhook send: JSON response exceeds 16777216 bytes\n  ✅ bounded reader rejected oversized response\n\n  [4/6] Discord webhook · malformed JSON\n  Status: 200, body: \"not json at all\"\n  Result: Discord webhook send: malformed JSON response\n  ✅ bounded reader rejects malformed JSON\n\n  [5/6] OpenRouter OAuth · normal token exchange\n  Status: 200\n  Parsed: key=sk-or-v1-abc123def456, user_id=user_789\n  ✅ bounded readProviderJsonResponse: success\n  (oversized → same 16MB cap → same error format)\n\n  [6/6] Google OAuth · normal + error bounded\n  Normal: access_token=ya29.abc123..., expires_in=3600\n  ✅ bounded readProviderJsonResponse: success\n  Error body: 4096 bytes (limited to 4KB)\n  Unbounded would have been: 10KB\n  ✅ error path bounded at 4KB\n```\n\n### Focused oversized proof — OpenRouter & Google OAuth\n\n```\n╔══════════════════════════════════════════════════════════╗\n║  Focused proof: oversized OpenRouter & Google OAuth    ║\n║  SDK cap: PROVIDER_JSON_RESPONSE_MAX_BYTES = 16MB     ║\n╚══════════════════════════════════════════════════════════╝\n\n  [1/4] OpenRouter OAuth · normal token response\n  Status: 200\n  Parsed: key=sk-or-v1-abc123def456, user_id=user_789\n  ✅ normal token exchange succeeds\n\n  [2/4] OpenRouter OAuth · oversized (>16MB)\n  Status: 200\n  Result: OpenRouter OAuth key exchange: JSON response exceeds 16777216 bytes\n  ✅ oversized rejected with explicit error\n\n  [3/4] Google OAuth · normal token response\n  Status: 200\n  Parsed: access_token=ya29.abc123..., expires_in=3600\n  ✅ normal token grant succeeds\n\n  [4/4] Google OAuth · oversized (>16MB)\n  Status: 200\n  Result: Google OAuth token grant: JSON response exceeds 16777216 bytes\n  ✅ oversized rejected with explicit error\n```\n\nBoth paths use `readProviderJsonResponse` with the SDK default cap of 16MB (`PROVIDER_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024`). Normal responses succeed; oversized responses are rejected with the exact SDK error message format `<label>: JSON response exceeds <maxBytes> bytes`.\n\n### Discard wait:true code path (204 guard)\n\n```typescript\n// send.webhook.ts:127-132\nconst payload = response.status === 204\n  ? ({} as { id?: string; channel_id?: string })       // no-body success\n  : await readProviderJsonResponse<{...}>(              // bounded JSON read\n      response, \"Discord webhook send\"\n    );\n```\n\nNo `.catch(() => ({}))` — overflow and malformed errors propagate to caller.\n\n### OpenRouter readResponseBody (readProviderJsonResponse for success)\n\n```typescript\n// oauth.ts:77-84\nasync function readResponseBody(response: Response): Promise<unknown> {\n  if (response.ok) {\n    return await readProviderJsonResponse(response, \"OpenRouter OAuth key exchange\");\n  }\n  // error path unchanged — readResponseTextLimited with .catch(() => \"\")\n}\n```\n\n### Google OAuth requestTokenGrant (dual-path bounded)\n\n```typescript\n// oauth.token.ts:33-43\nif (!response.ok) {\n  const errorText = await readResponseTextLimited(response, 4 * 1024);  // bounded error\n  throw new Error(`Token exchange failed: ${errorText}`);\n}\nreturn await readProviderJsonResponse<{...}>(response, \"Google OAuth token grant\");  // bounded success\n```\n\n### Unit tests\n\n```\n$ pnpm test extensions/openrouter/oauth.test.ts --reporter=verbose\n ✓ bounds OpenRouter OAuth exchange error bodies without requiring response.text() (2ms)\n ✓ exchanges an authorization code for the issued OpenRouter API key (17ms)\n ✓ surfaces OpenRouter OAuth exchange errors without credential material (2ms)\n Tests  8 passed (8)\n\n$ pnpm test extensions/discord/src/send.webhook-activity.test.ts --reporter=verbose\n ✓ records outbound channel activity for webhook sends (138ms)\n ✓ rewrites configured mention aliases for webhook sends (3ms)\n Tests  2 passed (2)\n\n$ pnpm test extensions/discord\n Test Files  162 passed (162), Tests 1816 passed (1816)\n```\n\n### Negative controls\n\n- Discord error path (`throwWebhookResponseError`) — unchanged, uses `readResponseTextLimited(8KB)` with `.catch(() => \"\")`\n- OpenRouter OAuth error path — unchanged, uses `readResponseTextLimited(8KB)` with `.catch(() => \"\")`\n- All 162 Discord test files pass — no regression\n- All 8 OpenRouter OAuth tests pass — no regression\n\n### Build\n\n```\n$ pnpm build\n✓ built successfully — 0 errors\n```\n\n### What was not tested\n\n- **Live Discord/Google/OpenRouter API calls**: Requires valid credentials. Loopback server simulates all response types (200 JSON, 204 No Content, oversized >16MB, malformed, error).\n- **OAuth token refresh**: Google `refreshTokensForGeminiCli` uses the same `requestTokenGrant` helper and benefits from the same bounded reads.\n\n## Files changed\n\n| File | Δ | Change |\n|------|---|--------|\n| `extensions/discord/src/send.webhook.ts` | +10/-4 | `readProviderJsonResponse` + 204 check + remove `.catch(() => ({}))` |\n| `extensions/google/oauth.token.ts` | +10/-3 | `readProviderJsonResponse` for success; `readResponseTextLimited(4KB)` for error |\n| `extensions/openrouter/oauth.ts` | +17/-6 | `readProviderJsonResponse` for success; removed unused `RESPONSE_BODY_LIMIT` |\n\n## Notes\n\n- **Overlapping PRs**: This PR's Discord/OpenRouter/Google bounded-read changes may overlap with similar hardening PRs. Maintainers should coordinate canonical branches.\n- **AI-assisted**: yes (Claude Code)",
+        "branch": "fix/bound-nextcloud-discord-response-reads",
+        "head_sha": "fbbab0d3ccf91d1019de88e16e040ac75ecad2e2",
+        "author": "lwy-2",
         "labels": [
-          "docs",
-          "cli",
-          "size: S",
+          "channel: discord",
+          "size: XS",
+          "extensions: google",
+          "extensions: openrouter",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 message-delivery",
           "status: 🔁 re-review loop"
         ],
         "files": [
           {
-            "path": "docs/cli/config.md",
-            "additions": 2,
-            "deletions": 0,
+            "path": "extensions/discord/src/send.webhook.ts",
+            "additions": 11,
+            "deletions": 5,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/config-cli.ts",
-            "additions": 4,
-            "deletions": 1,
+            "path": "extensions/google/oauth.token.ts",
+            "additions": 7,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/config-set-input.test.ts",
-            "additions": 34,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/config-set-input.ts",
-            "additions": 30,
-            "deletions": 1,
+            "path": "extensions/openrouter/oauth.ts",
+            "additions": 11,
+            "deletions": 6,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 70,
-        "deletions": 3,
+        "changedFiles": 3,
+        "additions": 29,
+        "deletions": 14,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98664",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98664.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98098",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98098.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 19,
-          "gatingTotal": 14,
+          "total": 17,
+          "gatingTotal": 12,
           "counts": {
-            "SUCCESS": 9,
+            "SUCCESS": 7,
             "SKIPPED": 10
           },
           "blockers": [],
@@ -147,15 +143,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2034,
+    "total_ms": 2546,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 774
+        "ms": 787
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1040
+        "ms": 1561
       },
       {
         "name": "classify_comment_commands",
@@ -171,7 +167,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 201
+        "ms": 180
       },
       {
         "name": "append_ledger",
