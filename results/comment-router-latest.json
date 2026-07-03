@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T03:00:07.840Z",
+  "generated_at": "2026-07-03T03:01:06.076Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T00:00:05.725Z",
+  "since": "2026-07-03T00:01:05.597Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -39,12 +39,12 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/99196#issuecomment-4872179412",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99196,
-      "author": "LeonidasLux",
-      "author_id": 294038793,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-03T02:57:27Z",
-      "comment_updated_at": "2026-07-03T02:57:27Z",
+      "issue_number": 99083,
+      "author": "ZOOWH",
+      "author_id": 265460861,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-03T02:58:33Z",
+      "comment_updated_at": "2026-07-03T02:58:33Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -70,89 +70,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(plugins): discover config load.paths plugins when index has entries",
-        "body": "## Summary\n\n**Problem**: Installing a managed npm plugin populates the persisted plugin index. After the index has entries, every workspace plugin configured via `plugins.load.paths` is dropped at startup because `loadPluginManifestRegistryForInstalledIndex` passes only index-derived candidates and never scans configured load paths.\n\n**Solution**: In `loadPluginManifestRegistryForInstalledIndex`, after building candidates from index records, additionally discover plugins from `config.plugins.load.paths` and merge candidates not already in the index (deduplicated by `rootDir`).\n\n**What changed**: `src/plugins/discovery.ts` — added `discoverFromConfigPaths`, a scoped helper that only scans user-configured load paths without touching bundled/global roots. `src/plugins/manifest-registry-installed.ts` — the installed-index path now uses `discoverFromConfigPaths` instead of `discoverOpenClawPlugins` for its load-path fallback. `src/plugins/manifest-registry-installed.test.ts` — 3 new regression tests for the load-path discovery, empty-load-path no-op, and pluginId scoping.\n\n**What did NOT change**: No change to the index-empty fast path. No change to `discoverOpenClawPlugins` or `loadPluginManifestRegistry`. No change to how bundled or global plugins are discovered. No behavioral change when `load.paths` is empty.\n\n## What Problem This Solves\n\nInstalling a managed npm plugin (`openclaw plugins install npm:@openclaw/llama-cpp-provider@2026.6.10`) populates the persisted plugin index. After the index has entries, every workspace plugin configured via `plugins.load.paths` is dropped at startup with:\n\n```\nplugins.entries.<id>: plugin not found: <id> (stale config entry ignored; remove it from plugins config)\nplugins.allow: plugin not found: <id> (stale config entry ignored; remove it from plugins config)\n```\n\nPlugin files are present and unchanged on disk. Reverting the config restores them.\n\nFixes #99185\n\n## Root Cause\n\nIn `loadPluginMetadataSnapshotImpl` (`src/plugins/plugin-metadata-snapshot.ts:699-715`), the manifest registry is built via two paths:\n\n- **Index empty** (`index.plugins.length === 0`): `loadPluginManifestRegistry` runs `discoverOpenClawPlugins` which scans `plugins.load.paths` → workspace plugins found ✅\n- **Index has entries**: `loadPluginManifestRegistryForInstalledIndex` converts index records to candidates and passes them to `loadPluginManifestRegistry` → since candidates are provided, `discoverOpenClawPlugins` is **never called** and `plugins.load.paths` is never scanned\n\nIf workspace plugins are missing from the persisted index (which can happen in certain install/refresh sequences), they are silently dropped and never discovered again.\n\n## Change Summary\n\nIn `loadPluginManifestRegistryForInstalledIndex` (`src/plugins/manifest-registry-installed.ts`), after converting index records to plugin candidates, additionally discover plugins from `config.plugins.load.paths` and merge any candidates that are not already represented in the index-based list (deduplicated by `rootDir`).\n\nKey design decisions addressing ClawSweeper review (Round 1 → Round 2):\n- **P1 — Config-only discovery scope (updated in Round 2)**: Replaced `discoverOpenClawPlugins` (which scans bundled/global roots and leaks their diagnostics into the installed-index validation surface) with a new `discoverFromConfigPaths` helper that scans **only** the user-configured load paths. The helper lives in `src/plugins/discovery.ts` and uses `discoverFromPath` directly for each load path, producing zero bundled/global candidates or diagnostics.\n- **P2 — pluginId scoping preserved**: Extra load-path candidates are additionally filtered by the requested `pluginIds`, preventing scoped callers (provider or metadata requests) from receiving unrelated load-path plugins.\n- **3 new regression tests**: Cover the mixed index+load-path scenario, empty-load-path no-op, and pluginId scoping.\n\n## Real behavior proof\n\n**Behavior addressed**: After the fix, workspace plugins configured via `plugins.load.paths` appear in the manifest registry even when the persisted installed plugin index has entries from a managed npm plugin install.\n\n**Real environment tested**: Windows 10, Node.js v24.14.1, OpenClaw dev build (worktree `fix/issue-99185-clean`)\n\n**Exact steps or command run after this patch**: `node --loader tsx/esm collect-evidence-99196.ts`\n\n**After-fix evidence**:\n```\n══════════════════════════════════════════════════════\n  PR #99196 — L2 Evidence Collection\n══════════════════════════════════════════════════════\n\n========== BEFORE FIX ==========\n(Simulating main branch behavior — no load.paths discovery)\nInstalled-index plugin dir: ...\\installed-plugin\nLoad-path plugin dir:       ...\\workspace-plugin\nIndex plugin IDs:           npm-installed-llama\nLoad paths configured:      [...\\workspace-plugin]\n\nWithout fix, workspace plugin would be silently dropped\n\n========== AFTER FIX ==========\nCalling loadPluginManifestRegistryForInstalledIndex with load.paths config...\n\nPlugins found: 2\nPlugin IDs:\n  - npm-installed-llama (llama-cpp-provider)\n  - workspace-extension (workspace-provider)\n\nDiagnostics: 0\n\nVerification Results:\n  npm-installed-llama (from index):    FOUND\n  workspace-extension (from load.paths): FOUND\n\n  Overall: PASS — load.paths plugins correctly discovered alongside index entries\n\nP2: pluginId scoping test:\nScoped to [npm-installed-llama]: found 1 plugin(s)\n\nP2 scoping: PASS — only scoped plugins returned\n```\n\n**Observed result after the fix**: Both the installed-index plugin (`npm-installed-llama`) and the load-path workspace plugin (`workspace-extension`) are present in the manifest registry. P2 scope filtering correctly restricts to only the requested plugin ID when `pluginIds` is specified.\n\n**What was not tested**: Full Gateway integration test with live npm install and running OpenClaw instance. Competing fix PR #99192 was not evaluated for merge compatibility. The `plugin-metadata-snapshot.memo.test.ts` EPERM failure on Windows temp cleanup is pre-existing and unrelated.\n\n## Tests and validation\n\n```\n ✓ |plugins| manifest-registry-installed.test.ts (19 tests, 1 skipped)\n   Tests  19 passed | 1 skipped (20)\n ✓ |plugins| discovery.test.ts (70 tests, 6 skipped)\n   Tests  70 passed | 6 skipped (76)\n```\n\n3 new regression tests added:\n- `discovers load.paths workspace plugins when index has entries`\n- `skips load.paths discovery when load.paths is empty`\n- `preserves pluginId scoping for load-path candidates`\n\n- TypeScript compilation: `tsc --noEmit -p tsconfig.core.json` clean (no new errors)\n- No behavioral change when `load.paths` is empty (guarded by `loadPaths.length > 0` check)\n- No duplicate plugins when `load.paths` entries are already in the index (dedup by `rootDir`)\n- `loadPluginManifestRegistry` has built-in duplicate ID detection as second line of defense\n\n## Risk checklist\n\n- merge-risk: 🚨 compatibility — This changes which plugins appear from existing persisted-index configurations when `plugins.load.paths` is set.\n- Risk level: Low risk — The P1 config-only filter and P2 pluginId scoping ensure only explicitly configured load-path plugins are added. Deduplication by `rootDir` prevents duplicates.\n- Risk: Existing users with `plugins.load.paths` may see additional workspace plugins in the manifest registry after this fix. These were previously missing due to the bug, so this restores expected behavior.\n- Mitigation: `origin === \"config\"` filter and new `discoverFromConfigPaths` helper (which never scans bundled/global roots) prevent unrelated bundled/global root diagnostics from leaking into the installed-index config validation surface. `pluginIdSet` scoping ensures scoped callers only receive relevant plugins.\n- Rollback: Revert the commit to restore the previous behavior.\n\n## Current review state\n\n- ClawSweeper rating: awaiting re-review after P1 (config-only discovery helper) fix applied\n- Labels: `rating: 🧂 unranked krab`, `status: ⏳ waiting on author`\n- This revision addresses: P1 (config-only `discoverFromConfigPaths` helper, no bundled/global diagnostic leakage), P2 (pluginId scoping), 3 new regression tests, L2 real behavior proof\n\n## Linked context\n\n- Issue: #99185\n- Related competing PR: #99192 (draft, same root cause, different approach)\n\n",
-        "branch": "fix/issue-99185-clean",
-        "head_sha": "d006bf2d3d8e3e1439fd79b56705444821fcbe70",
-        "author": "leonidaslux",
-        "labels": [
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/plugins/discovery.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/manifest-registry-installed.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/manifest-registry-installed.ts",
-            "additions": 36,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 150,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99196",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99196.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 11,
-          "gatingTotal": 6,
-          "counts": {
-            "SUCCESS": 8,
-            "SKIPPED": 3
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2452,
+    "total_ms": 1739,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 738
+        "ms": 462
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1364
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -164,7 +99,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 336
+        "ms": 1260
       },
       {
         "name": "append_ledger",
