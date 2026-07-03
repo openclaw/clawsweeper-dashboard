@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T08:02:14.926Z",
+  "generated_at": "2026-07-03T08:02:40.048Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T05:02:12.877Z",
+  "since": "2026-07-03T05:02:38.157Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99418
+    99422
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99418:4874061484:2026-07-03T08:02:09Z:clawsweeper_auto_repair",
-      "comment_id": "4874061484",
-      "comment_version_key": "4874061484:2026-07-03T08:02:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99418#issuecomment-4874061484",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99422:4874075251:2026-07-03T08:02:35Z:clawsweeper_auto_repair",
+      "comment_id": "4874075251",
+      "comment_version_key": "4874075251:2026-07-03T08:02:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99422#issuecomment-4874075251",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99418,
+      "issue_number": 99422,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-03T07:57:05Z",
-      "comment_updated_at": "2026-07-03T08:02:09Z",
+      "comment_created_at": "2026-07-03T07:58:42Z",
+      "comment_updated_at": "2026-07-03T08:02:35Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=367df9ec1efd7ba382c6ecd303c69f720cd8199c)",
-      "review_summary": "The PR adds a NaN fallback to `loadSessionLogs` when top-level transcript timestamps fail `Date` parsing.\n\nPR surface: Source +1. Total +1 across 1 file.\n\nReproducibility: yes. at source level: current main directly assigns `new Date(parsed.timestamp).getTime()` in `loadSessionLogs`, so an invalid string can produce `NaN` before the gateway sends logs. I did not run a full session-file gateway repro in this read-only review.",
-      "review_followup": "- [P1] The PR needs contributor-supplied real behavior proof and a small lint fix; no ClawSweeper repair lane is queued because the proof gap must be addressed from a real setup.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=776a4eaa536ebdf6df29afe17debe5eb076a6c01)",
+      "review_summary": "The PR makes Memory Wiki legacy import-run reading and doctor archiving skip malformed or schema-invalid legacy JSON files instead of failing the migration.\n\nPR surface: Source +36, Tests +140. Total +176 across 4 files.\n\nReproducibility: yes. from source inspection: current main has an unguarded JSON.parse in the legacy reader, and PR head still drops all-invalid directories before doctor can warn. I did not run a write-producing repro because this review is read-only.",
+      "review_followup": "- [P1] Human/contributor action is needed because the patch needs an invalid-only warning repair plus current-head real doctor proof before merge.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "367df9ec1efd7ba382c6ecd303c69f720cd8199c",
+      "expected_head_sha": "776a4eaa536ebdf6df29afe17debe5eb076a6c01",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,60 +70,81 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(infra): add NaN guard for date parse in session cost usage",
-        "body": "## Summary\n\n**Problem**: In `src/infra/session-cost-usage.ts`, the `buildUsageEntries()` function iterates over session transcript messages and parses their timestamps for use in cost and usage data aggregation. When `parsed.timestamp` exists as a string, the code calls `new Date(parsed.timestamp).getTime()` to convert it to a numeric Unix-epoch-milliseconds value. However, there is no `Number.isNaN()` guard on the parse result. If the timestamp string is unparseable — which can happen with malformed ISO-8601 dates, arbitrary text accidentally stored in the timestamp field, empty strings, or provider SDKs that emit non-standard timestamp formats — the `new Date()` constructor returns an invalid Date object, and `.getTime()` returns `NaN`. This `NaN` value is then assigned to the `timestamp` variable and silently propagates into every downstream usage and cost calculation: date-range grouping, session duration computation, per-model cost aggregation, and billing report generation.\n\nThis is a classic \"present-but-invalid\" boundary case: the timestamp key exists on the parsed message object (so we correctly enter the string branch), but the parsed value is semantically garbage (so the result is numerically poisonous). NaN is particularly dangerous because it propagates virally through all subsequent arithmetic operations — `NaN + anyNumber = NaN`, `NaN - anyNumber = NaN`, and `NaN <= anyNumber = false` — without ever throwing an exception or triggering an error log. This means the corruption is completely silent: the usage API returns malformed data, the user sees nonsensical numbers, and there is no indication anything went wrong.\n\nThis bug category is closely related to several recently-merged boundary-case fixes in the same codebase: #94096 (rejecting inverted startDate-endDate ranges where start > end), #93903 (rejecting invalid absolute timestamp values in cron schedules), and #89448 (rejecting duration values that overflow to non-finite numbers like Infinity). All share the same root cause: numeric input validation that trusts the parse result without checking for the boundary failure modes (NaN, Infinity, inverted ranges).\n\n**Solution**: Add a single `Number.isNaN()` guard immediately after the `new Date(parsed.timestamp).getTime()` call on line 2732, with a fallback to `0` (Unix epoch). The value `0` was chosen because it is already the default value of the `timestamp` variable (declared as `let timestamp = 0` on line 2730) — so semantically, an unparseable timestamp is treated identically to a missing timestamp, which is the safest fallback behavior.\n\nThis is a one-line addition:\n```typescript\n// Before (bug — NaN silently propagates):\ntimestamp = new Date(parsed.timestamp).getTime();\n\n// After (fix — NaN guarded with safe fallback):\ntimestamp = new Date(parsed.timestamp).getTime();\nif (Number.isNaN(timestamp)) timestamp = 0;\n```\n\nThe `Number.isNaN()` check (rather than the older global `isNaN()`) is the correct choice because `Number.isNaN()` does not coerce its argument — it only returns true for the actual `NaN` value, not for strings or undefined that `isNaN()` would also report as NaN. This is important because a valid numeric string passed to `new Date()` could theoretically parse to a real number, and we only want to guard against the genuine NaN result from Date parsing.\n\n**What changed**: Exactly one line added to `src/infra/session-cost-usage.ts` in the `buildUsageEntries()` function's timestamp parsing section (line 2733, immediately after line 2732's `new Date()` call). Total diff: +1 line, 0 lines removed, 0 lines modified.\n\n**What did NOT change**: The numeric timestamp path (`else if (typeof message.timestamp === \"number\")`) — numeric timestamps pass through unchanged. The default zero initialization (`let timestamp = 0` at declaration). All downstream cost/usage calculation logic, data aggregation, and API response formatting. The public API of `loadCostUsageSummary()`, `loadSessionCostSummary()`, `loadCostUsageSummaryFromCache()`, or any other exported function. The guard is strictly a defensive no-op for valid inputs — all correctly-formatted timestamp strings continue to parse to their exact same numeric values and pass through the guard unchanged because `Number.isNaN(validNumber)` is never true.\n\n**Why this specific fix**: The alternative of logging a warning or throwing an error was considered but rejected. The function operates on historical transcript data that may contain malformed timestamps from old sessions or third-party providers. Rejecting the entire usage calculation for one bad timestamp entry would be worse than silently falling back to epoch 0 — it would break the usage API entirely. The approach of logging a warning is reasonable but would require plumbing a logger into this pure data-transformation function, which exceeds the scope of this minimal defensive fix. Future work could add structured warning logging for unparseable timestamps, but the immediate priority is preventing NaN propagation.\n\nFixes #99413\n\n## Linked context\n\n- **Related PRs**: #94096 (fix(usage): reject inverted startDate-endDate range in usage.cost and sessions.usage), #93903 (fix(cron): reject invalid absolute timestamps), #89448 (fix(cron): reject durations that overflow to a non-finite value)\n- **In scope**: `buildUsageEntries()` timestamp string parse path in `src/infra/session-cost-usage.ts` (specifically the `typeof parsed.timestamp === \"string\"` branch at line 2731-2733)\n- **Out of scope**: Other `new Date()` call sites without NaN guards identified in the codebase — approximately 10 additional locations were found during the analysis that produced this PR, including `src/agents/sessions/agent-session.ts:2042,2089`, `src/agents/sessions/session-manager.ts:2649`, and 4 files in `extensions/qqbot/src/engine/gateway/stages/`. These are candidates for separate follow-up PRs to keep each change minimal and independently reviewable.\n\n## Root Cause\n\n**Trigger condition**: A session transcript message object has a `timestamp` field that is a string but is not a valid date string parseable by the JavaScript `Date` constructor. Examples include: empty string `\"\"`, arbitrary text `\"not-a-date\"`, non-standard date formats that the parser rejects, or corrupted data from provider SDK bugs.\n\n**Root cause analysis**: The code correctly handles two cases — timestamp is a string (parse it) and timestamp is a number (use it directly) — but fails to handle the third implicit case: timestamp is a string that fails to parse. This is a classic missing-branch-in-input-validation pattern. The fix adds the third branch: string that parses to NaN → fall back to default.\n\n**Affected scope**: All OpenClaw gateway instances that serve usage/cost data via the `/usage` API endpoint. The issue is present in every version since the `buildUsageEntries()` function was introduced. It only manifests when transcript data contains malformed timestamp strings, which is a rare but possible edge case from provider SDK format changes, manual transcript edits, or data migration issues.\n\n## Real behavior proof\n\n**Behavior addressed**: Unparseable timestamp strings in session transcript data no longer produce `NaN` values that silently corrupt usage and cost aggregation computations. With the guard, they safely fall back to `0` (Unix epoch), which is the identical default used when no timestamp key exists on the parsed message object. This ensures malformed transcript data cannot produce nonsensical billing numbers or break the usage API.\n\n**Real environment tested**: Windows 10 LTSC 2019 (build 10.0.17763), Node.js v22.11.0, openclaw main branch @ commit 4e6933c84f (fix(auto-reply): restore per-turn message-tool delivery contract)\n\n**Exact steps or command run after this patch**:\n```bash\n# Step 1: Verify timestamp parsing behavior BEFORE the fix (no NaN guard)\nnode -e \"\n// BEFORE: the buggy code without NaN guard\nfunction parseTimestampBefore(ts) {\n  let timestamp = 0;\n  if (typeof ts === 'string') {\n    timestamp = new Date(ts).getTime();\n    // NOTE: no NaN guard here — this is the bug\n  } else if (typeof ts === 'number') {\n    timestamp = ts;\n  }\n  return timestamp;\n}\nconsole.log('=== BEFORE FIX (NaN silently passes through) ===');\nconsole.log('  Valid ISO-8601         :', parseTimestampBefore('2024-01-15T08:30:00Z'));\nconsole.log('  Valid ISO with ms      :', parseTimestampBefore('2024-06-30T12:00:00.500Z'));\nconsole.log('  Arbitrary garbage text :', parseTimestampBefore('not-a-date'), '<- BUG: returns NaN');\nconsole.log('  Empty string           :', parseTimestampBefore(''), '<- BUG: returns NaN');\nconsole.log('  Numeric timestamp      :', parseTimestampBefore(1705304400000));\nconsole.log('  Undefined (no key)     :', parseTimestampBefore(undefined));\nconsole.log('  Random text            :', parseTimestampBefore('!!garbage-input!!'), '<- BUG: returns NaN');\n\"\n\n# Step 2: Verify timestamp parsing behavior AFTER the fix (with NaN guard)\nnode -e \"\n// AFTER: the fixed code with NaN guard\nfunction parseTimestampAfter(ts) {\n  let timestamp = 0;\n  if (typeof ts === 'string') {\n    timestamp = new Date(ts).getTime();\n    if (Number.isNaN(timestamp)) timestamp = 0;\n  } else if (typeof ts === 'number') {\n    timestamp = ts;\n  }\n  return timestamp;\n}\nconsole.log('=== AFTER FIX (NaN guarded with safe fallback to 0) ===');\nconsole.log('  Valid ISO-8601         :', parseTimestampAfter('2024-01-15T08:30:00Z'));\nconsole.log('  Valid ISO with ms      :', parseTimestampAfter('2024-06-30T12:00:00.500Z'));\nconsole.log('  Arbitrary garbage text :', parseTimestampAfter('not-a-date'), '<- FIXED: returns 0');\nconsole.log('  Empty string           :', parseTimestampAfter(''), '<- FIXED: returns 0');\nconsole.log('  Numeric timestamp      :', parseTimestampAfter(1705304400000));\nconsole.log('  Undefined (no key)     :', parseTimestampAfter(undefined));\nconsole.log('  Random text            :', parseTimestampAfter('!!garbage-input!!'), '<- FIXED: returns 0');\n\"\n\n# Step 3: Demonstrate NaN propagation in arithmetic (why this matters)\nnode -e \"\nconsole.log('=== NaN propagation demonstration ===');\nconsole.log('  NaN + 100          =', NaN + 100);\nconsole.log('  NaN - 50           =', NaN - 50);\nconsole.log('  NaN <= 0           =', NaN <= 0);\nconsole.log('  NaN > 0            =', NaN > 0);\nconsole.log('  Math.max(NaN, 100) =', Math.max(NaN, 100));\nconsole.log('  JSON.stringify(NaN)=', JSON.stringify(NaN));\nconsole.log('Without guard, one bad timestamp poisons ALL downstream math.');\n\"\n```\n\n**After-fix evidence**:\n```\n=== BEFORE FIX (NaN silently passes through) ===\n  Valid ISO-8601         : 1705307400000\n  Valid ISO with ms      : 1719744000500\n  Arbitrary garbage text : NaN <- BUG: returns NaN\n  Empty string           : NaN <- BUG: returns NaN\n  Numeric timestamp      : 1705304400000\n  Undefined (no key)     : 0\n  Random text            : NaN <- BUG: returns NaN\n\n=== AFTER FIX (NaN guarded with safe fallback to 0) ===\n  Valid ISO-8601         : 1705307400000\n  Valid ISO with ms      : 1719744000500\n  Arbitrary garbage text : 0 <- FIXED: returns 0\n  Empty string           : 0 <- FIXED: returns 0\n  Numeric timestamp      : 1705304400000\n  Undefined (no key)     : 0\n  Random text            : 0 <- FIXED: returns 0\n\n=== NaN propagation demonstration ===\n  NaN + 100          = NaN\n  NaN - 50           = NaN\n  NaN <= 0           = false\n  NaN > 0            = false\n  Math.max(NaN, 100) = NaN\n  JSON.stringify(NaN)= null\nWithout guard, one bad timestamp poisons ALL downstream math.\n```\n\n**Observed result after the fix**: Three previously-NaN-producing inputs (\"not-a-date\", \"\", \"!!garbage-input!!\") now correctly return `0` instead of `NaN`. Valid ISO-8601 timestamps continue to parse to correct numeric values (1705307400000, 1719744000500). Numeric timestamps pass through unchanged (1705304400000). Missing timestamps (undefined) still correctly default to `0`. The NaN propagation demonstration shows exactly why this matters: NaN corrupts every downstream arithmetic operation, and JSON.stringify(NaN) produces `null` instead of a number, which would break API clients expecting numeric timestamps.\n\n**What was not tested**: Full end-to-end cost/usage report generation with deliberately corrupted session transcript data injected into a live OpenClaw gateway instance. This would require: (1) starting a gateway with real session files, (2) manually editing a transcript JSON file to inject malformed timestamp strings, (3) calling the `/usage` API endpoint, and (4) verifying the response contains numeric (not null/NaN) values. The guard logic has been verified in isolation with 7 distinct input cases, following the same methodology used by #93903, #94096, and #89448 for timestamp/duration validation fixes. A follow-up integration test could be added to `session-cost-usage.test.ts` to cover this edge case with unit test fixtures.\n\n## Tests and validation\n\n### Unit tests\n\nThe existing unit test suite at `src/infra/session-cost-usage.test.ts` covers the cost/usage calculation functions but does not explicitly test the NaN timestamp guard path because the test fixtures use valid timestamps. A future enhancement could add a test case with malformed timestamp strings to verify the guard behavior at the unit test level.\n\n```bash\n# Type check on the core package verifies no syntax/import errors\n$ pnpm tsgo:core\n(clean exit with zero errors on modified file)\n\n# The guard is a single conditional check that does not affect any\n# TypeScript types, function signatures, or module exports, so\n# tsgo:core provides sufficient compile-time verification.\n```\n\n## Risk checklist\n\n- [x] This change is backwards compatible — the guard only activates when `Date.parse()` returns NaN; all valid timestamps produce identically the same values before and after the fix\n- [x] This change has been tested with existing configurations — Node.js inline verification with 7 distinct input cases covering valid, invalid, missing, and edge-case timestamps\n- [x] I have updated relevant documentation — PR body includes comprehensive before/after comparison and NaN propagation demonstration\n- [x] Breaking changes (if any) are documented in Summary — N/A, zero breaking changes, purely defensive guard\n- [x] Risk level: **Low** — single-line addition, only activates on NaN (invalid input), fallback value matches existing default, no API or signature changes, no logic changes to valid-input paths\n- [x] Merge-risk: **Low** — the `Number.isNaN()` guard pattern is an established convention in the codebase, already used in `src/agents/sessions/session-manager.ts:1256` (with `!Number.isNaN(t)` check) and `extensions/qqbot/src/engine/gateway/stages/register-basic.ts:53-55` (with `Number.isNaN(eventTime)` check). This PR applies the same well-tested pattern to a previously-unguarded location.\n\n## Current review state\n\n- [x] Self-review completed — all 7 test cases verified manually, NaN propagation demonstrated, type check passed, diff is a single line\n- [ ] At least one maintainer review\n- [ ] All CI checks passed\n",
-        "branch": "fix/issue-99413-nan-timestamp-guard",
-        "head_sha": "367df9ec1efd7ba382c6ecd303c69f720cd8199c",
-        "author": "sheyanmin",
+        "title": "fix(memory-wiki): skip malformed legacy import-run files in doctor",
+        "body": "## What Problem This Solves\n\n`readLegacyMemoryWikiImportRunRecords` in `extensions/memory-wiki/src/import-runs-state.ts` parsed each `.openclaw-wiki/import-runs/*.json` file with an unguarded `JSON.parse` inside `Promise.all`. A single partially-written or syntax-broken file (interrupted ChatGPT import, OOM kill, editor save with a syntax error) threw a raw `SyntaxError` that short-circuited the whole map, killing the Memory Wiki legacy migration during `openclaw doctor --fix` — with no mention of which file was corrupt.\n\n## Why This Change Was Made\n\nThe modern SQLite-backed sibling `listMemoryWikiImportRuns` deserializes rows defensively and returns only the ones that parse. The legacy file-based path did not get the same treatment, and it runs against user data without a schema guarantee — exactly when a corrupted file is most likely. This makes the legacy path consistent with the modern one: skip the bad file, keep the good ones.\n\n## User Impact\n\nA user upgrading from a pre-SQLite Memory Wiki install with one corrupted `import-runs/<id>.json` no longer has `openclaw doctor --fix` die with an opaque `SyntaxError`; the corrupted file is skipped and the rest of the import-run records still migrate. Well-formed files are unchanged.\n\n## Real behavior proof\n\n- **Behavior addressed:** A single malformed `.openclaw-wiki/import-runs/*.json` file threw a raw `SyntaxError` out of `readLegacyMemoryWikiImportRunRecords`, killing the whole Memory Wiki legacy migration pass.\n- **Real environment tested:** Linux x86_64, Node v24.14.0, commit `b266baac11` on branch `fix/memory-wiki-import-runs-jsonparse`.\n- **Exact steps or command run after this patch:** `node --import tsx verify-memory-wiki-import-runs.mjs` — imports the real `readLegacyMemoryWikiImportRunRecords`, writes a real valid + a real malformed `import-runs/*.json` into a real temp vault, and reads them through the real legacy path. No mocks: real fs, real function.\n- **Evidence after fix:** Terminal capture of `node` runtime verification (live stdout, copied verbatim):\n\n  ```text\n  $ node --import tsx verify-memory-wiki-import-runs.mjs\n  wrote valid.json + broken.json (\"{ not valid json , \") into .openclaw-wiki/import-runs/\n  raw JSON.parse(broken) -> SyntaxError (what doctor used to crash on)\n  readLegacyMemoryWikiImportRunRecords returned 1 record(s): [\"valid-run\"]\n\n  Verdict: valid record returned, malformed file skipped (no crash)\n  ```\n\n- **Observed result after fix:** Over a real vault with one valid and one malformed `import-runs/*.json`, `readLegacyMemoryWikiImportRunRecords` returns the valid record and skips the malformed file instead of throwing a `SyntaxError`. A raw `JSON.parse` of the malformed body still throws `SyntaxError` (shown for contrast: that is what doctor used to crash on).\n- **What was not tested:** A live upgrade from a real pre-SQLite Memory Wiki vault on a production machine (the temp vault + real function is the faithful unit; the live `openclaw doctor --fix` path is the same code).\n\n## Tests and validation\n\n```text\n$ pnpm test extensions/memory-wiki/src/import-runs.test.ts\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n```\n\nAdded `skips malformed legacy import-run files instead of throwing`: writes a valid + a malformed `import-runs/*.json` into a temp vault and asserts `readLegacyMemoryWikiImportRunRecords` returns only the valid record.\n\n## Risk checklist\n\n- User-visible behavior: Yes (intended, bounded) - a corrupted legacy `import-runs/*.json` is now skipped instead of killing `openclaw doctor --fix`; well-formed files and the happy path unchanged.\n- Config/env/migration behavior: No - no config or env surface touched; only the legacy-file read path.\n- Security/auth/secrets/network/tool execution: No - only error handling around an existing JSON.parse of local legacy files.\n- Plugins/providers/channels/SDK: Yes (bounded) - internal to the memory-wiki plugin doctor migration; no public API change.\n- Highest-risk area: silently skipping a corrupted file means its import run is not migrated - but the alternative (crash) is strictly worse, and the file is left in place for the user to repair/re-import.\n- Mitigation: 2 import-runs tests (incl. the new malformed-file case) + node runtime verification driving the real function over a real malformed file.\n\nCloses: N/A (no existing issue)\n\n\n---\nSupersedes #98889 (force-pushed branch could not be reopened).",
+        "branch": "fix/memory-wiki-import-runs-jsonparse",
+        "head_sha": "776a4eaa536ebdf6df29afe17debe5eb076a6c01",
+        "author": "miorbnli",
         "labels": [
-          "size: XS",
+          "size: S",
+          "extensions: memory-wiki",
           "P2",
-          "rating: 🧂 unranked krab",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/infra/session-cost-usage.ts",
-            "additions": 1,
+            "path": "extensions/memory-wiki/doctor-contract-api.test.ts",
+            "additions": 108,
             "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/doctor-contract-api.ts",
+            "additions": 22,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/import-runs-state.ts",
+            "additions": 17,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/import-runs.test.ts",
+            "additions": 33,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 1,
-        "additions": 1,
-        "deletions": 0,
+        "changedFiles": 4,
+        "additions": 180,
+        "deletions": 4,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99418",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99418.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99422",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99422.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 100,
-          "gatingTotal": 95,
+          "total": 92,
+          "gatingTotal": 87,
           "counts": {
             "CANCELLED": 2,
             "SKIPPED": 35,
-            "SUCCESS": 60,
-            "FAILURE": 2,
-            "NEUTRAL": 1
+            "SUCCESS": 52,
+            "FAILURE": 3
           },
           "blockers": [
             "Real behavior proof:CANCELLED",
-            "QA Smoke CI:FAILURE",
-            "check-lint:FAILURE"
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
           ],
           "pending": [
             "Real behavior proof:CANCELLED"
           ],
           "terminalBlockers": [
-            "QA Smoke CI:FAILURE",
-            "check-lint:FAILURE"
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
           ],
           "externalBlockers": []
         }
@@ -135,15 +156,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2238,
+    "total_ms": 2191,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 221
+        "ms": 286
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1814
+        "ms": 1591
       },
       {
         "name": "classify_comment_commands",
@@ -159,7 +180,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 179
+        "ms": 242
       },
       {
         "name": "append_ledger",
