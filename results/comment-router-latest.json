@@ -1,18 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-03T19:54:08.346Z",
+  "generated_at": "2026-07-03T19:54:32.607Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T16:54:06.765Z",
+  "since": "2026-07-03T16:54:27.923Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99477
+    99637
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4879026514
+  ],
+  "status_comment_id": 4879026687,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
   "commands_seen": 1,
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99477:4874832440:2026-07-03T19:26:30Z:clawsweeper_needs_human",
-      "comment_id": "4874832440",
-      "comment_version_key": "4874832440:2026-07-03T19:26:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99477#issuecomment-4874832440",
+      "idempotency_key": "comment-router:openclaw/openclaw:99637:4879026514:2026-07-03T19:53:12Z:re_review",
+      "comment_id": "4879026514",
+      "comment_version_key": "4879026514:2026-07-03T19:53:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99637#issuecomment-4879026514",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99477,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": "main",
+      "issue_number": 99637,
+      "author": "MonkeyLeeT",
+      "author_id": 6754057,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-03T09:34:31Z",
-      "comment_updated_at": "2026-07-03T19:26:30Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "comment_created_at": "2026-07-03T19:53:12Z",
+      "comment_updated_at": "2026-07-03T19:53:12Z",
+      "status_comment_id": 4879026687,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -66,73 +68,166 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-03T19:54:33.344Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 99637
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-03T19:54:34.212Z",
+          "response_comment_id": "4879026687",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix: avoid iOS node permission prompts",
-        "body": "## What Problem This Solves\n\niOS node commands for Calendar, Reminders, and Contacts could trigger native permission prompts from inside `node.invoke`.\n\nThat is the wrong execution boundary for gateway-driven agent calls:\n\n- `calendar.events` and `calendar.add` called EventKit request APIs when calendar access was `.notDetermined`.\n- `reminders.list` and `reminders.add` called EventKit request APIs when reminders access was `.notDetermined`.\n- `contacts.search` and `contacts.add` called `CNContactStore.requestAccess` when contacts access was `.notDetermined`.\n\nThose prompts require foreground user interaction, but the gateway call is waiting for a node response. If the user does not notice or cannot answer the native sheet, the agent turn can hang until the gateway/client timeout instead of getting an immediate permission-required error it can explain.\n\nPhotos already had the intended contract in `apps/ios/Sources/Media/PhotoLibraryService.swift`: node services should not prompt during `node.invoke` because prompts block the invoke path. This PR applies that same rule to Calendar, Reminders, and Contacts.\n\n## Why This Change Was Made\n\nThe iOS app already has an explicit permissions surface in `apps/ios/Sources/Settings/PrivacyAccessSectionView.swift`. That UI is the right owner for showing native TCC prompts because the user is intentionally managing app permissions there.\n\nThis change keeps node services transport-friendly:\n\n- Calendar and Reminders now read the current EventKit authorization status and use `EventKitAuthorization.allowsRead` / `allowsWrite`.\n- Contacts now reads the current Contacts authorization status and treats `.notDetermined` as unavailable.\n- The service-layer request helper methods were removed from Calendar and Reminders.\n- Contacts no longer calls `PermissionRequestBridge.awaitRequest` or `CNContactStore.requestAccess`.\n- Small authorization-status closures were added so tests can force `.notDetermined` without reaching real TCC state.\n\n## User Impact\n\nWhen an agent invokes calendar, reminders, or contacts commands before the user has granted iOS permission, the app now returns the existing `*_PERMISSION_REQUIRED` error promptly instead of opening a native permission prompt from the gateway call.\n\nUsers can still grant permissions from the Settings permissions page. After permission is granted there, the node commands continue through the same service methods and EventKit/Contacts stores as before.\n\n## Evidence\n\n- Added `apps/ios/Tests/NodeServicePermissionTests.swift` covering `.notDetermined` for:\n  - `calendar.events`\n  - `calendar.add`\n  - `reminders.list`\n  - `reminders.add`\n  - `contacts.search`\n  - `contacts.add`\n\n### Before / after\n\n- **Before (`main`)**: a real paired-gateway `contacts.search` invocation opened the native Contacts prompt from the node call. Leaving it unanswered caused the gateway invocation to time out; Calendar then timed out behind the same prompt-bound path.\n- **After (exact head `26855644f5720da44d9de8d25abcaa27f2202cdc`, permissions denied)**: `contacts.search`, `calendar.events`, and `reminders.list` immediately returned their service-specific `*_PERMISSION_REQUIRED` errors. The app remained foreground for 75 seconds with no native alert.\n- **After (same exact head, permissions granted)**: all three gateway calls succeeded. The app remained foreground for another 75 seconds with Contacts, both Calendar permissions, and Reminders shown as allowed.\n\n### Validation\n\n- `xcodebuild ... -only-testing:OpenClawTests/NodeServicePermissionTests test`\n  - 6 tests passed on iPhone 17 / iOS 26.5 simulator.\n- Two real setup-code pairings against an isolated local Gateway:\n  - denied path: three expected permission errors, no prompt, foreground preserved;\n  - granted path: three successful node responses, foreground preserved.\n- Verified service prompt ownership with `rg`: prompt APIs remain in the foreground Settings permissions UI, not the Calendar, Contacts, or Reminders node services.\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main --stream-engine-output`\n  - clean; no accepted/actionable findings, 0.96 confidence.\n- Hosted CI on the exact repaired head: `ios-build`, `macos-swift`, `macos-node`, `native-i18n`, security, dependency, and static-analysis checks passed.\n- `git diff --check`\n",
-        "branch": "codex/ios-node-invoke-permission-prompts",
-        "head_sha": "26855644f5720da44d9de8d25abcaa27f2202cdc",
-        "author": "nianjiuzst",
+        "title": "fix: preserve OpenCode Go DeepSeek V4 max thinking",
+        "body": "Closes #99601\n\nAI-assisted: yes (Codex).\n\n## What Problem This Solves\n\nFixes an issue where users selecting `/think max` or `/think xhigh` with `opencode-go/deepseek-v4-pro` or `opencode-go/deepseek-v4-flash` would have the requested thinking level silently clamped down before the OpenCode Go DeepSeek V4 request was built.\n\n## Why This Change Was Made\n\nThe OpenCode Go DeepSeek V4 model rows now carry an explicit thinking-level map in both runtime catalog data and manifest metadata: `off` disables thinking, normal levels map to DeepSeek's low/medium/high efforts, and `xhigh`/`max` map to DeepSeek's max effort. The fix stays inside the opencode-go provider metadata so the existing generic clamp and DeepSeek V4 OpenAI-compatible stream wrapper continue to own their current behavior.\n\n## User Impact\n\nOpenCode Go DeepSeek V4 users can use max/xhigh thinking and have the request reach the provider as max effort instead of being downgraded to high. Static model discovery and runtime provider discovery now agree on the same DeepSeek V4 thinking capabilities.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs extensions/opencode-go/index.test.ts` (12 passed)\n- `git diff --check`\n- GitHub `Real behavior proof` context/evidence gate passed: https://github.com/openclaw/openclaw/actions/runs/28680430416\n- Checked the relevant DeepSeek Thinking Mode docs for `reasoning_effort` values.\n\nRedacted after-fix OpenCode Go payload proof at `eb996427e1c127760a99a3960b1ea87bc90a794a`:\n\n```text\nprobe: opencode-go DeepSeek V4 thinking metadata + payload capture\nmodels checked: opencode-go/deepseek-v4-pro, opencode-go/deepseek-v4-flash\nnetwork/API key use: none; local provider wrapper payload capture only\n\nopencode-go/deepseek-v4-pro:\n  thinkingLevelMap.xhigh = max\n  thinkingLevelMap.max = max\n  clampThinkingLevel(max) = max\n  clampThinkingLevel(xhigh) = xhigh\n  captured payload thinking = { type: enabled }\n  captured payload reasoning_effort = max\n\nopencode-go/deepseek-v4-flash:\n  thinkingLevelMap.xhigh = max\n  thinkingLevelMap.max = max\n  clampThinkingLevel(max) = max\n  clampThinkingLevel(xhigh) = xhigh\n  captured payload thinking = { type: enabled }\n  captured payload reasoning_effort = max\n```\n\nKnown remaining validation-path proof from the same probe:\n\n```text\nopencode-go/deepseek-v4-pro command/profile levels: off, minimal, low, medium, high\nopencode-go/deepseek-v4-pro commandSupportsXHigh = false\nopencode-go/deepseek-v4-pro commandSupportsMax = false\n\nopencode-go/deepseek-v4-flash command/profile levels: off, minimal, low, medium, high\nopencode-go/deepseek-v4-flash commandSupportsXHigh = false\nopencode-go/deepseek-v4-flash commandSupportsMax = false\n```\n\nThat remaining validation-path result matches ClawSweeper's current code-path finding and is not claimed fixed by this proof-only evidence update.\n\nAutoreview was started, then interrupted at maintainer request to avoid blocking this draft PR; no autoreview verdict is included.",
+        "branch": "codex/99601-opencode-go-thinking-map",
+        "head_sha": "eb996427e1c127760a99a3960b1ea87bc90a794a",
+        "author": "monkeyleet",
         "labels": [
-          "app: ios",
           "size: S",
+          "extensions: opencode-go",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "apps/ios/Sources/Calendar/CalendarService.swift",
-            "additions": 14,
-            "deletions": 32,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/ios/Sources/Contacts/ContactsService.swift",
-            "additions": 17,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/ios/Sources/Reminders/RemindersService.swift",
-            "additions": 14,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/ios/Tests/NodeServicePermissionTests.swift",
-            "additions": 86,
+            "path": "extensions/opencode-go/index.test.ts",
+            "additions": 34,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/opencode-go/openclaw.plugin.json",
+            "additions": 18,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/opencode-go/provider-catalog.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 131,
-        "deletions": 67,
+        "changedFiles": 3,
+        "additions": 64,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99477",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99477.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99637",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99637.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 33,
-          "gatingTotal": 28,
+          "total": 93,
+          "gatingTotal": 88,
           "counts": {
-            "SUCCESS": 21,
-            "SKIPPED": 12
+            "SUCCESS": 15,
+            "SKIPPED": 39,
+            "CANCELLED": 39
           },
-          "blockers": [],
+          "blockers": [
+            "checks-fast-bundled-protocol:CANCELLED",
+            "QA Smoke CI:CANCELLED",
+            "checks-fast-bun-launcher:CANCELLED",
+            "checks-fast-contracts-plugins-a:CANCELLED",
+            "checks-fast-contracts-plugins-b:CANCELLED",
+            "checks-fast-contracts-channels-a:CANCELLED",
+            "checks-fast-contracts-channels-b:CANCELLED",
+            "checks-node-compact-large-1:CANCELLED",
+            "checks-node-compact-large-2:CANCELLED",
+            "checks-node-compact-large-3:CANCELLED",
+            "checks-node-compact-large-whole-1:CANCELLED",
+            "checks-node-compact-small-1:CANCELLED",
+            "checks-node-compact-small-10:CANCELLED",
+            "checks-node-compact-small-2:CANCELLED",
+            "checks-node-compact-small-3:CANCELLED",
+            "checks-node-compact-small-4:CANCELLED",
+            "checks-node-compact-small-5:CANCELLED",
+            "checks-node-compact-small-6:CANCELLED",
+            "checks-node-compact-small-7:CANCELLED",
+            "checks-node-compact-small-8:CANCELLED",
+            "checks-node-compact-small-9:CANCELLED",
+            "checks-node-compact-small-whole-1:CANCELLED",
+            "checks-node-compact-small-whole-2:CANCELLED",
+            "checks-node-compact-small-whole-3:CANCELLED",
+            "check-guards:CANCELLED",
+            "check-shrinkwrap:CANCELLED",
+            "check-bundled-channel-config-metadata:CANCELLED",
+            "check-prod-types:CANCELLED",
+            "check-lint:CANCELLED",
+            "check-dependencies:CANCELLED",
+            "check-test-types:CANCELLED",
+            "check-additional-boundaries-a:CANCELLED",
+            "check-additional-boundaries-bcd:CANCELLED",
+            "check-session-accessor-boundary:CANCELLED",
+            "check-session-transcript-reader-boundary:CANCELLED",
+            "check-additional-extension-channels:CANCELLED",
+            "check-additional-extension-bundled:CANCELLED",
+            "check-additional-extension-package-boundary:CANCELLED",
+            "check-additional-runtime-topology-architecture:CANCELLED"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "checks-fast-bundled-protocol:CANCELLED",
+            "QA Smoke CI:CANCELLED",
+            "checks-fast-bun-launcher:CANCELLED",
+            "checks-fast-contracts-plugins-a:CANCELLED",
+            "checks-fast-contracts-plugins-b:CANCELLED",
+            "checks-fast-contracts-channels-a:CANCELLED",
+            "checks-fast-contracts-channels-b:CANCELLED",
+            "checks-node-compact-large-1:CANCELLED",
+            "checks-node-compact-large-2:CANCELLED",
+            "checks-node-compact-large-3:CANCELLED",
+            "checks-node-compact-large-whole-1:CANCELLED",
+            "checks-node-compact-small-1:CANCELLED",
+            "checks-node-compact-small-10:CANCELLED",
+            "checks-node-compact-small-2:CANCELLED",
+            "checks-node-compact-small-3:CANCELLED",
+            "checks-node-compact-small-4:CANCELLED",
+            "checks-node-compact-small-5:CANCELLED",
+            "checks-node-compact-small-6:CANCELLED",
+            "checks-node-compact-small-7:CANCELLED",
+            "checks-node-compact-small-8:CANCELLED",
+            "checks-node-compact-small-9:CANCELLED",
+            "checks-node-compact-small-whole-1:CANCELLED",
+            "checks-node-compact-small-whole-2:CANCELLED",
+            "checks-node-compact-small-whole-3:CANCELLED",
+            "check-guards:CANCELLED",
+            "check-shrinkwrap:CANCELLED",
+            "check-bundled-channel-config-metadata:CANCELLED",
+            "check-prod-types:CANCELLED",
+            "check-lint:CANCELLED",
+            "check-dependencies:CANCELLED",
+            "check-test-types:CANCELLED",
+            "check-additional-boundaries-a:CANCELLED",
+            "check-additional-boundaries-bcd:CANCELLED",
+            "check-session-accessor-boundary:CANCELLED",
+            "check-session-transcript-reader-boundary:CANCELLED",
+            "check-additional-extension-channels:CANCELLED",
+            "check-additional-extension-bundled:CANCELLED",
+            "check-additional-extension-package-boundary:CANCELLED",
+            "check-additional-runtime-topology-architecture:CANCELLED"
+          ],
           "externalBlockers": []
         }
       },
@@ -143,19 +238,19 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1938,
+    "total_ms": 6805,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 431
+        "ms": 2854
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1134
+        "ms": 1816
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -167,11 +262,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 347
+        "ms": 2109
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 2
       }
     ]
   }
