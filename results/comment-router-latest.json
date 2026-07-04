@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T14:11:49.237Z",
+  "generated_at": "2026-07-04T14:11:55.966Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T11:11:46.927Z",
+  "since": "2026-07-04T11:11:54.278Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99960
+    97587
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99960:4882058587:2026-07-04T14:11:40Z:clawsweeper_needs_human",
-      "comment_id": "4882058587",
-      "comment_version_key": "4882058587:2026-07-04T14:11:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99960#issuecomment-4882058587",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97587:4827711347:2026-07-04T14:11:49Z:clawsweeper_needs_human",
+      "comment_id": "4827711347",
+      "comment_version_key": "4827711347:2026-07-04T14:11:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97587#issuecomment-4827711347",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99960,
+      "issue_number": 97587,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T12:50:13Z",
-      "comment_updated_at": "2026-07-04T14:11:40Z",
+      "comment_created_at": "2026-06-28T23:17:23Z",
+      "comment_updated_at": "2026-07-04T14:11:49Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- No ClawSweeper repair job is needed; the branch has no actionable code finding and only needs ordinary maintainer merge review.; Cleared: The diff only changes cron service runtime code and colocated tests; it does not touch workflows, dependencies, package metadata, permissions, secrets, or downloaded code execution paths. (sha=eb67e68773d3b9b0d5967493cbf209d922f6f91a)",
-      "review_summary": "The PR snapshots cron service add/update/remove live scheduler state and restores it if the durable cron store save throws, with regression tests for failed persistence.\n\nPR surface: Source +31, Tests +119. Total +150 across 2 files.\n\nReproducibility: yes. Source inspection on current main shows add/update/remove mutate state.store before await persist(state), and the PR body includes a real SQLite read-only before/after transcript; I did not run tests because this review must keep the checkout read-only.",
-      "review_followup": "- No ClawSweeper repair job is needed; the branch has no actionable code finding and only needs ordinary maintainer merge review.",
+      "repair_reason": "- No automated repair is needed because the refreshed diff has no concrete blocker; maintainer review should decide whether to accept and land the auth-provider parser-boundary behavior.; Cleared: No concrete security or supply-chain regression is visible; the diff uses an existing SDK bounded JSON helper and does not change dependencies, workflows, permissions, or secret handling. (sha=d7da56dfd213b159dad5392283977796b9b93a7a)",
+      "review_summary": "The PR replaces Google OAuth project/token JSON parsing call sites with `readProviderJsonResponse` and adds oversized-response regression tests.\n\nPR surface: Source +7, Tests +134. Total +141 across 3 files.\n\nReproducibility: yes. Source inspection shows current main still uses raw `response.json()` in the Google OAuth parser call sites, and the PR body plus added tests provide a high-confidence oversized-response path; I did not rerun tests because this review is read-only.",
+      "review_followup": "- No automated repair is needed because the refreshed diff has no concrete blocker; maintainer review should decide whether to accept and land the auth-provider parser-boundary behavior.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "eb67e68773d3b9b0d5967493cbf209d922f6f91a",
+      "expected_head_sha": "d7da56dfd213b159dad5392283977796b9b93a7a",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,85 +70,203 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): roll back live scheduler state when persisting add/update/remove fails",
-        "body": "## What Problem This Solves\n\nFixes an issue where a cron job mutation that fails to persist still changes the live scheduler, so what the user was told no longer matches what the gateway does or what survives a restart.\n\n`cron add`, `cron update`, and `cron remove` mutate the in-memory cron store first and persist to SQLite afterwards. When the persist fails (e.g. disk full or a failed write transaction), the caller correctly receives an error — but the in-memory mutation stays behind in the running gateway:\n\n- **add**: a job the user was told failed to save stays live, can be armed and executed, and is even written to disk by the next unrelated successful persist. If the gateway restarts first, it silently vanishes instead.\n- **update**: the live scheduler runs the new version the user was told did not apply, and a restart silently reverts it to the old version.\n- **remove**: the job disappears from the live scheduler but resurrects from SQLite on the next restart.\n\nBoth user surfaces converge on the same code path — the CLI issues the `cron.add`/`cron.update`/`cron.remove` gateway RPCs (`src/cli/cron-cli.ts`), whose handlers call `CronService.add/update/remove` (`src/cron/service.ts`), which delegate to the ops in this diff. The in-memory store is trusted indefinitely once loaded (`ensureLoaded` fast path), so none of this self-heals while the process lives.\n\n## Why This Change Was Made\n\nThe narrowest fix that restores the invariant \"if the caller was told the mutation failed, the runtime behaves as if it never happened\": snapshot the mutable state before the mutation and restore it when the persist throws, then rethrow the original error unchanged.\n\nThe snapshot covers the whole store plus the catch-up deferral marker set, not just the touched job, because `recomputeNextRunsForMaintenance` runs inside these operations and mutates `nextRunAtMs`/deferral state across *all* jobs — restoring only the touched job would leave sibling scheduler state ahead of disk. This matches the persist-before-mutate durability convention already documented in the task registry (`src/tasks/task-registry.ts`), which the cron service predates.\n\nNon-goal: `persist()` has a sibling seam where a failed quarantine flush silently skips the save (`src/cron/service/store.ts`); fixing it changes error propagation for read-path callers that intentionally degrade and continue, so it is left to a separately scoped follow-up. Run-state bookkeeping persists (`prepareManualRun`, `finishPreparedManualRun`) are also untouched — the run already happened, so rollback semantics differ.\n\n## User Impact\n\nOperators get truthful outcomes from cron CRUD under storage failure: a failed `cron add`/`update`/`remove` now restores the cron store and catch-up deferral markers touched by these operations, matching both the error the user saw and the state the next restart loads. No phantom runs of jobs that \"failed to save\", no silent reverts of edits, no deleted jobs resurrecting after a restart. Error reporting and the success paths are unchanged.\n\n## Evidence\n\n### Real behavior proof (before/after, real `CronService` + real shared SQLite state DB)\n\nA three-phase driver script runs the real `CronService` facade against the real shared SQLite state DB (`OPENCLAW_STATE_DIR` pointed at a scratch dir; separate OS processes per phase; no JS mocks or module patching). The durable-write failure is a genuine `SQLITE_READONLY` error raised inside `saveCronJobsStore`'s real write transaction, by switching the live production connection to read-only state (`PRAGMA query_only=1` on the same cached handle the cron service persists through) between a successful seed and the mutations.\n\n**Before (PR base, upstream/main):** every failed mutation leaves the live scheduler lying, and a restart flips all three back:\n\n```\nseed: added job \"daily-report\"\n  live store after seed: 1 job(s): daily-report\n\nSQLite state DB is now read-only (PRAGMA query_only=1 on the live connection)\n\n--- cron add (durable write fails) ---\n  add FAILED (real SQLite error): attempt to write a readonly database\n  live store after failed add: 2 job(s): daily-report, phantom-job      <- phantom job live\n--- cron update: rename daily-report -> renamed-report (durable write fails) ---\n  update FAILED (real SQLite error): attempt to write a readonly database\n  live store after failed update: 2 job(s): renamed-report, phantom-job <- rejected rename live\n--- cron remove daily-report (durable write fails) ---\n  remove FAILED (real SQLite error): attempt to write a readonly database\n  live store after failed remove: 1 job(s): phantom-job                 <- real job gone from live\n\nfresh process (simulated gateway restart), SQLite writable again:\n  store loaded from SQLite: 1 job(s): daily-report                      <- restart contradicts everything above\n```\n\n**After (this PR, same script, same failure):** the live store stays consistent with the reported errors, and restart agrees:\n\n```\nSQLite state DB is now read-only (PRAGMA query_only=1 on the live connection)\n\n--- cron add (durable write fails) ---\n  add FAILED (real SQLite error): attempt to write a readonly database\n  live store after failed add: 1 job(s): daily-report\n--- cron update: rename daily-report -> renamed-report (durable write fails) ---\n  update FAILED (real SQLite error): attempt to write a readonly database\n  live store after failed update: 1 job(s): daily-report\n--- cron remove daily-report (durable write fails) ---\n  remove FAILED (real SQLite error): attempt to write a readonly database\n  live store after failed remove: 1 job(s): daily-report\n\nfresh process (simulated gateway restart), SQLite writable again:\n  store loaded from SQLite: 1 job(s): daily-report\n```\n\nTranscripts are from a Linux host, redacted only by using scratch paths. The driver script:\n\n<details>\n<summary>cron-proof.mts (run from a checkout root: <code>OPENCLAW_STATE_DIR=&lt;scratch&gt; node --import tsx cron-proof.mts seed|mutate|inspect</code>)</summary>\n\n```ts\nimport fs from \"node:fs\";\nimport path from \"node:path\";\nimport { CronService } from \"./src/cron/service.js\";\nimport { openOpenClawStateDatabase } from \"./src/state/openclaw-state-db.js\";\n\nconst stateDir = process.env.OPENCLAW_STATE_DIR!;\nconst phase = process.argv[2];\nconst storePath = path.join(stateDir, \"cron\", \"jobs.json\");\n\nconst log = {\n  debug: () => {},\n  info: () => {},\n  warn: (_o: unknown, m?: string) => console.log(`  [warn] ${m ?? \"\"}`),\n  error: (_o: unknown, m?: string) => console.log(`  [error] ${m ?? \"\"}`),\n};\n\nfunction makeService() {\n  return new CronService({\n    log,\n    storePath,\n    cronEnabled: false, // scheduler timers off; CRUD + persistence paths only\n    enqueueSystemEvent: () => {},\n    requestHeartbeat: () => {},\n    runIsolatedAgentJob: async () => ({ status: \"ok\" as const }),\n  });\n}\n\nfunction jobInput(name: string) {\n  return {\n    name,\n    enabled: true,\n    schedule: { kind: \"cron\", expr: \"0 0 * * *\" } as const,\n    sessionTarget: \"isolated\" as const,\n    wakeMode: \"next-heartbeat\" as const,\n    payload: { kind: \"agentTurn\", message: `run ${name}` } as const,\n  };\n}\n\nasync function show(svc: CronService, label: string) {\n  const jobs = await svc.list({ includeDisabled: true });\n  console.log(`  ${label}: ${jobs.length} job(s): ${jobs.map((j) => `${j.name}`).join(\", \") || \"(none)\"}`);\n  return jobs;\n}\n\nconst svc = makeService();\n\nif (phase === \"seed\") {\n  const job = await svc.add(jobInput(\"daily-report\"));\n  console.log(`seed: added job \"daily-report\" id=${job.id}`);\n  await show(svc, \"live store after seed\");\n  fs.writeFileSync(path.join(stateDir, \"job-id.txt\"), job.id);\n} else if (phase === \"mutate\") {\n  const jobId = fs.readFileSync(path.join(stateDir, \"job-id.txt\"), \"utf-8\").trim();\n  await show(svc, \"live store loaded from SQLite at process start\");\n\n  // Put the shared production SQLite connection (the same cached handle the\n  // cron service persists through) into a read-only state. Every durable\n  // write below fails with a genuine SQLITE_READONLY error raised inside\n  // saveCronJobsStore's real write transaction — no JS mocking involved.\n  const { db } = openOpenClawStateDatabase();\n  db.exec(\"PRAGMA query_only = 1\");\n  console.log(\"\\nSQLite state DB is now read-only (PRAGMA query_only=1 on the live connection)\");\n\n  console.log(\"\\n--- cron add (durable write fails) ---\");\n  try {\n    await svc.add(jobInput(\"phantom-job\"));\n    console.log(\"  add unexpectedly succeeded\");\n  } catch (err) {\n    console.log(`  add FAILED (real SQLite error): ${(err as Error).message}`);\n  }\n  await show(svc, \"live store after failed add\");\n\n  console.log(\"\\n--- cron update: rename daily-report -> renamed-report (durable write fails) ---\");\n  try {\n    await svc.update(jobId, { name: \"renamed-report\" });\n    console.log(\"  update unexpectedly succeeded\");\n  } catch (err) {\n    console.log(`  update FAILED (real SQLite error): ${(err as Error).message}`);\n  }\n  await show(svc, \"live store after failed update\");\n\n  console.log(\"\\n--- cron remove daily-report (durable write fails) ---\");\n  try {\n    await svc.remove(jobId);\n    console.log(\"  remove unexpectedly succeeded\");\n  } catch (err) {\n    console.log(`  remove FAILED (real SQLite error): ${(err as Error).message}`);\n  }\n  await show(svc, \"live store after failed remove\");\n\n  db.exec(\"PRAGMA query_only = 0\");\n} else if (phase === \"inspect\") {\n  console.log(\"fresh process (simulated gateway restart), SQLite writable again:\");\n  await show(svc, \"store loaded from SQLite\");\n} else {\n  throw new Error(`unknown phase: ${phase}`);\n}\n```\n\n</details>\n\n### Failing-first tests\n\n`src/cron/service/ops.test.ts` (`cron service ops persist rollback` describe, persist failure injected via `saveCronJobsStore` rejection): before the fix all five fail with the exact lying behaviors above — notably the recovery case shows the phantom job from a *failed* add being written to disk by the next successful persist:\n\n```\nFAIL > recovers after a failed persist so the next mutation succeeds\n- Expected  + Received\n  [\n+   \"f97b06c3-...\",   <- job whose add reported \"disk full\" to the caller\n    \"9868ddb1-...\",\n  ]\n```\n\nAfter the fix:\n\n```\n✓ rolls back an added job from the live store when persist fails\n✓ keeps the pre-update job in the live store when persist fails\n✓ keeps a removed job in the live store when persist fails\n✓ keeps a job's catch-up deferral marker when a remove persist fails\n✓ recovers after a failed persist so the next mutation succeeds\n\nTest Files  1 passed (1) — src/cron/service/ops.test.ts, 24 tests\n```\n\nFull cron suite (local, `node scripts/run-vitest.mjs src/cron/`, ~34s): 117 test files / 1237 tests pass. Production diff is confined to `src/cron/service/ops.ts` (snapshot + restore helpers, three call sites); no change to success-path behavior, event ordering, error types, or `--json` shapes.\n",
-        "branch": "feat/cron-store-persist-rollback",
-        "head_sha": "eb67e68773d3b9b0d5967493cbf209d922f6f91a",
-        "author": "masatohoshino",
+        "title": "fix(google): bound OAuth project and token JSON response reads",
+        "body": "## What Problem This Solves\r\n\r\n`extensions/google/oauth.project.ts` and `extensions/google/oauth.token.ts` contained six\r\nunbounded `await response.json()` calls on the Gemini CLI OAuth onboarding and token-exchange\r\npaths (`getUserEmail`, `pollOperation`, `loadCodeAssist` success + error, `onboardUser`,\r\n`requestTokenGrant`).\r\n\r\nAfter `fetchWithTimeout` materialises the response body, `response.json()` can trigger a\r\nsecond large allocation during `JSON.parse`. Replacing these calls with\r\n`readProviderJsonResponse` caps the JSON parse step at 16 MiB with labeled errors at each\r\nOAuth call site.\r\n\r\nThis complements the shared fetch boundary landed in **#97628**\r\n(`readResponseWithLimit` inside `fetchWithTimeout`). Together the two layers give defense in\r\ndepth:\r\n\r\n1. **Fetch boundary (#97628 on main):** bounds upstream stream reads before buffering.\r\n2. **Parse boundary (this PR):** bounds `JSON.parse` on the buffered `Response` objects that\r\n   OAuth call sites consume.\r\n\r\n## Changes\r\n\r\n* `extensions/google/oauth.project.ts`:\r\n  - imports `readProviderJsonResponse` from `openclaw/plugin-sdk/provider-http`\r\n  - replaces six `response.json()` reads with labeled `readProviderJsonResponse(...)` calls\r\n    (`google.userinfo`, `google.poll-operation`, `google.load-code-assist`,\r\n    `google.onboard-user`)\r\n\r\n* `extensions/google/oauth.token.ts`:\r\n  - imports `readProviderJsonResponse` from `openclaw/plugin-sdk/provider-http`\r\n  - replaces `await response.json()` → `readProviderJsonResponse(response, \"google.token\")`\r\n    in `requestTokenGrant`\r\n\r\n* `extensions/google/oauth.test.ts`:\r\n  - adds four regression tests:\r\n    - `rejects an oversized token exchange response body` (end-to-end via\r\n      `exchangeCodeForTokens`; fetch cap fires first after #97628)\r\n    - `rejects an oversized token body at the JSON parse boundary` (defense-in-depth when\r\n      `fetchWithTimeout` already returned a buffered oversized body)\r\n    - `rejects an oversized loadCodeAssist success response body` (via\r\n      `resolveGoogleOAuthIdentity`)\r\n    - `swallows bound error on oversized userinfo body and returns undefined email`\r\n\r\nRebased onto current `main`; the stale plugin SDK surface budget commit was dropped because\r\n#97628 and other main commits already carry those values.\r\n\r\n## Real behavior proof\r\n\r\n**Behavior addressed:** Oversized or hostile Google OAuth JSON responses fail closed instead\r\nof triggering unbounded `JSON.parse` allocation on buffered bodies returned by\r\n`fetchWithTimeout`.\r\n\r\n**Real environment tested:** Node v22, macOS 24.3.0, `node:http` streaming server on\r\n`127.0.0.1`, built helpers from `dist/plugin-sdk/provider-http.js` and\r\n`dist/plugin-sdk/response-limit-runtime.js`.\r\n\r\n**Exact steps:**\r\n1. Stream an ~18 MiB OAuth token JSON body from a local HTTP server (no `Content-Length`).\r\n2. Drive `readResponseWithLimit` at the fetch boundary → assert labeled overflow error.\r\n3. Drive `readProviderJsonResponse` on the same streamed body → assert labeled parse cap.\r\n4. Negative control: unbounded `response.body` reader consumes the full ~18 MiB stream.\r\n5. Verify post-`fetchWithTimeout` buffered `Response` shape rejects at parse boundary.\r\n6. Verify normal token / userinfo / loadCodeAssist bodies still parse.\r\n7. Verify VPC-SC error-path `.catch(() => null)` swallows oversized error bodies.\r\n8. Run OAuth module regression tests through `exchangeCodeForTokens` and\r\n   `resolveGoogleOAuthIdentity`.\r\n\r\n**Observed result:**\r\n- Fetch boundary: `google HTTP fetch: body exceeds 16777216 bytes (got 16817603)`\r\n- Parse boundary (stream): `google.token: JSON response exceeds 16777216 bytes`\r\n- Negative control: unbounded reader consumed 18 874 405 bytes (~18 MiB)\r\n- Buffered oversized body (16 778 297 bytes) rejected before `JSON.parse`\r\n- Normal token / userinfo / loadCodeAssist responses parse correctly\r\n- VPC-SC error-path `.catch(() => null)` returns `null` on oversized body\r\n- `ALL PROOF ASSERTIONS PASSED`\r\n\r\n**What was not tested:** live Google OAuth API calls.\r\n\r\n## Evidence\r\n\r\n```\r\n=== Google OAuth response bound proof (path-level) ===\r\nLayers: (1) fetchWithTimeout readResponseWithLimit [#97628 on main]\r\n        (2) readProviderJsonResponse on OAuth call sites [#97587]\r\n\r\n--- Case 1: oversized streamed token body (fetch boundary) ---\r\n  ok: readResponseWithLimit rejects oversized streamed OAuth body\r\n  ok: fetch-boundary error is labeled (got: google HTTP fetch: body exceeds 16777216 bytes (got 16817603))\r\n  ok: negative control: unbounded reader consumed full ~18 MiB stream (18874405 bytes)\r\n\r\n--- Case 2: oversized streamed body rejected at JSON parse boundary ---\r\n  ok: readProviderJsonResponse rejects oversized streamed body\r\n  ok: parse-boundary label present (got: google.token: JSON response exceeds 16777216 bytes)\r\n\r\n--- Case 3: oversized buffered OAuth token body (post-fetch shape) ---\r\n  ok: buffered oversized body rejected before JSON.parse\r\n  ok: body size 16778297 bytes exceeds 16777216 cap\r\n\r\n--- Case 4: normal OAuth JSON responses still parse ---\r\n  ok: token body parses\r\n  ok: userinfo body parses\r\n  ok: loadCodeAssist body parses\r\n\r\n--- Case 5: loadCodeAssist error path .catch(() => null) ---\r\n  ok: oversized VPC-SC probe body returns null via .catch\r\n\r\n--- Case 6: OAuth module path-level regression tests ---\r\n  Tests  4 passed | 27 skipped (31)\r\n  ok: vitest OAuth bound regression tests passed\r\n\r\nALL PROOF ASSERTIONS PASSED\r\n```\r\n\r\n```\r\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs extensions/google/oauth.test.ts \\\r\n  -t \"rejects an oversized|swallows bound\"\r\n# Tests  4 passed | 27 skipped (31)\r\n```\r\n\r\nNew bound regression tests (4 added):\r\n- `loginGeminiCliOAuth > rejects an oversized token exchange response body` ✓\r\n- `loginGeminiCliOAuth > rejects an oversized token body at the JSON parse boundary` ✓\r\n- `loginGeminiCliOAuth > rejects an oversized loadCodeAssist success response body` ✓\r\n- `loginGeminiCliOAuth > swallows bound error on oversized userinfo body and returns undefined email` ✓\r\n",
+        "branch": "fix/bound-google-oauth-json-responses",
+        "head_sha": "d7da56dfd213b159dad5392283977796b9b93a7a",
+        "author": "hugenshen",
         "labels": [
           "size: S",
           "proof: sufficient",
+          "extensions: google",
           "P2",
-          "rating: 🦞 diamond lobster",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 auth-provider",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/cron/service/ops.test.ts",
-            "additions": 121,
-            "deletions": 2,
+            "path": "extensions/google/oauth.project.ts",
+            "additions": 11,
+            "deletions": 7,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service/ops.ts",
-            "additions": 35,
-            "deletions": 4,
+            "path": "extensions/google/oauth.test.ts",
+            "additions": 134,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/oauth.token.ts",
+            "additions": 6,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 156,
-        "deletions": 6,
+        "changedFiles": 3,
+        "additions": 151,
+        "deletions": 10,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99960",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99960.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97587",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97587.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 100,
-          "gatingTotal": 95,
+          "total": 88,
+          "gatingTotal": 83,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 35,
-            "SUCCESS": 62,
-            "NEUTRAL": 1
+            "SUCCESS": 59,
+            "SKIPPED": 28,
+            "FAILURE": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "QA Smoke CI:FAILURE"
           ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
+          "pending": [],
+          "terminalBlockers": [
+            "QA Smoke CI:FAILURE"
           ],
-          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:97587:4867116076:2026-07-02T14:55:09Z:re_review",
+      "comment_id": "4867116076",
+      "comment_version_key": "4867116076:2026-07-02T14:55:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97587#issuecomment-4867116076",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 97587,
+      "author": "hugenshen",
+      "author_id": 16300669,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-02T14:55:09Z",
+      "comment_updated_at": "2026-07-02T14:55:09Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(google): bound OAuth project and token JSON response reads",
+        "body": "## What Problem This Solves\r\n\r\n`extensions/google/oauth.project.ts` and `extensions/google/oauth.token.ts` contained six\r\nunbounded `await response.json()` calls on the Gemini CLI OAuth onboarding and token-exchange\r\npaths (`getUserEmail`, `pollOperation`, `loadCodeAssist` success + error, `onboardUser`,\r\n`requestTokenGrant`).\r\n\r\nAfter `fetchWithTimeout` materialises the response body, `response.json()` can trigger a\r\nsecond large allocation during `JSON.parse`. Replacing these calls with\r\n`readProviderJsonResponse` caps the JSON parse step at 16 MiB with labeled errors at each\r\nOAuth call site.\r\n\r\nThis complements the shared fetch boundary landed in **#97628**\r\n(`readResponseWithLimit` inside `fetchWithTimeout`). Together the two layers give defense in\r\ndepth:\r\n\r\n1. **Fetch boundary (#97628 on main):** bounds upstream stream reads before buffering.\r\n2. **Parse boundary (this PR):** bounds `JSON.parse` on the buffered `Response` objects that\r\n   OAuth call sites consume.\r\n\r\n## Changes\r\n\r\n* `extensions/google/oauth.project.ts`:\r\n  - imports `readProviderJsonResponse` from `openclaw/plugin-sdk/provider-http`\r\n  - replaces six `response.json()` reads with labeled `readProviderJsonResponse(...)` calls\r\n    (`google.userinfo`, `google.poll-operation`, `google.load-code-assist`,\r\n    `google.onboard-user`)\r\n\r\n* `extensions/google/oauth.token.ts`:\r\n  - imports `readProviderJsonResponse` from `openclaw/plugin-sdk/provider-http`\r\n  - replaces `await response.json()` → `readProviderJsonResponse(response, \"google.token\")`\r\n    in `requestTokenGrant`\r\n\r\n* `extensions/google/oauth.test.ts`:\r\n  - adds four regression tests:\r\n    - `rejects an oversized token exchange response body` (end-to-end via\r\n      `exchangeCodeForTokens`; fetch cap fires first after #97628)\r\n    - `rejects an oversized token body at the JSON parse boundary` (defense-in-depth when\r\n      `fetchWithTimeout` already returned a buffered oversized body)\r\n    - `rejects an oversized loadCodeAssist success response body` (via\r\n      `resolveGoogleOAuthIdentity`)\r\n    - `swallows bound error on oversized userinfo body and returns undefined email`\r\n\r\nRebased onto current `main`; the stale plugin SDK surface budget commit was dropped because\r\n#97628 and other main commits already carry those values.\r\n\r\n## Real behavior proof\r\n\r\n**Behavior addressed:** Oversized or hostile Google OAuth JSON responses fail closed instead\r\nof triggering unbounded `JSON.parse` allocation on buffered bodies returned by\r\n`fetchWithTimeout`.\r\n\r\n**Real environment tested:** Node v22, macOS 24.3.0, `node:http` streaming server on\r\n`127.0.0.1`, built helpers from `dist/plugin-sdk/provider-http.js` and\r\n`dist/plugin-sdk/response-limit-runtime.js`.\r\n\r\n**Exact steps:**\r\n1. Stream an ~18 MiB OAuth token JSON body from a local HTTP server (no `Content-Length`).\r\n2. Drive `readResponseWithLimit` at the fetch boundary → assert labeled overflow error.\r\n3. Drive `readProviderJsonResponse` on the same streamed body → assert labeled parse cap.\r\n4. Negative control: unbounded `response.body` reader consumes the full ~18 MiB stream.\r\n5. Verify post-`fetchWithTimeout` buffered `Response` shape rejects at parse boundary.\r\n6. Verify normal token / userinfo / loadCodeAssist bodies still parse.\r\n7. Verify VPC-SC error-path `.catch(() => null)` swallows oversized error bodies.\r\n8. Run OAuth module regression tests through `exchangeCodeForTokens` and\r\n   `resolveGoogleOAuthIdentity`.\r\n\r\n**Observed result:**\r\n- Fetch boundary: `google HTTP fetch: body exceeds 16777216 bytes (got 16817603)`\r\n- Parse boundary (stream): `google.token: JSON response exceeds 16777216 bytes`\r\n- Negative control: unbounded reader consumed 18 874 405 bytes (~18 MiB)\r\n- Buffered oversized body (16 778 297 bytes) rejected before `JSON.parse`\r\n- Normal token / userinfo / loadCodeAssist responses parse correctly\r\n- VPC-SC error-path `.catch(() => null)` returns `null` on oversized body\r\n- `ALL PROOF ASSERTIONS PASSED`\r\n\r\n**What was not tested:** live Google OAuth API calls.\r\n\r\n## Evidence\r\n\r\n```\r\n=== Google OAuth response bound proof (path-level) ===\r\nLayers: (1) fetchWithTimeout readResponseWithLimit [#97628 on main]\r\n        (2) readProviderJsonResponse on OAuth call sites [#97587]\r\n\r\n--- Case 1: oversized streamed token body (fetch boundary) ---\r\n  ok: readResponseWithLimit rejects oversized streamed OAuth body\r\n  ok: fetch-boundary error is labeled (got: google HTTP fetch: body exceeds 16777216 bytes (got 16817603))\r\n  ok: negative control: unbounded reader consumed full ~18 MiB stream (18874405 bytes)\r\n\r\n--- Case 2: oversized streamed body rejected at JSON parse boundary ---\r\n  ok: readProviderJsonResponse rejects oversized streamed body\r\n  ok: parse-boundary label present (got: google.token: JSON response exceeds 16777216 bytes)\r\n\r\n--- Case 3: oversized buffered OAuth token body (post-fetch shape) ---\r\n  ok: buffered oversized body rejected before JSON.parse\r\n  ok: body size 16778297 bytes exceeds 16777216 cap\r\n\r\n--- Case 4: normal OAuth JSON responses still parse ---\r\n  ok: token body parses\r\n  ok: userinfo body parses\r\n  ok: loadCodeAssist body parses\r\n\r\n--- Case 5: loadCodeAssist error path .catch(() => null) ---\r\n  ok: oversized VPC-SC probe body returns null via .catch\r\n\r\n--- Case 6: OAuth module path-level regression tests ---\r\n  Tests  4 passed | 27 skipped (31)\r\n  ok: vitest OAuth bound regression tests passed\r\n\r\nALL PROOF ASSERTIONS PASSED\r\n```\r\n\r\n```\r\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs extensions/google/oauth.test.ts \\\r\n  -t \"rejects an oversized|swallows bound\"\r\n# Tests  4 passed | 27 skipped (31)\r\n```\r\n\r\nNew bound regression tests (4 added):\r\n- `loginGeminiCliOAuth > rejects an oversized token exchange response body` ✓\r\n- `loginGeminiCliOAuth > rejects an oversized token body at the JSON parse boundary` ✓\r\n- `loginGeminiCliOAuth > rejects an oversized loadCodeAssist success response body` ✓\r\n- `loginGeminiCliOAuth > swallows bound error on oversized userinfo body and returns undefined email` ✓\r\n",
+        "branch": "fix/bound-google-oauth-json-responses",
+        "head_sha": "d7da56dfd213b159dad5392283977796b9b93a7a",
+        "author": "hugenshen",
+        "labels": [
+          "size: S",
+          "proof: sufficient",
+          "extensions: google",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 auth-provider",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/google/oauth.project.ts",
+            "additions": 11,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/oauth.test.ts",
+            "additions": 134,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/oauth.token.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 151,
+        "deletions": 10,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97587",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97587.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 88,
+          "gatingTotal": 83,
+          "counts": {
+            "SUCCESS": 59,
+            "SKIPPED": 28,
+            "FAILURE": 1
+          },
+          "blockers": [
+            "QA Smoke CI:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "QA Smoke CI:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2644,
+    "total_ms": 1997,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 413
+        "ms": 392
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1882
+        "ms": 1279
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -160,11 +278,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 323
+        "ms": 297
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
