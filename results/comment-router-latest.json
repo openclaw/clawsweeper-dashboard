@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T14:12:51.956Z",
-  "repo": "openclaw/Peekaboo",
+  "generated_at": "2026-07-04T14:13:05.603Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T11:12:48.482Z",
+  "since": "2026-07-04T11:13:05.391Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    215
+    99977
   ],
-  "comment_ids": [
-    4882352972
-  ],
-  "status_comment_id": 4882353089,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,149 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/Peekaboo:215:4882352972:2026-07-04T14:11:31Z:re_review",
-      "comment_id": "4882352972",
-      "comment_version_key": "4882352972:2026-07-04T14:11:31Z",
-      "comment_url": "https://github.com/openclaw/Peekaboo/pull/215#issuecomment-4882352972",
-      "repo": "openclaw/Peekaboo",
-      "target_branch": "main",
-      "issue_number": 215,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T14:11:31Z",
-      "comment_updated_at": "2026-07-04T14:11:31Z",
-      "status_comment_id": 4882353089,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 215,
-          "dispatch_key": "router-23c92e6fecf89e90",
-          "dispatched_at": "2026-07-04T14:12:53.053Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-04T14:12:54.134Z",
-          "response_comment_id": "4882353089",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(capture): bound action process wait so kill failure cannot hang forever",
-        "body": "## Summary\n\nFollow-up: `waitUntilExit` escalates to SIGKILL only at the hard deadline. Timeout and cancellation both keep SIGTERM + 500 ms grace (via `terminateAfterTimeout` / `terminateProcessGroupForCancellation`) without the wait loop racing that grace.\n\n`CaptureActionProcessRunner` reaped the action child with a blocking `waitpid(..., 0)` loop. Timeout and cancellation send `SIGTERM`/`SIGKILL`, but if the child survives kill attempts (unkillable state, race, or stuck uninterruptible sleep), the caller waits forever on `await waitTask.value`.\n\nThis changes the waiter to non-blocking `WNOHANG` polling with a hard deadline (`timeout + 2s`) and a 1s post-`SIGKILL` grace period. Cancellation sets a `forceStop` flag so the waiter escalates immediately instead of only after the configured timeout.\n\n## Failure scenario\n\n1. `CaptureCommand` runs an action subprocess via `CaptureActionProcessRunner.run`.\n2. The child ignores `SIGTERM` (or kill races with process-group membership).\n3. `terminateAfterTimeout` marks `timedOut` and later sends `SIGKILL`.\n4. Old code: `waitUntilExit()` is blocked in `waitpid(pid, &status, 0)` and never re-checks timeout state, so the capture action hangs indefinitely.\n5. New code: the waiter polls with `WNOHANG`, escalates to `SIGKILL` at the deadline/timeout/cancel, and returns within ~1s of escalation even if reap fails.\n\n## Fix\n\n- `waitUntilExit(deadline:)` uses `WNOHANG` + 10ms poll.\n- Escalate when `wasTimedOut()`, `wasForceStopped()`, or `Date() >= deadline`.\n- After 1s of failed escalation, return `128 + SIGKILL` instead of hanging.\n- Cancellation sets `forceStop` before group signal delivery.\n- Hard deadline in `run` is `timeoutSeconds + 2.0` (TERM grace + SIGKILL grace + margin).\n\n## Tests\n\n- Existing `runner escalates timeout for TERM ignoring child` (still covers TERM-ignore path).\n- New `runner returns by hard deadline for long running child`.\n- Standalone proof: `scripts/prove-action-process-deadline.swift`.\n\nLocal full `swift test` requires Xcode.app (Swift Testing / XCTest). This machine has Command Line Tools only; `swift build --package-path Apps/CLI` succeeds, and the proof script runs under CLT.\n\n## Bug origin\n\nIntroduced in `7e6101801` (Peter Steinberger, 2026-06-07) with the capture-action process runner.\n\n## Related\n\n- Same hang/cancellation class as merged [#193](https://github.com/openclaw/Peekaboo/pull/193), [#203](https://github.com/openclaw/Peekaboo/pull/203), [#204](https://github.com/openclaw/Peekaboo/pull/204) (stop/cancel must not wait on unbounded sleep/wait).\n- No competing open PRs for this file.\n\n## Real behavior proof\n\n**Behavior addressed:** Bound `waitpid` so an unkillable action child cannot hang the capture-action caller forever, while preserving the existing 500 ms SIGTERM grace before SIGKILL so TERM-handling children can exit cleanly.\n\n**Real environment tested:** macOS, Swift toolchain from Command Line Tools, branch head `6e40e630` (TERM grace fix on top of WNOHANG deadline waiter).\n\n**Exact steps or command run after this patch:**\n\n```console\n$ swift scripts/prove-action-process-deadline.swift\nF007 waitpid deadline proof\n  spawned unkillable-TERM child pid=<redacted>\n  fixed wait returned code=9 elapsed=0.31s\n  expected: returns within ~1.5s of deadline, not hang forever\nPROOF_OK hang bound (deadline waiter returned)\nF007 TERM grace proof\n  spawned TERM-handling child pid=<redacted>\n  sent SIGTERM (timeout path)\n  reaped_during_grace=true exitCode=0\nPROOF_OK TERM grace preserved (child exited cleanly during grace)\n```\n\n**Evidence after fix:** Console output above from the standalone proof script (no XCTest/Xcode required for this path).\n\n**Observed result after fix:**\n1. Deadline waiter returns within ~1.5s of the deadline for a TERM-ignoring child (no infinite hang).\n2. A child that traps TERM and exits 0 is reaped during the 500 ms grace with exit code 0 (SIGKILL is not sent immediately when timeout fires).\n3. Cancellation uses the same grace contract (forceStop no longer causes immediate wait-loop SIGKILL).\n\n**What was not tested:** Full `swift test --filter CaptureActionProcessRunnerTests` on this machine (Command Line Tools lack the Swift Testing module); CI macOS runners exercise that suite. Live Peekaboo UI capture end-to-end was not re-run.\n",
-        "branch": "fix/action-process-waitpid-hang",
-        "head_sha": "6e40e6306daaa9f5c8c2cd59b34581fdef5eabf4",
-        "author": "sebtardif",
-        "labels": [
-          "P2",
-          "proof: sufficient",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author",
-          "rating: 🧂 unranked krab"
-        ],
-        "files": [
-          {
-            "path": "Apps/CLI/Sources/PeekabooCLI/Commands/Core/CaptureActionProcessRunner.swift",
-            "additions": 54,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Apps/CLI/Tests/CoreCLITests/CaptureActionProcessRunnerTests.swift",
-            "additions": 87,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/prove-action-process-deadline.swift",
-            "additions": 136,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 277,
-        "deletions": 8,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-peekaboo-215",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-peekaboo-215.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 1,
-          "gatingTotal": 1,
-          "counts": {
-            "IN_PROGRESS": 1
-          },
-          "blockers": [
-            "PeekabooCore build & tests:IN_PROGRESS"
-          ],
-          "pending": [
-            "PeekabooCore build & tests:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-04T14:12:52.406Z"
-    }
-  ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6367,
+    "total_ms": 327,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2326
+        "ms": 199
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1130
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -184,16 +55,12 @@
         "ms": 0
       },
       {
-        "name": "claim_dispatch_commands",
-        "ms": 1
-      },
-      {
         "name": "execute_commands",
-        "ms": 2884
+        "ms": 115
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
