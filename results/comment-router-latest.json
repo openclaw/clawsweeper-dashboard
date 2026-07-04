@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T07:14:55.133Z",
+  "generated_at": "2026-07-04T07:15:10.730Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T04:14:53.376Z",
+  "since": "2026-07-04T04:15:07.892Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    89040
+    99541
   ],
   "comment_ids": [
-    4881101676
+    4881101961
   ],
-  "status_comment_id": 4881101754,
+  "status_comment_id": 4881102065,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4881101676:2026-07-04T07:13:45Z:re_review",
-      "comment_id": "4881101676",
-      "comment_version_key": "4881101676:2026-07-04T07:13:45Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4881101676",
+      "idempotency_key": "comment-router:openclaw/openclaw:99541:4881101961:2026-07-04T07:13:52Z:re_review",
+      "comment_id": "4881101961",
+      "comment_version_key": "4881101961:2026-07-04T07:13:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99541#issuecomment-4881101961",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 99541,
+      "author": "qingminglong",
+      "author_id": 34085845,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T07:13:45Z",
-      "comment_updated_at": "2026-07-04T07:13:45Z",
-      "status_comment_id": 4881101754,
+      "comment_created_at": "2026-07-04T07:13:52Z",
+      "comment_updated_at": "2026-07-04T07:13:52Z",
+      "status_comment_id": 4881102065,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -74,229 +74,71 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-07-04T07:14:55.808Z",
+          "dispatched_at": "2026-07-04T07:15:11.720Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 89040
+          "item_number": 99541
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-04T07:14:57.047Z",
-          "response_comment_id": "4881101754",
+          "commented_at": "2026-07-04T07:15:12.746Z",
+          "response_comment_id": "4881102065",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
-        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walker performs no directory pruning — it walks the full tree and returns every file matching the configured patterns, with no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Preserve `fs.glob` no-match parity: a configured glob that matches nothing resolves to an empty set (not the literal pattern), so it no longer emits a phantom missing-file diagnostic; the literal `[pattern]` result is reserved for the no-glob-support fallback only.\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`** / **`src/hooks/internal-hook-dispatch.ts`**\n- Keep the public `triggerInternalHook(event)` signature (re-exported via `plugin-sdk/hook-runtime`) unchanged and matching `main` — no new public parameter or exported options type.\n- Move the bootstrap-only handler scheduling (`yieldBetweenHandlers` with `setImmediate` yield between handlers) and per-handler timing/slow-handler (>500ms) warning into an internal `internal-hook-dispatch` module that is not on the plugin SDK surface.\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable yielding between handlers for `agent:bootstrap` hook triggers (via the internal dispatch entrypoint)\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Keep the public `resolveBootstrapFilesForRun` params (re-exported via `plugin-sdk/agent-harness-runtime`) callback-free and matching `main`; route embedded-runner substage timing through an internal `resolveBootstrapFilesForRunWithTiming` variant kept off the SDK surface.\n- Support the new async workspace file loading interface.\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — every matching file returned without an artificial cap (no directory pruning), and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — yield-between-handlers ordering, handler timing reporting, and slow handler warning exercised through the internal dispatch entrypoint\n- `workspace.load-extra-bootstrap-files.test.ts` — a no-match glob resolves to an empty set with no missing-file diagnostic (fs.glob parity)\n\nThe public plugin SDK surface is unchanged: `node scripts/plugin-sdk-surface-report.mjs` exits 0 with no new package-exported entrypoints. All existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\nCloses #87509\n\n\n",
-        "branch": "fix/bootstrap-context-event-loop-stall",
-        "head_sha": "7cb4a1822f7f426509586af134c8e251c0153c88",
-        "author": "jerry-xin",
+        "title": "fix(memory): keep local embedding worker forks working after Homebrew Node upgrades",
+        "body": "Closes #99183\n\n## What Problem This Solves\n\nFixes an issue where users running the Gateway with Homebrew-managed Node could lose fresh local embedding worker forks after Homebrew upgrades Node and removes the old Cellar binary.\n\n## Why This Change Was Made\n\nThe local embedding worker now resolves Homebrew Cellar `process.execPath` values to stable Homebrew symlinks before calling `fork()`. Non-Cellar paths keep the existing executable unchanged, and the change stays inside the memory host worker supervisor without adding config, public API, or a new worker error code.\n\n## User Impact\n\nLocal semantic-memory embeddings can continue starting fresh worker processes after a Homebrew Node upgrade instead of failing with `spawn ... ENOENT` until the Gateway is restarted.\n\n## Evidence\n\n- Claim proved: stale Homebrew Cellar worker forks use a stable Node executable path before `fork()`, while non-Cellar paths remain unchanged.\n- Commands / artifacts:\n  - `node scripts/run-vitest.mjs packages/memory-host-sdk/src/host/embeddings-worker-stale-execpath.test.ts` -> passed, 4 tests.\n  - `node scripts/run-vitest.mjs packages/memory-host-sdk/src/host/embeddings.test.ts` -> passed, 18 tests.\n  - `git diff --check HEAD~1..HEAD` -> passed.\n  - `python .agents\\skills\\autoreview\\scripts\\autoreview --mode local` -> worker reported clean, no accepted/actionable findings.\n  - Real macOS/Homebrew proof: https://github.com/qingminglong/openclaw/actions/runs/28698715497 -> passed on `macos-15-arm64`, artifact `pr-99541-macos-homebrew-proof`.\n- Observed result:\n  - Unit tests verify Cellar paths are passed to `fork()` as `/opt/homebrew/opt/node/bin/node` or `/usr/local/bin/node`, non-Cellar paths pass through unchanged, and aborts during the new async boundary do not send cancelled requests.\n  - The macOS proof ran on macOS 15.7.7 arm64 with Homebrew prefix `/opt/homebrew` and Homebrew Node 26.4.0.\n  - The parent process started from a Homebrew Cellar Node executable: `/opt/homebrew/Cellar/node/openclaw-proof-99541-28698715497-1/bin/node`.\n  - After that Cellar executable was removed, a raw `child_process.fork()` without explicit `execPath` failed with `spawn /opt/homebrew/Cellar/node/openclaw-proof-99541-28698715497-1/bin/node ENOENT`.\n  - The PR worker path then completed successfully while the stale Cellar executable remained unavailable; the child process ran through the stable Homebrew Node path, with child `argv0` recorded as `/opt/homebrew/opt/node/bin/node` and child `execPath` resolving to `/opt/homebrew/Cellar/node/26.4.0/bin/node`.",
+        "branch": "codex/issue-99183-stale-node-execpath",
+        "head_sha": "7d53310605e9fd111db375d479cc5f22da2f42db",
+        "author": "qingminglong",
         "labels": [
-          "agents",
-          "size: L",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
+          "size: M",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/bootstrap-files.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bootstrap-hooks.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.test-support.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 73,
-            "deletions": 42,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
-            "additions": 214,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.test.ts",
-            "additions": 102,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.ts",
-            "additions": 132,
-            "deletions": 41,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
-            "additions": 42,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/internal-hook-dispatch.ts",
-            "additions": 107,
+            "path": "packages/memory-host-sdk/src/host/embeddings-worker-stale-execpath.test.ts",
+            "additions": 146,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/hooks/internal-hooks.test.ts",
-            "additions": 102,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/internal-hooks.ts",
-            "additions": 6,
-            "deletions": 44,
+            "path": "packages/memory-host-sdk/src/host/embeddings-worker.ts",
+            "additions": 52,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 11,
-        "additions": 810,
-        "deletions": 130,
+        "changedFiles": 2,
+        "additions": 198,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99541",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99541.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 93,
-          "gatingTotal": 88,
+          "total": 100,
+          "gatingTotal": 95,
           "counts": {
-            "IN_PROGRESS": 48,
-            "SUCCESS": 18,
-            "SKIPPED": 26,
+            "SUCCESS": 66,
+            "SKIPPED": 33,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "pnpm-store-warmup:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "pnpm-store-warmup:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -307,19 +149,19 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4155,
+    "total_ms": 5547,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 433
+        "ms": 627
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1309
+        "ms": 2199
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -331,7 +173,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2385
+        "ms": 2697
       },
       {
         "name": "append_ledger",
