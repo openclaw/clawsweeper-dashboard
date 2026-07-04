@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T09:27:42.041Z",
+  "generated_at": "2026-07-04T09:27:50.961Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T06:27:40.373Z",
+  "since": "2026-07-04T06:27:48.914Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    99884
+    97975
   ],
   "comment_ids": [
-    4881458927
+    4881455853
   ],
-  "status_comment_id": 4881459043,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:99884:4881458927:2026-07-04T09:26:30Z:re_review",
-      "comment_id": "4881458927",
-      "comment_version_key": "4881458927:2026-07-04T09:26:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99884#issuecomment-4881458927",
+      "idempotency_key": "comment-router:openclaw/openclaw:97975:4881455853:2026-07-04T09:25:16Z:re_review",
+      "comment_id": "4881455853",
+      "comment_version_key": "4881455853:2026-07-04T09:25:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97975#issuecomment-4881455853",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 99884,
-      "author": "zenglingbiao",
-      "author_id": 290951975,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T09:26:30Z",
-      "comment_updated_at": "2026-07-04T09:26:30Z",
-      "status_comment_id": 4881459043,
+      "target_branch": null,
+      "issue_number": 97975,
+      "author": "Super-Cabbage",
+      "author_id": 295118064,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-04T09:25:16Z",
+      "comment_updated_at": "2026-07-04T09:25:16Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,52 +68,36 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-07-04T09:27:42.744Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 99884
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-04T09:27:43.597Z",
-          "response_comment_id": "4881459043",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(web-shared): bound response.text() fallback to honor maxBytes",
-        "body": "## What Problem This Solves\n\nIn `src/agents/tools/web-shared.ts`, `readResponseText()` has three read paths:\n1. **Bounded stream read** — uses `getReader()` with `maxBytes` byte cap ✅\n2. **arrayBuffer()** — reads bytes into ArrayBuffer ✅\n3. **`.text()` fallback** — calls `response.text()` which buffers the **full body unbounded** before any post-read check ❌\n\nWhen a foreign Response lacks both a body stream and `arrayBuffer()`, the `.text()` fallback at line 314 reads the entire response into memory regardless of `maxBytes`. Post-read truncation can't prevent the OOM.\n\n**Code evidence**: `src/agents/tools/web-shared.ts:314-316` — `const text = await res.text()` has no pre-read size guard. The `maxBytes` variable is never consulted before the read.\n\n## Root Cause\n\nThe `.text()` path is the last resort for Responses without a readable body stream or `arrayBuffer()`. When `maxBytes` is set the caller expects bounded memory, but `.text()` buffers the full body before any check. Post-read truncation cannot undo the allocation.\n\n## Why This Fix\n\nWhen `maxBytes` is set and the only read path is `.text()` (no stream, no arrayBuffer), **refuse to call `.text()`** — return `{ text: \"\", truncated: true, bytesRead: 0 }`. This is fail-closed: the caller receives an empty-truncated result rather than risking OOM on an unbounded read.\n\nWhen `maxBytes` is NOT set, `.text()` is safe — the caller accepts full allocation.\n\n## User Impact\n\n- `readResponseText` with `maxBytes` no longer calls `.text()` on Responses lacking a bounded byte source\n- Callers that already set `maxBytes` (web-fetch at 750KB, web-search at 64KB) are fully protected against OOM from foreign Response objects\n- Unbounded callers (no `maxBytes`) are unchanged\n\n## Changes\n\n- `src/agents/tools/web-shared.ts`: +6/-5 lines — refuse `.text()` when `maxBytes` is set\n- `src/agents/tools/web-shared.test.ts`: +15/-21 lines — test verifies `.text()` is skipped when bounded\n\n## Evidence\n\n**Before**: `.text()` called with no pre-read guard when `maxBytes=100` → reads full 10,000 chars → OOM risk\n**After**: `maxBytes=100` → returns `{ text: \"\", truncated: true, bytesRead: 0 }` without calling `.text()`\n\n## Real Behavior Proof\n\n### Before (on upstream/main)\n\n```bash\n$ node --import tsx -e \"\nconst { readResponseText } = await import('./src/agents/tools/web-shared.js');\nconst res = { body: null, headers: new Headers(), async text() { return 'x'.repeat(10_000); } };\nconst r = await readResponseText(res, { maxBytes: 100 });\nconsole.log('text:', r.text.length, 'chars loaded into memory (0 expected)');\n\"\ntext: 10000 chars loaded into memory (0 expected)\nFAIL: .text() called unbounded despite maxBytes=100 — full body loaded before truncation\n```\n\n### After (with fix)\n\n```bash\n$ node --import tsx -e \"\nconst { readResponseText } = await import('./src/agents/tools/web-shared.js');\nconst res = { body: null, headers: new Headers(), async text() { return 'x'.repeat(10_000); } };\nconst r = await readResponseText(res, { maxBytes: 100 });\nconsole.log('text:', JSON.stringify(r.text), '(expected \\\"\\\")');\nconsole.log('truncated:', r.truncated, '(expected true)');\n\"\ntext: \"\" (expected \"\")\ntruncated: true (expected true)\nPASS: .text() avoided when maxBytes is set\n```\n\n### Verification environment\n\n| Item | Value |\n|------|-------|\n| Node.js | v22.22.0 |\n| Vitest | v4.1.8 |\n| OS | Linux 4.19.112 x86_64 |\n\n## Tests and Validation\n\n- `oxlint`: PASS (0 errors)\n- `vitest web-shared.test.ts`: 9/9 passed\n- `oxfmt --check`: PASS (correct format)\n",
-        "branch": "fix/mcp-http-fetch-bounded-text",
-        "head_sha": "558116c41bf011c73b615242780527ebf950132e",
-        "author": "zenglingbiao",
+        "title": "fix(agents): add missing optional chain before .trim() in auth-controller and image-tool",
+        "body": "## What Problem This Solves\r\n\r\nTwo production code paths use `?.` optional chaining to access a property followed by `.trim()` without a second `?.` guard on the accessed value itself. When the intermediate property is `undefined`, `.trim()` throws `TypeError`:\r\n\r\n1. **`auth-controller.ts:111`** — `getRuntimeAuthState()?.sourceApiKey.trim()` throws if `sourceApiKey` is `undefined`\r\n2. **`image-tool.ts:903`** — `options?.sandbox && options?.sandbox.root.trim()` throws if `sandbox.root` is `undefined`\r\n\r\n ## Real behavior proof\r\n\r\n  - **Behavior or issue addressed**: Missing `?.` before `.trim()` on potentially-undefined values causing `TypeError`\r\n  - **Real environment tested**: Node 22.22, Linux x86_64, local dev checkout\r\n  - **Exact steps or command run after this patch**: `pnpm test src/agents/embedded-agent-runner/run/auth-controller.test.ts` and `pnpm test src/agents/tools/image-tool.test.ts`\r\n  - **Evidence after fix**:\r\n\r\n    ```text\r\n    ✓ auth-controller.test.ts — 9 tests passed\r\n    ✓ image-tool.test.ts — 94 tests passed\r\n\r\n    Both test suites pass. The ?. additions are defensive — they prevent TypeError at runtime when the upstream value is undefined, with no behavior change for existing valid code paths.\r\n  - Observed result after fix: No change for valid code paths; previously-crashing edge cases (undefined sourceApiKey or sandbox.root) now gracefully fall through instead of throwing\r\n  TypeError.\r\n  - What was not tested: Live agent run with missing sourceApiKey or missing sandbox root configuration\r\n\r\n## Files Changed\r\n\r\n| File | Change |\r\n|---|---|\r\n| `src/agents/embedded-agent-runner/run/auth-controller.ts` | `?.sourceApiKey.trim()` → `?.sourceApiKey?.trim()` |\r\n| `src/agents/tools/image-tool.ts` | `options?.sandbox && options?.sandbox.root.trim()` → `options?.sandbox?.root?.trim()` |\r\n\r\nGenerated with Claude Code",
+        "branch": "fix/optional-chain-trim",
+        "head_sha": "d1ea6944957f25a3e9b5f388862f0e00bd44af03",
+        "author": "super-cabbage",
         "labels": [
           "agents",
           "size: XS",
           "proof: sufficient",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "src/agents/tools/web-shared.test.ts",
-            "additions": 39,
-            "deletions": 0,
+            "path": "src/agents/embedded-agent-runner/run/auth-controller.ts",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/tools/web-shared.ts",
-            "additions": 6,
+            "path": "src/agents/tools/image-tool.ts",
+            "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
@@ -257,143 +241,53 @@
           }
         ],
         "changedFiles": 2,
-        "additions": 45,
-        "deletions": 1,
+        "additions": 2,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99884",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99884.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97975",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97975.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 93,
-          "gatingTotal": 88,
+          "total": 19,
+          "gatingTotal": 14,
           "counts": {
-            "IN_PROGRESS": 46,
-            "SUCCESS": 21,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
+            "FAILURE": 1,
+            "SUCCESS": 8,
+            "SKIPPED": 10
           },
           "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
+            "Real behavior proof:FAILURE"
           ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
           ],
-          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3724,
+    "total_ms": 2353,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 473
+        "ms": 574
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1179
+        "ms": 1457
       },
       {
         "name": "classify_comment_commands",
@@ -409,11 +303,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2043
+        "ms": 306
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
