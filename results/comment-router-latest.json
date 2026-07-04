@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T17:56:07.228Z",
+  "generated_at": "2026-07-04T17:56:35.674Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T14:56:05.516Z",
+  "since": "2026-07-04T14:56:35.174Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     99999
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4883298124
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 8,
-  "commands_seen": 4,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -37,278 +39,15 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/99999#issuecomment-4883272802",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99999,
-      "author": "markr9805",
-      "author_id": 23192809,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-04T17:45:02Z",
-      "comment_updated_at": "2026-07-04T17:45:02Z",
-      "status_comment_id": null,
-      "trigger": "slash",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(heartbeat): retry transient EAGAIN/EINTR on session-store and workspace-template reads",
-        "body": "## What Problem This Solves\n\nOn macOS, the OpenClaw gateway's heartbeat-driven reads of the session store (`loadSessionStore`) and workspace bootstrap files (`fileContentDiffersFromTemplate`) can surface transient `EAGAIN` / `EINTR` errors (`Unknown system error -11` / `errno -4`) when another process is atomically swapping the file. A single transient read failure aborted the heartbeat, which cascaded into cron, memory, and message workflows.\n\nReported in #99994. The existing retry loop in `loadSessionStore` was gated to **Windows-only** via `process.platform === \"win32\" ? 3 : 1`, so macOS and Linux got a single attempt with no retry. The workspace template read in `fileContentDiffersFromTemplate` had **no retry at all** — a single transient `EAGAIN` propagated up and aborted the heartbeat.\n\n## Evidence\n\n### Before fix: heartbeat aborts on macOS\n\nThe production gateway on macOS (Fort Lauderdale, EST) exhibited heartbeat aborts with `EAGAIN` / `Unknown system error -11` during session-store and workspace-template reads. The errors were transient — a retry on the same file succeeded — but the code path gave up after a single attempt on non-Windows platforms.\n\n### After fix: retry path proven by 20 passing tests\n\nThe fix adds bounded retry (3 attempts, 50ms backoff) to both read sites and classifies transient errors via `isTransientFsError()` (handles `code === EAGAIN | EINTR`, `errno === -11 | -4`, and the macOS `Unknown system error -11` message form).\n\nTest output (vitest, verbose reporter):\n\n```\n RUN  v4.1.8 /Users/mark/dev/openclaw\n\n ✓  runtime-config  store-load.eagain-retry.test.ts > retries readFileSync on EAGAIN and loads the store once the read succeeds 163ms\n ✓  runtime-config  store-load.eagain-retry.test.ts > returns an empty store after exhausting retries on persistent EAGAIN 251ms\n ✓  runtime-config  store-load.eagain-retry.test.ts > retries on the macOS 'Unknown system error -11' message form 175ms\n ✓  runtime-config  store-load.eagain-retry.test.ts > retries on transient empty reads (race with file swap) 196ms\n ✓  agents-core  workspace.eagain-retry.test.ts > returns false when the file is absent (ENOENT) 16ms\n ✓  agents-core  workspace.eagain-retry.test.ts > returns false when the file matches the template 1ms\n ✓  agents-core  workspace.eagain-retry.test.ts > returns true when the file differs from the template 1ms\n ✓  agents-core  workspace.eagain-retry.test.ts > retries on EAGAIN and returns true once the read succeeds 106ms\n ✓  agents-core  workspace.eagain-retry.test.ts > retries on EINTR and returns false when content matches 56ms\n ✓  agents-core  workspace.eagain-retry.test.ts > returns false after exhausting retries on persistent EAGAIN 110ms\n ✓  agents-core  workspace.eagain-retry.test.ts > retries on the macOS 'Unknown system error -11' message form 61ms\n ✓  agents-core  workspace.eagain-retry.test.ts > propagates non-transient errors immediately 9ms\n ✓  agents-support  workspace.eagain-retry.test.ts > (8 tests, all passing)\n\n Test Files  3 passed (3)\n      Tests  20 passed (20)\n   Duration  2.46s\n```\n\nKey test cases proving the fix:\n\n- **`retries on EAGAIN and returns true once the read succeeds`** — first read throws `EAGAIN`, second read succeeds → function returns `true`. This is the exact production failure mode: transient `EAGAIN` no longer aborts the heartbeat.\n- **`retries on the macOS 'Unknown system error -11' message form`** — proves the classifier catches the macOS-specific error string that doesn't carry a stable `.code` property.\n- **`returns false after exhausting retries on persistent EAGAIN`** — proves the function degrades gracefully (returns `false`, does not rewrite the file) instead of throwing.\n- **`propagates non-transient errors immediately`** — proves `EACCES` and other non-transient errors are not swallowed.\n\n### Production gateway stability\n\nThe production gateway has been running with an equivalent patch applied to the compiled `dist/` output (same retry logic, same classifier) with **zero heartbeat failures** since deployment. The source-level fix in this PR is the clean upstream version of that production-proven patch.\n\n### Lint and type check\n\n- `tsc --noEmit` — 0 errors\n- `oxlint` on all 4 changed files — 0 warnings, 0 errors\n- `check-lint` CI (typescript `prefer-includes` rule) — fixed: literal regex replaced with `message.includes(...)` per the review finding.\n\n## Root cause\n\n`EAGAIN` (errno `-11`) and `EINTR` (errno `-4`) are transient — they surface when the kernel can't immediately satisfy a read against a file being atomically swapped by another writer. The production failure mode on macOS is the `Unknown system error -11` string form, which doesn't always carry a stable `.code` property, so detection has to match on errno and message text too.\n\n## Changes\n\n**`src/config/sessions/store-load.ts`** (Site 1)\n- Drop the `win32`-only gate on `maxReadAttempts` → always `3` on every platform.\n- Classify errors in the `catch` block: retry on transient failures (`EAGAIN`, `EINTR`, `errno -11/-4`, macOS `Unknown system error -11` message form) **and** transient `SyntaxError` (unparseable JSON — preserves the existing Windows context-loss mitigation where concurrent replacement of `sessions.json` can expose a partially-written file). Permanent filesystem failures (`ENOENT`, `EACCES`) break out immediately so the heartbeat does not stall on two 50ms `Atomics.wait` pauses for a genuinely missing or inaccessible store. (P2 from clawsweeper review.)\n- Bounded retry on `SyntaxError`: a transient unparseable read retries within the loop; a persistently corrupted store exhausts retries and falls back to the empty-store path (verified by two regression tests — see below).\n- Comment updated to cite #99994 and explain the macOS/Linux failure mode.\n\n**`src/agents/workspace.ts`** (Site 2)\n- Add `isTransientFsError()` classifier handling: `code === EAGAIN | EINTR`, `errno === -11 | -4`, and the macOS `Unknown system error -11` / `system error -4` message forms.\n- Wrap `fileContentDiffersFromTemplate` in a 3-attempt retry loop with 50ms between attempts (using the existing `./utils/sleep.js` helper).\n- `ENOENT` still returns `false` (\"file absent\") so callers don't rewrite missing files.\n- Non-transient errors propagate.\n- Exhausted transient retries return `false` so the caller does **not** rewrite a file we could not read.\n- `fileContentDiffersFromTemplate` is exported with an `@internal` JSDoc tag so tests can exercise the retry path directly.\n\n## Impact\n\nNo happy-path change: on a clean read the new code returns immediately. The retry loop only fires on transient errors, and only for 3 attempts with 50ms backoff. This eliminates the heartbeat aborts observed in production on macOS without altering semantics for any non-transient error class.\n\n**Narrowed retry scope (P2 fix):** The session-store retry loop now classifies errors and only retries on transient failures (`EAGAIN`/`EINTR`/`errno -11/-4`/macOS message form). Permanent failures (`ENOENT`, `EACCES`) return immediately — verified by two regression tests that complete in <40ms with a single `readFileSync` call (no `Atomics.wait` pauses). This ensures a missing or unreadable store does not add 100ms of latency to every heartbeat cycle.\n\n**Preserved Windows context-loss mitigation (P1 fix from clawsweeper review):** The narrowing pass initially made `SyntaxError` immediate, which removed the existing Windows mitigation where concurrent replacement of `sessions.json` can expose a partially-written (unparseable) file. This PR now retries `SyntaxError` within the bounded loop — a transient unparseable read succeeds once the file settles; a persistently corrupted store exhausts retries and falls back to the empty-store path. Two regression tests verify both paths:\n- `retries on transient SyntaxError (invalid JSON) and loads the store once the read succeeds` — proves invalid-then-valid JSON succeeds via retry (2 calls).\n- `returns an empty store after exhausting retries on persistent SyntaxError` — proves persistent corruption exhausts to empty store (3 calls, no infinite loop).\n\n## Regression test suite (24/24 passing)\n\n- `store-load.eagain-retry.test.ts` — 8 cases: EAGAIN retry, persistent EAGAIN exhaust, macOS `-11` message form, transient empty read, ENOENT immediate (<40ms), EACCES immediate (<40ms), transient SyntaxError retry, persistent SyntaxError exhaust.\n- `workspace.eagain-retry.test.ts` — 16 cases (run in both `agents-core` and `agents-support` projects): ENOENT absent, content match, content differs, EAGAIN retry, EINTR retry, persistent EAGAIN exhaust, macOS `-11` message form, non-transient error propagation.\n- `oxlint` clean on all changed files.\n\n## Production behavior proof\n\nThe retry path is **live in production** on the maintainer's gateway (macOS, Node 22, OpenClaw 2026.6.11) and has been firing heartbeat-triggered session turns cleanly since patch v3 deployment. Redacted evidence:\n\n```\n# Gateway process (patched dist running)\n$ ps -p 49086 -o pid,etime,command\n  PID  ELAPSED COMMAND\n49086 03:07:42 /opt/homebrew/opt/node@22/bin/node /opt/homebrew/lib/node_modules/openclaw/dist/index.js gateway --port 18789 --verbose\n\n# Production dist contains the retry path\n$ grep -oE \"maxReadAttempts[^;]{0,80}\" /opt/homebrew/lib/node_modules/openclaw/dist/store-*.js | head -3\nmaxReadAttempts = 3\nmaxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : void 0\nmaxReadAttempts - 1) {\n\n# Heartbeat runner patch in production\n$ grep -oE \"EAGAIN|EINTR\" /opt/homebrew/lib/node_modules/openclaw/dist/heartbeat-runner-*.js\nEAGAIN\nEINTR\n\n# Heartbeat success count since patch v3 restart (today)\n$ grep -c \"session turn created.*trigger=heartbeat\" ~/Library/Logs/openclaw/gateway.log\n14\n\n# EAGAIN error count in current gateway log (post-patch)\n$ grep -ciE \"eagain|system error -11\" ~/Library/Logs/openclaw/gateway.log\n0\n```\n\nSample heartbeat-cycle log entries (redacted, current gateway log):\n```\n2026-07-04T13:25:27.194-04:00 memoryFlush check: sessionKey=agent:lane:main tokenCount=78648 ... isHeartbeat=true ... memoryFlushWritable=true\n2026-07-04T13:25:27.195-04:00 [diagnostic] session turn created: runId=397370b4-... sessionKey=agent:lane:main agentId=lane channel=heartbeat trigger=heartbeat\n2026-07-04T13:25:27.268-04:00 [agent/embedded] embedded run start: runId=397370b4-... provider=ollama model=glm-5.2:cloud ... messageChannel=heartbeat\n\n2026-07-04T13:37:17.406-04:00 memoryFlush check: sessionKey=agent:foster:main tokenCount=25999 ... isHeartbeat=true ... memoryFlushWritable=true\n2026-07-04T13:37:17.406-04:00 [diagnostic] session turn created: runId=34b983de-... sessionKey=agent:foster:main agentId=foster channel=heartbeat trigger=heartbeat\n2026-07-04T13:37:17.482-04:00 [agent/embedded] embedded run start: runId=34b983de-... provider=ollama model=glm-5.2:cloud ... messageChannel=heartbeat\n\n2026-07-04T13:38:12.362-04:00 memoryFlush check: sessionKey=agent:chase:main tokenCount=57213 ... isHeartbeat=true ... memoryFlushWritable=true\n2026-07-04T13:38:12.363-04:00 [diagnostic] session turn created: runId=9d359075-... sessionKey=agent:chase:main agentId=chase channel=heartbeat trigger=heartbeat\n2026-07-04T13:38:12.437-04:00 [agent/embedded] embedded run start: runId=9d359075-... provider=ollama model=glm-5.2:cloud ... messageChannel=heartbeat\n```\n\n**Interpretation:** Since patch v3 deployment (3h07m uptime at time of capture), the gateway has completed 14 heartbeat-triggered agent turns across `chase`, `lane`, `foster`, and `mira` agents with **zero EAGAIN/EINTR aborts** — the exact failure mode this PR addresses. Prior to the patch, the gateway was experiencing repeated unhandled-rejection crashes (see `~/.openclaw/logs/stability/openclaw-stability-2026-04-27T*-unhandled_rejection.json` artifacts from the EAGAIN storm that motivated this fix).\n\nCloses #99994.\n\n",
-        "branch": "fix/heartbeat-eagain-retry",
-        "head_sha": "811d4e2892c85ff53b2eeeba72f27bdb028d8b93",
-        "author": "markr9805",
-        "labels": [
-          "agents",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/workspace.eagain-retry.test.ts",
-            "additions": 150,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/workspace.ts",
-            "additions": 41,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store-load.eagain-retry.test.ts",
-            "additions": 219,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/sessions/store-load.ts",
-            "additions": 29,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 439,
-        "deletions": 12,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99999",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99999.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 94,
-          "gatingTotal": 89,
-          "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 26,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99999:4882615276:2026-07-04T16:38:27Z:clawsweeper_auto_repair",
-      "comment_id": "4882615276",
-      "comment_version_key": "4882615276:2026-07-04T16:38:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99999#issuecomment-4882615276",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99999,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 93056,
+      "author": "samson910022",
+      "author_id": 288947032,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T15:04:24Z",
-      "comment_updated_at": "2026-07-04T16:38:27Z",
+      "comment_created_at": "2026-07-04T17:54:01Z",
+      "comment_updated_at": "2026-07-04T17:54:01Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=4e01203d5f601f1d6c324b86114099e018205b9e)",
-      "review_summary": "The PR adds bounded EAGAIN/EINTR retry handling for session-store and workspace-template reads, plus focused regression tests for those retry paths.\n\nPR surface: Source +54, Tests +328. Total +382 across 4 files.\n\nReproducibility: yes. source-reproducible: current main still has the non-Windows session-store retry gap and the workspace ENOENT-only catch, and the linked issue supplies real macOS logs. I did not run a live filesystem race in this read-only review.",
-      "review_followup": "- [P1] The PR needs contributor-owned real behavior proof plus a small code/test repair; ClawSweeper should not take over the branch while the proof gate is still missing.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "4e01203d5f601f1d6c324b86114099e018205b9e",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(heartbeat): retry transient EAGAIN/EINTR on session-store and workspace-template reads",
-        "body": "## What Problem This Solves\n\nOn macOS, the OpenClaw gateway's heartbeat-driven reads of the session store (`loadSessionStore`) and workspace bootstrap files (`fileContentDiffersFromTemplate`) can surface transient `EAGAIN` / `EINTR` errors (`Unknown system error -11` / `errno -4`) when another process is atomically swapping the file. A single transient read failure aborted the heartbeat, which cascaded into cron, memory, and message workflows.\n\nReported in #99994. The existing retry loop in `loadSessionStore` was gated to **Windows-only** via `process.platform === \"win32\" ? 3 : 1`, so macOS and Linux got a single attempt with no retry. The workspace template read in `fileContentDiffersFromTemplate` had **no retry at all** — a single transient `EAGAIN` propagated up and aborted the heartbeat.\n\n## Evidence\n\n### Before fix: heartbeat aborts on macOS\n\nThe production gateway on macOS (Fort Lauderdale, EST) exhibited heartbeat aborts with `EAGAIN` / `Unknown system error -11` during session-store and workspace-template reads. The errors were transient — a retry on the same file succeeded — but the code path gave up after a single attempt on non-Windows platforms.\n\n### After fix: retry path proven by 20 passing tests\n\nThe fix adds bounded retry (3 attempts, 50ms backoff) to both read sites and classifies transient errors via `isTransientFsError()` (handles `code === EAGAIN | EINTR`, `errno === -11 | -4`, and the macOS `Unknown system error -11` message form).\n\nTest output (vitest, verbose reporter):\n\n```\n RUN  v4.1.8 /Users/mark/dev/openclaw\n\n ✓  runtime-config  store-load.eagain-retry.test.ts > retries readFileSync on EAGAIN and loads the store once the read succeeds 163ms\n ✓  runtime-config  store-load.eagain-retry.test.ts > returns an empty store after exhausting retries on persistent EAGAIN 251ms\n ✓  runtime-config  store-load.eagain-retry.test.ts > retries on the macOS 'Unknown system error -11' message form 175ms\n ✓  runtime-config  store-load.eagain-retry.test.ts > retries on transient empty reads (race with file swap) 196ms\n ✓  agents-core  workspace.eagain-retry.test.ts > returns false when the file is absent (ENOENT) 16ms\n ✓  agents-core  workspace.eagain-retry.test.ts > returns false when the file matches the template 1ms\n ✓  agents-core  workspace.eagain-retry.test.ts > returns true when the file differs from the template 1ms\n ✓  agents-core  workspace.eagain-retry.test.ts > retries on EAGAIN and returns true once the read succeeds 106ms\n ✓  agents-core  workspace.eagain-retry.test.ts > retries on EINTR and returns false when content matches 56ms\n ✓  agents-core  workspace.eagain-retry.test.ts > returns false after exhausting retries on persistent EAGAIN 110ms\n ✓  agents-core  workspace.eagain-retry.test.ts > retries on the macOS 'Unknown system error -11' message form 61ms\n ✓  agents-core  workspace.eagain-retry.test.ts > propagates non-transient errors immediately 9ms\n ✓  agents-support  workspace.eagain-retry.test.ts > (8 tests, all passing)\n\n Test Files  3 passed (3)\n      Tests  20 passed (20)\n   Duration  2.46s\n```\n\nKey test cases proving the fix:\n\n- **`retries on EAGAIN and returns true once the read succeeds`** — first read throws `EAGAIN`, second read succeeds → function returns `true`. This is the exact production failure mode: transient `EAGAIN` no longer aborts the heartbeat.\n- **`retries on the macOS 'Unknown system error -11' message form`** — proves the classifier catches the macOS-specific error string that doesn't carry a stable `.code` property.\n- **`returns false after exhausting retries on persistent EAGAIN`** — proves the function degrades gracefully (returns `false`, does not rewrite the file) instead of throwing.\n- **`propagates non-transient errors immediately`** — proves `EACCES` and other non-transient errors are not swallowed.\n\n### Production gateway stability\n\nThe production gateway has been running with an equivalent patch applied to the compiled `dist/` output (same retry logic, same classifier) with **zero heartbeat failures** since deployment. The source-level fix in this PR is the clean upstream version of that production-proven patch.\n\n### Lint and type check\n\n- `tsc --noEmit` — 0 errors\n- `oxlint` on all 4 changed files — 0 warnings, 0 errors\n- `check-lint` CI (typescript `prefer-includes` rule) — fixed: literal regex replaced with `message.includes(...)` per the review finding.\n\n## Root cause\n\n`EAGAIN` (errno `-11`) and `EINTR` (errno `-4`) are transient — they surface when the kernel can't immediately satisfy a read against a file being atomically swapped by another writer. The production failure mode on macOS is the `Unknown system error -11` string form, which doesn't always carry a stable `.code` property, so detection has to match on errno and message text too.\n\n## Changes\n\n**`src/config/sessions/store-load.ts`** (Site 1)\n- Drop the `win32`-only gate on `maxReadAttempts` → always `3` on every platform.\n- Classify errors in the `catch` block: retry on transient failures (`EAGAIN`, `EINTR`, `errno -11/-4`, macOS `Unknown system error -11` message form) **and** transient `SyntaxError` (unparseable JSON — preserves the existing Windows context-loss mitigation where concurrent replacement of `sessions.json` can expose a partially-written file). Permanent filesystem failures (`ENOENT`, `EACCES`) break out immediately so the heartbeat does not stall on two 50ms `Atomics.wait` pauses for a genuinely missing or inaccessible store. (P2 from clawsweeper review.)\n- Bounded retry on `SyntaxError`: a transient unparseable read retries within the loop; a persistently corrupted store exhausts retries and falls back to the empty-store path (verified by two regression tests — see below).\n- Comment updated to cite #99994 and explain the macOS/Linux failure mode.\n\n**`src/agents/workspace.ts`** (Site 2)\n- Add `isTransientFsError()` classifier handling: `code === EAGAIN | EINTR`, `errno === -11 | -4`, and the macOS `Unknown system error -11` / `system error -4` message forms.\n- Wrap `fileContentDiffersFromTemplate` in a 3-attempt retry loop with 50ms between attempts (using the existing `./utils/sleep.js` helper).\n- `ENOENT` still returns `false` (\"file absent\") so callers don't rewrite missing files.\n- Non-transient errors propagate.\n- Exhausted transient retries return `false` so the caller does **not** rewrite a file we could not read.\n- `fileContentDiffersFromTemplate` is exported with an `@internal` JSDoc tag so tests can exercise the retry path directly.\n\n## Impact\n\nNo happy-path change: on a clean read the new code returns immediately. The retry loop only fires on transient errors, and only for 3 attempts with 50ms backoff. This eliminates the heartbeat aborts observed in production on macOS without altering semantics for any non-transient error class.\n\n**Narrowed retry scope (P2 fix):** The session-store retry loop now classifies errors and only retries on transient failures (`EAGAIN`/`EINTR`/`errno -11/-4`/macOS message form). Permanent failures (`ENOENT`, `EACCES`) return immediately — verified by two regression tests that complete in <40ms with a single `readFileSync` call (no `Atomics.wait` pauses). This ensures a missing or unreadable store does not add 100ms of latency to every heartbeat cycle.\n\n**Preserved Windows context-loss mitigation (P1 fix from clawsweeper review):** The narrowing pass initially made `SyntaxError` immediate, which removed the existing Windows mitigation where concurrent replacement of `sessions.json` can expose a partially-written (unparseable) file. This PR now retries `SyntaxError` within the bounded loop — a transient unparseable read succeeds once the file settles; a persistently corrupted store exhausts retries and falls back to the empty-store path. Two regression tests verify both paths:\n- `retries on transient SyntaxError (invalid JSON) and loads the store once the read succeeds` — proves invalid-then-valid JSON succeeds via retry (2 calls).\n- `returns an empty store after exhausting retries on persistent SyntaxError` — proves persistent corruption exhausts to empty store (3 calls, no infinite loop).\n\n## Regression test suite (24/24 passing)\n\n- `store-load.eagain-retry.test.ts` — 8 cases: EAGAIN retry, persistent EAGAIN exhaust, macOS `-11` message form, transient empty read, ENOENT immediate (<40ms), EACCES immediate (<40ms), transient SyntaxError retry, persistent SyntaxError exhaust.\n- `workspace.eagain-retry.test.ts` — 16 cases (run in both `agents-core` and `agents-support` projects): ENOENT absent, content match, content differs, EAGAIN retry, EINTR retry, persistent EAGAIN exhaust, macOS `-11` message form, non-transient error propagation.\n- `oxlint` clean on all changed files.\n\n## Production behavior proof\n\nThe retry path is **live in production** on the maintainer's gateway (macOS, Node 22, OpenClaw 2026.6.11) and has been firing heartbeat-triggered session turns cleanly since patch v3 deployment. Redacted evidence:\n\n```\n# Gateway process (patched dist running)\n$ ps -p 49086 -o pid,etime,command\n  PID  ELAPSED COMMAND\n49086 03:07:42 /opt/homebrew/opt/node@22/bin/node /opt/homebrew/lib/node_modules/openclaw/dist/index.js gateway --port 18789 --verbose\n\n# Production dist contains the retry path\n$ grep -oE \"maxReadAttempts[^;]{0,80}\" /opt/homebrew/lib/node_modules/openclaw/dist/store-*.js | head -3\nmaxReadAttempts = 3\nmaxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : void 0\nmaxReadAttempts - 1) {\n\n# Heartbeat runner patch in production\n$ grep -oE \"EAGAIN|EINTR\" /opt/homebrew/lib/node_modules/openclaw/dist/heartbeat-runner-*.js\nEAGAIN\nEINTR\n\n# Heartbeat success count since patch v3 restart (today)\n$ grep -c \"session turn created.*trigger=heartbeat\" ~/Library/Logs/openclaw/gateway.log\n14\n\n# EAGAIN error count in current gateway log (post-patch)\n$ grep -ciE \"eagain|system error -11\" ~/Library/Logs/openclaw/gateway.log\n0\n```\n\nSample heartbeat-cycle log entries (redacted, current gateway log):\n```\n2026-07-04T13:25:27.194-04:00 memoryFlush check: sessionKey=agent:lane:main tokenCount=78648 ... isHeartbeat=true ... memoryFlushWritable=true\n2026-07-04T13:25:27.195-04:00 [diagnostic] session turn created: runId=397370b4-... sessionKey=agent:lane:main agentId=lane channel=heartbeat trigger=heartbeat\n2026-07-04T13:25:27.268-04:00 [agent/embedded] embedded run start: runId=397370b4-... provider=ollama model=glm-5.2:cloud ... messageChannel=heartbeat\n\n2026-07-04T13:37:17.406-04:00 memoryFlush check: sessionKey=agent:foster:main tokenCount=25999 ... isHeartbeat=true ... memoryFlushWritable=true\n2026-07-04T13:37:17.406-04:00 [diagnostic] session turn created: runId=34b983de-... sessionKey=agent:foster:main agentId=foster channel=heartbeat trigger=heartbeat\n2026-07-04T13:37:17.482-04:00 [agent/embedded] embedded run start: runId=34b983de-... provider=ollama model=glm-5.2:cloud ... messageChannel=heartbeat\n\n2026-07-04T13:38:12.362-04:00 memoryFlush check: sessionKey=agent:chase:main tokenCount=57213 ... isHeartbeat=true ... memoryFlushWritable=true\n2026-07-04T13:38:12.363-04:00 [diagnostic] session turn created: runId=9d359075-... sessionKey=agent:chase:main agentId=chase channel=heartbeat trigger=heartbeat\n2026-07-04T13:38:12.437-04:00 [agent/embedded] embedded run start: runId=9d359075-... provider=ollama model=glm-5.2:cloud ... messageChannel=heartbeat\n```\n\n**Interpretation:** Since patch v3 deployment (3h07m uptime at time of capture), the gateway has completed 14 heartbeat-triggered agent turns across `chase`, `lane`, `foster`, and `mira` agents with **zero EAGAIN/EINTR aborts** — the exact failure mode this PR addresses. Prior to the patch, the gateway was experiencing repeated unhandled-rejection crashes (see `~/.openclaw/logs/stability/openclaw-stability-2026-04-27T*-unhandled_rejection.json` artifacts from the EAGAIN storm that motivated this fix).\n\nCloses #99994.\n\n",
-        "branch": "fix/heartbeat-eagain-retry",
-        "head_sha": "811d4e2892c85ff53b2eeeba72f27bdb028d8b93",
-        "author": "markr9805",
-        "labels": [
-          "agents",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/workspace.eagain-retry.test.ts",
-            "additions": 150,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/workspace.ts",
-            "additions": 41,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store-load.eagain-retry.test.ts",
-            "additions": 219,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/sessions/store-load.ts",
-            "additions": 29,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 439,
-        "deletions": 12,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99999",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99999.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 94,
-          "gatingTotal": 89,
-          "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 26,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:99999:4883040507:2026-07-04T16:23:24Z:re_review",
-      "comment_id": "4883040507",
-      "comment_version_key": "4883040507:2026-07-04T16:23:24Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99999#issuecomment-4883040507",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99999,
-      "author": "markr9805",
-      "author_id": 23192809,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-04T16:23:24Z",
-      "comment_updated_at": "2026-07-04T16:23:24Z",
-      "status_comment_id": null,
-      "trigger": "slash",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:99999:4882994566:2026-07-04T16:07:27Z:re_review",
-      "comment_id": "4882994566",
-      "comment_version_key": "4882994566:2026-07-04T16:07:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99999#issuecomment-4882994566",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99999,
-      "author": "markr9805",
-      "author_id": 23192809,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-04T16:07:27Z",
-      "comment_updated_at": "2026-07-04T16:07:27Z",
-      "status_comment_id": null,
-      "trigger": "slash",
-      "command": "review",
+      "trigger": "mention",
+      "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -335,21 +74,21 @@
     }
   ],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3444,
+    "total_ms": 1976,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 290
+        "ms": 486
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1400
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -365,11 +104,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1712
+        "ms": 1476
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
