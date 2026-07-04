@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T04:54:56.286Z",
+  "generated_at": "2026-07-04T04:55:03.720Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T01:54:54.522Z",
+  "since": "2026-07-04T01:55:01.880Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99774
+    99812
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,34 +31,148 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99774:4880382160:2026-07-04T04:54:50Z:clawsweeper_auto_repair",
-      "comment_id": "4880382160",
-      "comment_version_key": "4880382160:2026-07-04T04:54:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99774#issuecomment-4880382160",
+      "idempotency_key": "comment-router:openclaw/openclaw:99812:4880713916:2026-07-04T04:49:58Z:re_review",
+      "comment_id": "4880713916",
+      "comment_version_key": "4880713916:2026-07-04T04:49:58Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99812#issuecomment-4880713916",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99774,
+      "issue_number": 99812,
+      "author": "Pandah97",
+      "author_id": 80405497,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-04T04:49:58Z",
+      "comment_updated_at": "2026-07-04T04:49:58Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(google): bound OAuth response reads to prevent OOM",
+        "body": "## Summary\n\n**Problem**: Three Google OAuth modules read HTTP response bodies without size limits, creating OOM risk when upstream services return oversized or malicious payloads. Additionally, `gunzipSync` in the Vertex ADC parser lacks a decompressed-output cap, so a small compressed payload can still inflate past the wire limit.\n\n**Solution**: Replace all unbounded `response.arrayBuffer()`, `.json()` calls with bounded SDK helpers (`readResponseWithLimit`, `readProviderJsonResponse`). Add `maxOutputLength` to `gunzipSync` to cap decompressed output at the same 1 MB bound.\n\n**What changed**: `extensions/google/vertex-adc.ts`, `extensions/google/oauth.token.ts`, `extensions/google/oauth.project.ts` — 3 files, +27/-12 lines.\n- Wire reads bounded via SDK helpers (7 call sites)\n- `gunzipSync` bounded via `maxOutputLength: GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES`\n- Token, project, and onboarding response paths all covered\n\n**What did NOT change**: No behavior change for well-formed responses under the size limits. No API or config surface changes. No dependency additions.\n\n## What Problem This Solves\n\n7 call sites across 3 files consume unbounded HTTP response bodies. This is the same unbounded-read class fixed across 30+ providers via the Plugin SDK, but the Google OAuth paths were missed.\n\nAdditionally, the Vertex ADC gzip decoder could amplify a small compressed payload (under the 1 MB wire cap) into an arbitrarily large decompressed buffer, leaving an OOM path open even after the wire cap.\n\n## Why This Change Was Made\n\nThe existing `readProviderJsonResponse` and `readResponseWithLimit` helpers already ship in the Plugin SDK with a default 16 MB cap. Using them here aligns with the established bounded-read pattern. The `maxOutputLength` option on `gunzipSync` (Node 15+) closes the decompression amplification path that the wire cap alone cannot address.\n\n## Real behavior proof\n\n**Behavior addressed**: Bounded HTTP response reads and bounded gzip decompression for Google OAuth HTTP paths.\n\n**BEFORE FIX — unbounded `response.arrayBuffer()` reads entire body into memory:**\n```typescript\nconst bytes = Buffer.from(await response.arrayBuffer());\n```\n\n**AFTER FIX — bounded read with 1 MB cap and overflow error:**\n```typescript\nconst bytes = await readResponseWithLimit(response, GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES, {\n  onOverflow: ({ maxBytes }) =>\n    new Error(`Google OAuth token response exceeds ${maxBytes} bytes`),\n});\n```\n\n**BEFORE FIX — unbounded `gunzipSync` allocates full decompressed output:**\n```typescript\nreturn gunzipSync(bytes).toString(\"utf8\");\n```\n\n**AFTER FIX — bounded decompression with `maxOutputLength`:**\n```typescript\nreturn gunzipSync(bytes, { maxOutputLength: GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES }).toString(\"utf8\");\n```\n\n**Real environment tested**: Linux x86_64, Node v24.13.1.\n\n**Exact steps or command run after this patch**:\n```bash\n# Unit tests\npnpm test extensions/google -- --reporter verbose\npnpm test:changed\n\n# L2 proof: bounded gzip prevents decompression bomb\nnode evidence/pr-99812/bounded-gzip-proof.mjs\n\n# L2 proof: loopback HTTP shows oversized response rejection\nnode evidence/pr-99812/bounded-http-proof.mjs\n```\n\n**After-fix evidence**: L2 runtime proof with loopback HTTP server and decompression bomb:\n```terminal_output\n=== Bounded gzip decompression proof ===\nNormal token response: 76 bytes uncompressed\n  ✓ bounded: decompressed 76 bytes, parsed OK\nDecompression bomb: 2068 bytes compressed → 2097153 bytes uncompressed\n  unbounded gunzipSync: allocated 2097153 bytes (OOM risk)\n  bounded gunzipSync: rejected — Cannot create a Buffer larger than 1048576 bytes\n\n=== Bounded HTTP read proof ===\nNormal response: 46 bytes — ✓ bounded read OK, parsed\nOversized response: caught — Response exceeds 1048576 bytes\n  ✓ bounded read correctly rejected the oversized response\n```\n\n**Unit tests**:\n```terminal_output\n ✓ |extension-providers| extensions/google/... (28 test files, 378 tests passed)\n ✓ |extension-providers| test:changed (15 test files, 228 tests passed)\n```\n\n**Observed result after the fix**: All tests pass. Both loopback proof scripts confirm oversized responses and decompression bombs are safely rejected at the 1 MB boundary. Normal-sized responses pass through unchanged.\n\n**What was not tested**: Actual Google OAuth HTTP round-trips (requires live credentials). The SDK helpers `readResponseWithLimit` and `readProviderJsonResponse` are integration-tested in `src/agents/provider-http-errors.test.ts` and `packages/media-core/src/read-response-with-limit.test.ts`. This PR only swaps the call sites and adds a `maxOutputLength` option, preserving all existing error handling and test seams.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk — bounded-read wrapper replaces unbounded call with same return type and compatible error semantics\n- [x] Decompression bomb path closed via `maxOutputLength` on `gunzipSync`\n- [x] No behavior change for normal-sized responses under the cap\n- [x] No API, config, or dependency changes\n- [x] L2 runtime proof with loopback HTTP server (oversized response rejection) and decompression bomb (gzip amplification blocked)\n- [x] Existing tests green (28 test files, 378 tests; 15 test:changed files, 228 tests)\n",
+        "branch": "fix/google-oauth-bound-response-reads",
+        "head_sha": "f7745fc37857815b2545aa9f947eeed0805e7f0e",
+        "author": "pandah97",
+        "labels": [
+          "size: XS",
+          "extensions: google",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/google/oauth.project.ts",
+            "additions": 14,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/oauth.token.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/vertex-adc.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 29,
+        "deletions": 12,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99812",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99812.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 85,
+          "gatingTotal": 80,
+          "counts": {
+            "SUCCESS": 56,
+            "SKIPPED": 26,
+            "IN_PROGRESS": 3
+          },
+          "blockers": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99812:4880646581:2026-07-04T04:37:36Z:clawsweeper_needs_human",
+      "comment_id": "4880646581",
+      "comment_version_key": "4880646581:2026-07-04T04:37:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99812#issuecomment-4880646581",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99812,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T02:46:47Z",
-      "comment_updated_at": "2026-07-04T04:54:50Z",
+      "comment_created_at": "2026-07-04T04:33:00Z",
+      "comment_updated_at": "2026-07-04T04:37:36Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=81db374624f8d1b7b6b396bcf7a7037d31d64b8a)",
-      "review_summary": "The PR moves `sessions --active`, `--limit`, and `sessions tail --tail` validation into CLI parsing, changes command option types to parsed numbers, and updates focused CLI/session tests.\n\nPR surface: Source +93, Tests +13. Total +106 across 9 files.\n\nReproducibility: yes. Source inspection on PR head shows omitted `--limit` flows to `limit === undefined`, while current main and docs define omitted `--limit` as the newest 100 sessions.",
-      "review_followup": "- [P2] The remaining blocker is a narrow mechanical repair in `sessionsCommand`: restore the default-100 omitted-limit behavior and add focused regression coverage.",
+      "repair_reason": "- [P1] Human review is needed because the PR has a P1 code finding, mock-only contributor proof, and overlapping open Google OAuth hardening branches that maintainers should coordinate.; Needs attention: The diff narrows an OAuth memory-exhaustion path, but the Vertex ADC gzip decode remains an unbounded allocation after the new wire cap.; Review finding: [P1] Cap decoded gzip output before parsing — extensions/goog... (sha=a9fb7b2da5b90b410cf431f9e61a6d75bbb16290)",
+      "review_summary": "The PR replaces unbounded Google OAuth JSON/arrayBuffer response reads with existing bounded SDK helpers in `extensions/google/oauth.project.ts`, `extensions/google/oauth.token.ts`, and `extensions/google/vertex-adc.ts`.\n\nPR surface: Source +15. Total +15 across 3 files.\n\nReproducibility: yes. from source inspection. Current main still reaches an unbounded `response.arrayBuffer()` in the Vertex ADC OAuth token refresh path, while the project/token JSON paths are already wire-capped by `fetchWithTimeout`.",
+      "review_followup": "- [P1] Human review is needed because the PR has a P1 code finding, mock-only contributor proof, and overlapping open Google OAuth hardening branches that maintainers should coordinate.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "81db374624f8d1b7b6b396bcf7a7037d31d64b8a",
+      "expected_head_sha": "a9fb7b2da5b90b410cf431f9e61a6d75bbb16290",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,99 +184,60 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(cli): validate sessions --active, --limit, and --tail as positive integers at CLI layer",
-        "body": "## What Problem This Solves\n\n`sessions --active <minutes>`, `sessions --limit <count>`, and `sessions tail --tail <count>` accepted any string value from the CLI without validation. Invalid values (e.g. `--active abc`, `--limit not-a-number`, `--tail xxx`) were silently passed through to the command layer as raw strings, potentially causing confusing runtime errors or unexpected behavior.\n\n## Why This Change Was Made\n\nThree new CLI-layer parsers were added to validate inputs early, before any module loading:\n\n- `parseSessionsActive()` — validates `--active` as a positive integer\n- `parseSessionsLimit()` — validates `--limit` as a positive integer or `\"all\"` (case-insensitive)\n- `parseSessionsTail()` — validates `--tail` as a non-negative integer (preserving `--tail 0`)\n\nValidation was lifted from the command layer (`sessionsCommand` / `sessionsTailCommand`) to both the Commander registration layer and the route-first argv parser (`route-args.ts`). Both paths support `=` form flags (`--active=30`, `--limit=all`). Invalid values are rejected immediately with a clear error and exit code 1.\n\n### Changes\n\n| File | Change |\n|------|--------|\n| `src/cli/program/register.status-health-sessions.ts` | Added `parseSessionsActive`, `parseSessionsLimit`, `parseSessionsTail` CLI-layer parsers; integrated into `runSessionsListCli` and sessions tail action handler |\n| `src/cli/program/route-args.ts` | Updated `parseSessionsRouteArgs` to parse `--active` and `--limit` as integers (matches CLI registration layer) |\n| `src/cli/program/route-args.test.ts` | Updated expectations; added coverage for `--limit all`/ALL, `=` form flags, invalid values |\n| `src/commands/sessions.ts` | Changed `active` and `limit` option types from `string` to `number \\| \"all\"`; removed redundant runtime-level validation |\n| `src/commands/sessions-tail.ts` | Changed `tail` option type from `string \\| number` to `number` |\n| `src/commands/sessions.test-helpers.ts` | Updated `runSessionsJson` type signature for parsed numeric values |\n| `src/commands/sessions.test.ts` | Updated test expectations; consolidated validation test |\n| `src/commands/sessions-tail.test.ts` | Updated test expectations for numeric tail values |\n| `src/cli/program/register.status-health-sessions.test.ts` | Updated test expectations for parsed numeric values |\n\n## Evidence\n\n- Tests: 6 route-args + 31 CLI registration + 14 sessions command + 11 sessions-tail = 62 tests, all passing\n- tsgo: clean (all typecheck passes — core, extensions, core-test, extensions-test)\n- oxfmt: clean\n- oxlint: clean\n\n### Route-first parser: valid inputs (including = form and case-insensitive)\n\n```\n--active=60  → parsed as 60\n--limit=all  → parsed as \"all\"\n--limit ALL  → parsed as \"all\"\n```\n\n### Default route (no options)\n\n```\n$ node openclaw.mjs sessions\nSession store: .../sessions.json\nSessions listed: 6\nKind        Key                        Age       Model          Runtime\ndirect      agent:main:matri...:18080  38h ago   Qwen3-235B-A22B OpenClaw Default\ndirect      agent:main:main            4d ago    Qwen3-235B-A22B OpenClaw Default\n...\n```\n\n### Invalid input (rejected early)\n\n```\n$ node openclaw.mjs sessions --active abc\n--active must be a positive integer, for example --active 30.\n(exit 1)\n\n$ node openclaw.mjs sessions --limit not-a-number\n--limit must be a positive integer or \"all\", for example --limit 25.\n(exit 1)\n\n$ node openclaw.mjs sessions tail --tail xxx\n--tail must be a non-negative integer, for example --tail 25.\n(exit 1)\n```\n\n### --tail 0 compatibility (no history events shown)\n\n```\n$ node openclaw.mjs sessions tail --tail 0\n(exit 0, no output — 0 events)\n```\n\n## User Impact\n\n- **Before**: Invalid `--active`, `--limit`, `--tail` values were silently passed through, potentially causing confusing downstream errors.\n- **After**: Invalid values are rejected immediately at the CLI layer with a clear error message.\n- **Default behavior unchanged**: omitting these options continues to work as before.\n- **`--tail 0` preserved**: zero is accepted (non-negative integer), correctly suppresses history event output.",
-        "branch": "fix/sessions-cli-input-validation",
-        "head_sha": "81db374624f8d1b7b6b396bcf7a7037d31d64b8a",
-        "author": "wm0018",
+        "title": "fix(google): bound OAuth response reads to prevent OOM",
+        "body": "## Summary\n\n**Problem**: Three Google OAuth modules read HTTP response bodies without size limits, creating OOM risk when upstream services return oversized or malicious payloads. Additionally, `gunzipSync` in the Vertex ADC parser lacks a decompressed-output cap, so a small compressed payload can still inflate past the wire limit.\n\n**Solution**: Replace all unbounded `response.arrayBuffer()`, `.json()` calls with bounded SDK helpers (`readResponseWithLimit`, `readProviderJsonResponse`). Add `maxOutputLength` to `gunzipSync` to cap decompressed output at the same 1 MB bound.\n\n**What changed**: `extensions/google/vertex-adc.ts`, `extensions/google/oauth.token.ts`, `extensions/google/oauth.project.ts` — 3 files, +27/-12 lines.\n- Wire reads bounded via SDK helpers (7 call sites)\n- `gunzipSync` bounded via `maxOutputLength: GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES`\n- Token, project, and onboarding response paths all covered\n\n**What did NOT change**: No behavior change for well-formed responses under the size limits. No API or config surface changes. No dependency additions.\n\n## What Problem This Solves\n\n7 call sites across 3 files consume unbounded HTTP response bodies. This is the same unbounded-read class fixed across 30+ providers via the Plugin SDK, but the Google OAuth paths were missed.\n\nAdditionally, the Vertex ADC gzip decoder could amplify a small compressed payload (under the 1 MB wire cap) into an arbitrarily large decompressed buffer, leaving an OOM path open even after the wire cap.\n\n## Why This Change Was Made\n\nThe existing `readProviderJsonResponse` and `readResponseWithLimit` helpers already ship in the Plugin SDK with a default 16 MB cap. Using them here aligns with the established bounded-read pattern. The `maxOutputLength` option on `gunzipSync` (Node 15+) closes the decompression amplification path that the wire cap alone cannot address.\n\n## Real behavior proof\n\n**Behavior addressed**: Bounded HTTP response reads and bounded gzip decompression for Google OAuth HTTP paths.\n\n**BEFORE FIX — unbounded `response.arrayBuffer()` reads entire body into memory:**\n```typescript\nconst bytes = Buffer.from(await response.arrayBuffer());\n```\n\n**AFTER FIX — bounded read with 1 MB cap and overflow error:**\n```typescript\nconst bytes = await readResponseWithLimit(response, GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES, {\n  onOverflow: ({ maxBytes }) =>\n    new Error(`Google OAuth token response exceeds ${maxBytes} bytes`),\n});\n```\n\n**BEFORE FIX — unbounded `gunzipSync` allocates full decompressed output:**\n```typescript\nreturn gunzipSync(bytes).toString(\"utf8\");\n```\n\n**AFTER FIX — bounded decompression with `maxOutputLength`:**\n```typescript\nreturn gunzipSync(bytes, { maxOutputLength: GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES }).toString(\"utf8\");\n```\n\n**Real environment tested**: Linux x86_64, Node v24.13.1.\n\n**Exact steps or command run after this patch**:\n```bash\n# Unit tests\npnpm test extensions/google -- --reporter verbose\npnpm test:changed\n\n# L2 proof: bounded gzip prevents decompression bomb\nnode evidence/pr-99812/bounded-gzip-proof.mjs\n\n# L2 proof: loopback HTTP shows oversized response rejection\nnode evidence/pr-99812/bounded-http-proof.mjs\n```\n\n**After-fix evidence**: L2 runtime proof with loopback HTTP server and decompression bomb:\n```terminal_output\n=== Bounded gzip decompression proof ===\nNormal token response: 76 bytes uncompressed\n  ✓ bounded: decompressed 76 bytes, parsed OK\nDecompression bomb: 2068 bytes compressed → 2097153 bytes uncompressed\n  unbounded gunzipSync: allocated 2097153 bytes (OOM risk)\n  bounded gunzipSync: rejected — Cannot create a Buffer larger than 1048576 bytes\n\n=== Bounded HTTP read proof ===\nNormal response: 46 bytes — ✓ bounded read OK, parsed\nOversized response: caught — Response exceeds 1048576 bytes\n  ✓ bounded read correctly rejected the oversized response\n```\n\n**Unit tests**:\n```terminal_output\n ✓ |extension-providers| extensions/google/... (28 test files, 378 tests passed)\n ✓ |extension-providers| test:changed (15 test files, 228 tests passed)\n```\n\n**Observed result after the fix**: All tests pass. Both loopback proof scripts confirm oversized responses and decompression bombs are safely rejected at the 1 MB boundary. Normal-sized responses pass through unchanged.\n\n**What was not tested**: Actual Google OAuth HTTP round-trips (requires live credentials). The SDK helpers `readResponseWithLimit` and `readProviderJsonResponse` are integration-tested in `src/agents/provider-http-errors.test.ts` and `packages/media-core/src/read-response-with-limit.test.ts`. This PR only swaps the call sites and adds a `maxOutputLength` option, preserving all existing error handling and test seams.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk — bounded-read wrapper replaces unbounded call with same return type and compatible error semantics\n- [x] Decompression bomb path closed via `maxOutputLength` on `gunzipSync`\n- [x] No behavior change for normal-sized responses under the cap\n- [x] No API, config, or dependency changes\n- [x] L2 runtime proof with loopback HTTP server (oversized response rejection) and decompression bomb (gzip amplification blocked)\n- [x] Existing tests green (28 test files, 378 tests; 15 test:changed files, 228 tests)\n",
+        "branch": "fix/google-oauth-bound-response-reads",
+        "head_sha": "f7745fc37857815b2545aa9f947eeed0805e7f0e",
+        "author": "pandah97",
         "labels": [
-          "cli",
-          "commands",
-          "size: M",
-          "proof: sufficient",
+          "size: XS",
+          "extensions: google",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/cli/program/register.status-health-sessions.test.ts",
-            "additions": 25,
+            "path": "extensions/google/oauth.project.ts",
+            "additions": 14,
             "deletions": 7,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/program/register.status-health-sessions.ts",
-            "additions": 86,
+            "path": "extensions/google/oauth.token.ts",
+            "additions": 6,
             "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/program/route-args.test.ts",
-            "additions": 40,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/program/route-args.ts",
-            "additions": 26,
+            "path": "extensions/google/vertex-adc.ts",
+            "additions": 9,
             "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/sessions-tail.test.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/sessions-tail.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/sessions.test-helpers.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/sessions.test.ts",
-            "additions": 12,
-            "deletions": 54,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/sessions.ts",
-            "additions": 4,
-            "deletions": 18,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 9,
-        "additions": 201,
-        "deletions": 95,
+        "changedFiles": 3,
+        "additions": 29,
+        "deletions": 12,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99774",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99774.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99812",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99812.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 93,
-          "gatingTotal": 88,
+          "total": 85,
+          "gatingTotal": 80,
           "counts": {
-            "SUCCESS": 64,
-            "SKIPPED": 25,
-            "IN_PROGRESS": 3,
-            "NEUTRAL": 1
+            "SUCCESS": 56,
+            "SKIPPED": 26,
+            "IN_PROGRESS": 3
           },
           "blockers": [
             "QA Smoke CI:IN_PROGRESS",
@@ -180,24 +255,24 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2111,
+    "total_ms": 2203,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 386
+        "ms": 412
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1365
+        "ms": 1415
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -209,7 +284,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 311
+        "ms": 357
       },
       {
         "name": "append_ledger",
