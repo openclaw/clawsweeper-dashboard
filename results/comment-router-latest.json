@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T08:59:31.609Z",
+  "generated_at": "2026-07-04T09:00:22.844Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T05:59:31.361Z",
+  "since": "2026-07-04T06:00:20.878Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99883
+    99884
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 5,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,278 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99884:4881248707:2026-07-04T09:00:16Z:clawsweeper_needs_human",
+      "comment_id": "4881248707",
+      "comment_version_key": "4881248707:2026-07-04T09:00:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99884#issuecomment-4881248707",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99884,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-04T08:11:23Z",
+      "comment_updated_at": "2026-07-04T09:00:16Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] A narrow repair remains in the touched helper and test: capped text-only fallback must not invoke text() before the cap can be enforced.; Needs attention: the availability hardening still permits full text allocation before enforcing maxBytes.; Review finding: [P1] Avoid text() when enforcing a byte cap — src/agents/tools/web-shared.ts:315 (sha=8d5b5df6b91a0c07b66131943801cabe57af8dd4)",
+      "review_summary": "The PR changes `readResponseText()`'s text-only fallback to post-read UTF-8 byte truncation and adds a multi-byte regression test.\n\nPR surface: Source +5, Tests +41. Total +46 across 2 files.\n\nReproducibility: yes. Source inspection at the PR head shows `readResponseText()` still awaits `res.text()` before checking `maxBytes`, so a text-only foreign response can reproduce the remaining full-allocation path.",
+      "review_followup": "- [P2] A narrow repair remains in the touched helper and test: capped text-only fallback must not invoke `text()` before the cap can be enforced.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "8d5b5df6b91a0c07b66131943801cabe57af8dd4",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(web-shared): bound response.text() fallback to honor maxBytes",
+        "body": "## What Problem This Solves\n\nIn `src/agents/tools/web-shared.ts`, `readResponseText()` has three read paths:\n1. **Bounded stream read** — uses `getReader()` with `maxBytes` byte cap ✅\n2. **arrayBuffer()** — reads bytes, inherently bounded ✅  \n3. **`.text()` fallback** — reads the full body, uses character-count not byte-count ❌\n\nWhen a foreign Response lacks both a body stream and `arrayBuffer()`, the `.text()` fallback at line 315-316 used `text.length` (character count) instead of `TextEncoder().encode(text).byteLength` (byte count) to check against `maxBytes`. This means:\n- ASCII strings: coincidentally correct (1 char = 1 byte)\n- Multi-byte UTF-8 (emoji, CJK): silently under-counts bytes, returning more data than `maxBytes` allows\n\n**Code evidence**: `src/agents/tools/web-shared.ts:315-316` compared `text.length > maxBytes` and truncated with `text.slice(0, maxBytes)` — both character-level operations on a byte-level limit.\n\n## Root Cause\n\nThe `.text()` fallback path used JavaScript string operations (character/UTF-16 code unit level) instead of byte-level operations. The `maxBytes` parameter was designed for byte-level limits (as used by the bounded-stream path at lines 240-298), but the fallback treated it as a character limit.\n\n## Why This Fix\n\nUse `TextEncoder`/`TextDecoder` for byte-accurate comparison and truncation:\n- `new TextEncoder().encode(text).byteLength` → byte count for comparison\n- `new TextDecoder().decode(bytes.slice(0, maxBytes))` → byte-safe truncation\n- `bytesRead` now reports actual byte count, not character count\n\n## User Impact\n\n- `readResponseText` now correctly respects `maxBytes` at byte level for all response types\n- Multi-byte UTF-8 content (emoji, CJK) is safely truncated without data corruption\n- Existing callers (web-fetch, web-search) get correct byte-level enforcement\n\n## Changes\n\n- `src/agents/tools/web-shared.ts`: +3/-2 lines — byte-level truncation via TextEncoder/TextDecoder\n- `src/agents/tools/web-shared.test.ts`: +19/-9 lines — test with multi-byte UTF-8 (CJK + emoji) at clean byte boundary\n\n## Evidence\n\n**Before**: `.text()` fallback uses character-count check — silently lets multi-byte content exceed `maxBytes`\n**After**: byte-level check via `TextEncoder` — correct truncation at exact `maxBytes` byte boundary\n\n## Real Behavior Proof\n\n### Before (on upstream/main)\n\n```bash\n$ node --import tsx -e \"\nconst { readResponseText } = await import('./src/agents/tools/web-shared.js');\nconst text = 'x'.repeat(50) + '中文🔥' + 'y'.repeat(50);\nconst r = await readResponseText(\n  { body: null, headers: new Headers(), async text() { return text; } },\n  { maxBytes: 53 }\n);\nconsole.log('bytesRead:', r.bytesRead, '(expected 53)');\nconsole.log('byteLength:', new TextEncoder().encode(r.text).byteLength, '(actual bytes)');\n\"\nbytesRead: 53 (expected 53)\nbyteLength: 53 (actual bytes)\nFAIL: character-count check, not byte-count — coincidentally correct for this input\n```\n\nThe old code passes `text.length > maxBytes` with ASCII but fails to distinguish bytes from characters. With multi-byte content, `text.length` (characters) ≠ byte length.\n\n### After (with fix)\n\n```bash\n$ node --import tsx -e \"\nconst { readResponseText } = await import('./src/agents/tools/web-shared.js');\nconst text = 'x'.repeat(50) + '中文🔥' + 'y'.repeat(50);\nconst bytes = new TextEncoder().encode(text);\nconst CAP = 53;\nconst r = await readResponseText(\n  { body: null, headers: new Headers(), async text() { return text; } },\n  { maxBytes: CAP }\n);\nconsole.log('truncated:', r.truncated, '(expected true)');\nconsole.log('bytesRead:', r.bytesRead, '(expected', CAP, ')');\nconsole.log('byteLength:', new TextEncoder().encode(r.text).byteLength, '(expected', CAP, ')');\nconst expected = new TextDecoder().decode(bytes.slice(0, CAP));\nconsole.log('text === expected:', r.text === expected);\n\"\ntruncated: true (expected true)\nbytesRead: 53 (expected 53)\nbyteLength: 53 (expected 53)\ntext === expected: true\nPASS: byte-level truncation correct\n```\n\n### Verification environment\n\n| Item | Value |\n|------|-------|\n| Node.js | v22.22.0 |\n| Vitest | v4.1.8 |\n| OS | Linux 4.19.112 x86_64 |\n\n## Tests and Validation\n\n- `oxlint`: PASS (0 errors)\n- `vitest web-shared.test.ts`: 9/9 passed (including UTF-8 byte-boundary test)\n- `oxfmt --check`: PASS (correct format)\n",
+        "branch": "fix/mcp-http-fetch-bounded-text",
+        "head_sha": "8d5b5df6b91a0c07b66131943801cabe57af8dd4",
+        "author": "zenglingbiao",
+        "labels": [
+          "agents",
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/tools/web-shared.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/web-shared.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 47,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99884",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99884.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 98,
+          "gatingTotal": 93,
+          "counts": {
+            "SUCCESS": 64,
+            "SKIPPED": 31,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:99884:4881366427:2026-07-04T08:54:03Z:re_review",
+      "comment_id": "4881366427",
+      "comment_version_key": "4881366427:2026-07-04T08:54:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99884#issuecomment-4881366427",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99884,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-04T08:54:03Z",
+      "comment_updated_at": "2026-07-04T08:54:03Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(web-shared): bound response.text() fallback to honor maxBytes",
+        "body": "## What Problem This Solves\n\nIn `src/agents/tools/web-shared.ts`, `readResponseText()` has three read paths:\n1. **Bounded stream read** — uses `getReader()` with `maxBytes` byte cap ✅\n2. **arrayBuffer()** — reads bytes, inherently bounded ✅  \n3. **`.text()` fallback** — reads the full body, uses character-count not byte-count ❌\n\nWhen a foreign Response lacks both a body stream and `arrayBuffer()`, the `.text()` fallback at line 315-316 used `text.length` (character count) instead of `TextEncoder().encode(text).byteLength` (byte count) to check against `maxBytes`. This means:\n- ASCII strings: coincidentally correct (1 char = 1 byte)\n- Multi-byte UTF-8 (emoji, CJK): silently under-counts bytes, returning more data than `maxBytes` allows\n\n**Code evidence**: `src/agents/tools/web-shared.ts:315-316` compared `text.length > maxBytes` and truncated with `text.slice(0, maxBytes)` — both character-level operations on a byte-level limit.\n\n## Root Cause\n\nThe `.text()` fallback path used JavaScript string operations (character/UTF-16 code unit level) instead of byte-level operations. The `maxBytes` parameter was designed for byte-level limits (as used by the bounded-stream path at lines 240-298), but the fallback treated it as a character limit.\n\n## Why This Fix\n\nUse `TextEncoder`/`TextDecoder` for byte-accurate comparison and truncation:\n- `new TextEncoder().encode(text).byteLength` → byte count for comparison\n- `new TextDecoder().decode(bytes.slice(0, maxBytes))` → byte-safe truncation\n- `bytesRead` now reports actual byte count, not character count\n\n## User Impact\n\n- `readResponseText` now correctly respects `maxBytes` at byte level for all response types\n- Multi-byte UTF-8 content (emoji, CJK) is safely truncated without data corruption\n- Existing callers (web-fetch, web-search) get correct byte-level enforcement\n\n## Changes\n\n- `src/agents/tools/web-shared.ts`: +3/-2 lines — byte-level truncation via TextEncoder/TextDecoder\n- `src/agents/tools/web-shared.test.ts`: +19/-9 lines — test with multi-byte UTF-8 (CJK + emoji) at clean byte boundary\n\n## Evidence\n\n**Before**: `.text()` fallback uses character-count check — silently lets multi-byte content exceed `maxBytes`\n**After**: byte-level check via `TextEncoder` — correct truncation at exact `maxBytes` byte boundary\n\n## Real Behavior Proof\n\n### Before (on upstream/main)\n\n```bash\n$ node --import tsx -e \"\nconst { readResponseText } = await import('./src/agents/tools/web-shared.js');\nconst text = 'x'.repeat(50) + '中文🔥' + 'y'.repeat(50);\nconst r = await readResponseText(\n  { body: null, headers: new Headers(), async text() { return text; } },\n  { maxBytes: 53 }\n);\nconsole.log('bytesRead:', r.bytesRead, '(expected 53)');\nconsole.log('byteLength:', new TextEncoder().encode(r.text).byteLength, '(actual bytes)');\n\"\nbytesRead: 53 (expected 53)\nbyteLength: 53 (actual bytes)\nFAIL: character-count check, not byte-count — coincidentally correct for this input\n```\n\nThe old code passes `text.length > maxBytes` with ASCII but fails to distinguish bytes from characters. With multi-byte content, `text.length` (characters) ≠ byte length.\n\n### After (with fix)\n\n```bash\n$ node --import tsx -e \"\nconst { readResponseText } = await import('./src/agents/tools/web-shared.js');\nconst text = 'x'.repeat(50) + '中文🔥' + 'y'.repeat(50);\nconst bytes = new TextEncoder().encode(text);\nconst CAP = 53;\nconst r = await readResponseText(\n  { body: null, headers: new Headers(), async text() { return text; } },\n  { maxBytes: CAP }\n);\nconsole.log('truncated:', r.truncated, '(expected true)');\nconsole.log('bytesRead:', r.bytesRead, '(expected', CAP, ')');\nconsole.log('byteLength:', new TextEncoder().encode(r.text).byteLength, '(expected', CAP, ')');\nconst expected = new TextDecoder().decode(bytes.slice(0, CAP));\nconsole.log('text === expected:', r.text === expected);\n\"\ntruncated: true (expected true)\nbytesRead: 53 (expected 53)\nbyteLength: 53 (expected 53)\ntext === expected: true\nPASS: byte-level truncation correct\n```\n\n### Verification environment\n\n| Item | Value |\n|------|-------|\n| Node.js | v22.22.0 |\n| Vitest | v4.1.8 |\n| OS | Linux 4.19.112 x86_64 |\n\n## Tests and Validation\n\n- `oxlint`: PASS (0 errors)\n- `vitest web-shared.test.ts`: 9/9 passed (including UTF-8 byte-boundary test)\n- `oxfmt --check`: PASS (correct format)\n",
+        "branch": "fix/mcp-http-fetch-bounded-text",
+        "head_sha": "8d5b5df6b91a0c07b66131943801cabe57af8dd4",
+        "author": "zenglingbiao",
+        "labels": [
+          "agents",
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/tools/web-shared.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/web-shared.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 47,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99884",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99884.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 98,
+          "gatingTotal": 93,
+          "counts": {
+            "SUCCESS": 64,
+            "SKIPPED": 31,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:99884:4881289988:2026-07-04T08:26:14Z:re_review",
+      "comment_id": "4881289988",
+      "comment_version_key": "4881289988:2026-07-04T08:26:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99884#issuecomment-4881289988",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99884,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-04T08:26:14Z",
+      "comment_updated_at": "2026-07-04T08:26:14Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 448,
+    "total_ms": 2361,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 234
+        "ms": 301
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1646
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +312,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 201
+        "ms": 384
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
