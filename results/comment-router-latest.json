@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T08:12:15.377Z",
+  "generated_at": "2026-07-04T08:13:32.783Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T05:12:13.880Z",
+  "since": "2026-07-04T05:13:32.142Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4881247876
   ],
-  "status_comment_id": 4881247976,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4881247876:2026-07-04T08:11:05Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/99610#issuecomment-4881247876",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 99610,
       "author": "LeonidasLux",
       "author_id": 294038793,
       "author_association": "NONE",
       "comment_created_at": "2026-07-04T08:11:05Z",
       "comment_updated_at": "2026-07-04T08:11:05Z",
-      "status_comment_id": 4881247976,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,98 +68,26 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-07-04T08:12:15.987Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 99610
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-04T08:12:16.864Z",
-          "response_comment_id": "4881247976",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(watch-node): defer restart when dist/entry.js is missing mid-rebuild",
-        "body": "## Summary\n\n**Problem**: When a git pull triggers source file changes while `dist/` is mid-rebuild, the hot-reload watcher (`watch-node.mjs`) kills the current healthy gateway process and restarts into a missing `dist/entry.js`, causing an 8x crash-loop that exhausts systemd's restart limit.\n\n**Solution**: Check build readiness before restarting. The new `isBuildReadyForRestart(cwd, fs)` function verifies that both `dist/entry.js` exists AND the build stamp's git HEAD matches the current checkout HEAD. If either check fails (missing entry, mismatched HEAD, missing stamp, or stamp without HEAD), the restart is deferred and polled every 2s until the build is verified fresh. An additional guard in the child-process exit handler prevents crash-looping when the watcher would otherwise restart into a stale build after a child exit.\n\n**What changed**: Two files — `scripts/watch-node.mjs` and `test/scripts/watch-node.test.ts`.\n\n**What did NOT change**: Build logic (`tsdown-build.mjs`), source watch paths, the `dist/` IGNORE segment, or `run-node.mjs`.\n\nFixes #99603\n\n## What Problem This Solves\n\nProduction gateway deployments using a git checkout with hot-reload (via systemd) are vulnerable to a crash-loop when a `git pull` triggers a rebuild while `dist/` is mid-build. The watcher kills the currently-healthy gateway and restarts into a missing entrypoint. This caused a 37-minute production outage on 2026-07-03.\n\n## Root Cause\n\n`watch-node.mjs:requestRestart()` unconditionally sends SIGTERM to the healthy gateway child process whenever chokidar detects a relevant source file change (e.g. from `git pull`). During a rebuild, `tsdown-build.mjs` calls `cleanTsdownOutputRoots()` which removes `dist/entry.js`. The new child then crashes because the entrypoint doesn't exist, and `shouldRestartAfterChildExit()` treats SIGTERM/exit code 143 as restartable — forming a crash-loop.\n\n**Additionally**: Even when an old `dist/entry.js` exists, the current git HEAD may have changed (after `git pull`), meaning `run-node` will rebuild and clean `dist` after the stop. The old entrypoint check alone is insufficient to prevent the crash-loop.\n\n## Changes\n\n`scripts/watch-node.mjs` (+86 / -37 lines):\n\n### Layer 1 — `isBuildReadyForRestart(cwd, fs, resolveHead)`\n\nReplaces the previous `isDistEntryFresh()` mtime check with a comprehensive build-readiness check:\n- Verifies `dist/entry.js` exists (basic guard for mid-rebuild window)\n- Reads the `.buildstamp` file from `dist/` and compares its recorded `head` against the current checkout HEAD via `resolveGitHead()`\n- If HEADs differ, or if the stamp lacks a `head` but the current HEAD is known, the build is stale — restart is deferred\n- Falls back gracefully (entry-only check) when git or stamp file is unavailable\n\n### Layer 2 — Deferred polling (existing, retained)\n\nWhen build is not ready, polls every 2s instead of dropping the restart request. When the build completes (entry.js + matching stamp appear), auto-triggers the restart.\n\n### Layer 3 — Exit handler guard\n\nOn child-process exit (SIGTERM/143), verifies build readiness before restarting. Prevents self-reinforcing crash-loop when the child exits during a rebuild window.\n\n## Real behavior proof\n\n**Behavior addressed**: The hot-reload watcher no longer kills the current healthy gateway child process when the build output is missing or stale for the current checkout.\n\n**Real environment tested**: Linux x64, Node v22 — L2 evidence via direct function call with real `fs` module and real `resolveGitHead()` against the worktree git checkout.\n\n**Exact steps or command run after this patch**:\n\n```terminal\nnode evidence-collection.mjs\n```\n\n**After-fix evidence**:\n\n```terminal\n======================================================================\nL2 Evidence: isBuildReadyForRestart with real fs/git\n======================================================================\n\n1. Current git HEAD: 0aeb43d2cc69...\n\n--- Scenario A: Missing dist/entry.js ---\n   isBuildReadyForRestart(cwd, fs) = false (expected: false)\n\n--- Scenario B: entry.js + matching build stamp ---\n   Created: dist/.buildstamp with head: 0aeb43d2cc69...\n   isBuildReadyForRestart(cwd, fs) = true (expected: true)\n\n--- Scenario C: entry.js + MISMATCHED build stamp ---\n   Updated: dist/.buildstamp with head: 00000000... (mismatched)\n   isBuildReadyForRestart(cwd, fs) = false (expected: false)\n\n--- Scenario D: entry.js exists, NO build stamp ---\n   Removed: dist/.buildstamp\n   isBuildReadyForRestart(cwd, fs) = false (expected: false)\n======================================================================\n```\n\n**Observed result after the fix**: `isBuildReadyForRestart` returns `true` only when entry.js exists AND the build stamp HEAD matches the current checkout HEAD. Scenario C directly demonstrates the fix for the review finding: even when an old `dist/entry.js` exists (simulating a `git pull` that changed the checkout), a mismatched git HEAD causes the restart to be deferred, preventing the crash-loop. 17/17 unit tests pass covering all code paths.\n\n**What was not tested**: Real Gateway integration with live systemd restart race (requires controlled git-pull-triggered rebuild environment). The pure-function and exit-handler tests provide L2 coverage for all code paths.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk — change is constrained to `isBuildReadyForRestart()` guard logic in `requestRestart()` and the exit handler; no impact on build, runtime, or non-watch paths\n- [x] All behaviors are additive (check before kill); when build stamp matches, behavior is identical to current code\n- [x] 17 tests added/updated covering all code paths including stamp matching, stamp-without-head edge case, deferred restart, exit handler guard, and shutdown races\n- [x] No config, API, or dependency changes\n- [x] Does not affect production (non-watch) gateway usage\n\n## Review\n\n- Manually reviewed and verified\n- AI-assisted: Yes",
-        "branch": "fix/issue-99603-hot-reload-crash-loop-guard",
-        "head_sha": "cc6af7c524d06cd6a2b3b90d43cfcc6629b20a93",
-        "author": "leonidaslux",
-        "labels": [
-          "scripts",
-          "size: L",
-          "P1"
-        ],
-        "files": [
-          {
-            "path": "scripts/watch-node.mjs",
-            "additions": 190,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/watch-node.test.ts",
-            "additions": 387,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 577,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99610",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99610.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 11,
-          "gatingTotal": 6,
-          "counts": {
-            "SUCCESS": 8,
-            "SKIPPED": 3
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3438,
+    "total_ms": 2476,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 454
+        "ms": 626
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1031
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -171,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1931
+        "ms": 1835
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
