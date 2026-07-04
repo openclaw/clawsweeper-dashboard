@@ -1,16 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T19:09:30.282Z",
+  "generated_at": "2026-07-04T19:10:18.230Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T16:09:28.409Z",
+  "since": "2026-07-04T16:10:17.137Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    99960
+    100029
   ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -30,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99960:4882058587:2026-07-04T19:09:21Z:clawsweeper_needs_human",
-      "comment_id": "4882058587",
-      "comment_version_key": "4882058587:2026-07-04T19:09:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99960#issuecomment-4882058587",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100029:4883187568:2026-07-04T19:10:13Z:clawsweeper_needs_human",
+      "comment_id": "4883187568",
+      "comment_version_key": "4883187568:2026-07-04T19:10:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100029#issuecomment-4883187568",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99960,
+      "issue_number": 100029,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T12:50:13Z",
-      "comment_updated_at": "2026-07-04T19:09:21Z",
+      "comment_created_at": "2026-07-04T17:13:54Z",
+      "comment_updated_at": "2026-07-04T19:10:13Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- No ClawSweeper repair job is needed; the remaining action is ordinary maintainer merge review and required CI on the latest head.; Cleared: Cleared: the diff touches cron service runtime code and colocated tests only, with no workflow, dependency, package, permission, secret, or downloaded-code changes. (sha=503e7e4b26f63c19d2efe412028275775921cab0)",
-      "review_summary": "Adds rollback snapshots around cron add, update, and remove persistence, defers rollback-sensitive auto-disable notifications until after successful saves, and adds cron service regression tests.\n\nPR surface: Source +74, Tests +163. Total +237 across 3 files.\n\nReproducibility: yes. Source inspection on current main shows cron add, update, and remove mutate in-memory state before awaiting the durable save, and the PR body includes a real SQLite read-only before/after transcript.",
-      "review_followup": "- No ClawSweeper repair job is needed; the remaining action is ordinary maintainer merge review and required CI on the latest head.",
+      "repair_reason": "- [P2] This protected, merge-conflicted, cross-surface onboarding/security PR needs author fixes plus maintainer review of the ring-zero MCP trust model and related-PR overlap.; Needs attention: The diff still has concrete security-sensitive defects in setup secret handling and approved plugin-install spec validation.; Review finding: [P1] Do not echo sensitive wizard replies — apps/macos/Sources/OpenClaw/Onboarding... (sha=84791554bc3cbba4a862d0f32581eaacf703341e)",
+      "review_summary": "The branch adds a Crestodian ring-zero MCP tool path for CLI harnesses, carries the broader conversational onboarding changes from #99935, and updates macOS onboarding, gateway handlers, setup flow, docs, and tests.\n\nReproducibility: yes. for the PR defects: they are source-reproducible at current head by tracing the macOS chat host, Crestodian operation parser/executor, channel setup hook path, CLI inference detection, setup flag dispatch, and tool schema mapping.",
+      "review_followup": "- [P2] This protected, merge-conflicted, cross-surface onboarding/security PR needs author fixes plus maintainer review of the ring-zero MCP trust model and related-PR overlap.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "503e7e4b26f63c19d2efe412028275775921cab0",
+      "expected_head_sha": "84791554bc3cbba4a862d0f32581eaacf703341e",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -69,71 +70,541 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): roll back live scheduler state when persisting add/update/remove fails",
-        "body": "## What Problem This Solves\n\nFixes an issue where a cron job mutation that fails to persist still changes the live scheduler, so what the user was told no longer matches what the gateway does or what survives a restart.\n\n`cron add`, `cron update`, and `cron remove` mutate the in-memory cron store first and persist to SQLite afterwards. When the persist fails (e.g. disk full or a failed write transaction), the caller correctly receives an error — but the in-memory mutation stays behind in the running gateway:\n\n- **add**: a job the user was told failed to save stays live, can be armed and executed, and is even written to disk by the next unrelated successful persist. If the gateway restarts first, it silently vanishes instead.\n- **update**: the live scheduler runs the new version the user was told did not apply, and a restart silently reverts it to the old version.\n- **remove**: the job disappears from the live scheduler but resurrects from SQLite on the next restart.\n\nBoth user surfaces converge on the same code path — the CLI issues the `cron.add`/`cron.update`/`cron.remove` gateway RPCs (`src/cli/cron-cli.ts`), whose handlers call `CronService.add/update/remove` (`src/cron/service.ts`), which delegate to the ops in this diff. The in-memory store is trusted indefinitely once loaded (`ensureLoaded` fast path), so none of this self-heals while the process lives.\n\n## Why This Change Was Made\n\nThe narrowest fix that restores the invariant \"if the caller was told the mutation failed, the runtime behaves as if it never happened\": snapshot the mutable state before the mutation and restore it when the persist throws, then rethrow the original error unchanged.\n\nThe snapshot covers the whole store plus the catch-up deferral marker set, not just the touched job, because `recomputeNextRunsForMaintenance` runs inside these operations and mutates `nextRunAtMs`/deferral state across *all* jobs — restoring only the touched job would leave sibling scheduler state ahead of disk. This matches the persist-before-mutate durability convention already documented in the task registry (`src/tasks/task-registry.ts`), which the cron service predates.\n\nNon-goal: `persist()` has a sibling seam where a failed quarantine flush silently skips the save (`src/cron/service/store.ts`); fixing it changes error propagation for read-path callers that intentionally degrade and continue, so it is left to a separately scoped follow-up. Run-state bookkeeping persists (`prepareManualRun`, `finishPreparedManualRun`) are also untouched — the run already happened, so rollback semantics differ.\n\n## User Impact\n\nOperators get truthful outcomes from cron CRUD under storage failure: a failed `cron add`/`update`/`remove` now restores the cron store and catch-up deferral markers touched by these operations, matching both the error the user saw and the state the next restart loads. No phantom runs of jobs that \"failed to save\", no silent reverts of edits, no deleted jobs resurrecting after a restart. Error reporting and the success paths are unchanged.\n\n## Evidence\n\n### Real behavior proof (before/after, real `CronService` + real shared SQLite state DB)\n\nA three-phase driver script runs the real `CronService` facade against the real shared SQLite state DB (`OPENCLAW_STATE_DIR` pointed at a scratch dir; separate OS processes per phase; no JS mocks or module patching). The durable-write failure is a genuine `SQLITE_READONLY` error raised inside `saveCronJobsStore`'s real write transaction, by switching the live production connection to read-only state (`PRAGMA query_only=1` on the same cached handle the cron service persists through) between a successful seed and the mutations.\n\n**Before (PR base, upstream/main):** every failed mutation leaves the live scheduler lying, and a restart flips all three back:\n\n```\nseed: added job \"daily-report\"\n  live store after seed: 1 job(s): daily-report\n\nSQLite state DB is now read-only (PRAGMA query_only=1 on the live connection)\n\n--- cron add (durable write fails) ---\n  add FAILED (real SQLite error): attempt to write a readonly database\n  live store after failed add: 2 job(s): daily-report, phantom-job      <- phantom job live\n--- cron update: rename daily-report -> renamed-report (durable write fails) ---\n  update FAILED (real SQLite error): attempt to write a readonly database\n  live store after failed update: 2 job(s): renamed-report, phantom-job <- rejected rename live\n--- cron remove daily-report (durable write fails) ---\n  remove FAILED (real SQLite error): attempt to write a readonly database\n  live store after failed remove: 1 job(s): phantom-job                 <- real job gone from live\n\nfresh process (simulated gateway restart), SQLite writable again:\n  store loaded from SQLite: 1 job(s): daily-report                      <- restart contradicts everything above\n```\n\n**After (this PR, same script, same failure):** the live store stays consistent with the reported errors, and restart agrees:\n\n```\nSQLite state DB is now read-only (PRAGMA query_only=1 on the live connection)\n\n--- cron add (durable write fails) ---\n  add FAILED (real SQLite error): attempt to write a readonly database\n  live store after failed add: 1 job(s): daily-report\n--- cron update: rename daily-report -> renamed-report (durable write fails) ---\n  update FAILED (real SQLite error): attempt to write a readonly database\n  live store after failed update: 1 job(s): daily-report\n--- cron remove daily-report (durable write fails) ---\n  remove FAILED (real SQLite error): attempt to write a readonly database\n  live store after failed remove: 1 job(s): daily-report\n\nfresh process (simulated gateway restart), SQLite writable again:\n  store loaded from SQLite: 1 job(s): daily-report\n```\n\nTranscripts are from a Linux host, redacted only by using scratch paths. The driver script:\n\n<details>\n<summary>cron-proof.mts (run from a checkout root: <code>OPENCLAW_STATE_DIR=&lt;scratch&gt; node --import tsx cron-proof.mts seed|mutate|inspect</code>)</summary>\n\n```ts\nimport fs from \"node:fs\";\nimport path from \"node:path\";\nimport { CronService } from \"./src/cron/service.js\";\nimport { openOpenClawStateDatabase } from \"./src/state/openclaw-state-db.js\";\n\nconst stateDir = process.env.OPENCLAW_STATE_DIR!;\nconst phase = process.argv[2];\nconst storePath = path.join(stateDir, \"cron\", \"jobs.json\");\n\nconst log = {\n  debug: () => {},\n  info: () => {},\n  warn: (_o: unknown, m?: string) => console.log(`  [warn] ${m ?? \"\"}`),\n  error: (_o: unknown, m?: string) => console.log(`  [error] ${m ?? \"\"}`),\n};\n\nfunction makeService() {\n  return new CronService({\n    log,\n    storePath,\n    cronEnabled: false, // scheduler timers off; CRUD + persistence paths only\n    enqueueSystemEvent: () => {},\n    requestHeartbeat: () => {},\n    runIsolatedAgentJob: async () => ({ status: \"ok\" as const }),\n  });\n}\n\nfunction jobInput(name: string) {\n  return {\n    name,\n    enabled: true,\n    schedule: { kind: \"cron\", expr: \"0 0 * * *\" } as const,\n    sessionTarget: \"isolated\" as const,\n    wakeMode: \"next-heartbeat\" as const,\n    payload: { kind: \"agentTurn\", message: `run ${name}` } as const,\n  };\n}\n\nasync function show(svc: CronService, label: string) {\n  const jobs = await svc.list({ includeDisabled: true });\n  console.log(`  ${label}: ${jobs.length} job(s): ${jobs.map((j) => `${j.name}`).join(\", \") || \"(none)\"}`);\n  return jobs;\n}\n\nconst svc = makeService();\n\nif (phase === \"seed\") {\n  const job = await svc.add(jobInput(\"daily-report\"));\n  console.log(`seed: added job \"daily-report\" id=${job.id}`);\n  await show(svc, \"live store after seed\");\n  fs.writeFileSync(path.join(stateDir, \"job-id.txt\"), job.id);\n} else if (phase === \"mutate\") {\n  const jobId = fs.readFileSync(path.join(stateDir, \"job-id.txt\"), \"utf-8\").trim();\n  await show(svc, \"live store loaded from SQLite at process start\");\n\n  // Put the shared production SQLite connection (the same cached handle the\n  // cron service persists through) into a read-only state. Every durable\n  // write below fails with a genuine SQLITE_READONLY error raised inside\n  // saveCronJobsStore's real write transaction — no JS mocking involved.\n  const { db } = openOpenClawStateDatabase();\n  db.exec(\"PRAGMA query_only = 1\");\n  console.log(\"\\nSQLite state DB is now read-only (PRAGMA query_only=1 on the live connection)\");\n\n  console.log(\"\\n--- cron add (durable write fails) ---\");\n  try {\n    await svc.add(jobInput(\"phantom-job\"));\n    console.log(\"  add unexpectedly succeeded\");\n  } catch (err) {\n    console.log(`  add FAILED (real SQLite error): ${(err as Error).message}`);\n  }\n  await show(svc, \"live store after failed add\");\n\n  console.log(\"\\n--- cron update: rename daily-report -> renamed-report (durable write fails) ---\");\n  try {\n    await svc.update(jobId, { name: \"renamed-report\" });\n    console.log(\"  update unexpectedly succeeded\");\n  } catch (err) {\n    console.log(`  update FAILED (real SQLite error): ${(err as Error).message}`);\n  }\n  await show(svc, \"live store after failed update\");\n\n  console.log(\"\\n--- cron remove daily-report (durable write fails) ---\");\n  try {\n    await svc.remove(jobId);\n    console.log(\"  remove unexpectedly succeeded\");\n  } catch (err) {\n    console.log(`  remove FAILED (real SQLite error): ${(err as Error).message}`);\n  }\n  await show(svc, \"live store after failed remove\");\n\n  db.exec(\"PRAGMA query_only = 0\");\n} else if (phase === \"inspect\") {\n  console.log(\"fresh process (simulated gateway restart), SQLite writable again:\");\n  await show(svc, \"store loaded from SQLite\");\n} else {\n  throw new Error(`unknown phase: ${phase}`);\n}\n```\n\n</details>\n\n### Failing-first tests\n\n`src/cron/service/ops.test.ts` (`cron service ops persist rollback` describe, persist failure injected via `saveCronJobsStore` rejection): before the fix all five fail with the exact lying behaviors above — notably the recovery case shows the phantom job from a *failed* add being written to disk by the next successful persist:\n\n```\nFAIL > recovers after a failed persist so the next mutation succeeds\n- Expected  + Received\n  [\n+   \"f97b06c3-...\",   <- job whose add reported \"disk full\" to the caller\n    \"9868ddb1-...\",\n  ]\n```\n\nAfter the fix:\n\n```\n✓ rolls back an added job from the live store when persist fails\n✓ keeps the pre-update job in the live store when persist fails\n✓ keeps a removed job in the live store when persist fails\n✓ keeps a job's catch-up deferral marker when a remove persist fails\n✓ recovers after a failed persist so the next mutation succeeds\n\nTest Files  1 passed (1) — src/cron/service/ops.test.ts, 24 tests\n```\n\nFull cron suite (local, `node scripts/run-vitest.mjs src/cron/`, ~34s): 117 test files / 1237 tests pass. Production diff is confined to `src/cron/service/ops.ts` (snapshot + restore helpers, three call sites); no change to success-path behavior, event ordering, error types, or `--json` shapes.\n",
-        "branch": "feat/cron-store-persist-rollback",
-        "head_sha": "503e7e4b26f63c19d2efe412028275775921cab0",
-        "author": "masatohoshino",
+        "title": "feat(crestodian): run CLI harnesses on the agent loop via a ring-zero MCP server",
+        "body": "Related: #99935\n\n## What Problem This Solves\n\nCrestodian's conversational onboarding runs the real embedded agent loop with a single ring-zero `crestodian` tool, but CLI harnesses (Claude Code, Gemini CLI) reject OpenClaw's restricted `toolsAllow` and fail closed. On machines whose only usable model is a local CLI (the most common fresh-machine case: Claude Code installed, no API keys), Crestodian silently degraded to the bounded single-turn planner: no tool calls, no multi-turn memory, no in-loop config repair.\n\n## Why This Change Was Made\n\nCLI harnesses cannot enforce an OpenClaw tool allow-list, but they can be handed a restricted MCP surface. The `openclaw-tools-serve` stdio MCP entry now serves the ring-zero `crestodian` tool on request (`OPENCLAW_TOOLS_MCP_TOOLS=crestodian`), and Crestodian CLI runs inject it as the run's exclusive MCP config: no loopback server, no plugin or user MCP servers, applied with `--strict-mcp-config` for Claude Code. The server keeps the `openclaw` name so existing per-backend tool pre-approvals apply unchanged. The gate is a typed `crestodianTool` run parameter set only by the Crestodian agent runner, so normal agent runs can never see the tool. Native CLI tools remain under the harness's own permission policy; the trust model is documented in `docs/cli/crestodian.md`. Embedded runtimes and the Codex app-server harness keep the hard `toolsAllow` enforcement.\n\nThis PR includes the five commits from #99935 (`claude/wizardly-ishizaka-7410c7`) rebased onto current `main`; identical patches drop automatically if that PR lands first.\n\n## User Impact\n\nCrestodian conversations on Claude Code or Gemini CLI models (configured or auto-detected) now run the full agent loop: real tool calls with approval-gated, audited config mutations, post-write validation fed back into the loop, and genuine multi-turn memory with native CLI session resume. The single-turn planner remains as fallback when no loop-capable backend works, and deterministic typed commands still work with no model at all.\n\n## Evidence\n\n- Live Codex leg (real inference, full loop): drove `CrestodianChatEngine` with the Codex app-server fallback on this machine. The loop invoked the ring-zero tool (`start:crestodian` / `result:crestodian` agent events), replied with grounded status facts (\"gateway `ws://127.0.0.1:18789` unreachable\"), and the second turn answered a memory question from the persistent session in 3.3s.\n- Live Claude leg (wiring): real Claude Code 2.1.198 spawned by the CLI runner loaded the generated exclusive MCP config (`--strict-mcp-config`, init event lists the `openclaw` server; argv captured in run logs). Model inference itself was blocked on this host because the standalone `claude` CLI is logged out - the already-shipped planner path fails identically there, confirming an environment issue rather than a regression.\n- MCP protocol probe against the built `dist/mcp/openclaw-tools-serve.js` (the exact transport CLI harnesses use): `tools/list` returns exactly `[\"crestodian\"]`, `crestodian(status)` executes and returns real status output, and an unapproved `gateway_restart` is refused with `needs-approval`, proving the approval gate holds over MCP.\n- Focused suites: `chat-engine` (16), `prepare` (61, includes a new ring-zero test proving no loopback + crestodian-only MCP config), `bundle-mcp` (17), `openclaw-tools-serve` (7), plus crestodian tool/assistant/operations suites - all green after rebase onto `main`.\n- `pnpm tsgo`, `pnpm check:test-types`, oxlint, `pnpm check:import-cycles`, and `pnpm build` (no ineffective-dynamic-import findings) all pass; Codex autoreview (`gpt-5.5`) exited clean with no actionable findings.\n- The crestodian Docker planner lane is unaffected: one-shot `--message` mode never enters the chat engine, so the new loop cannot intercept its planner flow.\n",
+        "branch": "claude/zealous-colden-0558cc",
+        "head_sha": "84791554bc3cbba4a862d0f32581eaacf703341e",
+        "author": "steipete",
         "labels": [
-          "size: M",
+          "docs",
+          "app: macos",
+          "app: web-ui",
+          "gateway",
+          "cli",
+          "commands",
+          "agents",
+          "maintainer",
+          "size: XL",
+          "extensions: codex",
           "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
+          "P0",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/cron/service/jobs.ts",
-            "additions": 46,
-            "deletions": 18,
+            "path": "apps/.i18n/native-source.json",
+            "additions": 119,
+            "deletions": 191,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service/ops.test.ts",
-            "additions": 165,
+            "path": "apps/macos/Sources/OpenClaw/Constants.swift",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
+            "additions": 6,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/OnboardingCrestodianChat.swift",
+            "additions": 198,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/OnboardingView+Actions.swift",
+            "additions": 0,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/OnboardingView+Chat.swift",
+            "additions": 3,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service/ops.ts",
-            "additions": 52,
+            "path": "apps/macos/Sources/OpenClaw/OnboardingView+CrestodianSetup.swift",
+            "additions": 45,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/OnboardingView+Layout.swift",
+            "additions": 2,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/OnboardingView+Monitoring.swift",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
+            "additions": 20,
+            "deletions": 25,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/OnboardingView+Testing.swift",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/OnboardingView+Wizard.swift",
+            "additions": 0,
+            "deletions": 109,
+            "changeType": "DELETED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/OnboardingWizard.swift",
+            "additions": 0,
+            "deletions": 418,
+            "changeType": "DELETED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/PermissionsSettings.swift",
+            "additions": 34,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Tests/OpenClawIPCTests/OnboardingViewSmokeTests.swift",
+            "additions": 13,
             "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Tests/OpenClawIPCTests/OnboardingWizardStepViewTests.swift",
+            "additions": 0,
+            "deletions": 46,
+            "changeType": "DELETED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/crestodian.md",
+            "additions": 92,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/onboard.md",
+            "additions": 22,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/start/onboarding-overview.md",
+            "additions": 28,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/start/onboarding.md",
+            "additions": 21,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/start/wizard.md",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/index.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/crestodian.ts",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/protocol-schemas.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/types.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/bundle-mcp.test.ts",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/bundle-mcp.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/prepare.test.ts",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/prepare.ts",
+            "additions": 14,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/types.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt-tool-construction-plan.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/params.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-tools.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tool-display-config.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/crestodian-tool.test.ts",
+            "additions": 123,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/tools/crestodian-tool.ts",
+            "additions": 219,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/program/register.onboard.ts",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/onboard-inference.test.ts",
+            "additions": 102,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/onboard-inference.ts",
+            "additions": 174,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/onboard-interactive.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/onboard-types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/onboard.test.ts",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/onboard.ts",
+            "additions": 23,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/crestodian/agent-turn.ts",
+            "additions": 217,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/crestodian/assistant-backends.ts",
+            "additions": 12,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/crestodian/assistant-prompts.ts",
+            "additions": 88,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/crestodian/assistant.test.ts",
+            "additions": 7,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/crestodian/assistant.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/crestodian/chat-engine.test.ts",
+            "additions": 443,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/crestodian/chat-engine.ts",
+            "additions": 590,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/crestodian/crestodian.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/crestodian/dialogue.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/crestodian/onboarding-welcome.ts",
+            "additions": 55,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/crestodian/operations.test.ts",
+            "additions": 55,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/crestodian/operations.ts",
+            "additions": 281,
+            "deletions": 76,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/crestodian/overview.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/crestodian/setup-apply.ts",
+            "additions": 199,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/crestodian/tui-backend.ts",
+            "additions": 46,
+            "deletions": 69,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/local-request-context.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/methods/core-descriptors.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/crestodian.test.ts",
+            "additions": 114,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-methods/crestodian.ts",
+            "additions": 97,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-methods/shared-types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-request-context.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-request-context.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.impl.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/mcp/openclaw-tools-serve-config.ts",
+            "additions": 116,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/mcp/openclaw-tools-serve.test.ts",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/mcp/openclaw-tools-serve.ts",
+            "additions": 29,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/wizard/session.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/wizard/setup.finalize.ts",
+            "additions": 47,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/wizard/setup.model-auth.ts",
+            "additions": 259,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/wizard/setup.shared.ts",
+            "additions": 161,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/wizard/setup.ts",
+            "additions": 17,
+            "deletions": 390,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 263,
-        "deletions": 26,
+        "changedFiles": 81,
+        "additions": 4496,
+        "deletions": 1495,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99960",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99960.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100029",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100029.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 99,
-          "gatingTotal": 94,
+          "total": 12,
+          "gatingTotal": 7,
           "counts": {
-            "SUCCESS": 62,
-            "SKIPPED": 33,
-            "IN_PROGRESS": 3,
-            "NEUTRAL": 1
+            "SUCCESS": 8,
+            "SKIPPED": 4
           },
-          "blockers": [
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -146,15 +617,15 @@
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2132,
+    "total_ms": 1347,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 325
+        "ms": 253
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1532
+        "ms": 826
       },
       {
         "name": "classify_comment_commands",
@@ -162,7 +633,7 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -174,11 +645,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 247
+        "ms": 243
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
