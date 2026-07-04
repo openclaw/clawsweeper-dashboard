@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T02:32:51.140Z",
+  "generated_at": "2026-07-04T02:32:53.592Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T23:32:49.600Z",
+  "since": "2026-07-03T23:32:53.007Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     99747
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4880331552
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 3,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -37,174 +39,12 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/99747#issuecomment-4880208780",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99747,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 93505,
+      "author": "sunlit-deng",
+      "author_id": 253064511,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T01:40:17Z",
-      "comment_updated_at": "2026-07-04T02:32:45Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=7c5f79026c4a99014151a7af9b381bce98cfd058)",
-      "review_summary": "The PR expands the cleanup try/finally boundary in `runCodexAppServerAttempt` and adds an inject regression test for synchronous `attachBackend` failure cleanup.\n\nPR surface: Source +8, Tests +41. Total +49 across 2 files.\n\nReproducibility: yes. source-reproducible: current main registers cleanup-sensitive Codex app-server handlers, leases, and active-run state before the cleanup finally, and the PR's injected test exercises part of that window. I did not run a live failing Codex app-server attempt in this read-only review.",
-      "review_followup": "- [P1] Contributor action and maintainer review are needed because the branch has blocking code defects and the external real-proof gate cannot be satisfied by automation for the contributor's setup.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "7c5f79026c4a99014151a7af9b381bce98cfd058",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: protect uncovered cleanup window in runCodexAppServerAttempt (#99271)",
-        "body": "## Summary\n\n`runCodexAppServerAttempt` in `extensions/codex/src/app-server/run-attempt.ts` had an uncovered exception window: the single cleanup `finally` started ~160 lines too late, leaving every post-turn-accept resource (notification/request handlers, event projector, steering queue, close handler, abort listener, active-run handle, shared-client lease) unprotected against synchronous throws.\n\n### Change\n\nMove the cleanup try boundary from just before `await completion` to right after turn acceptance (line 2938, +0 behavior change), so the single existing `finally` covers **all** resources acquired in the ~160-line setup window.\n\n- Before: only `attachBackend` + `setActiveEmbeddedRun` were try-protected (partial fix)\n- After: user-input bridge, projector, steering queue, handlers, close handler, abort listener, reply backend, active-run handle → all covered by one `finally`\n\n## Test plan\n\n- [x] **Inject test** (`run-attempt.cleanup-inject.test.ts`): patches `replyOperation.attachBackend` to throw synchronously, asserts `detachBackend` (and therefore the full cleanup finally) fires — **passes after fix**\n- [x] `run-attempt.dynamic-tools.test.ts` (8 tests) — passed\n- [x] `run-attempt.hooks.test.ts` (21 tests) — passed  \n- [x] `run-attempt.native-hook-relay.test.ts` (18 tests) — passed\n- [x] `attempt-client-cleanup.test.ts` (2 tests) — passed\n\n## Evidence\n\n**L2 — local vitest inject test**\n\nThe inject test proves both the pre-fix leak (old version: `detachBackend` not called) and the post-fix full cleanup (expanded try: `detachBackend` called):\n\n```bash\n$ node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.cleanup-inject.test.ts\n\n RUN  v4.1.8 E:/Projects/skills/work/openclaw\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n```\n\nBefore: `attachBackend` throwing left handlers, lease, active-run handle leaked.\nAfter: the expanded try boundary means the `finally` runs `notificationCleanup()`, `requestCleanup()`, `closeCleanup?.()`, `releaseSharedClientLeaseAndRetireOneShotClient()`, `detachBackend`, `clearActiveEmbeddedRun` — every cleanup step fires.\n\n## Root cause\n\nThe `try` that owns the cleanup `finally` opened at line ~3107 (`await completion`), but all resource acquisition happened between lines ~2938–3096 — a ~160-line uncovered window.\n\n## Expected vs actual behavior\n\n| Scenario | Before | After |\n|----------|--------|-------|\n| Any synchronous throw in setup window | Handlers/lease/active-run leaked | ✅ Full cleanup fires via finally |\n| Normal completion | Unchanged | Unchanged |\n\n## Impact\n\nPrevents notification/request handler leaks on the shared Codex pooled client, shared-client lease leaks, and phantom active-run handles when setup fails. No behavior change for the normal (success) path.\n\n## Proof limitations\n\nNo live Codex attempt was executed. Evidence is a vitest inject test on the real function with a mock client — L2 (source-repro + inject test), not L3 (live failing attempt).\n\n## Linked issues\n\n- Fixes #99271",
-        "branch": "fix/issue-99271-run-attempt-cleanup-disposer-stack",
-        "head_sha": "7c5f79026c4a99014151a7af9b381bce98cfd058",
-        "author": "liuwqgit",
-        "labels": [
-          "size: M",
-          "extensions: codex",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.cleanup-inject.test.ts",
-            "additions": 41,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.ts",
-            "additions": 153,
-            "deletions": 145,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 194,
-        "deletions": 145,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99747",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99747.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 85,
-          "gatingTotal": 80,
-          "counts": {
-            "FAILURE": 6,
-            "SUCCESS": 49,
-            "SKIPPED": 27,
-            "IN_PROGRESS": 3
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ],
-          "pending": [
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:99747:4880322972:2026-07-04T02:26:12Z:re_review",
-      "comment_id": "4880322972",
-      "comment_version_key": "4880322972:2026-07-04T02:26:12Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99747#issuecomment-4880322972",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99747,
-      "author": "LiuwqGit",
-      "author_id": 7065327,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T02:26:12Z",
-      "comment_updated_at": "2026-07-04T02:26:12Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:99747:4880263302:2026-07-04T02:03:09Z:re_review",
-      "comment_id": "4880263302",
-      "comment_version_key": "4880263302:2026-07-04T02:03:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99747#issuecomment-4880263302",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99747,
-      "author": "LiuwqGit",
-      "author_id": 7065327,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T02:03:09Z",
-      "comment_updated_at": "2026-07-04T02:03:09Z",
+      "comment_created_at": "2026-07-04T02:30:05Z",
+      "comment_updated_at": "2026-07-04T02:30:05Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -230,24 +70,24 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "newer re-review command supersedes this request"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2824,
+    "total_ms": 2409,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 327
+        "ms": 575
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1198
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -259,7 +99,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1272
+        "ms": 1824
       },
       {
         "name": "append_ledger",
