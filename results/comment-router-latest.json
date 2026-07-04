@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T02:03:55.682Z",
+  "generated_at": "2026-07-04T02:04:25.719Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T23:03:55.086Z",
+  "since": "2026-07-03T23:04:23.243Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    99740
+    99747
   ],
   "comment_ids": [
-    4880258091
+    4880263302
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4880263426,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:99740:4880258091:2026-07-04T02:01:03Z:re_review",
-      "comment_id": "4880258091",
-      "comment_version_key": "4880258091:2026-07-04T02:01:03Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99740#issuecomment-4880258091",
+      "idempotency_key": "comment-router:openclaw/openclaw:99747:4880263302:2026-07-04T02:03:09Z:re_review",
+      "comment_id": "4880263302",
+      "comment_version_key": "4880263302:2026-07-04T02:03:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99747#issuecomment-4880263302",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99614,
-      "author": "zw-xysk",
-      "author_id": 294457748,
+      "target_branch": "main",
+      "issue_number": 99747,
+      "author": "LiuwqGit",
+      "author_id": 7065327,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T02:01:32Z",
-      "comment_updated_at": "2026-07-04T02:01:32Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-04T02:03:09Z",
+      "comment_updated_at": "2026-07-04T02:03:09Z",
+      "status_comment_id": 4880263426,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,26 +68,195 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-04T02:04:26.835Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 99747
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-04T02:04:28.141Z",
+          "response_comment_id": "4880263426",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: protect uncovered cleanup window in runCodexAppServerAttempt (#99271)",
+        "body": "## Summary\n\n`runCodexAppServerAttempt` in `extensions/codex/src/app-server/run-attempt.ts` had an uncovered exception window: the single cleanup `finally` started ~160 lines too late, leaving every post-turn-accept resource (notification/request handlers, event projector, steering queue, close handler, abort listener, active-run handle, shared-client lease) unprotected against synchronous throws.\n\n### Change\n\nMove the cleanup try boundary from just before `await completion` to right after turn acceptance (line 2938, +0 behavior change), so the single existing `finally` covers **all** resources acquired in the ~160-line setup window.\n\n- Before: only `attachBackend` + `setActiveEmbeddedRun` were try-protected (partial fix)\n- After: user-input bridge, projector, steering queue, handlers, close handler, abort listener, reply backend, active-run handle → all covered by one `finally`\n\n## Test plan\n\n- [x] **Inject test** (`run-attempt.cleanup-inject.test.ts`): patches `replyOperation.attachBackend` to throw synchronously, asserts `detachBackend` (and therefore the full cleanup finally) fires — **passes after fix**\n- [x] `run-attempt.dynamic-tools.test.ts` (8 tests) — passed\n- [x] `run-attempt.hooks.test.ts` (21 tests) — passed  \n- [x] `run-attempt.native-hook-relay.test.ts` (18 tests) — passed\n- [x] `attempt-client-cleanup.test.ts` (2 tests) — passed\n\n## Evidence\n\n**L2 — local vitest inject test**\n\nThe inject test proves both the pre-fix leak (old version: `detachBackend` not called) and the post-fix full cleanup (expanded try: `detachBackend` called):\n\n```bash\n$ node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.cleanup-inject.test.ts\n\n RUN  v4.1.8 E:/Projects/skills/work/openclaw\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n```\n\nBefore: `attachBackend` throwing left handlers, lease, active-run handle leaked.\nAfter: the expanded try boundary means the `finally` runs `notificationCleanup()`, `requestCleanup()`, `closeCleanup?.()`, `releaseSharedClientLeaseAndRetireOneShotClient()`, `detachBackend`, `clearActiveEmbeddedRun` — every cleanup step fires.\n\n## Root cause\n\nThe `try` that owns the cleanup `finally` opened at line ~3107 (`await completion`), but all resource acquisition happened between lines ~2938–3096 — a ~160-line uncovered window.\n\n## Expected vs actual behavior\n\n| Scenario | Before | After |\n|----------|--------|-------|\n| Any synchronous throw in setup window | Handlers/lease/active-run leaked | ✅ Full cleanup fires via finally |\n| Normal completion | Unchanged | Unchanged |\n\n## Impact\n\nPrevents notification/request handler leaks on the shared Codex pooled client, shared-client lease leaks, and phantom active-run handles when setup fails. No behavior change for the normal (success) path.\n\n## Proof limitations\n\nNo live Codex attempt was executed. Evidence is a vitest inject test on the real function with a mock client — L2 (source-repro + inject test), not L3 (live failing attempt).\n\n## Linked issues\n\n- Fixes #99271",
+        "branch": "fix/issue-99271-run-attempt-cleanup-disposer-stack",
+        "head_sha": "bbe10dcad7d8c310507a8affac7616255f4fe37e",
+        "author": "liuwqgit",
+        "labels": [
+          "size: M",
+          "extensions: codex",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": ".pr-body/pr-99271-body.md",
+            "additions": 62,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.cleanup-inject.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.ts",
+            "additions": 153,
+            "deletions": 145,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "work/openclaw/.pre-push-state/.last-fetch",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 257,
+        "deletions": 145,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99747",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99747.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 91,
+          "gatingTotal": 86,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 20,
+            "SKIPPED": 33,
+            "IN_PROGRESS": 37
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1738,
+    "total_ms": 5716,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 584
+        "ms": 604
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1858
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -99,11 +268,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1143
+        "ms": 3229
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
