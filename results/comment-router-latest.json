@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T04:56:40.221Z",
-  "repo": "openclaw/crabbox",
+  "generated_at": "2026-07-04T04:56:41.082Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T01:56:36.997Z",
+  "since": "2026-07-04T01:56:38.902Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    842
+    99811
   ],
   "comment_ids": [
-    4880730143
+    4880730234
   ],
-  "status_comment_id": 4880730224,
+  "status_comment_id": 4880730321,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/crabbox:842:4880730143:2026-07-04T04:55:26Z:re_review",
-      "comment_id": "4880730143",
-      "comment_version_key": "4880730143:2026-07-04T04:55:26Z",
-      "comment_url": "https://github.com/openclaw/crabbox/pull/842#issuecomment-4880730143",
-      "repo": "openclaw/crabbox",
+      "idempotency_key": "comment-router:openclaw/openclaw:99811:4880730234:2026-07-04T04:55:28Z:re_review",
+      "comment_id": "4880730234",
+      "comment_version_key": "4880730234:2026-07-04T04:55:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99811#issuecomment-4880730234",
+      "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 842,
-      "author": "yetval",
-      "author_id": 102706514,
+      "issue_number": 99811,
+      "author": "kevinslin",
+      "author_id": 409321,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T04:55:26Z",
-      "comment_updated_at": "2026-07-04T04:55:26Z",
-      "status_comment_id": 4880730224,
+      "comment_created_at": "2026-07-04T04:55:28Z",
+      "comment_updated_at": "2026-07-04T04:55:28Z",
+      "status_comment_id": 4880730321,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -74,49 +74,230 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-07-04T04:56:40.843Z",
+          "dispatched_at": "2026-07-04T04:56:41.774Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 842
+          "item_number": 99811
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-04T04:56:41.716Z",
-          "response_comment_id": "4880730224",
+          "commented_at": "2026-07-04T04:56:42.685Z",
+          "response_comment_id": "4880730321",
           "response_comment_mode": "updated"
         }
       ],
-      "author_repository_permission": "read",
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "feat: add crabbox shard for parallel checkpoint fan-out with a merged suite verdict",
-        "body": "Implements the approved proposal https://github.com/openclaw/crabbox/issues/839. @steipete replied \"seems worthwhile\" to the proposal, so this is the bounded v1 described there: a new `crabbox shard` command that forks a checkpoint into `--count` leases concurrently, runs the templated command on every fork in parallel through the normal run pipeline, and merges the per-shard JUnit summaries into one locally printed suite verdict with an aggregate exit code.\n\n## Problem\n\nThe command fan-out shipped in https://github.com/openclaw/crabbox/pull/836 documents test sharding as its flagship example, but the `--count` loop in `internal/cli/checkpoint.go` is strictly sequential and returns on the first error, and nothing merges the per-run JUnit summaries. Three shards cost the full suite runtime plus three fork setups, a failing shard hides the state of the rest of the suite, and answering \"did the suite pass\" means walking N run ids by hand.\n\n## What this PR does\n\n- `crabbox shard --count <n> --from <checkpoint-id> [run flags] -- <command...>`: forks concurrently via the exact provisioning flow `checkpoint fork` uses, then runs every shard in parallel through `crabbox run` with an injected `--id` and a `shard N/M` label, so sync, history, logs, artifacts, and results behave exactly as for `run`. The `{{index}}`/`{{total}}`/`{{lease}}`/`{{slug}}` placeholders and slug suffixing are reused unchanged.\n- Live streaming with a stable `[i/N]` line prefix across all shards (one shared mutex, line-buffered writers); `--quiet` keeps only the per-shard lifecycle lines.\n- A failing shard does not abort the others; `--fail-fast` opts into canceling the remaining shards. Interrupted shards are reported as `canceled`, never as failed, and a pure interrupt exits 130.\n- With results wiring (`--junit`, `--results-auto`, or repo config), per-shard summaries merge through the existing `mergeJUnitSummary` into one verdict: per-shard table, merged totals with suite time vs wall clock, and every failed case with its shard index and run id, as text or `--json`.\n- Aggregate exit code, in precedence order: 7 when any shard failed to provision or run (the verdict is incomplete, so infrastructure failures are never masked by test failures); otherwise the failing shards' command exit code (or 1 when they disagree); otherwise `--fail-on-test-failures` evaluated against the merged summary only (the flag is forced off inside each shard so the policy applies once, to the whole suite).\n- Guaranteed release: every fork is released on success, failure, and Ctrl-C via a fresh context; a shard that fails to provision does not orphan its siblings; `--keep` retains the forks.\n- Cost stance: `--count` is required with no default, the plan is printed before provisioning, forks exist only for the duration of their shard, and a new repo config key `shard.maxCount` bounds what a checkout may request.\n\n## Delegated design decisions\n\nThe proposal asked three questions that were left open, so v1 ships the defaults stated on the issue; all three are easy to change if you prefer otherwise:\n\n1. Command shape: a new top-level `crabbox shard` rather than `checkpoint fork --parallel`.\n2. Failure mode: run-all-shards-to-completion by default, `--fail-fast` opt-in.\n3. Persistence: the merged verdict is printed locally only; each shard's run record keeps its own JUnit summary on the coordinator; no coordinator or worker changes.\n\n## Implementation notes\n\n- `internal/cli/checkpoint.go`: the provisioning sequence of `checkpointForkRecordOnce` (acquire, claim, network resolve, restore) is extracted into `provisionCheckpointFork` so fork and shard share it; fork behavior is unchanged and the existing fork tests pass untouched. The release guard is upgraded from a bool to `sync.Once` so it is safe under concurrent callers.\n- `internal/cli/run.go`: a 6-line outcome sink after `recorder.Finish` surfaces each run's exit code, run id, and parsed `TestResultSummary` to in-process callers; the sink is nil for every existing caller.\n- `internal/cli/watch.go`: `partitionWatchRunArgs` is generalized into `partitionForwardedRunArgs` (same behavior, parameterized flag sets) so shard reuses the watch arg-partitioning rules; flags that conflict with parallel runs (`--id`, `--pool`, `--capture-stdout`, `--timing-record`, `--label`, ...) are rejected with a clear error.\n- Provider-neutral: dispatch goes through the same `SSHLeaseBackend` seam as `checkpoint fork`; delegated providers keep a clear error; provider-native snapshot fan-out stays on `checkpoint fork --snapshot`.\n\nReview updates at head 799af571: infrastructure failures now take precedence over command failures in the aggregate exit code (a mixed test+infra run exits 7 instead of looking like an ordinary suite failure), and text-verdict failed case lines carry the shard's run id (`[2/3] run=run_...`), matching the documented attribution; both changes have regression tests.\n\n## Real behavior proof\n\nRecorded at head 799af571 against a live external-provider lease fleet (local SSH adapter), archive checkpoint of a repo with a 3-way shardable suite where each shard takes ~6s. Full transcript available on request.\n\nBefore, on main: the documented fan-out is serial (~20s for 3 x 6s shards) and aborts on the first failing shard:\n\n```text\n$ time crabbox checkpoint fork chk_8dc76c9ccc34a469 --keep=false --count 3 -- sh ./suite.sh '{{index}}' '{{total}}'\ncheckpoint fork command lease=cbx_9d7eb76e964a slug=brisk-barnacle index=1/3 command=sh ./suite.sh 1 3\nsuite shard 1/3 finished mode=pass\ncheckpoint fork command lease=cbx_35d85d0f1118 slug=swift-lobster index=2/3 command=sh ./suite.sh 2 3\nsuite shard 2/3 finished mode=pass\ncheckpoint fork command lease=cbx_14b752aa273e slug=golden-crayfish index=3/3 command=sh ./suite.sh 3 3\nsuite shard 3/3 finished mode=pass\nreal 20.186s\n\n$ crabbox checkpoint fork chk_8dc76c9ccc34a469 --keep=false --count 3 -- sh ./suite.sh '{{index}}' '{{total}}' fail\ncheckpoint fork command lease=cbx_fd646cd4bc57 slug=coral-shrimp index=1/3 command=sh ./suite.sh 1 3 fail\ncheckpoint fork command lease=cbx_52527bf06c05 slug=silver-barnacle index=2/3 command=sh ./suite.sh 2 3 fail\nremote command exited 1\nexit=1   (shard 3 never ran; no merged verdict)\n```\n\nAfter, with this PR: the same three shards run concurrently (~7s wall for 18s of suite time) with one merged verdict:\n\n```text\n$ time crabbox shard --count 3 --from chk_8dc76c9ccc34a469 --junit junit-shard.xml -- sh ./suite.sh '{{index}}' '{{total}}'\n[3/3] running on 127.0.0.1 sh ./suite.sh 3 3\n[2/3] running on 127.0.0.1 sh ./suite.sh 2 3\n[1/3] running on 127.0.0.1 sh ./suite.sh 1 3\n...\nshard results\nSHARD  LEASE             RUN  EXIT  TESTS  FAIL  ERR  SKIP  TIME\n1/3    cbx_324ca5499b92  -    0     4      0     0    1     6.0s\n2/3    cbx_497cab1dae1a  -    0     4      0     0    1     6.0s\n3/3    cbx_0684531e5214  -    0     4      0     0    1     6.0s\nshard verdict shards=3 failed_shards=0 tests=12 failures=0 errors=0 skipped=3 suite_time=18.000s wall=6.942s\nreal 6.999s\nexit=0\n```\n\nA failing shard no longer hides the rest of the suite, and the failed case is attributed to its shard and run (run ids are `-` here because the fleet runs without a coordinator; with one configured the recorded `run_...` id is printed):\n\n```text\n$ crabbox shard --count 3 --from chk_8dc76c9ccc34a469 --junit junit-shard.xml -- sh ./suite.sh '{{index}}' '{{total}}' fail\nshard verdict shards=3 failed_shards=1 tests=12 failures=1 errors=0 skipped=2 suite_time=18.100s wall=7.009s\nfailed:\n  [2/3] run=-  src/cart.test.js failure  my-app.shard2.test_cart_coupon — expected 3 got 2\n1 of 3 shards failed\nexit=1\n```\n\n`--fail-on-test-failures` fires on the merged summary even though every shard command exited 0:\n\n```text\n$ crabbox shard --count 3 --from chk_8dc76c9ccc34a469 --junit junit-shard.xml --fail-on-test-failures --quiet -- sh ./suite.sh '{{index}}' '{{total}}' softfail\nshard 2/3 done exit=0 tests=4 failures=1 errors=0\nshard verdict shards=3 failed_shards=0 tests=12 failures=1 errors=0 skipped=2 suite_time=18.100s wall=6.899s\nJUnit results contain 1 failures and 0 errors\nexit=1\n```\n\nCtrl-C mid-run cancels cleanly and releases every fork; the provider state afterwards holds only the kept base lease:\n\n```text\n$ crabbox shard --count 3 --from chk_8dc76c9ccc34a469 --quiet -- sh ./suite.sh '{{index}}' '{{total}}' &  sleep 4; kill -INT $!\nshard 3/3 canceled\nshard 2/3 canceled\nshard 1/3 canceled\nshard verdict shards=3 failed_shards=0 canceled=3 wall=6.806s\nshard interrupted; 3 of 3 shards canceled\nexit=130\n\n$ cat adapter-state.json\n['cbx_43c1cadc3525']   (only the kept base lease; all forks created across the session were released)\n```\n\nThe serial `checkpoint fork` demo above was recorded with this PR's binary, confirming the extraction left fork behavior unchanged.\n\n## Verification\n\n```sh\ngofmt -l $(git ls-files '*.go')                                   # clean\ngo vet ./...                                                      # clean\ngo run golang.org/x/tools/cmd/deadcode@v0.45.0 -test ./...        # clean\ngo test -race ./internal/cli/                                     # ok\ngo test ./... -covermode=atomic -coverprofile=...                 # core coverage 90.0% >= 90.0%\nscripts/check-docs.sh                                             # 53 command docs, links ok\n```\n\nNew tests in `internal/cli/shard_test.go` cover: shards actually overlapping (blocking executor), run-all-after-failure, fail-fast cancellation, releases on every path including interrupt with a fresh context, `--keep`, provision failure not orphaning siblings, infra-over-command exit precedence, merged verdict math with run-id attribution, the merged `--fail-on-test-failures` policy and its precedence, JSON report shape, arg partitioning and every forbidden flag, the prefix writer including concurrent line integrity under `-race`, `shard.maxCount`, dry-run, and `--help`.\n\nConfig implications: one new optional repo config key, `shard.maxCount` (bounds `--count`; unset means no cap). No secrets, no coordinator or worker changes. CHANGELOG intentionally left to maintainers.",
-        "branch": "feat/shard",
-        "head_sha": "799af571b600bc275dbdd60b17430c30a7609b18",
-        "author": "yetval",
+        "title": "feat(update): support extended-stable package updates",
+        "body": "Closes #99808\n\nRelated: #99352\n\n## What Problem This Solves\n\nOperators need a supported way to install, persist, and inspect the trailing supported-month npm release without changing the existing `stable` channel, which already maps to npm `latest`. Before this change, the CLI had no canonical channel contract for that release line, no fail-closed exact resolution, and no safe Gateway or status behavior for it.\n\n## Why This Change Was Made\n\nThis adds `extended-stable` as a net-new package-only channel across config, CLI, status, Gateway handoff, and Package Acceptance. Foreground updates resolve the public npm selector, verify the selected exact package, reuse the existing downgrade and post-core commit boundaries, reject Git checkouts and tag overrides before mutation, and skip startup/background auto-update. Post-core plugin convergence temporarily targets the existing stable/latest plugin line; plugin publication remains out of scope.\n\nThe change is AI-assisted. I reviewed the implementation, its transaction boundaries, and the verification results.\n\n## User Impact\n\nPackage-install users can run `openclaw update --channel extended-stable`, persist that selection, use bare foreground updates afterward, and inspect availability with `openclaw update status`. Existing `stable`, `beta`, and `dev` defaults and mappings remain unchanged. Git users receive a structured non-mutating error, and missing or inconsistent public npm metadata never falls back to another release line.\n\n## Evidence\n\n- Full CLI update suite: 174/174 passed.\n- Focused post-rebase policy matrix:\n  - 11 extended-stable CLI transaction cases passed.\n  - 4 resolver/runner exact-resolution and tag-guard cases passed.\n  - 87 startup, status, and channel-regression cases passed.\n  - 5 Gateway/handoff cases passed.\n  - Package Acceptance allowlist case for `openclaw@extended-stable` passed.\n- Config schema/help baselines, base schema generation, oxlint, formatting, MDX, markdownlint, docs map, and 5,550 internal links passed.\n- Review-added regression proof confirms selector failure does not modify config, package bytes, or the legacy launchd updater job; explicit and stored `--tag` overrides are rejected; managed handoff sentinel errors retain the exact selector reason.\n- Current public-registry prerequisite check returns HTTP 404 for `openclaw@extended-stable`, so the positive live-package run remains blocked until the publication workflow in #99352 ships the dist-tag. The implemented path and tests prove the required fail-closed `selector_missing` behavior for this state.\n- Two local type errors remain unchanged in untouched `src/config/io.ts` and `src/secrets/config-io.ts`; the worktree's private `@openclaw/crabline` bootstrap is also unavailable. Broad Testbox proof is delegated to PR CI because local Azure Crabbox auth returned 401 and the Blacksmith CLI is not installed.\n\n\n## Live fail-closed proof\n\nOn current head `7485b3573e`, I ran the real CLI entrypoint from a package-style archive with no `.git`, an isolated HOME/state/config path, and public npm registry access:\n\n```console\n$ node --import tsx src/entry.ts update --channel extended-stable --yes --json --timeout 30\n{\n  \"status\": \"error\",\n  \"mode\": \"unknown\",\n  \"root\": \"/private/tmp/pr99811-proof.Ek2cLv/repo\",\n  \"reason\": \"selector_missing\",\n  \"steps\": [],\n  \"durationMs\": 0\n}\n$ echo \"$?\"\n1\n$ echo \"CONFIG_BEFORE=$before CONFIG_AFTER=$after\"\nCONFIG_BEFORE=absent CONFIG_AFTER=absent\n```\n\nThis is the current public-registry 404 path. The structured `selector_missing` result, empty mutation-step list, nonzero exit, and unchanged absent config prove the CLI fails before config or package mutation. Positive live update/status proof remains gated on #99352 publishing the `extended-stable` dist-tag; maintainers can either sequence the PRs or explicitly accept this fail-closed launch window.",
+        "branch": "dev/kevinlin/extended-stable-cli",
+        "head_sha": "7485b3573e52f196e92da27ef617f62cec02fd39",
+        "author": "kevinslin",
         "labels": [
-          "proof: sufficient",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look",
-          "P3"
+          "docs",
+          "gateway",
+          "cli",
+          "scripts",
+          "commands",
+          "maintainer",
+          "size: XL",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "docs/commands/README.md",
-            "additions": 1,
-            "deletions": 0,
+            "path": "docs/.generated/config-baseline.sha256",
+            "additions": 3,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "docs/commands/checkpoint.md",
-            "additions": 3,
+            "path": "docs/ci.md",
+            "additions": 10,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "docs/commands/shard.md",
-            "additions": 133,
+            "path": "docs/cli/update.md",
+            "additions": 27,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/configuration-reference.md",
+            "additions": 4,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/help/faq-first-run.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/help/testing-updates-plugins.md",
+            "additions": 6,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/install/development-channels.md",
+            "additions": 19,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/install/updating.md",
+            "additions": 17,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/resolve-openclaw-package-candidate.mjs",
+            "additions": 3,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/config-cli.test.ts",
+            "additions": 5,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/update-cli.test.ts",
+            "additions": 250,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/update-cli.ts",
+            "additions": 15,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/update-cli/update-command.ts",
+            "additions": 140,
+            "deletions": 24,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/update-cli/wizard.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/status.update.test.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/status.update.ts",
+            "additions": 21,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.quality.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.openclaw.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/validation.allowed-values.test.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.ts",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.test.ts",
+            "additions": 46,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-channels.test.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-channels.ts",
+            "additions": 14,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-check.test.ts",
+            "additions": 131,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-check.ts",
+            "additions": 83,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-managed-service-handoff.test.ts",
+            "additions": 35,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-managed-service-handoff.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-runner.test.ts",
+            "additions": 46,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-runner.ts",
+            "additions": 53,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-startup.test.ts",
+            "additions": 41,
             "deletions": 0,
             "changeType": "ADDED"
           },
@@ -173,18 +354,30 @@
             "additions": 12,
             "deletions": 8,
             "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-startup.ts",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/resolve-openclaw-package-candidate.test.ts",
+            "additions": 16,
+            "deletions": 2,
+            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 12,
-        "additions": 1458,
-        "deletions": 35,
+        "changedFiles": 34,
+        "additions": 1091,
+        "deletions": 108,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-crabbox-842",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-842.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99811",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99811.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -193,42 +386,36 @@
           "total": 6,
           "gatingTotal": 6,
           "counts": {
-            "IN_PROGRESS": 5,
-            "SUCCESS": 1
+            "SUCCESS": 67,
+            "SKIPPED": 31,
+            "FAILURE": 1,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "Go:IN_PROGRESS",
-            "Apple VZ:IN_PROGRESS",
-            "Scripts:IN_PROGRESS",
-            "Docs:IN_PROGRESS",
-            "Release Check:IN_PROGRESS"
+            "QA Smoke CI:FAILURE"
           ],
-          "pending": [
-            "Go:IN_PROGRESS",
-            "Apple VZ:IN_PROGRESS",
-            "Scripts:IN_PROGRESS",
-            "Docs:IN_PROGRESS",
-            "Release Check:IN_PROGRESS"
+          "pending": [],
+          "terminalBlockers": [
+            "QA Smoke CI:FAILURE"
           ],
-          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5149,
+    "total_ms": 4311,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2079
+        "ms": 461
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1129
+        "ms": 1701
       },
       {
         "name": "classify_comment_commands",
@@ -244,7 +431,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1913
+        "ms": 2120
       },
       {
         "name": "append_ledger",
