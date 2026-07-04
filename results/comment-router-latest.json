@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T19:10:46.402Z",
+  "generated_at": "2026-07-04T19:10:58.825Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T16:10:44.950Z",
+  "since": "2026-07-04T16:10:57.042Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89040
+    99196
   ],
   "comment_ids": [
-    4883512442
+    4883512868
   ],
-  "status_comment_id": 4883512564,
+  "status_comment_id": 4883512977,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4883512442:2026-07-04T19:09:34Z:re_review",
-      "comment_id": "4883512442",
-      "comment_version_key": "4883512442:2026-07-04T19:09:34Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4883512442",
+      "idempotency_key": "comment-router:openclaw/openclaw:99196:4883512868:2026-07-04T19:09:45Z:re_review",
+      "comment_id": "4883512868",
+      "comment_version_key": "4883512868:2026-07-04T19:09:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99196#issuecomment-4883512868",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T19:09:34Z",
-      "comment_updated_at": "2026-07-04T19:09:34Z",
-      "status_comment_id": 4883512564,
+      "issue_number": 99196,
+      "author": "LeonidasLux",
+      "author_id": 294038793,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-04T19:09:45Z",
+      "comment_updated_at": "2026-07-04T19:09:45Z",
+      "status_comment_id": 4883512977,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -76,54 +76,47 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 89040,
-          "dispatch_key": "router-64a14bf079752c4b",
-          "dispatched_at": "2026-07-04T19:10:47.016Z"
+          "item_number": 99196,
+          "dispatch_key": "router-ca222317ee634c0c",
+          "dispatched_at": "2026-07-04T19:10:59.555Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-04T19:10:48.205Z",
-          "response_comment_id": "4883512564",
+          "commented_at": "2026-07-04T19:11:01.399Z",
+          "response_comment_id": "4872245379",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
-        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walker performs no directory pruning — it walks the full tree and returns every file matching the configured patterns, with no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Preserve `fs.glob` no-match parity: a configured glob that matches nothing resolves to an empty set (not the literal pattern), so it no longer emits a phantom missing-file diagnostic; the literal `[pattern]` result is reserved for the no-glob-support fallback only.\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`** / **`src/hooks/internal-hook-dispatch.ts`**\n- Keep the public `triggerInternalHook(event)` signature (re-exported via `plugin-sdk/hook-runtime`) unchanged and matching `main` — no new public parameter or exported options type.\n- Move the bootstrap-only handler scheduling (`yieldBetweenHandlers` with `setImmediate` yield between handlers) and per-handler timing/slow-handler (>500ms) warning into an internal `internal-hook-dispatch` module that is not on the plugin SDK surface.\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable yielding between handlers for `agent:bootstrap` hook triggers (via the internal dispatch entrypoint)\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Keep the public `resolveBootstrapFilesForRun` params (re-exported via `plugin-sdk/agent-harness-runtime`) callback-free and matching `main`; route embedded-runner substage timing through an internal `resolveBootstrapFilesForRunWithTiming` variant kept off the SDK surface.\n- Support the new async workspace file loading interface.\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — every matching file returned without an artificial cap (no directory pruning), and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — yield-between-handlers ordering, handler timing reporting, and slow handler warning exercised through the internal dispatch entrypoint\n- `workspace.load-extra-bootstrap-files.test.ts` — a no-match glob resolves to an empty set with no missing-file diagnostic (fs.glob parity)\n\nThe public plugin SDK surface is unchanged: `node scripts/plugin-sdk-surface-report.mjs` exits 0 with no new package-exported entrypoints. All existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\nCloses #87509\n\n\n",
-        "branch": "fix/bootstrap-context-event-loop-stall",
-        "head_sha": "4d2493904d0fab48b322a00525f687c046a617d6",
-        "author": "jerry-xin",
+        "title": "fix(plugins): discover config load.paths plugins when index has entries",
+        "body": "## Summary\n\n**Problem**: Installing a managed npm plugin populates the persisted plugin index. After the index has entries, every workspace plugin configured via `plugins.load.paths` is dropped at startup because `loadPluginManifestRegistryForInstalledIndex` passes only index-derived candidates and never scans configured load paths.\n\n**Solution**: In `loadPluginManifestRegistryForInstalledIndex`, after building candidates from index records, additionally discover plugins from `config.plugins.load.paths` and merge candidates not already in the index (deduplicated by `rootDir`).\n\n**What changed**: `src/plugins/discovery.ts` — added `discoverFromConfigPaths`, a scoped helper that scans only user-configured load paths with bundled-load-path alias filtering (same guard used by normal discovery). `src/plugins/manifest-registry-installed.ts` — the installed-index path now uses `discoverFromConfigPaths` instead of `discoverOpenClawPlugins` for its load-path fallback. `src/plugins/manifest-registry-installed.test.ts` — 4 new regression tests for load-path discovery, empty-load-path no-op, pluginId scoping, and bundled-path alias filtering.\n\n**What did NOT change**: No change to the index-empty fast path. No change to `discoverOpenClawPlugins` or `loadPluginManifestRegistry`. No change to how bundled or global plugins are discovered. No behavioral change when `load.paths` is empty.\n\n## What Problem This Solves\n\nInstalling a managed npm plugin (`openclaw plugins install npm:@openclaw/llama-cpp-provider@2026.6.10`) populates the persisted plugin index. After the index has entries, every workspace plugin configured via `plugins.load.paths` is dropped at startup with:\n\n```\nplugins.entries.<id>: plugin not found: <id> (stale config entry ignored; remove it from plugins config)\nplugins.allow: plugin not found: <id> (stale config entry ignored; remove it from plugins config)\n```\n\nPlugin files are present and unchanged on disk. Reverting the config restores them.\n\nFixes #99185\n\n## Root Cause\n\nIn `loadPluginMetadataSnapshotImpl` (`src/plugins/plugin-metadata-snapshot.ts:699-715`), the manifest registry is built via two paths:\n\n- **Index empty** (`index.plugins.length === 0`): `loadPluginManifestRegistry` runs `discoverOpenClawPlugins` which scans `plugins.load.paths` → workspace plugins found ✅\n- **Index has entries**: `loadPluginManifestRegistryForInstalledIndex` converts index records to candidates and passes them to `loadPluginManifestRegistry` → since candidates are provided, `discoverOpenClawPlugins` is **never called** and `plugins.load.paths` is never scanned\n\nIf workspace plugins are missing from the persisted index (which can happen in certain install/refresh sequences), they are silently dropped and never discovered again.\n\n## Change Summary\n\nIn `loadPluginManifestRegistryForInstalledIndex` (`src/plugins/manifest-registry-installed.ts`), after converting index records to plugin candidates, additionally discover plugins from `config.plugins.load.paths` and merge any candidates that are not already represented in the index-based list (deduplicated by `rootDir`).\n\nKey design decisions addressing ClawSweeper review (Round 1 → Round 2):\n- **P1 — Config-only discovery scope (Round 1)**: Replaced `discoverOpenClawPlugins` (which scans bundled/global roots and leaks their diagnostics into the installed-index validation surface) with a new `discoverFromConfigPaths` helper that scans **only** the user-configured load paths. The helper lives in `src/plugins/discovery.ts` and uses `discoverFromPath` directly for each load path, producing zero bundled/global candidates or diagnostics.\n- **P2 — pluginId scoping preserved**: Extra load-path candidates are additionally filtered by the requested `pluginIds`, preventing scoped callers (provider or metadata requests) from receiving unrelated load-path plugins.\n- **P2 — Bundled-load-path alias guard (Round 2)**: Added `resolvePackagedBundledLoadPathAlias` check to `discoverFromConfigPaths`, preserving normal discovery's behavior of warning and skipping paths that point at OpenClaw's current or legacy bundled plugin directory. This prevents the installed-index fallback from treating bundled directories as valid config-origin candidates.\n- **4 new regression tests**: Cover mixed index+load-path scenario, empty-load-path no-op, pluginId scoping, and bundled-path alias filtering in the installed-index context.\n\n## Real behavior proof\n\n**Behavior addressed**: After the fix, workspace plugins configured via `plugins.load.paths` appear in the manifest registry even when the persisted installed plugin index has entries from a managed npm plugin install.\n\n**Real environment tested**: Windows 10, Node.js v24.14.1, OpenClaw dev build (worktree `fix/issue-99185-clean`)\n\n**Exact steps or command run after this patch**: `node --loader tsx/esm collect-evidence-99196.ts`\n\n**After-fix evidence**:\n```\n══════════════════════════════════════════════════════\n  PR #99196 — L2 Evidence Collection\n══════════════════════════════════════════════════════\n\n========== BEFORE FIX ==========\n(Simulating main branch behavior — no load.paths discovery)\nInstalled-index plugin dir: ...\\installed-plugin\nLoad-path plugin dir:       ...\\workspace-plugin\nIndex plugin IDs:           npm-installed-llama\nLoad paths configured:      [...\\workspace-plugin]\n\nWithout fix, workspace plugin would be silently dropped\n\n========== AFTER FIX ==========\nCalling loadPluginManifestRegistryForInstalledIndex with load.paths config...\n\nPlugins found: 2\nPlugin IDs:\n  - npm-installed-llama (llama-cpp-provider)\n  - workspace-extension (workspace-provider)\n\nDiagnostics: 0\n\nVerification Results:\n  npm-installed-llama (from index):    FOUND\n  workspace-extension (from load.paths): FOUND\n\n  Overall: PASS — load.paths plugins correctly discovered alongside index entries\n\nP2: pluginId scoping test:\nScoped to [npm-installed-llama]: found 1 plugin(s)\n\nP2 scoping: PASS — only scoped plugins returned\n```\n\n**Observed result after the fix**: Both the installed-index plugin (`npm-installed-llama`) and the load-path workspace plugin (`workspace-extension`) are present in the manifest registry. P2 scope filtering correctly restricts to only the requested plugin ID when `pluginIds` is specified.\n\n**What was not tested**: Full Gateway integration test with live npm install and running OpenClaw instance. Competing fix PR #99192 was not evaluated for merge compatibility. The `plugin-metadata-snapshot.memo.test.ts` EPERM failure on Windows temp cleanup is pre-existing and unrelated.\n\n## Tests and validation\n\n```\n ✓ |plugins| manifest-registry-installed.test.ts (21 tests)\n   Tests  21 passed (21)\n ✓ |plugins| discovery.test.ts (76 tests)\n   Tests  76 passed (76)\n ✓ |plugins| manifest-registry.test.ts (72 tests)\n   Tests  72 passed (72)\n```\n\n4 new regression tests added:\n- `discovers load.paths workspace plugins when index has entries`\n- `skips load.paths discovery when load.paths is empty`\n- `preserves pluginId scoping for load-path candidates`\n- `ignores bundled plugin load paths on installed-index (P2 regression)`\n\n- TypeScript compilation: `tsc --noEmit -p tsconfig.core.json` clean (no new errors)\n- No behavioral change when `load.paths` is empty (guarded by `loadPaths.length > 0` check)\n- No duplicate plugins when `load.paths` entries are already in the index (dedup by `rootDir`)\n- `loadPluginManifestRegistry` has built-in duplicate ID detection as second line of defense\n\n## Risk checklist\n\n- merge-risk: 🚨 compatibility — This changes which plugins appear from existing persisted-index configurations when `plugins.load.paths` is set.\n- Risk level: Low risk — The P1 config-only filter and P2 pluginId scoping ensure only explicitly configured load-path plugins are added. Deduplication by `rootDir` prevents duplicates.\n- Risk: Existing users with `plugins.load.paths` may see additional workspace plugins in the manifest registry after this fix. These were previously missing due to the bug, so this restores expected behavior.\n- Mitigation: Bundled-load-path alias guard in `discoverFromConfigPaths` (matching normal discovery) prevents bundled directories from being treated as config-origin candidates. `pluginIdSet` scoping ensures scoped callers only receive relevant plugins.\n- Rollback: Revert the commit to restore the previous behavior.\n\n## Current review state\n\n- ClawSweeper rating: awaiting re-review after Round 2 fix (bundled-load-path alias guard)\n- Labels: `rating: 🦐 gold shrimp`, `status: ⏳ waiting on author`\n- Round 1 addressed: P1 (config-only `discoverFromConfigPaths` helper, no bundled/global diagnostic leakage)\n- Round 2 addresses: P2 (bundled-load-path alias guard in `discoverFromConfigPaths` + regression test)\n\n## Linked context\n\n- Issue: #99185\n- Related competing PR: #99192 (draft, same root cause, different approach)\n\n",
+        "branch": "fix/issue-99185-clean",
+        "head_sha": "79009941c2d2a39b0fe484a14a84915a28a003a4",
+        "author": "leonidaslux",
         "labels": [
-          "agents",
-          "size: L",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
+          "size: M",
+          "P2"
         ],
         "files": [
           {
-            "path": "src/agents/bootstrap-files.ts",
-            "additions": 28,
+            "path": "src/plugins/discovery.ts",
+            "additions": 56,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/bootstrap-hooks.ts",
-            "additions": 3,
-            "deletions": 2,
+            "path": "src/plugins/manifest-registry-installed.test.ts",
+            "additions": 127,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.test-support.ts",
-            "additions": 1,
-            "deletions": 0,
+            "path": "src/plugins/manifest-registry-installed.ts",
+            "additions": 36,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
@@ -229,150 +222,50 @@
             "changeType": "ADDED"
           }
         ],
-        "changedFiles": 11,
-        "additions": 810,
-        "deletions": 130,
+        "changedFiles": 3,
+        "additions": 219,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99196",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99196.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 93,
-          "gatingTotal": 88,
+          "total": 17,
+          "gatingTotal": 12,
           "counts": {
-            "IN_PROGRESS": 48,
-            "SUCCESS": 18,
-            "SKIPPED": 26,
-            "NEUTRAL": 1
+            "SUCCESS": 7,
+            "SKIPPED": 10
           },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-04T19:10:46.608Z"
+      "processed_at": "2026-07-04T19:10:59.049Z"
     }
   ],
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3702,
+    "total_ms": 4844,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 495
+        "ms": 576
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 944
+        "ms": 1190
       },
       {
         "name": "classify_comment_commands",
@@ -388,15 +281,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2239
+        "ms": 3048
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
