@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T05:28:53.578Z",
+  "generated_at": "2026-07-04T05:29:24.264Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T02:28:53.240Z",
+  "since": "2026-07-04T02:29:22.867Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99823
+    99812
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 4,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,278 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99812:4880646581:2026-07-04T05:29:19Z:clawsweeper_needs_human",
+      "comment_id": "4880646581",
+      "comment_version_key": "4880646581:2026-07-04T05:29:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99812#issuecomment-4880646581",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99812,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-04T04:33:00Z",
+      "comment_updated_at": "2026-07-04T05:29:19Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=f7745fc37857815b2545aa9f947eeed0805e7f0e)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +17. Total +17 across 3 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "f7745fc37857815b2545aa9f947eeed0805e7f0e",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(google): bound OAuth response reads to prevent OOM",
+        "body": "## Summary\n\n**Problem**: Three Google OAuth modules read HTTP response bodies without size limits, creating OOM risk when upstream services return oversized or malicious payloads. Additionally, `gunzipSync` in the Vertex ADC parser lacks a decompressed-output cap, so a small compressed payload can still inflate past the wire limit.\n\n**Solution**: Replace all unbounded `response.arrayBuffer()`, `.json()` calls with bounded SDK helpers (`readResponseWithLimit`, `readProviderJsonResponse`). Add `maxOutputLength` to `gunzipSync` to cap decompressed output at the same 1 MB bound.\n\n**What changed**: `extensions/google/vertex-adc.ts`, `extensions/google/oauth.token.ts`, `extensions/google/oauth.project.ts` — 3 files, +27/-12 lines.\n- Wire reads bounded via SDK helpers (7 call sites)\n- `gunzipSync` bounded via `maxOutputLength: GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES`\n- Token, project, and onboarding response paths all covered\n\n**What did NOT change**: No behavior change for well-formed responses under the size limits. No API or config surface changes. No dependency additions.\n\n## What Problem This Solves\n\n7 call sites across 3 files consume unbounded HTTP response bodies. This is the same unbounded-read class fixed across 30+ providers via the Plugin SDK, but the Google OAuth paths were missed.\n\nAdditionally, the Vertex ADC gzip decoder could amplify a small compressed payload (under the 1 MB wire cap) into an arbitrarily large decompressed buffer, leaving an OOM path open even after the wire cap.\n\n## Why This Change Was Made\n\nThe existing `readProviderJsonResponse` and `readResponseWithLimit` helpers already ship in the Plugin SDK with a default 16 MB cap. Using them here aligns with the established bounded-read pattern. The `maxOutputLength` option on `gunzipSync` (Node 15+) closes the decompression amplification path that the wire cap alone cannot address.\n\n## Real behavior proof\n\n**Behavior addressed**: Bounded HTTP response reads and bounded gzip decompression for Google OAuth HTTP paths.\n\n**BEFORE FIX — unbounded `response.arrayBuffer()` reads entire body into memory:**\n```typescript\nconst bytes = Buffer.from(await response.arrayBuffer());\n```\n\n**AFTER FIX — bounded read with 1 MB cap and overflow error:**\n```typescript\nconst bytes = await readResponseWithLimit(response, GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES, {\n  onOverflow: ({ maxBytes }) =>\n    new Error(`Google OAuth token response exceeds ${maxBytes} bytes`),\n});\n```\n\n**BEFORE FIX — unbounded `gunzipSync` allocates full decompressed output:**\n```typescript\nreturn gunzipSync(bytes).toString(\"utf8\");\n```\n\n**AFTER FIX — bounded decompression with `maxOutputLength`:**\n```typescript\nreturn gunzipSync(bytes, { maxOutputLength: GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES }).toString(\"utf8\");\n```\n\n**Real environment tested**: Linux x86_64, Node v24.13.1.\n\n**Exact steps or command run after this patch**:\n```bash\n# Unit tests\npnpm test extensions/google -- --reporter verbose\npnpm test:changed\n\n# L2 proof: bounded gzip prevents decompression bomb\nnode evidence/pr-99812/bounded-gzip-proof.mjs\n\n# L2 proof: loopback HTTP shows oversized response rejection\nnode evidence/pr-99812/bounded-http-proof.mjs\n```\n\n**After-fix evidence**: L2 runtime proof with loopback HTTP server and decompression bomb:\n```terminal_output\n=== Bounded gzip decompression proof ===\nNormal token response: 76 bytes uncompressed\n  ✓ bounded: decompressed 76 bytes, parsed OK\nDecompression bomb: 2068 bytes compressed → 2097153 bytes uncompressed\n  unbounded gunzipSync: allocated 2097153 bytes (OOM risk)\n  bounded gunzipSync: rejected — Cannot create a Buffer larger than 1048576 bytes\n\n=== Bounded HTTP read proof ===\nNormal response: 46 bytes — ✓ bounded read OK, parsed\nOversized response: caught — Response exceeds 1048576 bytes\n  ✓ bounded read correctly rejected the oversized response\n```\n\n**Unit tests**:\n```terminal_output\n ✓ |extension-providers| extensions/google/... (28 test files, 378 tests passed)\n ✓ |extension-providers| test:changed (15 test files, 228 tests passed)\n```\n\n**Observed result after the fix**: All tests pass. Both loopback proof scripts confirm oversized responses and decompression bombs are safely rejected at the 1 MB boundary. Normal-sized responses pass through unchanged.\n\n**What was not tested**: Actual Google OAuth HTTP round-trips (requires live credentials). The SDK helpers `readResponseWithLimit` and `readProviderJsonResponse` are integration-tested in `src/agents/provider-http-errors.test.ts` and `packages/media-core/src/read-response-with-limit.test.ts`. This PR only swaps the call sites and adds a `maxOutputLength` option, preserving all existing error handling and test seams.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk — bounded-read wrapper replaces unbounded call with same return type and compatible error semantics\n- [x] Decompression bomb path closed via `maxOutputLength` on `gunzipSync`\n- [x] No behavior change for normal-sized responses under the cap\n- [x] No API, config, or dependency changes\n- [x] L2 runtime proof with loopback HTTP server (oversized response rejection) and decompression bomb (gzip amplification blocked)\n- [x] Existing tests green (28 test files, 378 tests; 15 test:changed files, 228 tests)\n",
+        "branch": "fix/google-oauth-bound-response-reads",
+        "head_sha": "f7745fc37857815b2545aa9f947eeed0805e7f0e",
+        "author": "pandah97",
+        "labels": [
+          "size: XS",
+          "extensions: google",
+          "P2",
+          "merge-risk: 🚨 auth-provider"
+        ],
+        "files": [
+          {
+            "path": "extensions/google/oauth.project.ts",
+            "additions": 14,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/oauth.token.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/vertex-adc.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 29,
+        "deletions": 12,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99812",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99812.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 86,
+          "gatingTotal": 81,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 28,
+            "SUCCESS": 56
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:99812:4880735577:2026-07-04T04:57:57Z:re_review",
+      "comment_id": "4880735577",
+      "comment_version_key": "4880735577:2026-07-04T04:57:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99812#issuecomment-4880735577",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99812,
+      "author": "Pandah97",
+      "author_id": 80405497,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-04T04:57:57Z",
+      "comment_updated_at": "2026-07-04T04:57:57Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(google): bound OAuth response reads to prevent OOM",
+        "body": "## Summary\n\n**Problem**: Three Google OAuth modules read HTTP response bodies without size limits, creating OOM risk when upstream services return oversized or malicious payloads. Additionally, `gunzipSync` in the Vertex ADC parser lacks a decompressed-output cap, so a small compressed payload can still inflate past the wire limit.\n\n**Solution**: Replace all unbounded `response.arrayBuffer()`, `.json()` calls with bounded SDK helpers (`readResponseWithLimit`, `readProviderJsonResponse`). Add `maxOutputLength` to `gunzipSync` to cap decompressed output at the same 1 MB bound.\n\n**What changed**: `extensions/google/vertex-adc.ts`, `extensions/google/oauth.token.ts`, `extensions/google/oauth.project.ts` — 3 files, +27/-12 lines.\n- Wire reads bounded via SDK helpers (7 call sites)\n- `gunzipSync` bounded via `maxOutputLength: GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES`\n- Token, project, and onboarding response paths all covered\n\n**What did NOT change**: No behavior change for well-formed responses under the size limits. No API or config surface changes. No dependency additions.\n\n## What Problem This Solves\n\n7 call sites across 3 files consume unbounded HTTP response bodies. This is the same unbounded-read class fixed across 30+ providers via the Plugin SDK, but the Google OAuth paths were missed.\n\nAdditionally, the Vertex ADC gzip decoder could amplify a small compressed payload (under the 1 MB wire cap) into an arbitrarily large decompressed buffer, leaving an OOM path open even after the wire cap.\n\n## Why This Change Was Made\n\nThe existing `readProviderJsonResponse` and `readResponseWithLimit` helpers already ship in the Plugin SDK with a default 16 MB cap. Using them here aligns with the established bounded-read pattern. The `maxOutputLength` option on `gunzipSync` (Node 15+) closes the decompression amplification path that the wire cap alone cannot address.\n\n## Real behavior proof\n\n**Behavior addressed**: Bounded HTTP response reads and bounded gzip decompression for Google OAuth HTTP paths.\n\n**BEFORE FIX — unbounded `response.arrayBuffer()` reads entire body into memory:**\n```typescript\nconst bytes = Buffer.from(await response.arrayBuffer());\n```\n\n**AFTER FIX — bounded read with 1 MB cap and overflow error:**\n```typescript\nconst bytes = await readResponseWithLimit(response, GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES, {\n  onOverflow: ({ maxBytes }) =>\n    new Error(`Google OAuth token response exceeds ${maxBytes} bytes`),\n});\n```\n\n**BEFORE FIX — unbounded `gunzipSync` allocates full decompressed output:**\n```typescript\nreturn gunzipSync(bytes).toString(\"utf8\");\n```\n\n**AFTER FIX — bounded decompression with `maxOutputLength`:**\n```typescript\nreturn gunzipSync(bytes, { maxOutputLength: GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES }).toString(\"utf8\");\n```\n\n**Real environment tested**: Linux x86_64, Node v24.13.1.\n\n**Exact steps or command run after this patch**:\n```bash\n# Unit tests\npnpm test extensions/google -- --reporter verbose\npnpm test:changed\n\n# L2 proof: bounded gzip prevents decompression bomb\nnode evidence/pr-99812/bounded-gzip-proof.mjs\n\n# L2 proof: loopback HTTP shows oversized response rejection\nnode evidence/pr-99812/bounded-http-proof.mjs\n```\n\n**After-fix evidence**: L2 runtime proof with loopback HTTP server and decompression bomb:\n```terminal_output\n=== Bounded gzip decompression proof ===\nNormal token response: 76 bytes uncompressed\n  ✓ bounded: decompressed 76 bytes, parsed OK\nDecompression bomb: 2068 bytes compressed → 2097153 bytes uncompressed\n  unbounded gunzipSync: allocated 2097153 bytes (OOM risk)\n  bounded gunzipSync: rejected — Cannot create a Buffer larger than 1048576 bytes\n\n=== Bounded HTTP read proof ===\nNormal response: 46 bytes — ✓ bounded read OK, parsed\nOversized response: caught — Response exceeds 1048576 bytes\n  ✓ bounded read correctly rejected the oversized response\n```\n\n**Unit tests**:\n```terminal_output\n ✓ |extension-providers| extensions/google/... (28 test files, 378 tests passed)\n ✓ |extension-providers| test:changed (15 test files, 228 tests passed)\n```\n\n**Observed result after the fix**: All tests pass. Both loopback proof scripts confirm oversized responses and decompression bombs are safely rejected at the 1 MB boundary. Normal-sized responses pass through unchanged.\n\n**What was not tested**: Actual Google OAuth HTTP round-trips (requires live credentials). The SDK helpers `readResponseWithLimit` and `readProviderJsonResponse` are integration-tested in `src/agents/provider-http-errors.test.ts` and `packages/media-core/src/read-response-with-limit.test.ts`. This PR only swaps the call sites and adds a `maxOutputLength` option, preserving all existing error handling and test seams.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk — bounded-read wrapper replaces unbounded call with same return type and compatible error semantics\n- [x] Decompression bomb path closed via `maxOutputLength` on `gunzipSync`\n- [x] No behavior change for normal-sized responses under the cap\n- [x] No API, config, or dependency changes\n- [x] L2 runtime proof with loopback HTTP server (oversized response rejection) and decompression bomb (gzip amplification blocked)\n- [x] Existing tests green (28 test files, 378 tests; 15 test:changed files, 228 tests)\n",
+        "branch": "fix/google-oauth-bound-response-reads",
+        "head_sha": "f7745fc37857815b2545aa9f947eeed0805e7f0e",
+        "author": "pandah97",
+        "labels": [
+          "size: XS",
+          "extensions: google",
+          "P2",
+          "merge-risk: 🚨 auth-provider"
+        ],
+        "files": [
+          {
+            "path": "extensions/google/oauth.project.ts",
+            "additions": 14,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/oauth.token.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/vertex-adc.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 29,
+        "deletions": 12,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99812",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99812.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 86,
+          "gatingTotal": 81,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 28,
+            "SUCCESS": 56
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:99812:4880713916:2026-07-04T04:49:58Z:re_review",
+      "comment_id": "4880713916",
+      "comment_version_key": "4880713916:2026-07-04T04:49:58Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99812#issuecomment-4880713916",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99812,
+      "author": "Pandah97",
+      "author_id": 80405497,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-04T04:49:58Z",
+      "comment_updated_at": "2026-07-04T04:49:58Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 585,
+    "total_ms": 1742,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 326
+        "ms": 226
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1155
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +312,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 247
+        "ms": 336
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
