@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T06:17:24.103Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-04T06:19:01.840Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T03:17:22.381Z",
+  "since": "2026-07-04T03:19:01.647Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99840
+    1877
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,124 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99840:4880917625:2026-07-04T06:17:19Z:clawsweeper_needs_human",
-      "comment_id": "4880917625",
-      "comment_version_key": "4880917625:2026-07-04T06:17:19Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99840#issuecomment-4880917625",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99840,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T06:11:40Z",
-      "comment_updated_at": "2026-07-04T06:17:19Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] No automated repair is appropriate; the remaining blocker is contributor-supplied real Android proof plus maintainer acceptance of the background-capture compatibility change.; Cleared: The diff narrows Android microphone capture lifetime and does not add dependencies, workflows, permissions, secret handling, or supply-chain execution paths. (sha=918f2bd88676c24ba7db1ddd0960b578d174095c)",
-      "review_summary": "The PR changes Android NodeRuntime so app backgrounding stops any active voice capture through the existing Off stop path instead of only stopping ManualMic.\n\nPR surface: Other +6. Total +6 across 1 file.\n\nReproducibility: yes. source-reproducible: MainActivity.onStop reaches NodeRuntime.setForeground(false), current main only stops ManualMic, and TalkMode realtime capture keeps reading while _isEnabled remains true. I did not run a device or emulator repro.",
-      "review_followup": "- [P1] No automated repair is appropriate; the remaining blocker is contributor-supplied real Android proof plus maintainer acceptance of the background-capture compatibility change.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "918f2bd88676c24ba7db1ddd0960b578d174095c",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(android): stop talk mode audio capture on background",
-        "body": "## What Problem This Solves\n\nWhen the Android app moves to the background (`MainActivity.onStop()` → `NodeRuntime.setForeground(false)`), TalkMode continuous realtime audio capture (`AudioRecord`) keeps running. The microphone indicator stays on and audio frames continue streaming to the gateway via `talk.session.appendAudio`.\n\nThe root cause is `setForeground(false)` calls `stopManualVoiceSession()`, which is guarded to only stop `VoiceCaptureMode.ManualMic` — when TalkMode is active, it returns immediately without stopping anything:\n\n```\nNodeRuntime.kt:1804  stopManualVoiceSession()\n                       → if (mode != ManualMic) return  // TalkMode: no-op\n```\n\nMeanwhile, the TalkMode realtime capture loop (`TalkModeManager.kt:750`) checks `_isEnabled` but never checks `_isForeground`, so `AudioRecord.read()` continues uninterrupted.\n\nThis is inconsistent with the PTT background gate added in `e3f46d0926` (#98055), which explicitly blocks starting new Talk captures from the background but does not stop already-running continuous capture.\n\n## Why This Change Was Made\n\nA new method `stopVoiceCaptureForBackground()` replaces `stopManualVoiceSession()` in `setForeground(false)`. Unlike the old method (which only stops ManualMic), the new method stops **any** active voice capture mode — both ManualMic and TalkMode — by delegating to the existing `setVoiceCaptureMode(VoiceCaptureMode.Off)` stop chain.\n\nThe approach is minimal (1 file, +7/-1), reuses the proven `setVoiceCaptureMode(Off)` path that already correctly stops TalkMode's `realtimeCaptureJob` → `AudioRecord.stop()/release()` and `realtimeAppendJob` → audio frame streaming. No new stop logic or state machine added.\n\n`stopManualVoiceSession()` is preserved for its existing caller `setVoiceScreenActive(false)` (in-app navigation away from the voice screen), where only stopping ManualMic is appropriate.\n\n## User Impact\n\n- **Affected users**: Anyone using Android TalkMode (continuous conversation mode) who switches to another app or the home screen\n- **Before**: microphone indicator and foreground service continue; TalkMode keeps capturing and streaming audio in the background\n- **After**: TalkMode stops cleanly on background, same as ManualMic; microphone indicator and foreground service are removed\n\n## Evidence\n\n- Code path analysis: traced full call chain from `MainActivity.onStop()` → `NodeRuntime.setForeground(false)` → `stopManualVoiceSession()` no-op → `TalkModeManager.realtimeCaptureJob` continuing (see analysis above)\n- Review: `openclaw-pr-review` passed with P2-only findings (test gap — Android Gradle unavailable in this environment; fix path proven through `setVoiceCaptureMode(Off)` stop chain that is tested indirectly via `talkPttStart_rejectsNewCaptureWhenBackgrounded`)\n- Android Gradle tests could not run locally (network restriction on Gradle download); the fix reuses the existing `setVoiceCaptureMode(Off)` → `talkMode.setEnabled(false)` → `TalkModeManager.stop()` → `stopRealtimeRelay()` → `realtimeCaptureJob.cancel()` chain that is the same path exercised by normal TalkMode disable\n\nBehavior addressed: TalkMode AudioRecord continues after app background\nReal environment tested: N/A (code-path verification)\nExact steps or command run after this patch: In-app TalkMode active → press Home → verify mic indicator disappears, AudioRecord stopped\nEvidence after fix: N/A (requires Android device/emulator with Gradle build)\nObserved result after fix: Pending real-device validation\nWhat was not tested: Real-device background transition with TalkMode active (Gradle build unavailable in this environment)\n",
-        "branch": "fix/android-talkmode-background-audio-leak",
-        "head_sha": "918f2bd88676c24ba7db1ddd0960b578d174095c",
-        "author": "xialonglee",
-        "labels": [
-          "app: android",
-          "size: XS",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 7,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99840",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99840.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 43,
-          "gatingTotal": 38,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 22,
-            "SUCCESS": 18,
-            "FAILURE": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "native-i18n:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [
-            "native-i18n:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2027,
+    "total_ms": 305,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 391
+        "ms": 181
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1319
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -158,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 294
+        "ms": 112
       },
       {
         "name": "append_ledger",
