@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T12:55:30.577Z",
+  "generated_at": "2026-07-04T12:55:44.209Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T09:55:28.464Z",
+  "since": "2026-07-04T09:55:43.970Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99960
+    99957
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,132 +29,22 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99960:4882058587:2026-07-04T12:55:25Z:clawsweeper_needs_human",
-      "comment_id": "4882058587",
-      "comment_version_key": "4882058587:2026-07-04T12:55:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99960#issuecomment-4882058587",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99960,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T12:50:13Z",
-      "comment_updated_at": "2026-07-04T12:55:25Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Contributor-supplied real behavior proof is required before merge, and automation cannot provide proof from the contributor's setup.; Cleared: The diff only changes cron service runtime code and tests; it does not touch dependencies, workflows, permissions, secrets, package metadata, or downloaded code execution paths. (sha=eb67e68773d3b9b0d5967493cbf209d922f6f91a)",
-      "review_summary": "The PR snapshots and restores cron service live scheduler state around add, update, and remove persistence failures, with regression tests for failed durable writes.\n\nPR surface: Source +31, Tests +119. Total +150 across 2 files.\n\nReproducibility: yes. there is a high-confidence source-level reproduction path: mock saveCronJobsStore to throw during cron add/update/remove after the live store has been mutated, then inspect state.store and persisted rows. I did not run tests or a live gateway repro because this review is read-only.",
-      "review_followup": "- [P1] Contributor-supplied real behavior proof is required before merge, and automation cannot provide proof from the contributor's setup.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "eb67e68773d3b9b0d5967493cbf209d922f6f91a",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): roll back live scheduler state when persisting add/update/remove fails",
-        "body": "## What Problem This Solves\n\nFixes an issue where a cron job mutation that fails to persist still changes the live scheduler, so what the user was told no longer matches what the gateway does or what survives a restart.\n\n`cron add`, `cron update`, and `cron remove` mutate the in-memory cron store first and persist to SQLite afterwards. When the persist fails (e.g. disk full or a failed write transaction), the caller correctly receives an error — but the in-memory mutation stays behind in the running gateway:\n\n- **add**: a job the user was told failed to save stays live, can be armed and executed, and is even written to disk by the next unrelated successful persist. If the gateway restarts first, it silently vanishes instead.\n- **update**: the live scheduler runs the new version the user was told did not apply, and a restart silently reverts it to the old version.\n- **remove**: the job disappears from the live scheduler but resurrects from SQLite on the next restart.\n\nBoth user surfaces converge on the same code path — the CLI issues the `cron.add`/`cron.update`/`cron.remove` gateway RPCs (`src/cli/cron-cli.ts`), whose handlers call `CronService.add/update/remove` (`src/cron/service.ts`), which delegate to the ops in this diff. The in-memory store is trusted indefinitely once loaded (`ensureLoaded` fast path), so none of this self-heals while the process lives.\n\n## Why This Change Was Made\n\nThe narrowest fix that restores the invariant \"if the caller was told the mutation failed, the runtime behaves as if it never happened\": snapshot the mutable state before the mutation and restore it when the persist throws, then rethrow the original error unchanged.\n\nThe snapshot covers the whole store plus the catch-up deferral marker set, not just the touched job, because `recomputeNextRunsForMaintenance` runs inside these operations and mutates `nextRunAtMs`/deferral state across *all* jobs — restoring only the touched job would leave sibling scheduler state ahead of disk. This matches the persist-before-mutate durability convention already documented in the task registry (`src/tasks/task-registry.ts`), which the cron service predates.\n\nNon-goal: `persist()` has a sibling seam where a failed quarantine flush silently skips the save (`src/cron/service/store.ts`); fixing it changes error propagation for read-path callers that intentionally degrade and continue, so it is left to a separately scoped follow-up. Run-state bookkeeping persists (`prepareManualRun`, `finishPreparedManualRun`) are also untouched — the run already happened, so rollback semantics differ.\n\n## User Impact\n\nOperators get truthful outcomes from cron CRUD under storage failure: a failed `cron add`/`update`/`remove` now restores the cron store and catch-up deferral markers touched by these operations, matching both the error the user saw and the state the next restart loads. No phantom runs of jobs that \"failed to save\", no silent reverts of edits, no deleted jobs resurrecting after a restart. Error reporting and the success paths are unchanged.\n\n## Evidence\n\nFailing-first tests (`src/cron/service/ops.test.ts`, `cron service ops persist rollback` describe, persist failure injected via `saveCronJobsStore` rejection): before the fix all five fail with the exact lying behaviors above — notably the recovery case shows the phantom job from a *failed* add being written to disk by the next successful persist:\n\n```\nFAIL > recovers after a failed persist so the next mutation succeeds\n- Expected  + Received\n  [\n+   \"f97b06c3-...\",   <- job whose add reported \"disk full\" to the caller\n    \"9868ddb1-...\",\n  ]\n```\n\nAfter the fix:\n\n```\n✓ rolls back an added job from the live store when persist fails\n✓ keeps the pre-update job in the live store when persist fails\n✓ keeps a removed job in the live store when persist fails\n✓ keeps a job's catch-up deferral marker when a remove persist fails\n✓ recovers after a failed persist so the next mutation succeeds\n\nTest Files  1 passed (1) — src/cron/service/ops.test.ts, 24 tests\n```\n\nFull cron suite (local, `node scripts/run-vitest.mjs src/cron/`, ~34s): 117 test files / 1237 tests pass. Production diff is confined to `src/cron/service/ops.ts` (snapshot + restore helpers, three call sites); no change to success-path behavior, event ordering, error types, or `--json` shapes.\n",
-        "branch": "feat/cron-store-persist-rollback",
-        "head_sha": "eb67e68773d3b9b0d5967493cbf209d922f6f91a",
-        "author": "masatohoshino",
-        "labels": [
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cron/service/ops.test.ts",
-            "additions": 121,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 35,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 156,
-        "deletions": 6,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99960",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99960.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 99,
-          "gatingTotal": 94,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 34,
-            "SUCCESS": 59,
-            "IN_PROGRESS": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2451,
+    "total_ms": 439,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 408
+        "ms": 223
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1691
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -166,7 +56,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 325
+        "ms": 199
       },
       {
         "name": "append_ledger",
