@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T02:21:29.734Z",
+  "generated_at": "2026-07-04T02:22:03.271Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T23:21:29.467Z",
+  "since": "2026-07-03T23:22:01.516Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99761
+    98821
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,22 +29,126 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98821:4861354589:2026-07-04T02:21:56Z:clawsweeper_needs_human",
+      "comment_id": "4861354589",
+      "comment_version_key": "4861354589:2026-07-04T02:21:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98821#issuecomment-4861354589",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 98821,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-02T01:21:02Z",
+      "comment_updated_at": "2026-07-04T02:21:56Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Contributor-supplied real Gateway proof is still needed; there is no narrow ClawSweeper code repair to perform on the branch right now.; Cleared: The diff only changes Gateway schema warning emission and tests, with no dependency, workflow, lockfile, credential, install, package, or release surface. (sha=663d1bb8eaa53939167724d455d540577aa483a8)",
+      "review_summary": "The PR adds process-local deduplication for Gateway MCP loopback malformed/conflicting union-schema warnings, attributes messages by tool field, and adds focused regression tests.\n\nPR surface: Source +26, Tests +96. Total +122 across 2 files.\n\nReproducibility: yes. for the source path, but not as an executed live repro. Current main warns inside buildMcpToolSchema and the runtime cache rebuilds schemas on context misses or TTL expiry, matching the reported repeated-warning mechanism.",
+      "review_followup": "- [P1] Contributor-supplied real Gateway proof is still needed; there is no narrow ClawSweeper code repair to perform on the branch right now.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "663d1bb8eaa53939167724d455d540577aa483a8",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): dedupe MCP schema conflict warnings",
+        "body": "Related: #98437\n\n## What Problem This Solves\n\nOperators see repeated MCP loopback `conflicting schema definitions` warnings every time loopback tool schemas are rebuilt for a different request/session context (`buildMcpToolSchema` runs on every cache miss in `src/gateway/mcp-http.runtime.ts`, and again after the 30s TTL expires). The same field-level first-shape fallback is logged over and over, burying more useful Gateway diagnostics during restart or session churn.\n\nTwo further problems in the same code path:\n\n- The warning named only the **field** (`\"action\"`), not the tool, so it could not be attributed and — worse — deduping on the bare field name meant a genuine, *distinct* conflict on a common field (`action`/`id`/`type`) in a **second, different tool** was silently suppressed by the first tool's warning.\n- The structurally identical `malformed schema definition` warning in the same function was left un-deduped and still flooded on every rebuild.\n\nAI-assisted: this PR was prepared with Codex and Claude. I understand the change: it preserves the existing schema-flattening/first-variant behavior and only narrows and attributes duplicate warning emission.\n\n## Why This Change Was Made\n\nThe Gateway MCP schema projection already keeps the first schema variant when union object fields conflict. This change keeps that diagnostic signal, but:\n\n- Emits each warning **once per process for a given `(tool, field, reason)`** instead of once per schema rebuild/cache miss.\n- Names the tool in the message (`\"<tool>.<field>\"`) so the warning is attributable and a conflict in one tool no longer suppresses a genuinely different conflict on the same field name in another tool.\n- Routes the `malformed schema definition` warning through the same one-per-message helper, fixing the remaining flood.\n\nThe dedupe set is keyed on the full message and bounded by the process-stable universe of loopback tool + field names (gateway tool metadata does not change without a restart or explicit reload). The fix stays in the Gateway schema projection layer and does not rename tool fields, change MCP input schemas, or add config.\n\n## User Impact\n\nOperators see far less repeated MCP loopback warning noise while retaining one attributable warning per conflicting/malformed field per tool. Distinct conflicts across different tools are no longer masked. MCP clients continue to receive the same flattened object schema and first-variant precedence as before.\n\n## Evidence\n\nFocused proof run (`src/gateway/mcp-http.test.ts` drives the real `buildMcpToolSchema` path across repeated rebuilds and multiple tools):\n\n```text\nnode scripts/run-vitest.mjs src/gateway/mcp-http.test.ts\n\nTest Files  4 passed (4)\n      Tests  232 passed (232)\n```\n\nNew regression tests:\n\n- `warns per tool for the same conflicting field name across different tools` — two tools each conflict on `action`; asserts both `mcp_message_send.action` and `mcp_calendar_create.action` warn (fails under the old bare-field-name dedupe, which suppressed the second), and rebuilding twice proves per-`(tool, field)` dedupe survives.\n- `warns once per tool for repeated malformed variant schemas across rebuilds` — proves the malformed warning now dedupes instead of flooding.\n\nAdditional local checks:\n\n```text\noxfmt --check                 # clean\nscripts/run-oxlint.mjs        # clean\ntsgo:core + tsgo:core:test    # clean (exit 0)\ngit diff --check              # clean\n```\n\nAutoreview: no accepted/actionable findings.\n",
+        "branch": "codex/98437-mcp-loopback-schema-warning-dedupe",
+        "head_sha": "663d1bb8eaa53939167724d455d540577aa483a8",
+        "author": "harjothkhara",
+        "labels": [
+          "gateway",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/mcp-http.schema.ts",
+            "additions": 33,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/mcp-http.test.ts",
+            "additions": 97,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 130,
+        "deletions": 8,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98821",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98821.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "SUCCESS": 64,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "QA Smoke CI:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "QA Smoke CI:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 445,
+    "total_ms": 2070,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 256
+        "ms": 390
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1353
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +160,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 179
+        "ms": 303
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
