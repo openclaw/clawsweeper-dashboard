@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T06:28:54.630Z",
+  "generated_at": "2026-07-04T06:28:57.025Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T03:28:51.444Z",
+  "since": "2026-07-04T03:28:56.524Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
@@ -38,14 +38,14 @@
       "comment_version_key": "4880969614:2026-07-04T06:27:39Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/98706#issuecomment-4880969614",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 98706,
+      "target_branch": null,
+      "issue_number": 99555,
       "author": "ly85206559",
       "author_id": 12526624,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T06:27:39Z",
-      "comment_updated_at": "2026-07-04T06:27:39Z",
-      "status_comment_id": 4880969738,
+      "comment_created_at": "2026-07-04T06:26:27Z",
+      "comment_updated_at": "2026-07-04T06:26:27Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,117 +68,26 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-07-04T06:28:55.400Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 98706
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-04T06:28:56.584Z",
-          "response_comment_id": "4880969738",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(google): bound Vertex ADC OAuth token refresh responses",
-        "body": "## What Problem This Solves\n\nFixes a sibling OOM risk in the Google Vertex ADC OAuth token refresh path. Gemini CLI OAuth calls already cap HTTP bodies at 16 MiB via `fetchWithTimeout`, but `readGoogleOauthTokenResponsePayload` in the Vertex ADC refresh flow still buffered the full token response with `response.arrayBuffer()`. A faulty or hostile OAuth endpoint could stream an oversized refresh body and grow gateway memory without bound.\n\nRelated: #98507 covers the same bug class with additional gzip/decompression hardening.\n\n## Why This Change Was Made\n\nThe Vertex ADC refresh path now uses the shared bounded response reader (`readResponseWithLimit`) and reuses `GOOGLE_OAUTH_BODY_MAX_BYTES` (16 MiB) from `oauth.http.ts` so the cap stays consistent across Google OAuth call sites.\n\nThis follows the same invariant as recent Google provider hardening work (for example #98692 on embedding batch reads): legitimate small token responses keep working, but unbounded provider output must be cancelled early.\n\nScope is intentionally narrow:\n\n- export the shared 16 MiB OAuth body cap from `oauth.http.ts`\n- replace the bare `arrayBuffer()` read in `readGoogleOauthTokenResponsePayload`\n- add focused regression tests for normal refresh and oversized streamed bodies\n\nThis PR does not change ADC discovery, cache behavior, gzip decode policy, or non-OAuth Vertex auth flows.\n\n## User Impact\n\nUsers running Google Vertex with `authorized_user` ADC keep the same refresh behavior for normal token responses (typically well under 10 KiB). If a refresh response exceeds 16 MiB, the gateway now fails fast with a clear error instead of buffering the entire body into memory.\n\n## Evidence\n\nShared bounded-read wire proof: `oauth.http.test.ts` exercises the same `readResponseWithLimit` helper this PR uses on the Vertex ADC path against a local `http.createServer` listener on `127.0.0.1` with real `fetch()` and streamed chunked bodies. No mocked reader.\n\n```text\nstdout | extensions/google/oauth.http.test.ts > oauth.http bounded-read real wire proof (loopback http.createServer) > caps an oversized body streamed chunked over real wire\n[oauth.http loopback proof] oversized path: cap=16777216 reported=16842704 server_total=18874368\n\nstdout | extensions/google/oauth.http.test.ts > oauth.http bounded-read real wire proof (loopback http.createServer) > returns a Buffer for normal-size responses on real wire\n[oauth.http loopback proof] normal path: cap=16777216 returned=45 body=\"{\\\"access_token\\\":\\\"loopback\\\",\\\"expires_in\\\":3600}\"\n```\n\nTargeted unit proof: the new tests drive the production `resolveGoogleVertexAuthorizedUserHeaders` -> `refreshGoogleVertexAuthorizedUserAccessToken` -> `readGoogleOauthTokenResponsePayload` path with real `Response` streams passed through an injected `fetchImpl`. They cover the normal authorized_user refresh case and the oversized streamed refresh body case that previously relied on unbounded `arrayBuffer()`.\n\n```text\n$ pnpm test extensions/google/vertex-adc.oauth-response.test.ts extensions/google/oauth.http.test.ts -- --reporter=verbose\n ✓ |extension-providers| extensions/google/oauth.http.test.ts > oauth.http fetchWithTimeout body byte cap > caps oversized response body at 16 MiB with labeled overflow error\n ✓ |extension-providers| extensions/google/oauth.http.test.ts > oauth.http fetchWithTimeout body byte cap > returns a Response for normal-size bodies\n ✓ |extension-providers| extensions/google/oauth.http.test.ts > oauth.http bounded-read real wire proof (loopback http.createServer) > caps an oversized body streamed chunked over real wire\n ✓ |extension-providers| extensions/google/oauth.http.test.ts > oauth.http bounded-read real wire proof (loopback http.createServer) > returns a Buffer for normal-size responses on real wire\n ✓ |extension-providers| extensions/google/vertex-adc.oauth-response.test.ts > vertex-adc OAuth token response bounds > parses a normal token refresh response\n ✓ |extension-providers| extensions/google/vertex-adc.oauth-response.test.ts > vertex-adc OAuth token response bounds > rejects oversized token refresh bodies instead of buffering the whole stream\n\n Test Files  2 passed (2)\n      Tests  6 passed (6)\n[test] passed 1 Vitest shard in 17.15s\n```\n\n```text\n$ node_modules/.bin/oxfmt --check extensions/google/oauth.http.ts extensions/google/vertex-adc.ts extensions/google/vertex-adc.oauth-response.test.ts\nChecking formatting...\n\nAll matched files use the correct format.\n```\n\n```text\n$ node_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.core.json extensions/google/oauth.http.ts extensions/google/vertex-adc.ts extensions/google/vertex-adc.oauth-response.test.ts\n# passed\n```\n\n```text\n$ git diff --check -- extensions/google/oauth.http.ts extensions/google/vertex-adc.ts extensions/google/vertex-adc.oauth-response.test.ts\n# passed\n```\n\n```text\n$ python .agents/skills/autoreview/scripts/autoreview --mode local --parallel-tests \"pnpm test extensions/google/vertex-adc.oauth-response.test.ts extensions/google/oauth.http.test.ts\"\nautoreview target: local\nbranch: fix/google-bound-vertex-oauth-responses\nengine: codex\nautoreview clean: no accepted/actionable findings reported\noverall: patch is correct (0.74)\ntests exit: 0 after 59s\n```\n\nNotes for reviewers:\n\n- The 16 MiB cap matches the existing Google OAuth HTTP helper in `oauth.http.ts`. Legitimate ADC token responses are far smaller; the cap is a fail-closed bound against unbounded wire reads, not a product limit change.\n- This PR intentionally does not include the gzip `maxOutputLength` hardening present in #98507. If maintainers prefer one combined fix, that sibling PR is the broader option; this one is the minimal shared-cap alignment for the ADC refresh read site.\n- This PR does not add or migrate persistent state.\n\nAI-assisted: built with Codex. I understand the change: it replaces the unbounded Vertex ADC OAuth token refresh `arrayBuffer()` read with the shared 16 MiB bounded response reader and adds focused regression tests for normal and oversized streamed refresh bodies.\n",
-        "branch": "fix/google-bound-vertex-oauth-responses",
-        "head_sha": "83a679bb5d2537289bbab942e0d56a6464bf6f29",
-        "author": "ly85206559",
-        "labels": [
-          "size: S",
-          "extensions: google",
-          "P2"
-        ],
-        "files": [
-          {
-            "path": "extensions/google/oauth.http.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google/vertex-adc.oauth-response.test.ts",
-            "additions": 91,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/google/vertex-adc.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/embedded-backend.test.ts",
-            "additions": 13,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/embedded-backend.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 98,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98706",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98706.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 86,
-          "gatingTotal": 81,
-          "counts": {
-            "SUCCESS": 57,
-            "SKIPPED": 29
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 5601,
+    "total_ms": 1869,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1810
+        "ms": 490
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1362
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -190,11 +99,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2403
+        "ms": 1368
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
