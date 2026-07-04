@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T00:13:07.730Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-04T00:13:40.207Z",
+  "repo": "openclaw/mcporter",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-03T21:13:07.433Z",
+  "since": "2026-07-03T21:13:38.696Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    98236
+    227
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4879959417
+  ],
+  "status_comment_id": 4879959544,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,22 +31,135 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/mcporter:227:4879959417:2026-07-04T00:12:28Z:re_review",
+      "comment_id": "4879959417",
+      "comment_version_key": "4879959417:2026-07-04T00:12:28Z",
+      "comment_url": "https://github.com/openclaw/mcporter/pull/227#issuecomment-4879959417",
+      "repo": "openclaw/mcporter",
+      "target_branch": "main",
+      "issue_number": 227,
+      "author": "feniix",
+      "author_id": 91633,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-04T00:12:28Z",
+      "comment_updated_at": "2026-07-04T00:12:28Z",
+      "status_comment_id": 4879959544,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-07-04T00:13:40.995Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 227
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-04T00:13:41.936Z",
+          "response_comment_id": "4879959544",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(oauth): recover refreshable_bearer refresh failures like plain OAuth",
+        "body": "## Summary\n\nPorts the plain-OAuth refresh-failure recovery to the `refreshable_bearer` path in `src/oauth-persistence.ts`, closing the gap where a single lost refresh race against a rotating-refresh-token provider (e.g. the hosted Notion MCP) escalated into full grant revocation.\n\n- `refreshBearerToken` now reads the token endpoint error body on `!response.ok` and attaches the OAuth `error` code, so `invalid_grant` / `invalid_client` / `unauthorized_client` are distinguishable from transient failures (previously only `Token endpoint returned HTTP 400.`).\n- On an unrecoverable code, `readExplicitRefreshableBearerToken` re-reads persistence and adopts the tokens a concurrent refresh persisted first, instead of spuriously failing the losing invocation.\n- With no concurrent winner, it clears the cached credentials (`tokens` scope for `invalid_grant`, `all` otherwise) before throwing, so a rotated-out refresh token is never replayed — replays past the provider's grace window are treated as stolen-token signals and revoke the entire grant.\n- The recovery logic is extracted into a shared `recoverFromUnrecoverableRefresh` used by both the plain-OAuth and bearer paths, so the two can't drift apart again.\n\nAlso fixes a test-isolation bug found while working on this: the vault honors `XDG_DATA_HOME` (`src/paths.ts`), which the tests' `os.homedir()` spy does not cover, so running `tests/oauth-persistence.test.ts` on a machine with `XDG_DATA_HOME` set read from and wrote test entries into the developer's real `credentials.json`. The suite now unsets `XDG_*` vars in `beforeEach`. (`tests/oauth-callback.test.ts` has the same exposure and probably deserves a follow-up.)\n\nFixes #226\n\n## Type of change\n- [ ] Feature\n- [x] Bug fix\n- [ ] Hotfix\n- [ ] Spike / exploration\n- [ ] Documentation\n- [ ] Refactor\n\n## Test plan\n\nDeveloped test-first (red/green); new regression tests in `tests/oauth-persistence.test.ts`:\n\n- clears cached bearer tokens instead of replaying a refresh token rejected with `invalid_grant` (and verifies the next invocation does not hit the token endpoint again)\n- adopts the concurrent winner token when a bearer refresh loses the race with `invalid_grant`\n- clears all cached bearer credentials when refresh reports an `invalid_client`\n- transient HTTP 500 refresh failures still throw and preserve the stored refresh token for retry\n\nVerified per the issue's acceptance criteria:\n\n- `pnpm exec vitest run tests/oauth-persistence.test.ts tests/runtime-transport.test.ts` — 61 passed\n- `pnpm check` — clean\n- `pnpm test` — 817 passed, 3 skipped\n\n## Runtime proof\n\nCaptured against the real CLI (this branch, `pnpm build`, `node dist/cli.js`) talking to a local mock provider that implements the Notion token semantics from #226: refresh tokens rotate on every use, the grant keeps a one-step grace window, a grace-window replay returns `invalid_grant` without revoking, and any older replay is a stolen-token signal that revokes the whole grant. The provider also serves a real MCP endpoint (`@modelcontextprotocol/sdk` `StreamableHTTPServerTransport`) that 401s unless the presented bearer token is currently valid. Everything runs in an isolated `$HOME` with a `tokenCacheDir`-backed cache; all hosts are `127.0.0.1` and all tokens are synthetic, so nothing is redacted.\n\nConfig entry used:\n\n```json\n{\n  \"mcpServers\": {\n    \"notion-sim\": {\n      \"url\": \"http://127.0.0.1:8976/mcp\",\n      \"auth\": \"refreshable_bearer\",\n      \"tokenCacheDir\": \"<isolated>/token-cache\",\n      \"refresh\": {\n        \"tokenEndpoint\": \"http://127.0.0.1:8976/token\",\n        \"clientIdEnv\": \"SIM_CLIENT_ID\",\n        \"clientAuthMethod\": \"none\"\n      }\n    }\n  }\n}\n```\n\n### Before (v0.12.3 via `npx -y mcporter@0.12.3`): poison token replayed forever\n\nCache seeded with an expired access token and a rotated-out refresh token (`rt-dead`, past the grace window). Three consecutive invocations:\n\n```\n  Tools: <unavailable>\n  Reason: Failed to refresh cached bearer token for 'notion-sim': Token endpoint returned HTTP 400.\n```\n\nToken cache after the runs — the dead refresh token is still there:\n\n```\n{\n  \"access_token\": \"at-stale\",\n  \"token_type\": \"Bearer\",\n  \"refresh_token\": \"rt-dead\",\n  \"expires_at\": 1783123357\n}\n```\n\nProvider log — every invocation replays the dead token; the first replay revokes the grant:\n\n```\n[provider 00:04:06.804] POST /token #1 refresh_token=rt-dead\n[provider 00:04:06.804]   -> #1 400 invalid_grant *** STOLEN-TOKEN SIGNAL: ENTIRE GRANT REVOKED ***\n[provider 00:04:16.658] POST /token #2 refresh_token=rt-dead\n[provider 00:04:16.658]   -> #2 400 invalid_grant (grant already revoked)\n[provider 00:04:28.763] POST /token #3 refresh_token=rt-dead\n[provider 00:04:28.763]   -> #3 400 invalid_grant (grant already revoked)\n```\n\n### After (this branch): dead grant cleared, never replayed\n\nSame poison seed, run 1 — the error is now classified and the cache is cleared:\n\n```\n$ node dist/cli.js list notion-sim --debug\n  Tools: <unavailable>\n  Reason: Failed to refresh cached bearer token for 'notion-sim': Token endpoint returned HTTP 400 (invalid_grant).\n\n$ ls <isolated>/token-cache/\n(tokens.json gone)\n```\n\nRun 2 — fails cleanly with no replay:\n\n```\n$ node dist/cli.js list notion-sim\n  Tools: <unavailable>\n  Reason: Server 'notion-sim' uses refreshable_bearer auth but has no cached access token.\n```\n\nProvider log across both runs — exactly one `/token` request total:\n\n```\n[provider 00:03:03.909] POST /token #1 refresh_token=rt-dead\n[provider 00:03:03.910]   -> #1 400 invalid_grant *** STOLEN-TOKEN SIGNAL: ENTIRE GRANT REVOKED ***\n```\n\n### After (this branch): concurrent refresh race — loser adopts the winner\n\nCache seeded with an expired access token and the *live* refresh token `rt-1`. Two CLI invocations launched 400 ms apart; provider response latency arranged so both submit `rt-1` before either response returns, and the loser's rejection arrives after the winner has persisted (the realistic ordering — the winner's round-trip completes first):\n\n```\n=== process A (winner):\n  1 tool · 1048ms · HTTP http://127.0.0.1:8976/mcp\n=== process B (loser — refresh rejected with invalid_grant, adopts A's token, still succeeds):\n  1 tool · 3030ms · HTTP http://127.0.0.1:8976/mcp\n```\n\nProvider log — both in flight with the same token, one rotation, one grace-window rejection:\n\n```\n[provider 00:05:42.227] POST /token #1 refresh_token=rt-1\n[provider 00:05:42.626] POST /token #2 refresh_token=rt-1\n[provider 00:05:43.227]   -> #1 200 rotated: access_token=at-2 refresh_token=rt-2 (previous rt-1 enters grace window)\n[provider 00:05:45.627]   -> #2 400 invalid_grant (grace-window replay: concurrent refresh lost the race, grant survives)\n```\n\nFinal token cache — the winner's tokens survive, neither clobbered nor cleared, and process B's MCP call was served with `at-2`:\n\n```\n{\n  \"access_token\": \"at-2\",\n  \"token_type\": \"Bearer\",\n  \"refresh_token\": \"rt-2\",\n  \"expires_in\": 3600,\n  \"expires_at\": 1783127143\n}\n```\n\nOn v0.12.3 the same race fails process B's tool call outright (this is gap 2 in #226); this run shows both invocations succeeding.\n\nNote on scope: if the loser's `invalid_grant` arrives *before* the winner has persisted, the loser still fails that one call (there is nothing newer to adopt yet) — but the grant survives because the winner's tokens land afterwards. Fully eliminating that window is the optional per-entry refresh serialization the issue defers as follow-up hardening.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/refreshable-bearer-invalid-grant-recovery",
+        "head_sha": "412fecf9c8a4581a3f816fc405e0f28ce85f3677",
+        "author": "feniix",
+        "labels": [
+          "status: 📣 needs proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider"
+        ],
+        "files": [
+          {
+            "path": "src/oauth-persistence.ts",
+            "additions": 64,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/oauth-persistence.test.ts",
+            "additions": 165,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 229,
+        "deletions": 15,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-mcporter-227",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-mcporter-227.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 3,
+          "gatingTotal": 3,
+          "counts": {
+            "SUCCESS": 3
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 506,
+    "total_ms": 3789,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 287
+        "ms": 554
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 944
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -56,11 +171,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 209
+        "ms": 2266
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
