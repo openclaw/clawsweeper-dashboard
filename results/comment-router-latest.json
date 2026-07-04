@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-04T21:16:23.458Z",
+  "generated_at": "2026-07-04T21:16:29.851Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T18:16:21.033Z",
+  "since": "2026-07-04T18:16:27.982Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    77127
+    95885
   ],
   "comment_ids": [
-    4883824431
+    4883824523
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:77127:4883824431:2026-07-04T21:13:46Z:re_review",
-      "comment_id": "4883824431",
-      "comment_version_key": "4883824431:2026-07-04T21:13:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/77127#issuecomment-4883824431",
+      "idempotency_key": "comment-router:openclaw/openclaw:95885:4883824523:2026-07-04T21:13:48Z:re_review",
+      "comment_id": "4883824523",
+      "comment_version_key": "4883824523:2026-07-04T21:13:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/95885#issuecomment-4883824523",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 77127,
+      "issue_number": 95885,
       "author": "anyech",
       "author_id": 8743351,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T21:13:46Z",
-      "comment_updated_at": "2026-07-04T21:13:46Z",
+      "comment_created_at": "2026-07-04T21:13:48Z",
+      "comment_updated_at": "2026-07-04T21:13:48Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -73,658 +73,78 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat(tools/write): add append mode for agent writes",
-        "body": "## Summary\n\nRevives and rebases the closed append-mode work from #75549 for the canonical data-loss issue #40001.\n\nThe `write` tool currently overwrites existing files. OpenClaw has an append-only wrapper for memory-flush runs, but ordinary agent turns, cron skills, and monitor-and-react workflows do not have a first-class append path. This PR adds a backwards-compatible optional `append: true` parameter to `write` so agents can append without synthesizing a read-concatenate-overwrite sequence.\n\nWhen `append` is omitted or false, existing overwrite behavior is unchanged.\n\n## What changed\n\n- Adds optional `append?: boolean` handling for host/workspace and sandbox write operations.\n- Preserves existing workspace/root guard behavior.\n- Serializes concurrent appends through the existing file mutation queue.\n- Preserves validation behavior for blank paths and invalid content.\n- Surfaces sandbox I/O failures except for missing-file cases used to create-on-append.\n- Honors aborted append calls before entering the mutation queue.\n- Adds focused regression coverage for append-create, append-accumulate, append-false-overwrites, validation, and sandbox/workspace behavior.\n\n## Validation\n\nRun in an isolated checkout on current `origin/main`:\n\n- `corepack pnpm install --frozen-lockfile`\n- `corepack pnpm exec vitest run src/agents/pi-tools.workspace-only-false.test.ts src/agents/pi-tools.create-openclaw-coding-tools.test.ts src/agents/pi-tools.read.host-tilde-expansion.test.ts src/agents/pi-tools.sandbox-mounted-paths.workspace-only.test.ts src/agents/pi-tools.params.test.ts`\n  - passed: `10 files / 170 tests`\n- `git diff --check`\n- `corepack pnpm lint:core`\n  - passed: `0 warnings / 0 errors`\n\n## Notes\n\nThis PR intentionally keeps the API small and backwards-compatible. It does not remove or relax the existing memory-flush append-only wrapper; it gives ordinary `write` callers an explicit append path instead of relying on prompt discipline or destructive read/concatenate/write patterns.\n\nFixes #40001.\n\n## Real behavior proof\n\n- **Behavior addressed:** The agent write tool supports `append: true` without overwriting the existing file, while still using the workspace-root guard for workspace-only host writes.\n- **Real environment tested:** Local OpenClaw source checkout on Linux using the actual `createHostWorkspaceWriteTool` implementation against a temporary workspace on the real filesystem.\n- **Exact steps or command run after this patch:** Ran a `node --import tsx` terminal smoke that created the host workspace write tool, wrote `first line`, reran the same write tool with `append: true` for `second line`, then read the resulting file.\n- **Evidence after fix:** Terminal capture from the smoke:\n\n  ```text\n  workspace: $TMPDIR/openclaw-write-append-proof-.../workspace\n  tool result: append:true preserved existing content and added the second line\n  file content:\n  first line\n  second line\n  ```\n\n- **Observed result after fix:** The final file retained the original content and appended the new content in order; the append path did not truncate or replace the file.\n- **What was not tested:** No live Gateway session was exercised; validation used the real tool implementation in an isolated local checkout plus targeted regression/type checks.\n",
-        "branch": "feat/write-append-mode-revival",
-        "head_sha": "9f7f053034f96ba485198847dae68368ac968919",
+        "title": "Prevent repeated byte-triggered compactions",
+        "body": "## Summary\n\n- prevent repeated byte-triggered preflight compactions for the same active transcript when a previous byte-triggered compaction did not materially reduce the transcript below the configured threshold\n- record byte-triggered compaction retry state on `SessionEntry` so retries require the same threshold, the same active session file, and material new growth\n- preserve token-triggered preflight compaction behavior, including token compaction taking precedence when the byte retry is suppressed\n\n## What Problem This Solves\n\nWhen `agents.defaults.compaction.maxActiveTranscriptBytes` is configured, a byte-triggered preflight compaction can legitimately leave the active successor transcript above the threshold (for example when transcript rotation preserves branch/state history). Without retry hysteresis, the next turn can immediately trigger another byte-based preflight compaction, producing a repeated compaction loop.\n\nThis patch records the post-compaction active transcript size/file/threshold for byte-triggered compactions and suppresses another byte-triggered retry for that same active transcript until it grows materially. A retry is allowed when the active file changes, the threshold changes, or the transcript grows by at least `max(1 MiB, 10%)` from the previously recorded byte size.\n\nToken-triggered compaction remains unchanged.\n\n## Related\n\nAdjacent to #88188 because both involve `maxActiveTranscriptBytes` behavior, but this PR handles the opposite failure mode: byte-triggered preflight compaction firing repeatedly after a prior byte-triggered compaction leaves the active transcript above threshold.\n\n## Real setup tested\n\nStaged runtime validation in a clean upstream checkout on the current branch. The proof harness used a temporary session store/transcript file, called the real `runPreflightCompactionIfNeeded` runtime path, and replaced only the compaction executor with a recording stub so the trigger/skip decision still came from the production preflight guard. No production runtime or private deployment state was used for PR validation.\n\n## Exact steps or command run after this patch\n\nFrom the repository checkout:\n\n```bash\nnode_modules/.bin/oxfmt --check \\\n  src/auto-reply/reply/agent-runner-memory.ts \\\n  src/auto-reply/reply/session-updates.ts \\\n  src/config/sessions/types.ts \\\n  src/plugins/session-entry-slot-keys.ts \\\n  src/auto-reply/reply/agent-runner-memory.test.ts \\\n  src/auto-reply/reply/session-updates.test.ts\n\ngit diff --check\n\nnode scripts/test-projects.mjs \\\n  src/auto-reply/reply/agent-runner-memory.test.ts -- --run\n\nnode scripts/test-projects.mjs \\\n  src/auto-reply/reply/session-updates.test.ts \\\n  src/auto-reply/reply/session-updates.lifecycle.test.ts -- --run\n\nnode scripts/run-tsgo.mjs \\\n  -p tsconfig.core.json \\\n  --incremental \\\n  --tsBuildInfoFile .artifacts/tsgo-cache/core-byteguard.tsbuildinfo\n```\n\n## Evidence\n\n- `agent-runner-memory.test.ts`: 53 tests passed\n- `session-updates.test.ts` + `session-updates.lifecycle.test.ts`: 5 tests passed\n- `tsgo` core project check passed\n- formatting check passed\n- diff whitespace check passed\n\nNew coverage includes:\n\n- first byte-threshold crossing still triggers preflight compaction\n- same active transcript + same threshold + no material growth suppresses repeated byte-triggered compaction\n- changed active session file does not suppress retry\n- changed threshold does not suppress retry\n- material transcript growth allows retry\n- token-triggered compaction still runs when byte retry is suppressed\n- rotated successor file and byte size are recorded after byte-triggered compaction\n- byte-triggered metadata is persisted through `incrementCompactionCount`\n- ordinary token compactions do not write byte-triggered retry metadata\n\n## Observed result after fix\n\nThe repeated byte-trigger retry condition is blocked for the same active transcript until there is material new growth, while token-triggered compaction and legitimate byte retries remain available.\n\nAdditional staged runtime proof from `tmp/pr-95885-proof/run-preflight-compaction-proof.ts` on head `bba688c7bc9de4aa9d511591a4b1a77b7ddacb34`:\n\n```json\n{\"step\":\"byte-trigger first preflight\",\"compactCallsBefore\":0,\"compactCallsAfter\":1,\"compactedThisStep\":true,\"trigger\":\"transcript_bytes\",\"currentTokenCount\":124,\"sessionId\":\"byte-session\",\"compactionCount\":1,\"transcriptBytesCompactionBytes\":487,\"transcriptBytesCompactionThreshold\":128}\n{\"step\":\"byte-trigger same transcript retry\",\"compactCallsBefore\":1,\"compactCallsAfter\":1,\"compactedThisStep\":false,\"sessionId\":\"byte-session\",\"compactionCount\":1,\"transcriptBytesCompactionBytes\":487,\"transcriptBytesCompactionThreshold\":128}\n{\"step\":\"token-trigger still compacts\",\"compactCallsBefore\":1,\"compactCallsAfter\":2,\"compactedThisStep\":true,\"trigger\":\"tokens\",\"currentTokenCount\":902,\"sessionId\":\"token-session\",\"compactionCount\":1}\n{\"proof\":\"summary\",\"totalCompactCalls\":2,\"triggers\":[\"transcript_bytes\",\"tokens\"]}\n```\n\nThis covers the runtime behavior ClawSweeper requested: the first byte-threshold crossing still compacts, the same active transcript/threshold retry is suppressed when there is no material growth, and token-triggered compaction still runs.\n\n\n## What was not tested\n\n- No production runtime or private deployment state was used.\n- This PR does not change successor transcript pruning semantics; it only prevents immediate retry loops when a byte-triggered compaction does not materially shrink the active transcript.\n- End-to-end UI notification behavior is not changed or tested here.\n",
+        "branch": "fix/auto-compact-byteguard-loop-20260622",
+        "head_sha": "88e351be432f5540d47d6321d4cd0d852a850de4",
         "author": "anyech",
         "labels": [
-          "channel: mattermost",
-          "gateway",
-          "cli",
-          "scripts",
-          "commands",
-          "docker",
-          "agents",
-          "size: XL",
-          "channel: qqbot",
-          "extensions: qa-lab",
-          "proof: supplied",
+          "size: L",
           "proof: sufficient",
-          "extensions: openrouter",
-          "P1",
+          "P2",
           "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look",
-          "feature: ✨ showcase",
-          "extensions: copilot",
-          "channel: raft"
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/canvas/scripts/pnpm-runner.mjs",
-            "additions": 5,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/copilot/harness.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/slash-commands.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openrouter/oauth.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/character-eval.test.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/lab-server.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qqbot/src/engine/api/media-chunked.test.ts",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/raft/src/accounts.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/raft/src/channel.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/raft/src/config-schema.ts",
-            "additions": 16,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/raft/src/gateway.test.ts",
-            "additions": 28,
-            "deletions": 27,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/raft/src/setup.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/normalization-core/src/string-coerce.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/check-memory-fd-repro.mjs",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/docker-e2e-rerun.mjs",
-            "additions": 10,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/e2e/parallels/linux-smoke.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/e2e/secret-provider-integrations.mjs",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/test-docker-all.mjs",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/commands.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-tools.read.ts",
-            "additions": 73,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-tools.sandbox-mounted-paths.workspace-only.test.ts",
-            "additions": 17,
+            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
+            "additions": 399,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/agent-tools.workspace-only-false.test.ts",
-            "additions": 178,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.types.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/harness/compaction.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/extensions/types.test.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/sessions/tools/tool-contracts.test.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/sessions/tools/tool-contracts.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/tools/write.test.ts",
-            "additions": 131,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/tools/write.ts",
-            "additions": 78,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-registry-helpers.ts",
-            "additions": 5,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-session-reconciliation.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/system-prompt.test.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/system-prompt.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/directive-handling.parse.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/thinking.test.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/tool-meta.test.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/message/inbound-reply-dispatch.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/daemon-cli/lifecycle-core.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/program/register.agent.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/configure.commands.ts",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-legacy-config.migrations.test.ts",
-            "additions": 4,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/status.types.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.agents.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/model-pricing-cache.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/setup-registry.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/scripts/control-ui-i18n-report.test.ts",
-            "additions": 3,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/status/status-text.types.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/tui-backend.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/tui-types.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/tui.test.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts",
-            "additions": 2,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/arg-utils.test.ts",
-            "additions": 12,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/bench-cli-startup.test.ts",
-            "additions": 4,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/check-docs-i18n-glossary.test.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/create-dmg.test.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/dependency-ownership-surface-report.test.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/dev-tooling-safety.test.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/docker-e2e-helper-cli.test.ts",
-            "additions": 3,
+            "path": "src/auto-reply/reply/agent-runner-memory.ts",
+            "additions": 139,
             "deletions": 9,
             "changeType": "MODIFIED"
           },
           {
-            "path": "test/scripts/embedded-run-abort-leak.test.ts",
-            "additions": 1,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/generate-dependency-release-evidence.test.ts",
-            "additions": 35,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/kitchen-sink-rpc-walk.test.ts",
-            "additions": 18,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/merge-head-diff-base.test.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/plugin-gateway-gauntlet.test.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/plugin-package-dependencies.test.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/plugin-release-pretag-pack-check.test.ts",
-            "additions": 1,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/plugin-update-unchanged-docker.test.ts",
-            "additions": 7,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/proxy-install-ca.test.ts",
-            "additions": 1,
+            "path": "src/auto-reply/reply/session-updates.test.ts",
+            "additions": 58,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "test/scripts/release-candidate-checklist.test.ts",
+            "path": "src/auto-reply/reply/session-updates.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/session-entry-slot-keys.ts",
             "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/release-preflight.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/report-cli-helpers.test.ts",
-            "additions": 4,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/restart-mac.test.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/run-opengrep.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/test-device-pair-telegram.test.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/test-group-report.test.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/validate-release-publish-approval.test.ts",
-            "additions": 3,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/verify-pr-hosted-gates.test.ts",
-            "additions": 20,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/stable-release-closeout.test.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/de.ts",
-            "additions": 1,
             "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/en.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/es.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/fa.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/fr.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/hi.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/id.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/it.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/ja-JP.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/ko.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/nl.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/pl.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/pt-BR.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/ru.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/th.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/tr.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/uk.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/vi.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/zh-CN.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/i18n/locales/zh-TW.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/terminal/terminal-connection.test.ts",
-            "additions": 77,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/terminal/terminal-connection.ts",
-            "additions": 64,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/terminal/terminal-panel.ts",
-            "additions": 241,
-            "deletions": 102,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 77,
-        "additions": 781,
-        "deletions": 273,
+        "changedFiles": 6,
+        "additions": 649,
+        "deletions": 10,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-77127",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77127.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-95885",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95885.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 94,
-          "gatingTotal": 89,
+          "total": 93,
+          "gatingTotal": 88,
           "counts": {
-            "SUCCESS": 42,
-            "SKIPPED": 21,
-            "FAILURE": 29,
-            "IN_PROGRESS": 1,
+            "SUCCESS": 65,
+            "SKIPPED": 24,
+            "IN_PROGRESS": 3,
             "NEUTRAL": 1
           },
           "blockers": [
@@ -804,15 +224,15 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2778,
+    "total_ms": 2169,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 697
+        "ms": 585
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1709
+        "ms": 1269
       },
       {
         "name": "classify_comment_commands",
@@ -832,7 +252,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 353
+        "ms": 301
       },
       {
         "name": "append_ledger",
