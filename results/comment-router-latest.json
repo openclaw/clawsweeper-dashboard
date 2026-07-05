@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T02:59:56.871Z",
+  "generated_at": "2026-07-05T03:00:07.349Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T23:59:54.827Z",
+  "since": "2026-07-05T00:00:07.127Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    100149
+    100153
   ],
-  "comment_ids": [
-    4884636447
-  ],
-  "status_comment_id": 4884636545,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,229 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:100149:4884636447:2026-07-05T02:58:35Z:re_review",
-      "comment_id": "4884636447",
-      "comment_version_key": "4884636447:2026-07-05T02:58:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100149#issuecomment-4884636447",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 100149,
-      "author": "yaotukeji",
-      "author_id": 20797940,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-05T02:58:35Z",
-      "comment_updated_at": "2026-07-05T02:58:35Z",
-      "status_comment_id": 4884636545,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 100149,
-          "dispatch_key": "router-9eebdfce9eb05d56",
-          "dispatched_at": "2026-07-05T02:59:57.838Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-05T02:59:58.870Z",
-          "response_comment_id": "4884636545",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: prevent Anthropic thinking-signature replay causing permanent session bricks (#94228)",
-        "body": "## Summary\n\nThis PR implements a create-side prevention fix for Issue #94228, where Anthropic thinking-signature replay causes permanent session bricks.\n\n## What Problem This Solves\n\n**Problem**: The current implementation re-emits ALL historical thinking blocks with their original signatures during replay, violating Anthropic's contract that \"thinking blocks from already-closed turns may be omitted\". When signatures become stale (due to model version drift, config changes, or internal state corruption), this causes HTTP 400 errors and permanent session bricks (~11 occurrences/24h per host).\n\n**Impact**: Users experience permanent session bricks requiring manual restart when thinking signatures no longer match the replay context.\n\n## Why This Change Was Made\n\nAfter analyzing 9 different PR approaches (#94493, #94649, #97019, etc.), I identified a gap in the existing sanitization pipeline:\n\n- Current code handles compaction-stale signatures (timestamp-based)\n- Current code handles blank/missing signatures\n- **Missing**: Present-but-invalid signatures from other sources (model drift, config changes, corruption)\n\nThis fix fills that gap by unconditionally stripping ALL non-latest thinking signatures, providing defense-in-depth alongside recovery-side approaches like PR #94649.\n\n## User Impact\n\n**Before**: Sessions could brick permanently when stale thinking signatures were replayed, causing HTTP 400 errors on every subsequent request.\n\n**After**: Non-latest thinking signatures are proactively stripped before replay, preventing signature mismatch errors while preserving latest-turn signatures for provider compatibility.\n\n**Performance**: Minimal impact - returns original array reference when no changes needed (reference equality optimization).\n\n## Evidence\n\n### Code Changes\n- `src/agents/embedded-agent-runner/thinking.ts`: Added `stripAllNonLatestThinkingSignatures()` (+62 lines)\n- `src/agents/embedded-agent-runner/replay-history.ts`: Integrated into `sanitizeSessionHistory` pipeline (+16 lines)\n- `src/agents/embedded-agent-runner/thinking.test.ts`: Comprehensive test coverage (+152 lines)\n\n### Test Coverage\n6 test cases covering:\n1. Reference equality when no non-latest turns exist\n2. Strips ALL signature types (valid, blank, missing, opaque) from non-latest turns\n3. Preserves all signatures with single turn + preserveLatestAssistant: false\n4. Can strip from \"latest\" turn when flag disabled\n5. Handles multiple turns correctly\n6. Generates placeholder text for thinking-only turns\n\n### Design Principles\n- **Minimal scope**: ~60 lines core logic, following PR #94649 example\n- **Leverages existing helpers**: Uses `stripThinkingSignaturesFromMessage`\n- **Defensive design**: Latest-turn exemption protects provider expectations\n- **Performance optimized**: Returns original array when unchanged\n- **Comprehensive testing**: 6 cases covering edge cases\n\n### Integration Point\nInserted into `sanitizeSessionHistory` pipeline between:\n1. `stripStaleThinkingSignaturesForCompactionReplay` (compaction-specific)\n2. **NEW** `stripAllNonLatestThinkingSignatures` (universal prevention)\n3. `stripInvalidThinkingSignatures` (final safety net)\n\n## Relationship to Other Fixes\n\nThis create-side prevention complements PR #94649 recovery-side approach:\n\n| Layer | Mechanism | Timing | This PR | PR #94649 |\n|-------|-----------|--------|---------|-----------|\n| Prevention | Create-side sanitization | Before request sent | ✅ Strips non-latest signatures | ❌ |\n| Recovery | Terminal-result carrier | After error detected | ❌ | ✅ Retries without thinking |\n| Repair | Reactive history repair | After provider confirms rejection | ❌ | ✅ `repairRejectedThinkingReplayInSessionManager` |\n\nThree layers working together provide robust protection against thinking-signature bricks.\n\n## Testing Notes\n\nDue to network firewall blocking external AI APIs (`api.anthropic.com` redirected to block page), I could not perform live reproduction of the thinking-signature brick scenario. Implementation based on thorough source code analysis across 9 different PR approaches.\n\nTests can be validated via CI or by maintainers with direct API access.\n\n## Coordination Questions\n\n- Is this PR waiting on any other PR to merge first?\n- Are maintainers planning coordinated fix under #94228, or preferring incremental patches?\n- Should contributors focus on one approach (recovery vs prevention) to avoid conflicts?\n\nHappy to help however makes sense - whether providing additional repro evidence (once network access resolved), testing existing PRs, or diving into narrower follow-up issues!\n\n---\n\n**Fixes**: #94228\n**Related**: #94649, #94493, #97019, #94234, #98441, #98831",
-        "branch": "fix-94228-thinking-signature-replay",
-        "head_sha": "9b53a974825c8e2f42115ace6301af4165881277",
-        "author": "yaotukeji",
-        "labels": [
-          "agents",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner.sanitize-session-history.test.ts",
-            "additions": 38,
-            "deletions": 31,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/replay-history.ts",
-            "additions": 16,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/thinking.test.ts",
-            "additions": 165,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/thinking.ts",
-            "additions": 62,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 281,
-        "deletions": 34,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100149",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100149.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 93,
-          "gatingTotal": 88,
-          "counts": {
-            "SUCCESS": 32,
-            "IN_PROGRESS": 35,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "security-fast:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "security-fast:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-05T02:59:57.174Z"
-    }
-  ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4715,
+    "total_ms": 349,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 599
+        "ms": 209
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1429
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -265,15 +57,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2660
+        "ms": 127
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
