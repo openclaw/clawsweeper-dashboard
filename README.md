@@ -90,6 +90,15 @@ commenting or closing anything. Closed or already-closed reports move to
 `records/<repo-slug>/closed/<number>.md`; reopened archived items move back to
 `items/` as stale work.
 
+Apply and artifact replay also maintain Codex-authored decision packet JSON at
+`records/<repo-slug>/decision-packets/<number>.json` for reports that need a
+maintainer ruling. Codex supplies the exact question, rationale, options,
+recommendation, and likely owner as structured review output. Deterministic
+code validates that intent, persists it, refreshes item state, and removes stale
+packets; labels and report prose do not reconstruct the decision. Pass
+`--decision-packets-dir` to write those packet files somewhere other than the
+profile's default records directory.
+
 Generated state lives on the `state` branch of `openclaw/clawsweeper-state`:
 durable `records/`, `jobs/`, `results/`, audit output, workflow status JSON,
 repair ledgers, and the rendered dashboard. The state repo `main` branch is the
