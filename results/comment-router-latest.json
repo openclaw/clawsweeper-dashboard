@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T19:55:31.030Z",
+  "generated_at": "2026-07-05T19:55:33.619Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T16:55:28.311Z",
+  "since": "2026-07-05T16:55:33.311Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100446
+    100441
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,158 +29,27 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100446:4887384412:2026-07-05T19:55:25Z:clawsweeper_auto_repair",
-      "comment_id": "4887384412",
-      "comment_version_key": "4887384412:2026-07-05T19:55:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100446#issuecomment-4887384412",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100446,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-05T19:50:43Z",
-      "comment_updated_at": "2026-07-05T19:55:25Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=f2fb769669deeff25102e427262eb7063d6d1f6e)",
-      "review_summary": "The branch adds an iMessage RPC retry that strips `reply_to` for unsupported threaded text sends and rekeys the downtime recovery cursor by account plus database identity with tests.\n\nPR surface: Source +103, Tests +130. Total +233 across 6 files.\n\nReproducibility: yes. source-reproducible. Current main rethrows the upstream `reply_to` unsupported error and stores the recovery cursor by account only; the linked issue provides real logs, but I did not run a live macOS/iMessage repro in this read-only pass.",
-      "review_followup": "- [P2] Needs contributor or maintainer follow-up because the PR has a protected maintainer label, a blocking media-reply fallback gap, and missing after-fix real behavior proof.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "f2fb769669deeff25102e427262eb7063d6d1f6e",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(imessage): plain-send fallback for threaded replies + db-scoped recovery cursor (#99638)",
-        "body": "Closes #99638\n\n## What Problem This Solves\n\nIssue #99638 reported three failures on the dedicated bot-user / SSH-wrapped iMessage deployment. The primary one (every DM after the first failing with `reply session initialization conflicted`) was already fixed by #98835. This PR fixes the two remaining reported failures:\n\n- **Threaded replies were dropped on AppleScript-only deployments.** When a reply payload carried `reply_to` but the private-API bridge was unavailable, `imsg` hard-errored (`reply_to requires bridge transport; ...`) and OpenClaw rethrew, so the reply was **lost** with no fallback.\n- **Repointing `dbPath` silently stopped all inbound.** The downtime-recovery cursor was keyed per account, not per database, and is monotonic. After pointing `dbPath` at a different `chat.db` with lower rowids (e.g. a fresh bot-user DB, max rowid ~15), the stale high-water (~12396) was still sent as `since_rowid`, so `imsg` replayed/emitted nothing and inbound was **silently lost forever**.\n\n## Why This Change Was Made\n\nBoth fixes stay entirely within `extensions/imessage` (no core or config-surface changes):\n\n- **Plain-send fallback (`send.ts`):** the send `catch` now detects the specific \"threaded reply unsupported\" error and, when a `reply_to` was set, retries the send once with `reply_to` stripped — delivering the message unthreaded instead of dropping it. The match is a closed error class, so unrelated send failures still propagate.\n- **DB-scoped recovery cursor (`recovery-cursor.ts`):** the cursor value now records the resolved database identity (`local:<dbPath>` / `remote:<host>:<dbPath>`). A cursor recorded against a different database no longer seeds `since_rowid`, and advance is monotonic only within the same database — so a `dbPath`/`remoteHost` change starts from the new DB's own startup watermark. This is cache-class state (rebuilds safely via GUID dedupe), so no migration is required.\n\n## User Impact\n\n- On no-SIP / AppleScript-only deployments, replies are delivered (unthreaded) instead of being silently dropped.\n- Changing `dbPath` (or moving to/from a remote host) no longer wedges inbound message delivery; recovery resumes from the correct database.\n\n## Evidence\n\n**New/updated unit + integration tests — all green (90 passed across the 3 touched files):**\n\n```\nnode scripts/run-vitest.mjs \\\n  extensions/imessage/src/monitor/recovery-cursor.test.ts \\\n  extensions/imessage/src/send.test.ts \\\n  extensions/imessage/src/monitor.last-route.test.ts\n Test Files  3 passed (3)\n      Tests  90 passed (90)\n```\n\n- `send.test.ts`: \"resends unthreaded when the transport cannot deliver a threaded reply (#99638)\" — asserts the first attempt carries `reply_to`, the retry drops it, the message is delivered, and the receipt reports no threaded reply.\n- `recovery-cursor.test.ts`: cursor is scoped per (account, database), ignores a cursor from a different database, re-scopes on advance, adopts a pre-scoping legacy cursor once for the active database, and derives a stable identity across `dbPath`/`remoteHost`/custom `cliPath`.\n- `monitor.last-route.test.ts`: existing downtime-recovery integration tests updated to the DB-scoped cursor and still passing.\n\nTypecheck: `pnpm tsgo:extensions` and `pnpm tsgo:extensions:test` both clean.\n\nCodex review (`autoreview`, gpt-5.5) run to clean: it flagged and I fixed upgrade-drop of legacy cursors, per-database cursor overwrite, custom-`cliPath` identity aliasing, and unthreaded-fallback receipt accuracy; final pass reports no actionable findings.\n\n**Primary bug (#98835) verified live for context:** the same issue's primary conflict was verified end-to-end on a real two-Mac SSH deployment (gateway on one Mac driving `imsg` on another over an SSH wrapper) — three sequential multi-turn DMs all delivered replies with `outcome=completed` and zero `reply session initialization conflicted`. With this PR the remaining two reported items are addressed.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "fix/imessage-99638-reply-fallback-recovery-cursor",
-        "head_sha": "f2fb769669deeff25102e427262eb7063d6d1f6e",
-        "author": "omarshahine",
-        "labels": [
-          "channel: imessage",
-          "maintainer",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/imessage/src/monitor.last-route.test.ts",
-            "additions": 27,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/monitor-provider.ts",
-            "additions": 21,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/recovery-cursor.test.ts",
-            "additions": 97,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/recovery-cursor.ts",
-            "additions": 82,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/send.test.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/send.ts",
-            "additions": 40,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 300,
-        "deletions": 67,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100446",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100446.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "gatingTotal": 98,
-          "counts": {
-            "CANCELLED": 2,
-            "SUCCESS": 64,
-            "SKIPPED": 36,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "matrix.checkName:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "matrix.checkName:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3018,
+    "total_ms": 478,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 319
+        "ms": 295
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2386
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -192,11 +61,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 289
+        "ms": 170
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
