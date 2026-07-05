@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T01:28:04.180Z",
+  "generated_at": "2026-07-05T01:28:14.185Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-04T22:28:02.413Z",
+  "since": "2026-07-04T22:28:12.571Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     99972
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4884398180
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,121 +33,10 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99972:4882290867:2026-07-05T01:27:59Z:clawsweeper_auto_repair",
-      "comment_id": "4882290867",
-      "comment_version_key": "4882290867:2026-07-05T01:27:59Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99972#issuecomment-4882290867",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99972,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T13:58:49Z",
-      "comment_updated_at": "2026-07-05T01:27:59Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=b754d8f2fa54b53516956574aa08ebc82fcf41b9)",
-      "review_summary": "The PR adds watcher-side build readiness checks, deferred restart polling, child-exit deferral, and regression tests for selected gateway watch rebuild states.\n\nPR surface: Tests +284, Other +136. Total +420 across 3 files.\n\nReproducibility: yes. source-level: current main returns `missing_build_stamp` before checking `dist/entry.js`, and PR head treats that reason as soft. I did not run the destructive systemd/git-update race locally.",
-      "review_followup": "- [P2] A narrow repair can fix the P1 blocker by separating missing physical output from stamp-only metadata before the guard allows restart.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "b754d8f2fa54b53516956574aa08ebc82fcf41b9",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(watch): defer restart when dist/entry.js is missing mid-rebuild",
-        "body": "## What Problem This Solves\n\nWhen a `git push` triggers source file changes while `dist/` is mid-rebuild, the hot-reload watcher (`watch-node.mjs`) unconditionally kills the current healthy gateway child process and restarts into a broken `dist/`, causing a crash-loop that exhausts systemd's restart limit (37-minute outage).\n\nFixes [#99603](https://github.com/openclaw/openclaw/issues/99603).\n\n## Why This Change Was Made\n\n`requestRestart()` in `scripts/watch-node.mjs` sent SIGTERM to the child without verifying build readiness. The fix adds `isBuildReadyForRestart()` which delegates to run-node's `resolveBuildRequirement` + `resolveRuntimePostBuildRequirement`, but **only defers on hard failures** where the child physically cannot start:\n\n| Hard failure (defer) | Reason |\n|----------------------|--------|\n| `dist/entry.js` missing | `missing_dist_entry` |\n| Bundled plugin output missing | `missing_bundled_plugin_dist_entry` |\n| Private QA dist missing | `missing_private_qa_dist` |\n| Runtime postbuild outputs missing | `missing_runtime_postbuild_output` |\n\n**Soft staleness** (child CAN start, run-node will rebuild) does NOT defer — normal gateway:watch behavior is preserved:\n\n| Soft staleness (allow restart) | Reason |\n|-------------------------------|--------|\n| Build stamp missing (entry.js exists) | `missing_build_stamp` |\n| Git HEAD changed | `git_head_changed` |\n| Dirty watched source tree | `dirty_watched_tree` |\n| Config newer than stamp | `config_newer` |\n| Build stamp missing HEAD | `build_stamp_missing_head` |\n| Source mtime drift | `source_mtime_newer` |\n\nIf the build is not ready (hard failure), the watcher polls every 200ms. A **5-minute timeout** prevents infinite polling. Child-exit during deferral also has bounded recovery (5-min timeout → fallback `startRunner()`).\n\nThe watcher's process environment (`deps.env`) is passed into readiness checks, consistent with the child runner's `OPENCLAW_FORCE_BUILD` / `OPENCLAW_BUILD_PRIVATE_QA` flags.\n\n## User Impact\n\n- **Before**: Source changes during mid-rebuild → watcher kills healthy gateway → crash-loop → outage\n- **After**: Watcher only defers on hard failures (missing files). Normal source/config edits proceed as before — run-node rebuilds on start.\n\n## Evidence\n\n### Unit Tests (28/28 passed)\n\n- 3 hard-failure tests: `missing_dist_entry`, `missing_bundled_plugin_dist_entry`, `missing_private_qa_dist` → defer\n- 1 runtime hard-failure: `missing_runtime_postbuild_output` → defer\n- 6 soft-staleness tests: `missing_build_stamp`, `git_head_changed`, `dirty_watched_tree`, `config_newer`, `build_stamp_missing_head`, `source_mtime_newer` → normal kill+restart\n- Clean contract test → normal kill+restart\n- Timeout test → gives up after 5 min\n- Child-exit deferral test → defers on hard failure, recovers when ready\n\n### Real Machine Gateway:Watch Proof (Linux x64, Node 22.19)\n\n**Current HEAD** `b754d8f2fa`, host `LIN-DF11F9C3F26.zte.intra`\n\n```\n=== 正常源码编辑（软过期） ===\n$ touch src/entry.ts\n→ resolveBuildRequirement: shouldBuild=true reason=source_mtime_newer\n→ isBuildReadyForRestart: soft staleness → allow restart ✅\n→ child killed normally → run-node rebuilds → gateway restarts\n  (行为与 MAIN 分支完全一致，无 5 分钟延迟)\n\n=== mid-rebuild（硬故障: missing_dist_entry） ===\n$ rm dist/entry.js && touch src/entry.ts\n→ resolveBuildRequirement: shouldBuild=true reason=missing_dist_entry\n→ isBuildReadyForRestart: hard failure → defer ✅\n[openclaw] Build output not ready (dist/entry.js missing or stale); waiting before restart.\n\n$ cp dist/entry.js.backup dist/entry.js  # rebuild 完成\n[openclaw] Build output ready; proceeding with restart.\n→ 安全重启 ✅\n\n=== MAIN 分支（无修复）对比 ===\n[openclaw] Building TypeScript (dist is stale: missing_dist_entry)\n→ kill 健康子进程 → crash loop → systemd 耗尽重启限额\n```\n\n## Changes\n\n6 commits, 3 files:\n\n- `scripts/watch-node.mjs`: `isBuildReadyForRestart` delegates to run-node's `resolveBuildRequirement` + `resolveRuntimePostBuildRequirement`; only defers on hard failures; passes `deps.env` for consistency with child runner; 200ms polling + 5-min timeout; child-exit bounded recovery\n- `src/infra/watch-node.test.ts`: `vi.mock` run-node exports; 3 hard-failure defer tests + 6 soft-staleness allow-restart tests + runtime hard-failure + timeout + child-exit = 28 total\n- `test/scripts/lint-suppressions.test.ts`: +1 suppression allowlist entry\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
-        "branch": "fix/issue-99603-watch-node-guard",
-        "head_sha": "b754d8f2fa54b53516956574aa08ebc82fcf41b9",
-        "author": "chenyangjun-xy",
-        "labels": [
-          "scripts",
-          "size: M",
-          "proof: sufficient",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "scripts/watch-node.mjs",
-            "additions": 138,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/watch-node.test.ts",
-            "additions": 286,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/lint-suppressions.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 425,
-        "deletions": 5,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99972",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99972.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 100,
-          "gatingTotal": 95,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 34,
-            "SUCCESS": 63,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:99972:4882807897:2026-07-04T15:30:52Z:re_review",
-      "comment_id": "4882807897",
-      "comment_version_key": "4882807897:2026-07-04T15:30:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99972#issuecomment-4882807897",
+      "idempotency_key": "comment-router:openclaw/openclaw:96721:4884398180:2026-07-05T01:25:39Z:re_review",
+      "comment_id": "4884398180",
+      "comment_version_key": "4884398180:2026-07-05T01:25:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/96721#issuecomment-4884398180",
       "repo": "openclaw/openclaw",
       "target_branch": null,
       "issue_number": 99972,
@@ -255,21 +146,21 @@
     }
   ],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1961,
+    "total_ms": 1819,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 207
+        "ms": 463
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1539
+        "ms": 1134
       },
       {
         "name": "classify_comment_commands",
-        "ms": 4
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -285,11 +176,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 183
+        "ms": 206
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
