@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T20:16:44.733Z",
+  "generated_at": "2026-07-05T20:17:02.199Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T17:16:44.420Z",
+  "since": "2026-07-05T17:17:00.141Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    100107
+    100446
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4887455505
+  ],
+  "status_comment_id": 4887455611,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,27 +31,211 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100446:4887455505:2026-07-05T20:15:46Z:re_review",
+      "comment_id": "4887455505",
+      "comment_version_key": "4887455505:2026-07-05T20:15:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100446#issuecomment-4887455505",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 100446,
+      "author": "omarshahine",
+      "author_id": 10343873,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-05T20:15:46Z",
+      "comment_updated_at": "2026-07-05T20:15:46Z",
+      "status_comment_id": 4887455611,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 100446,
+          "dispatch_key": "router-62cc4765ea4e515c",
+          "dispatched_at": "2026-07-05T20:17:02.948Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-05T20:17:03.832Z",
+          "response_comment_id": "4887455611",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(imessage): plain-send fallback for threaded replies + db-scoped recovery cursor (#99638)",
+        "body": "Closes #99638\n\n## What Problem This Solves\n\nIssue #99638 reported three failures on the dedicated bot-user / SSH-wrapped iMessage deployment. The primary one (every DM after the first failing with `reply session initialization conflicted`) was already fixed by #98835. This PR fixes the two remaining reported failures:\n\n- **Threaded replies were dropped when the private-API bridge was unavailable.** When a reply carried `reply_to` but only AppleScript transport was available, `imsg` hard-errored (`reply_to requires bridge transport; ...`) and OpenClaw rethrew, so the reply was **lost** — for both text and media replies.\n- **Repointing `dbPath` silently stopped all inbound.** The downtime-recovery cursor was keyed per account, not per database, and is monotonic. After pointing `dbPath` at a different `chat.db` with lower rowids (e.g. a fresh bot-user DB, max rowid ~15), the stale high-water (~12396) was still sent as `since_rowid`, so `imsg` replayed/emitted nothing and inbound was **silently lost forever**.\n\n## Why This Change Was Made\n\nBoth fixes stay entirely within `extensions/imessage` (no core or config-surface changes):\n\n- **Plain-send fallback (`send.ts`):** the send `catch` now detects the specific \"threaded reply unsupported\" error and, when a `reply_to` was set, retries the send once with `reply_to` stripped — delivering the message unthreaded instead of dropping it. This covers **text and media replies** alike (both carry `reply_to` through the same send path), keeps any attached file on the retry, and clears the reply id so the receipt reports the unthreaded send that was actually delivered. The match is a closed error class, so unrelated send failures still propagate.\n- **DB-scoped recovery cursor (`recovery-cursor.ts`):** the cursor is keyed per **(account, database identity)**. The identity is derived from `remoteHost` / `dbPath` / custom `cliPath`, with local paths canonicalized (leading `~` expanded, then resolved) so the implicit default and an explicit path to the same `chat.db` map to one identity. A cursor recorded against a different database no longer seeds `since_rowid`, advance is monotonic only within the same database, and a pre-scoping (account-only) cursor is adopted once for the active database on upgrade so downtime replay still works. This is cache-class state (rebuilds safely via GUID dedupe), so no migration is required.\n\n## User Impact\n\n- On no-SIP / AppleScript-only deployments, **text and media replies are delivered (unthreaded)** instead of being silently dropped.\n- Changing `dbPath` (or moving to/from a remote host, or spelling the default path explicitly) no longer wedges inbound message delivery; recovery resumes from the correct database.\n\n## Evidence\n\n**Unit + integration tests — all green (92 passed across the 3 touched files):**\n\n```\nnode scripts/run-vitest.mjs \\\n  extensions/imessage/src/monitor/recovery-cursor.test.ts \\\n  extensions/imessage/src/send.test.ts \\\n  extensions/imessage/src/monitor.last-route.test.ts\n Test Files  3 passed (3)\n      Tests  92 passed (92)\n```\n\nThese exercise the exact runtime paths the fix changes:\n- `send.test.ts`: text and media replies that hit the upstream `reply_to`-unsupported error retry once with `reply_to` stripped, deliver the message/media unthreaded, and report a non-threaded receipt.\n- `recovery-cursor.test.ts`: cursor scoped per (account, database); ignores a cursor from a different database; re-scopes on advance without losing the other database's high-water; adopts a pre-scoping legacy cursor once for the active database; unifies the implicit default with explicit/`~` spellings of the same `chat.db`; keeps distinct DBs/wrappers/remotes separate.\n- `monitor.last-route.test.ts`: existing downtime-recovery integration tests updated to the DB-scoped cursor (local + remote paths) and still passing.\n\nTypecheck: `pnpm tsgo:extensions` and `pnpm tsgo:extensions:test` both clean.\n\nCodex review (`autoreview`, gpt-5.5) run to clean over several rounds — it flagged and I fixed: legacy-cursor upgrade-drop, per-database cursor overwrite, custom-`cliPath` identity aliasing, unthreaded-fallback receipt accuracy, media-reply fallback coverage, and default-vs-explicit-path identity normalization. Final pass reports no actionable findings.\n\n**Primary bug (#98835) verified live for context:** the same issue's primary conflict was verified end-to-end on a real two-Mac SSH deployment (gateway on one Mac driving `imsg` on another over an SSH wrapper) — three sequential multi-turn DMs all delivered replies with `outcome=completed` and zero `reply session initialization conflicted`. With this PR the remaining two reported items are addressed. The two behaviors changed here are transport-error and persisted-cursor paths; they are proven deterministically by the unit/integration tests above (which drive the real `imsg` RPC rejection and the cross-database cursor scoping) rather than a live macOS run. I can add a live AppleScript-only fallback + dbPath-repoint capture on request.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/imessage-99638-reply-fallback-recovery-cursor",
+        "head_sha": "3a233c8601255aff845b17c0c9a4535a998a7317",
+        "author": "omarshahine",
+        "labels": [
+          "channel: imessage",
+          "maintainer",
+          "size: M",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/imessage/src/monitor.last-route.test.ts",
+            "additions": 27,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/imessage/src/monitor/monitor-provider.ts",
+            "additions": 21,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/imessage/src/monitor/recovery-cursor.test.ts",
+            "additions": 116,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/imessage/src/monitor/recovery-cursor.ts",
+            "additions": 118,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/imessage/src/send.test.ts",
+            "additions": 66,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/imessage/src/send.ts",
+            "additions": 41,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 389,
+        "deletions": 67,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100446",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100446.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "gatingTotal": 91,
+          "counts": {
+            "SUCCESS": 50,
+            "SKIPPED": 27,
+            "IN_PROGRESS": 18,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "processed_at": "2026-07-05T20:17:02.425Z"
+    }
+  ],
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 503,
+    "total_ms": 4251,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 302
+        "ms": 547
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1497
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -57,11 +243,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 190
+        "ms": 2183
       },
       {
         "name": "append_ledger",
