@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T11:27:32.799Z",
+  "generated_at": "2026-07-05T11:27:47.838Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T08:27:32.365Z",
+  "since": "2026-07-05T08:27:45.558Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83000
+    100272
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,136 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100272:4885679176:2026-07-05T11:27:42Z:clawsweeper_auto_repair",
+      "comment_id": "4885679176",
+      "comment_version_key": "4885679176:2026-07-05T11:27:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100272#issuecomment-4885679176",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100272,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-05T10:26:57Z",
+      "comment_updated_at": "2026-07-05T11:27:42Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=578b6f5fba653a2bc891b58b16505faa570edcb9)",
+      "review_summary": "The PR changes the embedded agent LLM boundary to strip inbound metadata from active user turns as well as historical turns, and updates boundary/cache-stability tests for active-turn byte identity.\n\nPR surface: Source +1, Tests +110. Total +111 across 3 files.\n\nReproducibility: yes. at source level. Current main preserves inbound metadata for the active user turn while stripping it once the same turn becomes historical, and the PR changes/tests the exact boundary helper that causes the byte difference.",
+      "review_followup": "- [P2] Maintainer or contributor follow-up should preserve current inbound context before merge, likely by stacking or reusing the runtime-context handoff from https://github.com/openclaw/openclaw/pull/89428.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "578b6f5fba653a2bc891b58b16505faa570edcb9",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): strip inbound metadata from the active user turn too, for byte-stable prompt caching",
+        "body": "Fixes #100271\n\n**Reported-by:** @Peetiegonzalez\n**cc:** @Peetiegonzalez\n\n### Problem\n\nThe channel layer decorates the ACTIVE user message with a \"Conversation info (untrusted\nmetadata)\" / \"Reply target of current user message (untrusted, for context)\" block, but the\nsession store only ever persists the bare (already-stripped) text.\n`stripHistoricalInboundMetadataFromUserMessages`\n(`src/agents/embedded-agent-runner/run/attempt.llm-boundary.ts`) already strips this block from\nhistorical user turns before replay, but left the active turn's block in place. The active turn\nis what becomes the PREVIOUS turn's history the moment a new turn arrives, so its serialized bytes\nchanged retroactively at that point in the conversation on every single turn — invalidating any\nprefix/exact-match provider prompt cache from there onward, every turn. Full details and\nevidence in #100271.\n\n(#90811 fixed the *timestamp* half of this same active/historical asymmetry; this is the\nremaining half — the metadata block itself.)\n\n### Fix\n\n`stripHistoricalInboundMetadataFromUserMessages` now strips inbound metadata from the active turn\nidentically to a historical turn, in all three text shapes it handles:\n- **Envelope-wrapped** (`[DOW YYYY-MM-DD HH:MM ...] ` channel envelope, or a cron\n  \"Current time:\" marker): the envelope is still preserved verbatim; only the metadata block\n  behind it is stripped, active or historical.\n- **Plain text** (no envelope): stripped then stamped from the message's own timestamp, same as\n  historical.\n- **Multi-block (attachment) turns**: the second-and-later text blocks are metadata-stripped\n  regardless of active/historical, same as the first block already was via the envelope/plain\n  path.\n\nThe `isActive` branch that special-cased \"return raw unchanged\" / \"keep the block\" for the active\nturn is removed from all three call sites; `isActive` is still used elsewhere in the function\n(the current-turn timestamp-override matching), so it isn't removed entirely.\n\n### Measurements\n\n| Config | TRUE cache hit% (gpt-5.5, ChatGPT-OAuth, 12-turn identical-prompt A/B, session-affinity\nheader from #100233 already applied) |\n|---|---|\n| stock (active keeps metadata) | 81.8% |\n| + this fix | **90.6%** |\n\nAnthropic (claude-sonnet-4-6) shows the larger effect on the write side, since its cache matches\nonly at explicit `cache_control` breakpoints: stock, the mutated active-turn byte voids everything\npast the 36,105-token system-prompt breakpoint every turn, so the whole conversation tail gets\nrewritten into the cache each turn at the 1.25x cache-write rate. With this fix, over a 12-turn\nsession: **cacheWrite 60,208 -> 10,051 tokens (-83%)**; cacheRead advances monotonically instead\nof resetting to the same breakpoint every turn.\n\nDeepSeek and Kimi (incremental/multi-prefix caches) mostly absorb the mutation already (95.4% vs\n93.9%, and 89.7% vs 96.0% respectively) — this fix is neutral-to-slightly-positive there, not a\nregression. Full per-model tables in #100271.\n\n### Trade-off\n\nThe active turn no longer surfaces its own message_id/sender/reply-target JSON inline to the\nmodel (same strip as a historical turn always had). The equivalent patch has been running as a\ndist hot-patch on a production OpenClaw gateway since 2026-07-04 (real traffic soak) with no\nobserved regressions in reply threading, mentions, or routing.\n\n### Tests\n\n`attempt.llm-boundary.cache-stability.test.ts`: 3 new tests asserting the active-turn form is\nbyte-identical to its later historical form for (a) an envelope-wrapped message, (b) a\nnon-enveloped message, (c) the second text block of a multi-block (attachment) turn.\n\n`attempt.llm-boundary.test.ts`: updated 3 existing tests that encoded the old \"active turn keeps\nits metadata\" behavior as the intended spec — they now assert the metadata is stripped from the\nactive turn too (byte-identical to history), matching the new intended behavior. All other tests\nin this file were unaffected (their \"current turn\" fixtures carried no metadata to begin with).\n\nTypecheck (`node scripts/run-tsgo.mjs -p tsconfig.core.json`) clean — output byte-identical\nbefore/after (42 pre-existing, unrelated `ui/` module-resolution errors on this branch, confirmed\npresent on unmodified upstream main too).\n\nFull `unit-fast` vitest shard (`test/vitest/vitest.unit-fast.config.ts`, which is where this test\nfile actually runs — see note below) passes clean: 11,000 passed / 10 failed / 4 skipped, and the\n10 failures are byte-identical (same 5 files, same test names) to the failures already present on\nunmodified upstream main before this change — i.e. zero regressions introduced by this diff.\n\nNote: this test file is dynamically routed into the `unit-fast` shard rather than the\n`agents-embedded-agent` shard by content-based classification\n(`test/vitest/vitest.unit-fast-paths.mjs`), not a static per-file config — worth knowing if a\nfuture PR touching this file sees \"No test files found\" against the more obvious-looking shard.\n\n## What Problem This Solves\n\nThe active user turn's serialized text differs from how that same turn is later replayed as\nhistory: the channel layer decorates the active turn with an untrusted-metadata block that\n`stripHistoricalInboundMetadataFromUserMessages` already strips for every historical turn, but\nleft in place for the turn currently being sent. Since the active turn becomes the previous\nturn's history the instant the next turn arrives, its bytes change retroactively at that point in\nthe conversation on every single turn — invalidating any prefix/exact-match provider prompt cache\nfrom that point onward, every turn. See \"Problem\" above for the exact code path and the three\ntext shapes it touches.\n\n## Evidence\n\nMethodology: forced-exact 12-turn scripts (byte-identical commands per leg, verified identical\noutputs), warm-then-`/new` per leg, memory-injection subsystem off during the clean A/B so its own\nseparately-known injection volatility doesn't confound this fix's effect. Numbers are provider\n`usage` fields read directly from each call.\n\n- OpenAI (gpt-5.5, ChatGPT-OAuth, session-affinity header from #100233 already applied both legs):\n  **81.8% -> 90.6%** TRUE cache hit rate (+8.8 points).\n- Anthropic (claude-sonnet-4-6) — the larger, non-OpenAI effect, because Anthropic's cache matches\n  only at explicit `cache_control` breakpoints: stock, every turn's cache read falls back to the\n  same 36,105-token system-prompt breakpoint while cache write grows turn over turn (the whole\n  conversation tail re-written every turn at the 1.25x cache-write rate). Fixed, cache reads\n  advance monotonically instead. Measured over a 12-turn session: **cacheWrite 60,208 -> 10,051\n  tokens (-83%)**.\n- DeepSeek and Kimi (incremental/multi-prefix caches) absorb the mutation already and show\n  neutral-to-slightly-positive deltas (95.4% vs 93.9%, and 89.7% vs 96.0%) — not a regression.\n- Production soak: an equivalent patch has been running on a production OpenClaw gateway on real\n  traffic since 2026-07-04 with no observed regressions in reply threading, mentions, or routing.\n- Full per-call tables, the Anthropic breakpoint mechanism, and the GLM/backend-pooling caveat\n  (a separate, already-diagnosed noise source, not this defect):\n  https://raw.githubusercontent.com/Marvinthebored/openclaw/proof-assets-metadata-byte-stability/pr-proof/100272-metadata-byte-stability/EVIDENCE.md\n",
+        "branch": "fix/active-message-metadata-byte-stability",
+        "head_sha": "578b6f5fba653a2bc891b58b16505faa570edcb9",
+        "author": "marvinthebored",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts",
+            "additions": 103,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts",
+            "additions": 22,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.llm-boundary.ts",
+            "additions": 14,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 139,
+        "deletions": 28,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100272",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100272.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 100,
+          "gatingTotal": 95,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 64,
+            "SKIPPED": 34,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 731,
+    "total_ms": 2675,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 422
+        "ms": 343
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1924
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,7 +174,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 297
+        "ms": 387
       },
       {
         "name": "append_ledger",
