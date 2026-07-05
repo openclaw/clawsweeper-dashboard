@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T16:19:55.093Z",
-  "repo": "openclaw/imsg",
+  "generated_at": "2026-07-05T16:20:08.574Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T13:19:54.797Z",
+  "since": "2026-07-05T13:20:06.920Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    157
+    100343
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,146 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100343:4886370767:2026-07-05T16:20:03Z:clawsweeper_needs_human",
+      "comment_id": "4886370767",
+      "comment_version_key": "4886370767:2026-07-05T16:20:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100343#issuecomment-4886370767",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100343,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-05T14:24:30Z",
+      "comment_updated_at": "2026-07-05T16:20:03Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] No repair lane is appropriate: code review found no actionable patch defect, but the contributor still needs real behavior proof before merge.; Cleared: No concrete security or supply-chain concern was found; the diff is Twitch runtime status plumbing plus tests and does not change dependencies, workflows, permissions, or secret handling. (sha=05efae808147a88648b3fb7f04e95e9ec2acda3c)",
+      "review_summary": "The PR adds persistent Twitch ChatClient connect/disconnect listeners, forwards `connected`, `lastTransportActivityAt`, and `lastError` through the Twitch monitor status sink, updates the Twitch status summary, and adds focused tests.\n\nPR surface: Source +86, Tests +207. Total +293 across 6 files.\n\nReproducibility: yes. source-reproducible: current main has no live Twitch transport `connected` writer, while shared health/status code already consumes `connected` and `lastTransportActivityAt`. I did not run a real Twitch transport.",
+      "review_followup": "- [P1] No repair lane is appropriate: code review found no actionable patch defect, but the contributor still needs real behavior proof before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "05efae808147a88648b3fb7f04e95e9ec2acda3c",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(twitch): channel status keeps reporting connected after the chat transport drops",
+        "body": "## What Problem This Solves\n\nFixes an issue where a Twitch channel keeps reporting a live connection after\nits chat transport has actually dropped. Once the initial connection succeeds,\n`openclaw channels status` (and the Control UI) shows the account as running\nindefinitely even if the underlying chat socket is later disconnected by a\nnetwork blip, a Twitch-side close, or a failed auto-reconnect. Because the\nchannel never reported a transport-level `connected` state, the shared channel\nhealth monitor also could not detect the dead transport to restart it, so a\nsilently disconnected Twitch account would stay dark with no operator signal.\n\n## Why This Change Was Made\n\nTwitch set `running: true` on start but only cleared status on a connect-time\nfailure or a manual stop; the sole `onDisconnect` listener lived inside the\nconnect handshake and unbound as soon as authentication settled, so no listener\nsurvived to observe a later disconnect. This change registers a persistent\n`onConnect`/`onDisconnect` pair on the chat client and feeds a distinct\n`connected` flag (plus `lastTransportActivityAt`) through the monitor's status\nsink, surfacing it in the channel status summary. On a successful connect or\nreconnect the sink also clears `lastError` (runtime status patches merge, so a\nrecovered transport would otherwise keep surfacing the previous disconnect\nerror). `running` is deliberately left owned by the monitor lifecycle and stays\n`true` across transient reconnects — the same split the qqbot channel adopted in\n#100127. This restores\nthe `connected` / `lastTransportActivityAt` signals the shared health monitor\n(`evaluateChannelHealth`) needs to notice and recover a dead Twitch transport.\n\nThe other bundled channels (Discord, Slack, Mattermost, Feishu, Matrix,\nWhatsApp, Telegram, and the webhook-based channels) already clear their\nconnection status on transport close, and the probe-based channels compute\nliveness on demand — Twitch was the remaining channel that latched a live\nstatus and never cleared it. The on-demand `probeTwitch` check is a separate,\nindependent throwaway-client credential test; it does not observe the live\nmonitor's chat client and the health monitor does not consult it, so the\npersistent `connected` wiring is still required.\n\n## User Impact\n\nOperators running Twitch now see the account flip to disconnected in\n`openclaw channels status` when its chat transport actually drops, instead of a\npermanently green status. This also lets the channel health monitor detect and\nrestart a dead Twitch transport automatically. No configuration changes; the\n`running` field keeps its existing meaning.\n\n## Evidence\n\n**Real-behavior run.** A harness drives the real production code path —\n`TwitchClientManager` (persistent listeners), `monitorTwitchProvider` (status\nsink), `twitchPlugin.status.buildChannelSummary`, and `collectTwitchStatusIssues`\n— with only the external `@twurple/chat` transport replaced by a controllable\nstub (no product code stubbed). The runtime status store shallow patch-merges,\nmatching the gateway status store. Output for connect → drop → reconnect:\n\n```\n=== after initial connect ===\nchannels status -> {\"running\":true,\"connected\":true,\"lastError\":null,\"lastTransportActivityAt\":\"<ts>\"}\nstatus issues -> (none)\n\n=== after transport drop ===\nchannels status -> {\"running\":true,\"connected\":false,\"lastError\":\"connection reset\",\"lastTransportActivityAt\":\"<ts>\"}\nstatus issues -> [ '[runtime] Last error: connection reset' ]\n\n=== after reconnect ===\nchannels status -> {\"running\":true,\"connected\":true,\"lastError\":null,\"lastTransportActivityAt\":\"<ts>\"}\nstatus issues -> (none)\n```\n\nBefore this change the status stayed `connected: true` after the drop; and\nwithout clearing `lastError` on reconnect the recovered transport kept surfacing\n`[runtime] Last error: connection reset`.\n\n**Automated tests** (all Twitch extension tests pass, 188/188):\n\n- `extensions/twitch/src/twitch-client.test.ts` — a post-handshake\n  `onDisconnect` notifies subscribers with `connected: false` and the disconnect\n  reason; the registration cleanly unsubscribes.\n- `extensions/twitch/src/monitor.status.test.ts` — the monitor forwards\n  `onConnectionChange` to the status sink, and a disconnect-then-reconnect\n  sequence clears the prior `lastError`.\n- `extensions/twitch/src/plugin.lifecycle.test.ts` — driving the real\n  `gateway.startAccount` path, a monitor-reported transport drop emits\n  `connected: false` while `running` is never cleared; `buildChannelSummary`\n  surfaces `connected` / `lastTransportActivityAt`.\n",
+        "branch": "fix/twitch-disconnect-status",
+        "head_sha": "05efae808147a88648b3fb7f04e95e9ec2acda3c",
+        "author": "masatohoshino",
+        "labels": [
+          "channel: twitch",
+          "size: M",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/twitch/src/monitor.status.test.ts",
+            "additions": 108,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/twitch/src/monitor.ts",
+            "additions": 31,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/twitch/src/plugin.lifecycle.test.ts",
+            "additions": 56,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/twitch/src/plugin.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/twitch/src/twitch-client.test.ts",
+            "additions": 45,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/twitch/src/twitch-client.ts",
+            "additions": 50,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 301,
+        "deletions": 8,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100343",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100343.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 87,
+          "gatingTotal": 82,
+          "counts": {
+            "SUCCESS": 59,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 513,
+    "total_ms": 1959,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 285
+        "ms": 386
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1250
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -57,15 +180,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 217
+        "ms": 295
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
