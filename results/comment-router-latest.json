@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T05:12:40.568Z",
-  "repo": "openclaw/acpx",
+  "generated_at": "2026-07-05T05:13:33.461Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T02:12:39.293Z",
+  "since": "2026-07-05T02:13:30.896Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    433
+    97269
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4884928420
+  ],
+  "status_comment_id": 4884928495,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,171 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/acpx:433:4884811011:2026-07-05T05:12:36Z:clawsweeper_auto_repair",
-      "comment_id": "4884811011",
-      "comment_version_key": "4884811011:2026-07-05T05:12:36Z",
-      "comment_url": "https://github.com/openclaw/acpx/pull/433#issuecomment-4884811011",
-      "repo": "openclaw/acpx",
-      "target_branch": null,
-      "issue_number": 433,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "idempotency_key": "comment-router:openclaw/openclaw:97269:4884928420:2026-07-05T05:12:17Z:re_review",
+      "comment_id": "4884928420",
+      "comment_version_key": "4884928420:2026-07-05T05:12:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97269#issuecomment-4884928420",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 97269,
+      "author": "qingminglong",
+      "author_id": 34085845,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-05T04:20:26Z",
-      "comment_updated_at": "2026-07-05T05:12:36Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=c4272a53ffb8edc6e206423e113e06fe5edc3286)",
-      "review_summary": "The PR adds a POSIX pipe lifeline helper, lazy helper resolution/compile support, process-group bridge spawning, cooperative release handling, and real-process lifecycle tests.\n\nReproducibility: yes. Current main spawns and kills only the bridge process, while the remaining helper-startup hole is visible from source inspection of helper resolution plus the async watchdog error handler.",
-      "review_followup": "- [P2] A narrow repair can prove watchdog startup before detach or fall back cleanly, then cover the executable-failure case.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "c4272a53ffb8edc6e206423e113e06fe5edc3286",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(acp): pipe lifeline — reap the bridge tree on abrupt owner death",
-        "body": "## Problem\n\n#432 (included here as the base commit) reaps the bridge's process group on a **cooperative** `AcpClient.close()`. But when the acpx process that owns a bridge dies **abruptly** — `SIGKILL`, OOM kill, crash — no handler runs, and the bridge tree (codex-acp + the model process + MCP servers such as `serena`) is orphaned to PID 1. Orphans accumulate across runs until the agent app-server chokes and new sessions hang at `session/new`. We hit this in production with 26 leaked processes.\n\n## Fix: a pipe lifeline\n\nA tiny native sibling watchdog, coupled to the owner by an **inherited pipe** rather than a PID:\n\n- `native/lifeline.c` (~100 lines, single POSIX source for macOS + Linux): `poll()`s its stdin, whose write end the owner holds. **EOF** — the owner died, for any reason including `SIGKILL`, because the kernel closes the pipe — reaps the bridge's process group (`SIGTERM`, 200 ms grace, then `SIGKILL` only if the group leader is still alive). A **released byte `'R'`** means cooperative close: exit without reaping (the close path already reaps).\n- Pipe identity (an fd, not a number) avoids owner-PID recycling races **by construction** — no `kqueue`/`pidfd`/poll-loop on a PID that may have been reused.\n- `AcpClient` spawns the watchdog right after the detached bridge (gated on `agentGroupLeader`), holds its stdin, and on cooperative close writes `'R'` — no raw-PID kill of the watchdog either.\n\n## No binaries shipped\n\nThe npm package ships the **C source only**. Resolution order: `ACPX_LIFELINE_HELPER` env override → package-relative prebuilt (`dist/native/…`, for source checkouts or future per-platform packages) → **lazy one-time compile** to `~/.acpx/native/lifeline-<version>-<platform>-<arch>` (`cc -O2` via `execFile`, temp file + atomic rename so concurrent spawns race safely). Any failure (no `cc`, sandboxed FS) writes a marker and **degrades silently to current behavior** — no per-spawn retries, no hard native dependency, no cross-compile release matrix.\n\n## Scope & limitations (explicit)\n\n- **POSIX-only.** Windows keeps current behavior (no group reaping, no lifeline).\n- **Process group, not full tree**: a descendant that re-detaches into its own session escapes — inherent to group-based reaping.\n- A tiny window exists between bridge spawn and watchdog spawn (owner SIGKILL in between → orphan). Documented in code.\n- Hardened per an adversarial review: strict pgid parsing (a malformed argument can never `kill(-1)` broadcast), helper never resolved from `process.cwd()` (a repo-local binary must not be executed), `POLLERR`/`POLLNVAL` degrade without reaping, second `SIGKILL` gated on leader liveness to narrow PGID reuse.\n\n## Real behavior proof\n\nSibling-topology harness, owner SIGKILLed, on real hardware:\n\n```\n# macOS arm64                              # Linux 5.15 x86_64 (production VPS)\nchain: owner=1085 bridge=1086 gc=1088      chain: owner=1883006 bridge=1883013 gc=1883021\nbefore kill -9 owner : bridge=true  gc=true\nafter  kill -9 owner : bridge=false gc=false\nPASS — sibling watchdog reaped the bridge group on owner SIGKILL   (both platforms)\n```\n\nFull suite: `857 tests, 857 pass, 0 fail`. `typecheck` + `lint` clean. Lazy-compile path verified end-to-end with a virgin cache (resolve → compile → cache hit).\n\n## Relationship to #432\n\nThis PR is **self-contained**: it includes #432's group-reaping commit as its base, because the lifeline requires the bridge to lead its own process group. If #432 (or a variant) lands first, this rebases to the lifeline-only commit. Happy to restructure either way.\n\n---\n\nMaintainer edits enabled (personal fork).\n",
-        "branch": "fix/bridge-lifeline",
-        "head_sha": "c4272a53ffb8edc6e206423e113e06fe5edc3286",
-        "author": "superworldsavior",
-        "labels": [
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author",
-          "proof: sufficient",
-          "rating: 🦪 silver shellfish",
-          "P1",
-          "merge-risk: 🚨 availability"
-        ],
-        "files": [
-          {
-            "path": "native/lifeline.c",
-            "additions": 107,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "package.json",
-            "additions": 5,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/build-native-lifeline.mjs",
-            "additions": 48,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/acp/client.ts",
-            "additions": 107,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/lifeline.ts",
-            "additions": 239,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/client.test.ts",
-            "additions": 262,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/lifeline-test-helper.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/lifeline.test.ts",
-            "additions": 155,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/mock-agent.ts",
-            "additions": 38,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/package-scripts.test.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/queue-owner-lifecycle.test.ts",
-            "additions": 168,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 11,
-        "additions": 1176,
-        "deletions": 16,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-acpx-433",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-acpx-433.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 10,
-          "gatingTotal": 10,
-          "counts": {
-            "SUCCESS": 9,
-            "SKIPPED": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/acpx:433:4884905744:2026-07-05T05:02:45Z:re_review",
-      "comment_id": "4884905744",
-      "comment_version_key": "4884905744:2026-07-05T05:02:45Z",
-      "comment_url": "https://github.com/openclaw/acpx/pull/433#issuecomment-4884905744",
-      "repo": "openclaw/acpx",
-      "target_branch": null,
-      "issue_number": 433,
-      "author": "superWorldSavior",
-      "author_id": 20945750,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-05T05:02:45Z",
-      "comment_updated_at": "2026-07-05T05:02:45Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-05T05:12:17Z",
+      "comment_updated_at": "2026-07-05T05:12:17Z",
+      "status_comment_id": 4884928495,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -218,102 +68,68 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 97269,
+          "dispatch_key": "router-092b10c13c805cf5",
+          "dispatched_at": "2026-07-05T05:13:34.558Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-05T05:13:35.630Z",
+          "response_comment_id": "4884928495",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat(acp): pipe lifeline — reap the bridge tree on abrupt owner death",
-        "body": "## Problem\n\n#432 (included here as the base commit) reaps the bridge's process group on a **cooperative** `AcpClient.close()`. But when the acpx process that owns a bridge dies **abruptly** — `SIGKILL`, OOM kill, crash — no handler runs, and the bridge tree (codex-acp + the model process + MCP servers such as `serena`) is orphaned to PID 1. Orphans accumulate across runs until the agent app-server chokes and new sessions hang at `session/new`. We hit this in production with 26 leaked processes.\n\n## Fix: a pipe lifeline\n\nA tiny native sibling watchdog, coupled to the owner by an **inherited pipe** rather than a PID:\n\n- `native/lifeline.c` (~100 lines, single POSIX source for macOS + Linux): `poll()`s its stdin, whose write end the owner holds. **EOF** — the owner died, for any reason including `SIGKILL`, because the kernel closes the pipe — reaps the bridge's process group (`SIGTERM`, 200 ms grace, then `SIGKILL` only if the group leader is still alive). A **released byte `'R'`** means cooperative close: exit without reaping (the close path already reaps).\n- Pipe identity (an fd, not a number) avoids owner-PID recycling races **by construction** — no `kqueue`/`pidfd`/poll-loop on a PID that may have been reused.\n- `AcpClient` spawns the watchdog right after the detached bridge (gated on `agentGroupLeader`), holds its stdin, and on cooperative close writes `'R'` — no raw-PID kill of the watchdog either.\n\n## No binaries shipped\n\nThe npm package ships the **C source only**. Resolution order: `ACPX_LIFELINE_HELPER` env override → package-relative prebuilt (`dist/native/…`, for source checkouts or future per-platform packages) → **lazy one-time compile** to `~/.acpx/native/lifeline-<version>-<platform>-<arch>` (`cc -O2` via `execFile`, temp file + atomic rename so concurrent spawns race safely). Any failure (no `cc`, sandboxed FS) writes a marker and **degrades silently to current behavior** — no per-spawn retries, no hard native dependency, no cross-compile release matrix.\n\n## Scope & limitations (explicit)\n\n- **POSIX-only.** Windows keeps current behavior (no group reaping, no lifeline).\n- **Process group, not full tree**: a descendant that re-detaches into its own session escapes — inherent to group-based reaping.\n- A tiny window exists between bridge spawn and watchdog spawn (owner SIGKILL in between → orphan). Documented in code.\n- Hardened per an adversarial review: strict pgid parsing (a malformed argument can never `kill(-1)` broadcast), helper never resolved from `process.cwd()` (a repo-local binary must not be executed), `POLLERR`/`POLLNVAL` degrade without reaping, second `SIGKILL` gated on leader liveness to narrow PGID reuse.\n\n## Real behavior proof\n\nSibling-topology harness, owner SIGKILLed, on real hardware:\n\n```\n# macOS arm64                              # Linux 5.15 x86_64 (production VPS)\nchain: owner=1085 bridge=1086 gc=1088      chain: owner=1883006 bridge=1883013 gc=1883021\nbefore kill -9 owner : bridge=true  gc=true\nafter  kill -9 owner : bridge=false gc=false\nPASS — sibling watchdog reaped the bridge group on owner SIGKILL   (both platforms)\n```\n\nFull suite: `857 tests, 857 pass, 0 fail`. `typecheck` + `lint` clean. Lazy-compile path verified end-to-end with a virgin cache (resolve → compile → cache hit).\n\n## Relationship to #432\n\nThis PR is **self-contained**: it includes #432's group-reaping commit as its base, because the lifeline requires the bridge to lead its own process group. If #432 (or a variant) lands first, this rebases to the lifeline-only commit. Happy to restructure either way.\n\n---\n\nMaintainer edits enabled (personal fork).\n",
-        "branch": "fix/bridge-lifeline",
-        "head_sha": "c4272a53ffb8edc6e206423e113e06fe5edc3286",
-        "author": "superworldsavior",
+        "title": "improve: show edit mismatch candidate lines",
+        "body": "Closes #97032  ## What Problem This Solves  Resolves a problem where edit tool `oldText` mismatch failures only showed the generic exact-match error plus current file contents, leaving users to guess whether indentation, escaping, or nearby text drift caused the miss.  ## Why This Change Was Made  The edit mismatch path now appends bounded nearest-candidate diagnostics with line numbers, escaped line diffs, and indentation hints when the failing edit can be identified. Matching behavior is unchanged: the tool still requires the same exact/fuzzy edit semantics, and validation-phase no-op mismatch errors avoid candidate guesses when the indexed edit source is ambiguous.  ## User Impact  Users and agents get actionable feedback after a failed edit call: the error can point at nearby candidate lines and show the visible difference, while still preserving the existing current-file-content hint.  ## Evidence  - Real behavior proof: ran `node --import tsx` against `createEditTool()` on a temp file and intentionally submitted an `oldText` indentation mismatch. Result: the thrown edit-tool error included `Nearest candidate lines:`, `Candidate 1 (line 2):`, `indentation: expected 6 spaces, candidate 2 spaces`, and escaped diff lines (`- \"      return value;\"` / `+ \"  return value;\"`) after the redacted `Current file contents:` block. - `node scripts/run-vitest.mjs src/agents/sessions/tools/edit.test.ts` - passed, 24 tests - `node scripts/run-vitest.mjs src/agents/agent-tools.create-openclaw-coding-tools.test.ts` - passed, 65 tests after rerun with a fresh `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH`; an earlier same-command run hit a local transient `typebox` module-cache resolution error - `$env:OPENCLAW_OXLINT_SKIP_PREPARE='1'; node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/agents/sessions/tools/edit.ts src/agents/sessions/tools/edit.test.ts` - passed - `git diff --check` - passed - `python .agents\\skills\\autoreview\\scripts\\autoreview --mode local` - clean, no accepted/actionable findings reported; helper exited 0, with a Windows GBK stderr reader exception after the clean result   Follow-up after ClawSweeper waiting-on-author review (commit 3fd09be6e1):  ```text # ClawSweeper asked for candidate/target text to be bounded before scoring, storage, and escaped diff formatting. # Added per-line diagnostic truncation before candidate scoring and formatting. # Added a long single-line mismatch regression proving diagnostics stay bounded and do not leak long-line tails.  node scripts/run-vitest.mjs src/agents/sessions/tools/edit.test.ts # passed: 25 tests  node scripts/run-vitest.mjs src/agents/agent-tools.create-openclaw-coding-tools.test.ts # passed: 65 tests  $env:OPENCLAW_OXLINT_SKIP_PREPARE='1'; node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/agents/sessions/tools/edit.ts src/agents/sessions/tools/edit.test.ts # passed  git diff --check # passed ```  \nFollow-up after July 5 review blocker (commit 4ced22dc7e):\n\n```text\n# ClawSweeper found that PR head 0efc50000b still split the whole current file before applying EDIT_MISMATCH_SCAN_LINE_LIMIT.\n# Replaced the full-file split with bounded line collection that stops at EDIT_MISMATCH_SCAN_LINE_LIMIT and truncates each stored line before cheap scoring, expensive scoring, storage, and diff formatting.\n# Added a many-line regression proving line 1001 is not collected or surfaced in mismatch diagnostics.\n\nnode scripts/run-vitest.mjs src/agents/sessions/tools/edit.test.ts\n# passed: 30 tests\n\nnode scripts/run-vitest.mjs src/agents/agent-tools.create-openclaw-coding-tools.test.ts\n# passed: 66 tests\n\nnode scripts/run-vitest.mjs src/cron/isolated-agent/run-fallback-policy.test.ts src/docs/clawhub-plugin-docs.test.ts src/config/talk-defaults.test.ts src/docs/environment-docs.test.ts src/agents/minimax-docs.test.ts\n# passed: 5 targeted files, including the five CI red-log test families from run 28729651276\n\ngit diff --check\n# passed\n\npython .agents\\skills\\autoreview\\scripts\\autoreview --mode local\n# clean: no accepted/actionable findings reported\n\n$env:OPENCLAW_OXLINT_SKIP_PREPARE='1'; node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/agents/sessions/tools/edit.ts src/agents/sessions/tools/edit.test.ts\n# blocked locally before linting: missing optional platform package @oxlint-tsgolint/win32-x64/tsgolint.exe.\n# pnpm install --frozen-lockfile was retried once in this worktree and timed out after 120s; commit hook also confirmed missing optional @oxfmt/binding-win32-x64-msvc.\n```",
+        "branch": "codex/edit-mismatch-candidates",
+        "head_sha": "4ced22dc7edc18ea892ec54036bb5030749ac779",
+        "author": "qingminglong",
         "labels": [
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author",
+          "agents",
+          "size: M",
           "proof: sufficient",
-          "rating: 🦪 silver shellfish",
-          "P1",
-          "merge-risk: 🚨 availability"
+          "P3",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author",
+          "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "native/lifeline.c",
-            "additions": 107,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "package.json",
-            "additions": 5,
-            "deletions": 3,
+            "path": "src/agents/sessions/tools/edit.test.ts",
+            "additions": 165,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/build-native-lifeline.mjs",
-            "additions": 48,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/acp/client.ts",
-            "additions": 107,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/lifeline.ts",
-            "additions": 239,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/client.test.ts",
-            "additions": 262,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/lifeline-test-helper.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/lifeline.test.ts",
-            "additions": 155,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/mock-agent.ts",
-            "additions": 38,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/package-scripts.test.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/queue-owner-lifecycle.test.ts",
-            "additions": 168,
-            "deletions": 0,
+            "path": "src/agents/sessions/tools/edit.ts",
+            "additions": 250,
+            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 11,
-        "additions": 1176,
-        "deletions": 16,
+        "changedFiles": 2,
+        "additions": 415,
+        "deletions": 5,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-acpx-433",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-acpx-433.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97269",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97269.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
@@ -322,32 +138,120 @@
           "total": 10,
           "gatingTotal": 10,
           "counts": {
-            "SUCCESS": 9,
-            "SKIPPED": 1
+            "FAILURE": 1,
+            "SKIPPED": 30,
+            "SUCCESS": 29,
+            "IN_PROGRESS": 40,
+            "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "processed_at": "2026-07-05T05:13:33.745Z"
     }
   ],
-  "ledger_claimed": false,
+  "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1501,
+    "total_ms": 5416,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 294
+        "ms": 746
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 964
+        "ms": 1805
       },
       {
         "name": "classify_comment_commands",
@@ -363,15 +267,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 215
+        "ms": 2841
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
