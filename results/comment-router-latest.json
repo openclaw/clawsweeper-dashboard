@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T06:30:46.547Z",
+  "generated_at": "2026-07-05T06:30:49.569Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T03:30:44.680Z",
+  "since": "2026-07-05T03:30:47.629Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    98402
+    90259
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4885097307
+  ],
+  "status_comment_id": 4885097419,
   "max_autoclose_targets": 8,
-  "scanned_comments": 12,
-  "commands_seen": 6,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,127 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98402:4850266135:2026-07-05T06:30:42Z:clawsweeper_auto_repair",
-      "comment_id": "4850266135",
-      "comment_version_key": "4850266135:2026-07-05T06:30:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4850266135",
+      "idempotency_key": "comment-router:openclaw/openclaw:90259:4885097307:2026-07-05T06:29:38Z:re_review",
+      "comment_id": "4885097307",
+      "comment_version_key": "4885097307:2026-07-05T06:29:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90259#issuecomment-4885097307",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98402,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": "main",
+      "issue_number": 90259,
+      "author": "simplyclever914",
+      "author_id": 280986376,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T04:31:01Z",
-      "comment_updated_at": "2026-07-05T06:30:42Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=64c6f8ff8e233c928aadef0ad81faebe4dd241e8)",
-      "review_summary": "The PR changes the SQLite channel ingress queue to use tagged JSON parsing, skip or tombstone corrupt payload rows, omit corrupt metadata, and adds queue plus adjacent gateway test updates.\n\nPR surface: Source +154, Tests +252. Total +406 across 3 files.\n\nReproducibility: yes. Source inspection of current main shows bare JSON.parse in queue record conversion, and the PR body provides terminal negative-control output against a real on-disk SQLite database; I did not run tests because this review is read-only.",
-      "review_followup": "- [P2] A narrow automated repair can address the duplicate enqueue and bounded reconciliation blockers on the PR branch without changing product scope.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "64c6f8ff8e233c928aadef0ad81faebe4dd241e8",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(infra): guard channel ingress queue parseJson against corrupted JSON",
-        "body": "## What Problem This Solves\n\nFixes an issue where a single corrupted `payload_json`, `metadata_json`, or `completed_metadata_json` row in the SQLite channel ingress queue crashes the entire queue operation. The `parseJson()` helper calls `JSON.parse(value)` without a try-catch. A corrupt row throws an uncaught `SyntaxError` that propagates through `baseRecord()` (called by `listPending`, `listClaims`, `claimNext`, `enqueue`) and `completedRecord()` (called by `enqueue` duplicate detection). One bad row in `listPending()` or `listClaims()` kills **all** entries in that listing. This affects every channel that uses the durable ingress queue for inbound message processing.\n\nAdditionally, `claimNext` and `claim` would UPDATE a pending row to `claimed` status **before** validating the payload could be decoded — so a corrupt payload could become an invisible claimed row, hidden from `listPending`/`listClaims`/`recoverStaleClaims`, permanently blocking queue recovery.\n\n## Why This Change Was Made\n\nThree coordinated changes:\n\n1. **Tagged parse result**: `parseJson()` now returns `{ ok: true, value } | { ok: false }` instead of the ambiguous `unknown | null`. `JSON.parse(\"null\")` is valid and returns `null`, which the old sentinel conflated with parse failure. The tagged result cleanly separates \"valid JSON value\" from \"corrupt input\".\n\n2. **Guard `parseJson` at the chokepoint**: `baseRecord()` returns `null` when `payload_json` is corrupt (unrecoverable). Corrupt `metadata_json`/`completed_metadata_json` is non-fatal — the record is kept with metadata omitted. All callers (`listPending`, `listClaims`, `enqueue`, `claimNext`, `claim`) handle null/omitted results.\n\n3. **Validate before claiming**: `claimNext` calls `baseRecord()` inside `rows.find()` to skip corrupt rows before they are selected, and `claim` pre-reads the pending row and validates `baseRecord()` before issuing the UPDATE. No corrupt row can ever be promoted to `claimed` status.\n\n## User Impact\n\nNo user-visible impact under normal operation. When a channel ingress queue row is somehow corrupted:\n- `listPending` / `listClaims` skip the bad entry instead of crashing\n- `claimNext` / `claim` skip corrupt rows and claim the next valid one\n- `enqueue` duplicate detection works with corrupt metadata omitted\n- Valid JSON `null` payload is correctly preserved (not treated as corrupt)\n\n## Real behavior proof\n\n- **Real environment:** Linux, Node v22.22.0, driving real `createChannelIngressQueue` against a real on-disk SQLite database.\n- **Evidence after fix (23 tests, all pass):**\n\n```text\n$ node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts --run\n Test Files  1 passed (1)\n      Tests  23 passed (23)\n```\n\nNew tests cover: pending row with corrupt `payload_json` → skipped, corrupt `metadata_json` → metadata omitted, claimed row with corrupt payload → skipped, corrupt `completed_metadata_json` → duplicate detection works, `claimNext` skips corrupt → claims next valid, `claim` returns null for corrupt, valid JSON null → preserved.\n\n- **Negative control (pre-fix — 4 SyntaxError crashes):**\n\n```text\n$ git show origin/main:src/channels/message/ingress-queue.ts > /tmp/iq-old.ts   && cp /tmp/iq-old.ts src/channels/message/ingress-queue.ts   && node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts --run\n\n FAIL  skips a pending row with corrupt payload_json in listPending\n       SyntaxError: Expected property name or '}' in JSON at position 1\n       ❯ parseJson (src/channels/message/ingress-queue.ts:222)\n\n FAIL  skips corrupt metadata_json in listPending\n       SyntaxError at parseJson (line 222)\n\n FAIL  skips a claimed row with corrupt payload_json in listClaims\n       SyntaxError at parseJson (line 222)\n\n FAIL  skips corrupt completed_metadata_json during duplicate detection\n       SyntaxError at parseJson (line 222)\n\n Test Files  1 failed (1)  —  4 failed | 16 passed (20)\nexit=1\n```\n\nRestoring the fix returns to 23/23 green. The negative control is load-bearing: same tests, same corrupt rows, same disk boundary.\n\n- **What was not tested:** a live gateway with real channels end-to-end. The proof drives the same exported queue APIs against a real SQLite database, which exercises the shared chokepoint.\n\n## Evidence\n\n**Existing tests — no regressions:**\n\n```text\n$ node scripts/run-vitest.mjs src/channels/message/durable-receive.test.ts --run\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\n**Additional validation after CI fix:**\n\n```text\n$ pnpm check:test-types\n# passes\n\n$ node scripts/run-vitest.mjs src/gateway/server-cron.test.ts src/gateway/server-cron-notifications.test.ts --run\n Test Files  4 passed (4)\n      Tests  62 passed (62)\n\n$ node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts src/channels/message/durable-receive.test.ts --run\n Test Files  2 passed (2)\n      Tests  30 passed (30)\n\n$ git diff --check\n# passes\n```\n\nAlso rebased onto latest `origin/main`, fixed the `check-test-types` failure from typed empty mock call tuple access in gateway cron tests, and reran local autoreview with no accepted/actionable findings.\n\n**Lint:** `oxlint` clean on both changed files.\n\nAI-assisted.\n",
-        "branch": "fix/ingress-queue-parsejson-guard",
-        "head_sha": "64c6f8ff8e233c928aadef0ad81faebe4dd241e8",
-        "author": "pick-cat",
-        "labels": [
-          "gateway",
-          "size: M",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/channels/message/ingress-queue.test.ts",
-            "additions": 237,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/message/ingress-queue.ts",
-            "additions": 177,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron-notifications.test.ts",
-            "additions": 19,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 433,
-        "deletions": 27,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98402",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98402.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 100,
-          "gatingTotal": 95,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:98402:4855644728:2026-07-01T13:46:35Z:re_review",
-      "comment_id": "4855644728",
-      "comment_version_key": "4855644728:2026-07-01T13:46:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4855644728",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98402,
-      "author": "Pick-cat",
-      "author_id": 266665499,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T13:46:35Z",
-      "comment_updated_at": "2026-07-01T13:46:35Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-05T06:29:38Z",
+      "comment_updated_at": "2026-07-05T06:29:38Z",
+      "status_comment_id": 4885097419,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -174,256 +68,493 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 90259,
+          "dispatch_key": "router-0c3ac953ef006474",
+          "dispatched_at": "2026-07-05T06:30:50.146Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-05T06:30:51.058Z",
+          "response_comment_id": "4885097419",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(infra): guard channel ingress queue parseJson against corrupted JSON",
-        "body": "## What Problem This Solves\n\nFixes an issue where a single corrupted `payload_json`, `metadata_json`, or `completed_metadata_json` row in the SQLite channel ingress queue crashes the entire queue operation. The `parseJson()` helper calls `JSON.parse(value)` without a try-catch. A corrupt row throws an uncaught `SyntaxError` that propagates through `baseRecord()` (called by `listPending`, `listClaims`, `claimNext`, `enqueue`) and `completedRecord()` (called by `enqueue` duplicate detection). One bad row in `listPending()` or `listClaims()` kills **all** entries in that listing. This affects every channel that uses the durable ingress queue for inbound message processing.\n\nAdditionally, `claimNext` and `claim` would UPDATE a pending row to `claimed` status **before** validating the payload could be decoded — so a corrupt payload could become an invisible claimed row, hidden from `listPending`/`listClaims`/`recoverStaleClaims`, permanently blocking queue recovery.\n\n## Why This Change Was Made\n\nThree coordinated changes:\n\n1. **Tagged parse result**: `parseJson()` now returns `{ ok: true, value } | { ok: false }` instead of the ambiguous `unknown | null`. `JSON.parse(\"null\")` is valid and returns `null`, which the old sentinel conflated with parse failure. The tagged result cleanly separates \"valid JSON value\" from \"corrupt input\".\n\n2. **Guard `parseJson` at the chokepoint**: `baseRecord()` returns `null` when `payload_json` is corrupt (unrecoverable). Corrupt `metadata_json`/`completed_metadata_json` is non-fatal — the record is kept with metadata omitted. All callers (`listPending`, `listClaims`, `enqueue`, `claimNext`, `claim`) handle null/omitted results.\n\n3. **Validate before claiming**: `claimNext` calls `baseRecord()` inside `rows.find()` to skip corrupt rows before they are selected, and `claim` pre-reads the pending row and validates `baseRecord()` before issuing the UPDATE. No corrupt row can ever be promoted to `claimed` status.\n\n## User Impact\n\nNo user-visible impact under normal operation. When a channel ingress queue row is somehow corrupted:\n- `listPending` / `listClaims` skip the bad entry instead of crashing\n- `claimNext` / `claim` skip corrupt rows and claim the next valid one\n- `enqueue` duplicate detection works with corrupt metadata omitted\n- Valid JSON `null` payload is correctly preserved (not treated as corrupt)\n\n## Real behavior proof\n\n- **Real environment:** Linux, Node v22.22.0, driving real `createChannelIngressQueue` against a real on-disk SQLite database.\n- **Evidence after fix (23 tests, all pass):**\n\n```text\n$ node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts --run\n Test Files  1 passed (1)\n      Tests  23 passed (23)\n```\n\nNew tests cover: pending row with corrupt `payload_json` → skipped, corrupt `metadata_json` → metadata omitted, claimed row with corrupt payload → skipped, corrupt `completed_metadata_json` → duplicate detection works, `claimNext` skips corrupt → claims next valid, `claim` returns null for corrupt, valid JSON null → preserved.\n\n- **Negative control (pre-fix — 4 SyntaxError crashes):**\n\n```text\n$ git show origin/main:src/channels/message/ingress-queue.ts > /tmp/iq-old.ts   && cp /tmp/iq-old.ts src/channels/message/ingress-queue.ts   && node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts --run\n\n FAIL  skips a pending row with corrupt payload_json in listPending\n       SyntaxError: Expected property name or '}' in JSON at position 1\n       ❯ parseJson (src/channels/message/ingress-queue.ts:222)\n\n FAIL  skips corrupt metadata_json in listPending\n       SyntaxError at parseJson (line 222)\n\n FAIL  skips a claimed row with corrupt payload_json in listClaims\n       SyntaxError at parseJson (line 222)\n\n FAIL  skips corrupt completed_metadata_json during duplicate detection\n       SyntaxError at parseJson (line 222)\n\n Test Files  1 failed (1)  —  4 failed | 16 passed (20)\nexit=1\n```\n\nRestoring the fix returns to 23/23 green. The negative control is load-bearing: same tests, same corrupt rows, same disk boundary.\n\n- **What was not tested:** a live gateway with real channels end-to-end. The proof drives the same exported queue APIs against a real SQLite database, which exercises the shared chokepoint.\n\n## Evidence\n\n**Existing tests — no regressions:**\n\n```text\n$ node scripts/run-vitest.mjs src/channels/message/durable-receive.test.ts --run\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\n**Additional validation after CI fix:**\n\n```text\n$ pnpm check:test-types\n# passes\n\n$ node scripts/run-vitest.mjs src/gateway/server-cron.test.ts src/gateway/server-cron-notifications.test.ts --run\n Test Files  4 passed (4)\n      Tests  62 passed (62)\n\n$ node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts src/channels/message/durable-receive.test.ts --run\n Test Files  2 passed (2)\n      Tests  30 passed (30)\n\n$ git diff --check\n# passes\n```\n\nAlso rebased onto latest `origin/main`, fixed the `check-test-types` failure from typed empty mock call tuple access in gateway cron tests, and reran local autoreview with no accepted/actionable findings.\n\n**Lint:** `oxlint` clean on both changed files.\n\nAI-assisted.\n",
-        "branch": "fix/ingress-queue-parsejson-guard",
-        "head_sha": "64c6f8ff8e233c928aadef0ad81faebe4dd241e8",
-        "author": "pick-cat",
+        "title": "Add reset family carryover summaries",
+        "body": "## Behavior or issue addressed\n\nDepends on #90239.\n\nWhen a session has been reset/rotated, the active transcript can be clean while the previous reset archive still contains the latest compaction summary. The next embedded-agent prompt therefore starts without the carryover context unless the model/tool explicitly asks for family history.\n\nThis change reuses the session-family transcript resolver from #90239 and injects the latest reset-archive compaction summary into embedded-agent prompt context before the LLM boundary, but only when the active context does not already contain a compaction summary.\n\n## Fix\n\n- Move the #90239 family/reset transcript target resolver into a shared gateway helper.\n- Keep `chat.history(includeFamily)` on the shared resolver.\n- Pass the current session store path/entry into embedded-agent attempts.\n- Add a prompt-context transform that prepends one `compactionSummary` from reset ancestor transcripts.\n- Skip injection when the active session already has a compaction summary.\n- Cap family transcript read targets before reading files; ancestor targets stop at the cap while current-session targets remain available.\n- Rebased onto current `origin/main` and preserved the newer transcript-reader seam plus same-session reset fallback.\n\n## Real behavior proof\n\n**Current head proven:** `ba74ecd54e52c2416ab8f7906491266b989f529c`.\n\n**Behavior or issue addressed:** A reset/rotated logical session should read bounded reset-family history through the shared resolver, keep current reset archive plus current active transcript available inside the cap, preserve the newest eligible ancestors even when an older retained ancestor has many reset-topic archives, and inject exactly one reset-family compaction summary before the embedded-agent LLM boundary.\n\n**Real environment tested:** Local OpenClaw checkout on this PR branch at `/home/clever/.openclaw/workspace/github/openclaw`, using current branch TypeScript modules and temporary on-disk session stores/transcripts under `/tmp/openclaw-family-proof-ba74ecd54e-*`. No private channel, endpoint, phone, prompt, auth, or user transcript data was used.\n\n**Exact steps or command run after this patch:**\n\n```text\n$ git rev-parse HEAD\nba74ecd54e52c2416ab8f7906491266b989f529c\n\n$ node --import tsx --input-type=module <<'TS'\n# The script imported these current-branch modules:\n# - ./src/gateway/session-history-family.ts\n# - ./src/agents/embedded-agent-runner/session-family-carryover.ts\n# It created a temporary sessions.json, 35 ancestor transcripts,\n# 35 owned reset-topic archives for ancestor 05, one current reset archive,\n# and one current active transcript. It called the real family target resolver,\n# real carryover resolver, installed the prompt transform, applied the transform\n# twice, printed the observed result, and removed temp files.\nTS\n{\n  \"head\": \"ba74ecd54e52c2416ab8f7906491266b989f529c\",\n  \"targetCount\": 32,\n  \"firstTargets\": [\n    \"ancestor-proof-05:ancestor-active:ancestor-proof-05.jsonl\",\n    \"ancestor-proof-06:ancestor-active:ancestor-proof-06.jsonl\",\n    \"ancestor-proof-07:ancestor-active:ancestor-proof-07.jsonl\",\n    \"ancestor-proof-08:ancestor-active:ancestor-proof-08.jsonl\"\n  ],\n  \"lastTargets\": [\n    \"ancestor-proof-33:ancestor-active:ancestor-proof-33.jsonl\",\n    \"ancestor-proof-34:ancestor-active:ancestor-proof-34.jsonl\",\n    \"current-proof-session:reset-archive:current-proof-session.jsonl.reset.2026-06-04T00-04-00.000Z\",\n    \"current-proof-session:active:current-proof-session.jsonl\"\n  ],\n  \"currentResetTargetPresent\": true,\n  \"currentActiveLast\": true,\n  \"ancestor04Present\": false,\n  \"ancestor34Present\": true,\n  \"archiveHeavyTopicTargetCount\": 0,\n  \"carryoverSummary\": \"Exact-head ba74ecd54e carryover 34\",\n  \"carryoverTokensBefore\": 2034,\n  \"promptRolesBeforeLlm\": [\"compactionSummary\", \"user\"],\n  \"compactionSummaryCount\": 1,\n  \"idempotentRoles\": [\"compactionSummary\", \"user\"]\n}\n```\n\n**Evidence after fix:**\n\n- The shared resolver returned 32 targets and kept both current reset archive and current active transcript inside the cap.\n- The current active transcript was ordered last for final history trimming.\n- The old over-cap ancestor was not read: `ancestor04Present` is false.\n- The newest eligible ancestor survived even though older retained ancestor 05 had 35 owned reset-topic archives: `ancestor34Present` is true and `archiveHeavyTopicTargetCount` is 0.\n- Carryover selected the newest retained ancestor summary, `Exact-head ba74ecd54e carryover 34`, and preserved its token count.\n- The embedded prompt transform injected exactly one `compactionSummary` before the model boundary and remained idempotent on a second pass.\n\n**Validation on current head:**\n\n```text\n$ CI=true node scripts/run-vitest.mjs run src/agents/embedded-agent-runner/session-family-carryover.test.ts\nTest Files  1 passed (1)\nTests  10 passed (10)\n\n$ CI=true node scripts/run-vitest.mjs run src/gateway/server.chat.gateway-server-chat-b.test.ts -t 'family|includeFamily|cap'\nTest Files  1 passed (1)\nTests  4 passed | 39 skipped (43)\n\n$ CI=true node scripts/run-vitest.mjs run src/agents/tools/embedded-gateway-stub.test.ts -t 'family|includeFamily|cap'\nTest Files  2 passed (2)\nTests  4 passed | 18 skipped (22)\n\n$ node scripts/plugin-sdk-surface-report.mjs --check\n# passed; public package SDK entrypoints: exports 10327, callable exports 5184, deprecated exports 3247\n\n$ CI=true node scripts/run-vitest.mjs run test/scripts/plugin-sdk-surface-report.test.ts\nTest Files  1 passed (1)\nTests  5 passed (5)\n\n$ CI=true pnpm check:test-types\n# passed\n\n$ git diff --check\n# no output\n```\n\n**What was not tested:** Full live Telegram/Slack/Discord end-to-end reset turn was not run locally; the proof exercises the real resolver and embedded carryover path against on-disk OpenClaw-like session artifacts.\n## Current head addendum: `f59176b8ac`\n\nClawSweeper's exact-head proof request is addressed on current head `f59176b8acbb9847ab4c69c09ad4539cde66b9d0`.\n\nThe carryover prompt injection is now default-off and requires explicit `agents.defaults.experimental.sessionFamilyCarryover: true`. The proof below uses current-branch modules, temporary on-disk reset-family transcript files, the real reset-family carryover resolver, and the real transform installer/gate.\n\n```text\n$ git rev-parse HEAD\nf59176b8acbb9847ab4c69c09ad4539cde66b9d0\n\n$ node --import tsx --input-type=module <<'TS'\n# Creates a temporary ancestor reset archive with a compaction row and a current active transcript.\n# Imports current-branch:\n# - ./src/agents/embedded-agent-runner/session-family-carryover.ts\n# Resolves carryover from reset-family transcript files, checks default-off/raw/opt-in gate behavior,\n# installs the transform only for explicit opt-in, applies it before the model boundary, prints result,\n# and removes temp files.\nTS\n{\n  \"head\": \"f59176b8acbb9847ab4c69c09ad4539cde66b9d0\",\n  \"defaultOffInstalls\": false,\n  \"rawOptInInstalls\": false,\n  \"explicitOptInInstalls\": true,\n  \"carryoverSummary\": \"Exact-head proof archived carryover summary.\",\n  \"carryoverTokensBefore\": 1234,\n  \"defaultOffRolesBeforeLlm\": [\n    \"user\"\n  ],\n  \"explicitOptInRolesBeforeLlm\": [\n    \"compactionSummary\",\n    \"user\"\n  ],\n  \"compactionSummaryCount\": 1\n}\n```\n\nObserved result after fix:\n\n- default config does not install reset-family carryover and leaves model-bound roles as `user` only\n- raw model runs do not install reset-family carryover even when the experimental opt-in is true\n- explicit `sessionFamilyCarryover` opt-in installs the transform and prepends exactly one archived reset-family compaction summary before the user message\n- the carryover resolver read the summary from the reset-family transcript archive and preserved `tokensBefore`\n\nValidation after the stacked #90239 CI repair cherry-pick:\n\n```text\nCI=true node scripts/run-vitest.mjs run src/agents/model-fallback.test.ts -t 'fallback behavior with provider cooldowns'\n# 2 files / 14 selected tests passed\n\nCI=true node scripts/run-vitest.mjs run src/agents/embedded-agent-runner/session-family-carryover.test.ts src/agents/tools/embedded-gateway-stub.test.ts\n# 2 files / 21 tests passed\n\nCI=true node scripts/run-vitest.mjs run src/config/schema.help.quality.test.ts test/scripts/plugin-sdk-surface-report.test.ts\n# 2 files / 28 tests passed\n\nCI=true node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo\n# passed\n\nCI=true node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo\n# passed\n\ngit diff --check\n# no output\n```\n## Current head addendum: `1f2e39b6d9`\n\nClawSweeper's current-head proof request is refreshed on head `1f2e39b6d9f93c541c1d15549620b9e4a27fd751` after the selector/offset validation and embedded/Gateway family-history parity updates.\n\nThe carryover prompt-boundary proof below uses current-branch TypeScript modules directly and no private transcript data:\n\n```text\n$ git rev-parse HEAD\n1f2e39b6d9f93c541c1d15549620b9e4a27fd751\n\n$ node --import tsx --input-type=module <<'TS'\n# Imports current-branch ./src/agents/embedded-agent-runner/session-family-carryover.ts\n# Checks default-off, raw-run, explicit opt-in, transform insertion, and idempotence.\nTS\n{\n  \"head\": \"1f2e39b6d9f93c541c1d15549620b9e4a27fd751\",\n  \"defaultOffInstalls\": false,\n  \"rawOptInInstalls\": false,\n  \"explicitOptInInstalls\": true,\n  \"rolesBeforeLlm\": [\n    \"compactionSummary\",\n    \"user\"\n  ],\n  \"compactionSummaryCount\": 1,\n  \"idempotentRoles\": [\n    \"compactionSummary\",\n    \"user\"\n  ]\n}\n```\n\nAdditional exact-head validation after the embedded family-history parity fix and includeFamily/offset validation:\n\n```text\n$ CI=true node scripts/run-vitest.mjs run src/agents/embedded-agent-runner/session-family-carryover.test.ts\nTest Files  1 passed (1)\nTests  10 passed (10)\n\n$ CI=true node scripts/run-vitest.mjs run src/agents/tools/embedded-gateway-stub.test.ts -t 'family|includeFamily|subagent_announce|sessionStartedAt|offset'\nTest Files  2 passed (2)\nTests  22 passed | 18 skipped (40)\n\n$ CI=true node scripts/run-vitest.mjs run src/agents/openclaw-tools.sessions.test.ts src/gateway/server.chat.gateway-server-chat-b.test.ts -t 'family|includeFamily|offset|cap'\nTest Files  3 passed (3)\nTests  16 passed | 107 skipped (123)\n\n$ git diff --check\n# no output\n```\n\nObserved result after fix:\n\n- `includeFamily` remains the only selector and `includeFamily + offset` is rejected in tool, Gateway, and embedded paths.\n- Embedded `chat.history(includeFamily)` now skips the final current-session `sessionStartedAt` announce filter, matching Gateway, so ancestor/reset `subagent_announce` rows are preserved in family history.\n- Reset-family carryover remains default-off, skips raw model runs, and injects exactly one archived compaction summary only under explicit opt-in.\n## Current head addendum: `1ca3a90b24`\n\nFollow-up head `1ca3a90b24bed1bf8aa0a855614afa8d5f70d45d` keeps the same behavior as the `1f2e39b6d9` proof and only adjusts the new embedded regression test to satisfy lint and test-type gates.\n\nRuntime carryover proof on the exact current head:\n\n```text\n$ git rev-parse HEAD\n1ca3a90b24bed1bf8aa0a855614afa8d5f70d45d\n\n$ node --import tsx --input-type=module <<'TS'\n# Imports current-branch ./src/agents/embedded-agent-runner/session-family-carryover.ts\n# Checks default-off, raw-run, explicit opt-in, transform insertion, and idempotence.\nTS\n{\n  \"head\": \"1ca3a90b24bed1bf8aa0a855614afa8d5f70d45d\",\n  \"defaultOffInstalls\": false,\n  \"rawOptInInstalls\": false,\n  \"explicitOptInInstalls\": true,\n  \"rolesBeforeLlm\": [\n    \"compactionSummary\",\n    \"user\"\n  ],\n  \"compactionSummaryCount\": 1,\n  \"idempotentRoles\": [\n    \"compactionSummary\",\n    \"user\"\n  ]\n}\n```\n\nExact-head validation after the lint/type follow-up:\n\n```text\n$ pnpm lint --threads=8\n# passed\n\n$ CI=true pnpm check:test-types\n# passed\n\n$ git diff --check\n# no output\n```\n\nThe earlier `1f2e39b6d9` addendum in this PR body remains the focused behavioral validation for `includeFamily + offset`, embedded/Gateway family-history parity, and carryover tests; this head only changes test typing/property-access style.\n\n## Current head addendum: \\`a054665423\\`\n\nClawSweeper's protocol-validator concern is addressed on current head \\`a054665423d6037478feb28a26467d257f5adb9d\\`:\n\n- The executable protocol validator now rejects \\`includeFamily: true\\` combined with \\`offset\\`.\n- \\`ChatHistoryParamsSchema\\` remains generator-compatible, so protocol schema and Swift model generation stay stable.\n- Runtime boundaries continue to reject the same unsupported combination before falling back to active-history paging.\n\nExact-head validation:\n\n\\`\\`\\`text\n$ git rev-parse HEAD\na054665423d6037478feb28a26467d257f5adb9d\n\n$ CI=true node scripts/run-vitest.mjs run packages/gateway-protocol/src/index.test.ts\nTest Files  1 passed (1)\nTests  45 passed (45)\n\n$ CI=true node scripts/run-vitest.mjs run src/agents/tools/sessions-history-tool.test.ts src/agents/openclaw-tools.sessions.test.ts -t 'includeFamily|offset'\nTest Files  4 passed (4)\nTests  12 passed | 84 skipped (96)\n\n$ CI=true node scripts/run-vitest.mjs run src/agents/tools/embedded-gateway-stub.test.ts src/gateway/server.chat.gateway-server-chat-b.test.ts -t 'family|includeFamily|subagent_announce|sessionStartedAt|offset|cap'\nTest Files  3 passed (3)\nTests  30 passed | 59 skipped (89)\n\n$ pnpm protocol:check\n# passed; generated protocol schema and Swift models are current\n\n$ pnpm lint --threads=8\n# passed\n\n$ CI=true pnpm check:test-types\n# passed\n\n$ git diff --check\n# no output\n\\`\\`\\`\n\n## Current head addendum: `30c6060925`\n\nClawSweeper's proof request is refreshed on head `30c6060925f11aeaebdfbe7d2dfaf549da93f5bf` after the current reset-archive target-cap fix.\n\nThe runtime proof below uses current-branch TypeScript modules directly, temporary on-disk session artifacts, the shared family target resolver, and the embedded carryover transform gate. No private transcript or channel data was used.\n\n```text\n$ git rev-parse HEAD\n30c6060925f11aeaebdfbe7d2dfaf549da93f5bf\n\n$ node --import tsx --input-type=module <<'TS'\n# Imports current-branch:\n# - ./src/gateway/session-history-family.ts\n# - ./src/agents/embedded-agent-runner/session-family-carryover.ts\n# Creates one current active transcript, an older current reset-topic archive, and a newer current plain reset archive.\n# Resolves includeFamily targets, resolves carryover, checks default-off/raw/explicit opt-in gates,\n# applies the transform before the LLM boundary, checks idempotence, prints observed result, and removes temp files.\nTS\n{\n  \"head\": \"30c6060925f11aeaebdfbe7d2dfaf549da93f5bf\",\n  \"targetBasenames\": [\n    \"current-proof-session.jsonl.reset.2026-06-04T00-04-00.000Z\",\n    \"current-proof-session.jsonl\"\n  ],\n  \"newestCurrentResetSelected\": true,\n  \"olderCurrentTopicSelected\": false,\n  \"currentActiveLast\": true,\n  \"defaultOffInstalls\": false,\n  \"rawOptInInstalls\": false,\n  \"explicitOptInInstalls\": true,\n  \"defaultOffRolesBeforeLlm\": [\n    \"user\"\n  ],\n  \"carryoverSummary\": \"Exact-head current target ordering proof carryover.\",\n  \"carryoverTokensBefore\": 404,\n  \"explicitOptInRolesBeforeLlm\": [\n    \"compactionSummary\",\n    \"user\"\n  ],\n  \"compactionSummaryCount\": 1,\n  \"idempotentRoles\": [\n    \"compactionSummary\",\n    \"user\"\n  ]\n}\n```\n\nObserved result after fix:\n\n- default config does not install reset-family carryover and leaves model-bound roles as `user` only\n- raw model runs do not install reset-family carryover even when the experimental opt-in is true\n- explicit `sessionFamilyCarryover` opt-in installs the transform and prepends exactly one archived reset-family `compactionSummary` before the user message\n- current target ordering keeps the newest current reset archive plus current active transcript inside the reserved current-session target cap\n- the older current reset-topic archive is capped out, and the current active transcript remains ordered last\n- the carryover resolver reads the summary from the selected current reset archive and preserves `tokensBefore`\n\nExact-head validation:\n\n```text\n$ CI=true node scripts/run-vitest.mjs run src/agents/embedded-agent-runner/session-family-carryover.test.ts\nTest Files  1 passed (1)\nTests  11 passed (11)\n\n$ CI=true node scripts/run-vitest.mjs run src/agents/tools/embedded-gateway-stub.test.ts -t 'includeFamily|family|topic archive|cap|limit'\nTest Files  2 passed (2)\nTests  14 passed | 26 skipped (40)\n\n$ CI=true node scripts/run-vitest.mjs run src/gateway/server.chat.gateway-server-chat-b.test.ts -t 'includeFamily|family|reset archive|topic|limit|cap'\nTest Files  1 passed (1)\nTests  7 passed | 49 skipped (56)\n\n$ CI=true node scripts/run-vitest.mjs run packages/gateway-protocol/src/index.test.ts src/agents/tools/sessions-history-tool.test.ts src/agents/openclaw-tools.sessions.test.ts -t 'includeFamily|offset'\nTest Files  4 passed | 2 skipped (6)\nTests  12 passed | 176 skipped (188)\n\n$ git diff --check\n# no output\n```\n",
+        "branch": "fix/session-carryover-summary",
+        "head_sha": "0eb67f5b46197adaa6c6b592b653966c7564d949",
+        "author": "simplyclever914",
         "labels": [
+          "docs",
+          "channel: discord",
+          "app: web-ui",
           "gateway",
-          "size: M",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "scripts",
+          "commands",
+          "agents",
+          "size: XL",
+          "proof: supplied",
+          "extensions: amazon-bedrock",
+          "P2"
         ],
         "files": [
           {
-            "path": "src/channels/message/ingress-queue.test.ts",
-            "additions": 237,
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/session-tool.md",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/embedding-provider.test.ts",
+            "additions": 1,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/threading.auto-thread.test.ts",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/index.test.ts",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/index.ts",
+            "additions": 50,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/logs-chat.ts",
+            "additions": 6,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/channels/message/ingress-queue.ts",
-            "additions": 177,
+            "path": "packages/sdk/src/package.e2e.test.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/protocol-gen-swift.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-command.ts",
+            "additions": 7,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner.spawn.test.ts",
+            "additions": 39,
+            "deletions": 35,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/command/attempt-execution.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/command/attempt-execution.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/params.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/session-family-carryover.test.ts",
+            "additions": 604,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/session-family-carryover.ts",
+            "additions": 220,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/openclaw-tools.sessions.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tool-description-presets.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/embedded-gateway-stub.test.ts",
+            "additions": 290,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/embedded-gateway-stub.ts",
+            "additions": 45,
             "deletions": 23,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-cron-notifications.test.ts",
-            "additions": 19,
+            "path": "src/agents/tools/sessions-history-tool.test.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/sessions-history-tool.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-utils.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/progress-draft-compositor.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-legacy-config.migrations.test.ts",
+            "additions": 1,
             "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/legacy-config-core-migrate.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/tasks.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.labels.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.agent-defaults.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-defaults.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 62,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 324,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.sessions.reset-models.test.ts",
+            "additions": 38,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-history-family.ts",
+            "additions": 224,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/session-reset-service.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-transcript-files.fs.ts",
+            "additions": 65,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.single-row-cache.test.ts",
+            "additions": 2,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/channel-plugin-ids.test.ts",
+            "additions": 21,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/host-hook-runtime.ts",
+            "additions": 6,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/proxy-capture/store.sqlite.test.ts",
+            "additions": 36,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/skills/loading/workspace.ts",
+            "additions": 7,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.discord-group.json",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.heartbeat-turn.json",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.telegram-direct.json",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/openclaw-cross-os-release-checks.test.ts",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 433,
-        "deletions": 27,
+        "changedFiles": 54,
+        "additions": 2370,
+        "deletions": 156,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98402",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98402.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90259",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90259.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 100,
-          "gatingTotal": 95,
+          "total": 93,
+          "gatingTotal": 88,
           "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 34,
+            "SUCCESS": 38,
+            "SKIPPED": 21,
+            "IN_PROGRESS": 32,
+            "FAILURE": 1,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
+          "blockers": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "native-i18n:FAILURE",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "ios-build:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "ios-build:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "native-i18n:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:98402:4851071663:2026-07-01T06:42:36Z:re_review",
-      "comment_id": "4851071663",
-      "comment_version_key": "4851071663:2026-07-01T06:42:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4851071663",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98402,
-      "author": "Pick-cat",
-      "author_id": 266665499,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T06:42:36Z",
-      "comment_updated_at": "2026-07-01T06:42:36Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:98402:4850956498:2026-07-01T06:33:04Z:re_review",
-      "comment_id": "4850956498",
-      "comment_version_key": "4850956498:2026-07-01T06:33:04Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4850956498",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98402,
-      "author": "Pick-cat",
-      "author_id": 266665499,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T06:33:04Z",
-      "comment_updated_at": "2026-07-01T06:33:04Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:98402:4850597678:2026-07-01T05:38:09Z:re_review",
-      "comment_id": "4850597678",
-      "comment_version_key": "4850597678:2026-07-01T05:38:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4850597678",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98402,
-      "author": "Pick-cat",
-      "author_id": 266665499,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T05:38:09Z",
-      "comment_updated_at": "2026-07-01T05:38:09Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:98402:4850295529:2026-07-01T04:37:43Z:re_review",
-      "comment_id": "4850295529",
-      "comment_version_key": "4850295529:2026-07-01T04:37:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98402#issuecomment-4850295529",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 98402,
-      "author": "Pick-cat",
-      "author_id": 266665499,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-01T04:37:43Z",
-      "comment_updated_at": "2026-07-01T04:37:43Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
+      "processed_at": "2026-07-05T06:30:49.745Z"
     }
   ],
-  "ledger_claimed": false,
+  "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2777,
+    "total_ms": 3834,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 222
+        "ms": 489
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1626
+        "ms": 1437
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -435,15 +566,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 899
+        "ms": 1884
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
