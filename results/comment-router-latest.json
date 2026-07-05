@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T05:15:11.005Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-05T05:15:28.538Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T02:15:09.169Z",
+  "since": "2026-07-05T02:15:27.976Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99916
+    907
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,265 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99916:4881559394:2026-07-05T05:15:05Z:clawsweeper_needs_human",
-      "comment_id": "4881559394",
-      "comment_version_key": "4881559394:2026-07-05T05:15:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99916#issuecomment-4881559394",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99916,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T10:04:16Z",
-      "comment_updated_at": "2026-07-05T05:15:05Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] No ClawSweeper repair job is appropriate because there is no concrete code defect to fix; the contributor needs to add real behavior proof before normal maintainer merge review.; Cleared: The diff only changes Android exception propagation and native i18n line metadata, with no dependency, secret, permission, build, release, or supply-chain surface change. (sha=7ddc16080512796eb9d572a325cd83491dcafe1f)",
-      "review_summary": "The PR adds CancellationException rethrows before generic Throwable handling in Android CameraHandler and GatewaySession invoke handling, plus line-number i18n inventory updates.\n\nPR surface: Other +13. Total +13 across 3 files.\n\nReproducibility: yes. from source inspection rather than an executed repro: current main catches Throwable around camera operations and the invoke boundary, so CancellationException follows the normal InvokeResult.error path. I did not run a live Android camera cancellation scenario.",
-      "review_followup": "- [P1] No ClawSweeper repair job is appropriate because there is no concrete code defect to fix; the contributor needs to add real behavior proof before normal maintainer merge review.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "7ddc16080512796eb9d572a325cd83491dcafe1f",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(android): propagate CancellationException in CameraHandler catch blocks",
-        "body": "## What Problem This Solves\n\nThe `catch (err: Throwable)` blocks in `CameraHandler.kt`'s three suspend methods (`handleList`, `handleSnap`, `handleClip`) swallow `kotlinx.coroutines.CancellationException`, breaking structured concurrency by silently consuming coroutine cancellation signals. Additionally, `GatewaySession.handleInvokeEvent` catches `Throwable` around `onInvoke` and converts any rethrown `CancellationException` into `InvokeResult.error`, so even after `CameraHandler` rethrows cancellation, it still gets serialized as a normal invoke error at the gateway boundary.\n\n`handleClip` is the worst case — `CameraCaptureManager.clip()` internally hits 6 cancellation points (`delay`, `withTimeout`, `withContext`). When the scope is cancelled (e.g., talk mode moves to background), `CancellationException` is caught and returned as a normal `InvokeResult.error`, so the parent coroutine never learns that cancellation occurred.\n\nThe codebase already has the correct pattern in `GatewaySession.kt:441-443` and `TalkModeManager.kt:897-899`, where `CancellationException` is re-thrown before the generic `Throwable` catch. `CameraHandler` and the invoke boundary missed this.\n\n## Why This Change Was Made\n\n1. **`CameraHandler.kt`**: Added `catch (err: CancellationException) { throw err }` before each of the 5 `catch (err: Throwable)` blocks in `handleList`, `handleSnap`, and `handleClip`, preserving structured concurrency semantics. No other logic changed — the existing error-handling paths remain identical for all non-cancellation exceptions.\n\n2. **`GatewaySession.kt`**: Added the same `catch (err: CancellationException) { throw err }` before `catch (err: Throwable)` in `handleInvokeEvent` at the production invoke boundary (line 1018). This prevents the rethrown cancellation from being serialized as `InvokeResult.error`, following the same pattern already used at `GatewaySession.kt:441`.\n\n## User Impact\n\n- Coroutine cancellation during camera operations (`handleList`, `handleSnap`, `handleClip`) is now correctly propagated at both the handler and invoke-boundary layers\n- `handleClip`'s `finally` block (restoring `externalAudioCaptureActive`) still runs correctly on cancellation\n- Complements the talk mode background audio fix (7481712f8e) for correct background resource cleanup\n\n## Evidence\n\n- CameraHandler tests: 6/6 passed ✅\n- Pattern consistency with existing `GatewaySession.kt:441-443`\n- CI: all checks green (android-build-play, android-test-play, android-test-third-party, plus all core checks)\n\n### Real behavior proof\n\nBehavior addressed: CancellationException propagation during camera coroutine operations (handleList/handleSnap/handleClip) through both CameraHandler and GatewaySession invoke boundary.\n\nReal environment tested: Linux x86_64 (NewStartOS V4.4.2, kernel 4.19.112-2.el8), JDK 21.0.11 (Temurin), Gradle 9.5.1, Android SDK 36, branch `fix/android-camerahandler-cancellation-leak`, commits `79ea25420e`.\n\nChanges: +11 lines in CameraHandler.kt (5 CancellationException rethrow blocks), +2 lines in GatewaySession.kt (1 CancellationException rethrow at invoke boundary).\n\nExact steps or command run after this patch:\n\n```\nsource ~/android-env.sh\n./gradlew :app:testPlayDebugUnitTest --tests \"ai.openclaw.app.node.CameraHandlerTest\"\n```\n\nEvidence after fix:\n\n```\n> Task :app:testPlayDebugUnitTest\nBUILD SUCCESSFUL in 8s\n31 actionable tasks: 5 executed, 26 up-to-date\n```\n\nAll 6 CameraHandlerTest cases passed with zero failures. The CancellationException rethrow blocks compile and pass existing tests — no regression.\n\nObserved result after fix: Existing CameraHandler tests continue to pass. The catch blocks correctly allow CancellationException to propagate while still handling all other Throwable types as before. The fix is purely additive — no existing behavior path is altered. The GatewaySession change mirrors the existing pattern at line 441.\n\nWhat was not tested: Real-device Android testing with actual camera hardware (requires physical device with CameraX). The fix is structural (additive catch clause before existing handler), so the risk of device-specific regression is negligible. The `handleClip` `finally` block (`externalAudioCaptureActive.value = false`) is structurally unchanged and runs on both normal return and cancellation paths.\n",
-        "branch": "fix/android-camerahandler-cancellation-leak",
-        "head_sha": "7ddc16080512796eb9d572a325cd83491dcafe1f",
-        "author": "xialonglee",
-        "labels": [
-          "app: android",
-          "size: XS",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "apps/.i18n/native-source.json",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/android/app/src/main/java/ai/openclaw/app/node/CameraHandler.kt",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 15,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99916",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99916.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 78,
-          "gatingTotal": 73,
-          "counts": {
-            "SUCCESS": 54,
-            "CANCELLED": 1,
-            "SKIPPED": 18,
-            "FAILURE": 5
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-large-2:FAILURE",
-            "checks-node-compact-large-whole-1:FAILURE",
-            "checks-node-compact-small-2:FAILURE",
-            "checks-node-compact-small-whole-2:FAILURE",
-            "checks-node-compact-small-whole-3:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [
-            "checks-node-compact-large-2:FAILURE",
-            "checks-node-compact-large-whole-1:FAILURE",
-            "checks-node-compact-small-2:FAILURE",
-            "checks-node-compact-small-whole-2:FAILURE",
-            "checks-node-compact-small-whole-3:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:99916:4881683580:2026-07-04T10:52:48Z:re_review",
-      "comment_id": "4881683580",
-      "comment_version_key": "4881683580:2026-07-04T10:52:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99916#issuecomment-4881683580",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99916,
-      "author": "xialonglee",
-      "author_id": 22994703,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T10:52:48Z",
-      "comment_updated_at": "2026-07-04T10:52:48Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(android): propagate CancellationException in CameraHandler catch blocks",
-        "body": "## What Problem This Solves\n\nThe `catch (err: Throwable)` blocks in `CameraHandler.kt`'s three suspend methods (`handleList`, `handleSnap`, `handleClip`) swallow `kotlinx.coroutines.CancellationException`, breaking structured concurrency by silently consuming coroutine cancellation signals. Additionally, `GatewaySession.handleInvokeEvent` catches `Throwable` around `onInvoke` and converts any rethrown `CancellationException` into `InvokeResult.error`, so even after `CameraHandler` rethrows cancellation, it still gets serialized as a normal invoke error at the gateway boundary.\n\n`handleClip` is the worst case — `CameraCaptureManager.clip()` internally hits 6 cancellation points (`delay`, `withTimeout`, `withContext`). When the scope is cancelled (e.g., talk mode moves to background), `CancellationException` is caught and returned as a normal `InvokeResult.error`, so the parent coroutine never learns that cancellation occurred.\n\nThe codebase already has the correct pattern in `GatewaySession.kt:441-443` and `TalkModeManager.kt:897-899`, where `CancellationException` is re-thrown before the generic `Throwable` catch. `CameraHandler` and the invoke boundary missed this.\n\n## Why This Change Was Made\n\n1. **`CameraHandler.kt`**: Added `catch (err: CancellationException) { throw err }` before each of the 5 `catch (err: Throwable)` blocks in `handleList`, `handleSnap`, and `handleClip`, preserving structured concurrency semantics. No other logic changed — the existing error-handling paths remain identical for all non-cancellation exceptions.\n\n2. **`GatewaySession.kt`**: Added the same `catch (err: CancellationException) { throw err }` before `catch (err: Throwable)` in `handleInvokeEvent` at the production invoke boundary (line 1018). This prevents the rethrown cancellation from being serialized as `InvokeResult.error`, following the same pattern already used at `GatewaySession.kt:441`.\n\n## User Impact\n\n- Coroutine cancellation during camera operations (`handleList`, `handleSnap`, `handleClip`) is now correctly propagated at both the handler and invoke-boundary layers\n- `handleClip`'s `finally` block (restoring `externalAudioCaptureActive`) still runs correctly on cancellation\n- Complements the talk mode background audio fix (7481712f8e) for correct background resource cleanup\n\n## Evidence\n\n- CameraHandler tests: 6/6 passed ✅\n- Pattern consistency with existing `GatewaySession.kt:441-443`\n- CI: all checks green (android-build-play, android-test-play, android-test-third-party, plus all core checks)\n\n### Real behavior proof\n\nBehavior addressed: CancellationException propagation during camera coroutine operations (handleList/handleSnap/handleClip) through both CameraHandler and GatewaySession invoke boundary.\n\nReal environment tested: Linux x86_64 (NewStartOS V4.4.2, kernel 4.19.112-2.el8), JDK 21.0.11 (Temurin), Gradle 9.5.1, Android SDK 36, branch `fix/android-camerahandler-cancellation-leak`, commits `79ea25420e`.\n\nChanges: +11 lines in CameraHandler.kt (5 CancellationException rethrow blocks), +2 lines in GatewaySession.kt (1 CancellationException rethrow at invoke boundary).\n\nExact steps or command run after this patch:\n\n```\nsource ~/android-env.sh\n./gradlew :app:testPlayDebugUnitTest --tests \"ai.openclaw.app.node.CameraHandlerTest\"\n```\n\nEvidence after fix:\n\n```\n> Task :app:testPlayDebugUnitTest\nBUILD SUCCESSFUL in 8s\n31 actionable tasks: 5 executed, 26 up-to-date\n```\n\nAll 6 CameraHandlerTest cases passed with zero failures. The CancellationException rethrow blocks compile and pass existing tests — no regression.\n\nObserved result after fix: Existing CameraHandler tests continue to pass. The catch blocks correctly allow CancellationException to propagate while still handling all other Throwable types as before. The fix is purely additive — no existing behavior path is altered. The GatewaySession change mirrors the existing pattern at line 441.\n\nWhat was not tested: Real-device Android testing with actual camera hardware (requires physical device with CameraX). The fix is structural (additive catch clause before existing handler), so the risk of device-specific regression is negligible. The `handleClip` `finally` block (`externalAudioCaptureActive.value = false`) is structurally unchanged and runs on both normal return and cancellation paths.\n",
-        "branch": "fix/android-camerahandler-cancellation-leak",
-        "head_sha": "7ddc16080512796eb9d572a325cd83491dcafe1f",
-        "author": "xialonglee",
-        "labels": [
-          "app: android",
-          "size: XS",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "apps/.i18n/native-source.json",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/android/app/src/main/java/ai/openclaw/app/node/CameraHandler.kt",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 15,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99916",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99916.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 78,
-          "gatingTotal": 73,
-          "counts": {
-            "SUCCESS": 54,
-            "CANCELLED": 1,
-            "SKIPPED": 18,
-            "FAILURE": 5
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-large-2:FAILURE",
-            "checks-node-compact-large-whole-1:FAILURE",
-            "checks-node-compact-small-2:FAILURE",
-            "checks-node-compact-small-whole-2:FAILURE",
-            "checks-node-compact-small-whole-3:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [
-            "checks-node-compact-large-2:FAILURE",
-            "checks-node-compact-large-whole-1:FAILURE",
-            "checks-node-compact-small-2:FAILURE",
-            "checks-node-compact-small-whole-2:FAILURE",
-            "checks-node-compact-small-whole-3:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2152,
+    "total_ms": 745,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 417
+        "ms": 552
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1405
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -303,11 +61,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 303
+        "ms": 183
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
