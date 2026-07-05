@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T03:11:40.045Z",
-  "repo": "openclaw/acpx",
+  "generated_at": "2026-07-05T03:11:58.842Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T00:11:38.932Z",
+  "since": "2026-07-05T00:11:56.680Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    432
+    100102
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4884149339
+  ],
+  "status_comment_id": 4884149409,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,127 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/acpx:432:4884472865:2026-07-05T03:11:36Z:clawsweeper_auto_repair",
-      "comment_id": "4884472865",
-      "comment_version_key": "4884472865:2026-07-05T03:11:36Z",
-      "comment_url": "https://github.com/openclaw/acpx/pull/432#issuecomment-4884472865",
-      "repo": "openclaw/acpx",
-      "target_branch": null,
-      "issue_number": 432,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-05T01:55:47Z",
-      "comment_updated_at": "2026-07-05T03:11:36Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=e13ace6216a07bba01b817a2f16f4d61601f0b7a)",
-      "review_summary": "This PR makes POSIX agent bridges detached process-group leaders, signals that group during `AcpClient.close()`, adds a final group sweep, and adds mock-agent regression tests for bridge grandchildren.\n\nReproducibility: yes. at source level: current main only calls `child.kill(signal)` on the bridge PID, so a bridge-spawned grandchild is not directly signaled. I did not run a live current-main repro in this read-only review.",
-      "review_followup": "- [P1] Needs maintainer decision on detached POSIX bridge compatibility plus contributor real-behavior proof; the right parent-death contract is not a safe automated repair choice.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "e13ace6216a07bba01b817a2f16f4d61601f0b7a",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(client): reap the bridge process tree on close",
-        "body": "## Problem\n\nWhen acpx terminates an agent bridge, `killAgentIfRunning` (`src/acp/client.ts`) called `child.kill(signal)` — signalling **only the bridge PID**. The bridge (codex-acp etc.) spawns its own children: the model process and MCP servers (e.g. `serena`). Those descendants were never signalled, so they survived as orphans and accumulated until the agent app-server choked and new sessions hung at `session/new`.\n\n## Fix\n\nOn **POSIX**, spawn the bridge in its own process group (`detached`, `pgid == pid`) and signal the **whole group** on close (`process.kill(-pid, signal)`), gated on an `agentGroupLeader` flag so acpx never signals its own group. Windows and any non-detached path keep the previous single-PID `child.kill`.\n\nA **final best-effort group sweep** also runs after the bridge PID itself has gone — e.g. a well-behaved bridge that exits during the stdin-close grace — so descendants that outlived the bridge are still reaped. Signal failures other than `ESRCH` are traced (verbose) rather than silently swallowed.\n\n## Scope & limitations (explicit)\n\n- **Process group, not full tree.** Reaps descendants that stay in the bridge's group. A descendant that re-detaches into its **own** session (`setsid`) leaves the group and is out of scope.\n- **POSIX-only.** On Windows `agentGroupLeader` is false and behaviour is unchanged (no group reaping). A Job-Object path can follow.\n- **Cooperative close only.** This couples descendants to `AcpClient.close()`. It does **not** cover abrupt death of acpx itself (`SIGKILL`/OOM) — there is no `PR_SET_PDEATHSIG` here. Note that detaching also means the bridge no longer receives signals sent to acpx's process group; both are left to a follow-up that adds a real die-with-parent mechanism.\n- **Headless assumption.** `detached` puts the bridge in a new session without a controlling terminal; tools that need `/dev/tty` directly would be affected. acpx bridges are headless ACP adapters, so this is expected.\n\n## Real behavior proof\n\nDeterministic regression (`--exit-on-stdin-end` makes the mock bridge exit on stdin EOF, so only the post-exit sweep can reap the grandchild). Same test, with and without the fix:\n\n```\n# WITH the fix\n✔ AcpClient close reaps grandchildren when the bridge exits during stdin-close\nℹ pass 1  ℹ fail 0\n\n# WITHOUT the fix (git stash of src/acp/client.ts)\n✖ AcpClient close reaps grandchildren when the bridge exits during stdin-close\n  AssertionError: grandchild 57370 must be dead after close even when the bridge exited on its own\nℹ pass 0  ℹ fail 1\n```\n\nFull suite: `850 tests, 847 pass, 0 fail, 3 skipped`. `typecheck` + `lint` clean.\n\n## Tests\n\n`test/client.test.ts` (+ `test/mock-agent.ts`), real-process, Unix:\n- grandchild reaped when the bridge is **stubborn** (`--ignore-sigterm --stay-alive-after-stdin-end`, forcing the group `SIGKILL`);\n- grandchild reaped when the bridge **exits cleanly** on stdin-close (`--exit-on-stdin-end`, exercising the post-exit group sweep — the case ClawSweeper flagged).\n\n---\n\nAddresses the ClawSweeper review of the previous revision (the stdin-close descendant leak). Maintainer edits enabled (personal fork).\n",
-        "branch": "fix/bridge-process-reaping",
-        "head_sha": "e13ace6216a07bba01b817a2f16f4d61601f0b7a",
-        "author": "superworldsavior",
-        "labels": [
-          "status: 📣 needs proof",
-          "merge-risk: 🚨 compatibility",
-          "rating: 🦪 silver shellfish",
-          "P1",
-          "merge-risk: 🚨 availability"
-        ],
-        "files": [
-          {
-            "path": "src/acp/client.ts",
-            "additions": 49,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/client.test.ts",
-            "additions": 129,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/mock-agent.ts",
-            "additions": 54,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 232,
-        "deletions": 5,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-acpx-432",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-acpx-432.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 10,
-          "gatingTotal": 10,
-          "counts": {
-            "SUCCESS": 8,
-            "FAILURE": 1,
-            "SKIPPED": 1
-          },
-          "blockers": [
-            "Format:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Format:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/acpx:432:4884644833:2026-07-05T03:02:30Z:re_review",
-      "comment_id": "4884644833",
-      "comment_version_key": "4884644833:2026-07-05T03:02:30Z",
-      "comment_url": "https://github.com/openclaw/acpx/pull/432#issuecomment-4884644833",
-      "repo": "openclaw/acpx",
-      "target_branch": null,
-      "issue_number": 432,
-      "author": "superWorldSavior",
-      "author_id": 20945750,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-05T03:02:30Z",
-      "comment_updated_at": "2026-07-05T03:02:30Z",
-      "status_comment_id": null,
+      "idempotency_key": "comment-router:openclaw/openclaw:100102:4884149339:2026-07-05T03:10:44Z:re_review",
+      "comment_id": "4884149339",
+      "comment_version_key": "4884149339:2026-07-05T03:10:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100102#issuecomment-4884149339",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 100102,
+      "author": "Gfaerny",
+      "author_id": 120312426,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-04T23:35:59Z",
+      "comment_updated_at": "2026-07-05T03:10:44Z",
+      "status_comment_id": 4884149409,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -174,96 +68,100 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 100102,
+          "dispatch_key": "router-2bf3128a17af8ec8",
+          "dispatched_at": "2026-07-05T03:11:59.873Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-05T03:12:01.047Z",
+          "response_comment_id": "4884149409",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(client): reap the bridge process tree on close",
-        "body": "## Problem\n\nWhen acpx terminates an agent bridge, `killAgentIfRunning` (`src/acp/client.ts`) called `child.kill(signal)` — signalling **only the bridge PID**. The bridge (codex-acp etc.) spawns its own children: the model process and MCP servers (e.g. `serena`). Those descendants were never signalled, so they survived as orphans and accumulated until the agent app-server choked and new sessions hung at `session/new`.\n\n## Fix\n\nOn **POSIX**, spawn the bridge in its own process group (`detached`, `pgid == pid`) and signal the **whole group** on close (`process.kill(-pid, signal)`), gated on an `agentGroupLeader` flag so acpx never signals its own group. Windows and any non-detached path keep the previous single-PID `child.kill`.\n\nA **final best-effort group sweep** also runs after the bridge PID itself has gone — e.g. a well-behaved bridge that exits during the stdin-close grace — so descendants that outlived the bridge are still reaped. Signal failures other than `ESRCH` are traced (verbose) rather than silently swallowed.\n\n## Scope & limitations (explicit)\n\n- **Process group, not full tree.** Reaps descendants that stay in the bridge's group. A descendant that re-detaches into its **own** session (`setsid`) leaves the group and is out of scope.\n- **POSIX-only.** On Windows `agentGroupLeader` is false and behaviour is unchanged (no group reaping). A Job-Object path can follow.\n- **Cooperative close only.** This couples descendants to `AcpClient.close()`. It does **not** cover abrupt death of acpx itself (`SIGKILL`/OOM) — there is no `PR_SET_PDEATHSIG` here. Note that detaching also means the bridge no longer receives signals sent to acpx's process group; both are left to a follow-up that adds a real die-with-parent mechanism.\n- **Headless assumption.** `detached` puts the bridge in a new session without a controlling terminal; tools that need `/dev/tty` directly would be affected. acpx bridges are headless ACP adapters, so this is expected.\n\n## Real behavior proof\n\nDeterministic regression (`--exit-on-stdin-end` makes the mock bridge exit on stdin EOF, so only the post-exit sweep can reap the grandchild). Same test, with and without the fix:\n\n```\n# WITH the fix\n✔ AcpClient close reaps grandchildren when the bridge exits during stdin-close\nℹ pass 1  ℹ fail 0\n\n# WITHOUT the fix (git stash of src/acp/client.ts)\n✖ AcpClient close reaps grandchildren when the bridge exits during stdin-close\n  AssertionError: grandchild 57370 must be dead after close even when the bridge exited on its own\nℹ pass 0  ℹ fail 1\n```\n\nFull suite: `850 tests, 847 pass, 0 fail, 3 skipped`. `typecheck` + `lint` clean.\n\n## Tests\n\n`test/client.test.ts` (+ `test/mock-agent.ts`), real-process, Unix:\n- grandchild reaped when the bridge is **stubborn** (`--ignore-sigterm --stay-alive-after-stdin-end`, forcing the group `SIGKILL`);\n- grandchild reaped when the bridge **exits cleanly** on stdin-close (`--exit-on-stdin-end`, exercising the post-exit group sweep — the case ClawSweeper flagged).\n\n---\n\nAddresses the ClawSweeper review of the previous revision (the stdin-close descendant leak). Maintainer edits enabled (personal fork).\n",
-        "branch": "fix/bridge-process-reaping",
-        "head_sha": "e13ace6216a07bba01b817a2f16f4d61601f0b7a",
-        "author": "superworldsavior",
+        "title": "Fix nodejs installation logic on Debian-based systems",
+        "body": "## What Problem This Solves\r\n\r\nFixes an issue where non-Arch Linux systems (such as Debian, Ubuntu, Mint, etc.) that happen to have a `pacman` executable present in their `PATH` were incorrectly routed into Arch-based installer branches.  \r\nThis caused the installer to attempt `pacman -Sy` operations on systems that do not use pacman as a package manager, breaking build-tool installation, Git installation, and the Node.js install path.\r\n\r\nThe root cause was that the Arch detection logic treated the presence of any `pacman` binary as proof of an Arch-based distribution.\r\n\r\n## Why This Change Was Made\r\n\r\nThe previous logic relied on:\r\n\r\n```\r\ncommand -v pacman || is_arch_linux\r\n```\r\n\r\nAdditionally, `is_arch_linux` itself included a fallback that returned success if `pacman` existed in `PATH`.  \r\nThis produced false positives whenever any package or program named `pacman` was installed on non-Arch systems.\r\n\r\nTo correct this:\r\n\r\n1. **Removed the pacman fallback from `is_arch_linux()`**  \r\n   The function now identifies Arch-based systems only via `/etc/os-release` or `/etc/arch-release`.\r\n\r\n2. **Switched installer conditions from `||` to `&&`**  \r\n   The installer now requires:\r\n   - a system that is *actually* Arch-based  \r\n   - and a real pacman package manager available  \r\n   before using pacman installation paths.\r\n\r\nThis prevents unrelated binaries named `pacman` from triggering Arch-specific routes.\r\n\r\n## User Impact\r\n\r\n- Debian/Ubuntu/Mint users who have any program named `pacman` on their system (e.g., games or custom tools) will no longer be misdetected as Arch.\r\n- Installer routes for build tools, Git, and Node.js now reliably use `apt`/NodeSource on Debian-based systems.\r\n- Arch and Arch-like distributions continue to install packages via pacman normally.\r\n- This change improves reliability and prevents package‑manager confusion in multi-distro setups and development environments.\r\n\r\n## Evidence\r\n\r\n(You will add your real logs + test outputs here as soon as you run the PR-proof steps.)\r\n\r\n---\r\n\r\n## Follow-up (optional)\r\n\r\nDear maintainers,  \r\nIf you agree, I can submit a separate PR to add distro‑specific helpers such as `is_debian_linux()` and `is_fedora_linux()` to reduce repeated `command -v apt-get` / `command -v dnf` checks and improve installer routing clarity across the codebase.\r\n\r\n",
+        "branch": "main",
+        "head_sha": "999e5318778344ab72b30099795f3b05c8bf6f62",
+        "author": "gfaerny",
         "labels": [
-          "status: 📣 needs proof",
+          "scripts",
+          "size: XS",
+          "triage: risky-infra",
+          "P2",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "rating: 🦪 silver shellfish",
-          "P1",
-          "merge-risk: 🚨 availability"
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/acp/client.ts",
-            "additions": 49,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/client.test.ts",
-            "additions": 129,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/mock-agent.ts",
-            "additions": 54,
-            "deletions": 0,
+            "path": "scripts/install.sh",
+            "additions": 3,
+            "deletions": 7,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 232,
-        "deletions": 5,
+        "changedFiles": 1,
+        "additions": 3,
+        "deletions": 7,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-acpx-432",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-acpx-432.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100102",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100102.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 10,
-          "gatingTotal": 10,
+          "total": 85,
+          "gatingTotal": 80,
           "counts": {
-            "SUCCESS": 8,
-            "FAILURE": 1,
-            "SKIPPED": 1
+            "SUCCESS": 71,
+            "SKIPPED": 13,
+            "NEUTRAL": 1
           },
-          "blockers": [
-            "Format:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Format:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "processed_at": "2026-07-05T03:11:59.156Z"
     }
   ],
-  "ledger_claimed": false,
+  "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1232,
+    "total_ms": 5050,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 211
+        "ms": 654
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 882
+        "ms": 1490
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -279,7 +177,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 110
+        "ms": 2871
       },
       {
         "name": "append_ledger",
