@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T15:06:53.503Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-05T15:07:26.684Z",
+  "repo": "openclaw/acpx",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T12:06:53.153Z",
+  "since": "2026-07-05T12:07:25.127Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100356
+    433
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 8,
+  "commands_seen": 5,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,449 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/acpx:433:4884811011:2026-07-05T15:07:22Z:clawsweeper_needs_human",
+      "comment_id": "4884811011",
+      "comment_version_key": "4884811011:2026-07-05T15:07:22Z",
+      "comment_url": "https://github.com/openclaw/acpx/pull/433#issuecomment-4884811011",
+      "repo": "openclaw/acpx",
+      "target_branch": null,
+      "issue_number": 433,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-05T04:20:26Z",
+      "comment_updated_at": "2026-07-05T15:07:22Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] Manual review is appropriate because no narrow automated repair remains; the blocker is maintainer acceptance of native helper and process-lifecycle semantics.; Cleared: The diff adds native helper execution, a build script, an env override, and lazy local compilation, but I found no concrete secret, dependency, remote-download, permission, or supply-chain regression. (sha=6c5a4f0e577ff677786f2b289e7785f59e83846a)",
+      "review_summary": "The branch adds POSIX process-group bridge teardown, a native pipe-lifeline watchdog with lazy helper resolution/compilation, package script/source packaging changes, and real-process lifecycle regression tests.\n\nReproducibility: yes. source-reproducible: current main only signals the bridge PID during close and cannot run owner-death cleanup after SIGKILL. I did not run a live current-main repro in this read-only review, but the PR includes terminal proof and real-process tests for the failing paths.",
+      "review_followup": "- [P2] Manual review is appropriate because no narrow automated repair remains; the blocker is maintainer acceptance of native helper and process-lifecycle semantics.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "6c5a4f0e577ff677786f2b289e7785f59e83846a",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(acp): pipe lifeline — reap the bridge tree on abrupt owner death",
+        "body": "## Problem\n\n`AcpClient.close()` and abrupt queue-owner death both need to clean up the whole ACP bridge process group, not just the bridge PID.\n\nBefore this PR, bridge descendants could survive in several cases:\n\n- cooperative close could kill only the bridge process and leave bridge-spawned children alive;\n- initialize/startup failure could hit a PID-only `child.kill()` path before the normal close machinery owned the bridge;\n- abrupt owner death (`SIGKILL`, OOM kill, crash) runs no JavaScript cleanup at all, so a detached bridge tree can be orphaned under PID 1.\n\nWe hit the abrupt-death variant in production with leaked bridge/model/MCP processes accumulating until new sessions hung at `session/new`.\n\n## Fix\n\nThis PR makes the bridge lifecycle group-aware on POSIX:\n\n- The bridge is spawned as a detached process-group leader when a POSIX lifeline helper is available.\n- Normal `AcpClient.close()` first closes stdin for graceful ACP shutdown, but then checks whether the bridge process group is still alive. If descendants remain, it signals the group with `SIGTERM`, waits, then falls back to `SIGKILL`.\n- Initialize/startup failure now also uses group-aware termination instead of PID-only `child.kill()`.\n- Abrupt owner death is covered by a tiny native pipe lifeline helper. The helper inherits a pipe from the owner; owner EOF means the owner died, so the helper reaps the bridge process group.\n\n## Lifeline safety model\n\nThe lifeline uses pipe identity, not owner PID polling, so owner PID reuse is not part of the death-detection mechanism.\n\nThe helper also guards the bridge PGID side:\n\n- strict PGID parsing rejects malformed or unsafe input;\n- `kill(-pgid, 0)` probes the process group itself, not just the leader, so TERM-resistant descendants still receive the `SIGKILL` fallback;\n- if the watched process group disappears while the owner is still alive, the helper disarms and exits cleanly, avoiding a stale-PGID kill on later owner EOF;\n- `POLLERR`/`POLLNVAL` on the lifeline fd degrade without reaping rather than risk killing a live session.\n\n## No binaries shipped\n\nThe npm package ships the C source only. Resolution order is:\n\n1. `ACPX_LIFELINE_HELPER` override\n2. package-relative prebuilt helper, if present in a source checkout or future platform package\n3. lazy one-time compile into `~/.acpx/native/lifeline-<version>-<platform>-<arch>` using `cc`\n\nIf no usable helper can be resolved or compiled, acpx degrades to the previous non-detached/no-lifeline behavior instead of adding a hard native dependency.\n\n## Scope and limitations\n\n- POSIX-only. Windows keeps current behavior.\n- Process-group cleanup, not a universal process-tree reaper. A descendant that deliberately starts a new session/process group can escape.\n- There is still a tiny best-effort window between bridge spawn and watchdog spawn where an immediate owner `SIGKILL` can orphan the bridge.\n- If a helper starts and then immediately dies, abrupt-death cleanup is not protected, but normal close still group-kills the bridge descendants.\n\n## Regression coverage\n\nAdded real-process tests for:\n\n- initialize failure with a long-lived bridge grandchild;\n- normal close with long-lived bridge grandchildren;\n- cooperative bridge exit while a TERM-resistant grandchild survives;\n- native lifeline `SIGKILL` fallback after the bridge leader exits;\n- native lifeline disarm when the watched process group disappears before owner EOF;\n- queue-owner `SIGKILL` cleanup with a TERM-resistant descendant.\n\n## Verification\n\nFinal HEAD: `6c5a4f0e577ff677786f2b289e7785f59e83846a`\n\nLocal validation:\n\n- `pnpm run check` -> pass (`864` runtime tests + `109` flow/runtime coverage tests, 0 failures; coverage gates passed)\n- `pnpm run mutate` -> pass (Stryker score `90.55`, threshold `80`, 0 timeouts)\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base upstream/main` -> clean, no accepted/actionable findings\n- `pnpm dlx slophammer-ts@latest rules --format text` -> pass\n- `pnpm dlx slophammer-ts@latest dry .` -> `DRY candidates: 0; maximum: 0`\n- `pnpm dlx slophammer-ts@latest check . --only ts.dependency-boundaries-required` -> pass\n\nGitHub CI on `ubuntu-24.04`:\n\n- Format, Typecheck, Lint, Build, Conformance Smoke, Test, Mutation, Slophammer -> pass\n- Docs -> skipped by scope\n\n## Relationship to #432\n\nThis PR supersedes #432 and is self-contained: it includes the cooperative close/group cleanup plus the abrupt-owner-death lifeline work.\n\n---\n\nMaintainer edits enabled (personal fork).\n",
+        "branch": "fix/bridge-lifeline",
+        "head_sha": "6c5a4f0e577ff677786f2b289e7785f59e83846a",
+        "author": "superworldsavior",
+        "labels": [
+          "merge-risk: 🚨 compatibility",
+          "proof: sufficient",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look",
+          "P1",
+          "merge-risk: 🚨 availability"
+        ],
+        "files": [
+          {
+            "path": "native/lifeline.c",
+            "additions": 137,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "package.json",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/build-native-lifeline.mjs",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/acp/client.ts",
+            "additions": 208,
+            "deletions": 23,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/lifeline.ts",
+            "additions": 255,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/client.test.ts",
+            "additions": 423,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/lifeline-test-helper.ts",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/lifeline.test.ts",
+            "additions": 337,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/mock-agent.ts",
+            "additions": 62,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/package-scripts.test.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/queue-owner-lifecycle.test.ts",
+            "additions": 169,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 11,
+        "additions": 1691,
+        "deletions": 26,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-acpx-433",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-acpx-433.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 10,
+          "gatingTotal": 10,
+          "counts": {
+            "SUCCESS": 9,
+            "SKIPPED": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/acpx:433:4886449017:2026-07-05T14:50:21Z:re_review",
+      "comment_id": "4886449017",
+      "comment_version_key": "4886449017:2026-07-05T14:50:21Z",
+      "comment_url": "https://github.com/openclaw/acpx/pull/433#issuecomment-4886449017",
+      "repo": "openclaw/acpx",
+      "target_branch": null,
+      "issue_number": 433,
+      "author": "superWorldSavior",
+      "author_id": 20945750,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-05T14:50:21Z",
+      "comment_updated_at": "2026-07-05T14:50:21Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(acp): pipe lifeline — reap the bridge tree on abrupt owner death",
+        "body": "## Problem\n\n`AcpClient.close()` and abrupt queue-owner death both need to clean up the whole ACP bridge process group, not just the bridge PID.\n\nBefore this PR, bridge descendants could survive in several cases:\n\n- cooperative close could kill only the bridge process and leave bridge-spawned children alive;\n- initialize/startup failure could hit a PID-only `child.kill()` path before the normal close machinery owned the bridge;\n- abrupt owner death (`SIGKILL`, OOM kill, crash) runs no JavaScript cleanup at all, so a detached bridge tree can be orphaned under PID 1.\n\nWe hit the abrupt-death variant in production with leaked bridge/model/MCP processes accumulating until new sessions hung at `session/new`.\n\n## Fix\n\nThis PR makes the bridge lifecycle group-aware on POSIX:\n\n- The bridge is spawned as a detached process-group leader when a POSIX lifeline helper is available.\n- Normal `AcpClient.close()` first closes stdin for graceful ACP shutdown, but then checks whether the bridge process group is still alive. If descendants remain, it signals the group with `SIGTERM`, waits, then falls back to `SIGKILL`.\n- Initialize/startup failure now also uses group-aware termination instead of PID-only `child.kill()`.\n- Abrupt owner death is covered by a tiny native pipe lifeline helper. The helper inherits a pipe from the owner; owner EOF means the owner died, so the helper reaps the bridge process group.\n\n## Lifeline safety model\n\nThe lifeline uses pipe identity, not owner PID polling, so owner PID reuse is not part of the death-detection mechanism.\n\nThe helper also guards the bridge PGID side:\n\n- strict PGID parsing rejects malformed or unsafe input;\n- `kill(-pgid, 0)` probes the process group itself, not just the leader, so TERM-resistant descendants still receive the `SIGKILL` fallback;\n- if the watched process group disappears while the owner is still alive, the helper disarms and exits cleanly, avoiding a stale-PGID kill on later owner EOF;\n- `POLLERR`/`POLLNVAL` on the lifeline fd degrade without reaping rather than risk killing a live session.\n\n## No binaries shipped\n\nThe npm package ships the C source only. Resolution order is:\n\n1. `ACPX_LIFELINE_HELPER` override\n2. package-relative prebuilt helper, if present in a source checkout or future platform package\n3. lazy one-time compile into `~/.acpx/native/lifeline-<version>-<platform>-<arch>` using `cc`\n\nIf no usable helper can be resolved or compiled, acpx degrades to the previous non-detached/no-lifeline behavior instead of adding a hard native dependency.\n\n## Scope and limitations\n\n- POSIX-only. Windows keeps current behavior.\n- Process-group cleanup, not a universal process-tree reaper. A descendant that deliberately starts a new session/process group can escape.\n- There is still a tiny best-effort window between bridge spawn and watchdog spawn where an immediate owner `SIGKILL` can orphan the bridge.\n- If a helper starts and then immediately dies, abrupt-death cleanup is not protected, but normal close still group-kills the bridge descendants.\n\n## Regression coverage\n\nAdded real-process tests for:\n\n- initialize failure with a long-lived bridge grandchild;\n- normal close with long-lived bridge grandchildren;\n- cooperative bridge exit while a TERM-resistant grandchild survives;\n- native lifeline `SIGKILL` fallback after the bridge leader exits;\n- native lifeline disarm when the watched process group disappears before owner EOF;\n- queue-owner `SIGKILL` cleanup with a TERM-resistant descendant.\n\n## Verification\n\nFinal HEAD: `6c5a4f0e577ff677786f2b289e7785f59e83846a`\n\nLocal validation:\n\n- `pnpm run check` -> pass (`864` runtime tests + `109` flow/runtime coverage tests, 0 failures; coverage gates passed)\n- `pnpm run mutate` -> pass (Stryker score `90.55`, threshold `80`, 0 timeouts)\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base upstream/main` -> clean, no accepted/actionable findings\n- `pnpm dlx slophammer-ts@latest rules --format text` -> pass\n- `pnpm dlx slophammer-ts@latest dry .` -> `DRY candidates: 0; maximum: 0`\n- `pnpm dlx slophammer-ts@latest check . --only ts.dependency-boundaries-required` -> pass\n\nGitHub CI on `ubuntu-24.04`:\n\n- Format, Typecheck, Lint, Build, Conformance Smoke, Test, Mutation, Slophammer -> pass\n- Docs -> skipped by scope\n\n## Relationship to #432\n\nThis PR supersedes #432 and is self-contained: it includes the cooperative close/group cleanup plus the abrupt-owner-death lifeline work.\n\n---\n\nMaintainer edits enabled (personal fork).\n",
+        "branch": "fix/bridge-lifeline",
+        "head_sha": "6c5a4f0e577ff677786f2b289e7785f59e83846a",
+        "author": "superworldsavior",
+        "labels": [
+          "merge-risk: 🚨 compatibility",
+          "proof: sufficient",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look",
+          "P1",
+          "merge-risk: 🚨 availability"
+        ],
+        "files": [
+          {
+            "path": "native/lifeline.c",
+            "additions": 137,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "package.json",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/build-native-lifeline.mjs",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/acp/client.ts",
+            "additions": 208,
+            "deletions": 23,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/lifeline.ts",
+            "additions": 255,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/client.test.ts",
+            "additions": 423,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/lifeline-test-helper.ts",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/lifeline.test.ts",
+            "additions": 337,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/mock-agent.ts",
+            "additions": 62,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/package-scripts.test.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/queue-owner-lifecycle.test.ts",
+            "additions": 169,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 11,
+        "additions": 1691,
+        "deletions": 26,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-acpx-433",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-acpx-433.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 10,
+          "gatingTotal": 10,
+          "counts": {
+            "SUCCESS": 9,
+            "SKIPPED": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/acpx:433:4886422647:2026-07-05T14:42:16Z:re_review",
+      "comment_id": "4886422647",
+      "comment_version_key": "4886422647:2026-07-05T14:42:16Z",
+      "comment_url": "https://github.com/openclaw/acpx/pull/433#issuecomment-4886422647",
+      "repo": "openclaw/acpx",
+      "target_branch": null,
+      "issue_number": 433,
+      "author": "superWorldSavior",
+      "author_id": 20945750,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-05T14:42:16Z",
+      "comment_updated_at": "2026-07-05T14:42:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/acpx:433:4885721576:2026-07-05T10:44:50Z:re_review",
+      "comment_id": "4885721576",
+      "comment_version_key": "4885721576:2026-07-05T10:44:50Z",
+      "comment_url": "https://github.com/openclaw/acpx/pull/433#issuecomment-4885721576",
+      "repo": "openclaw/acpx",
+      "target_branch": null,
+      "issue_number": 433,
+      "author": "superWorldSavior",
+      "author_id": 20945750,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-05T10:44:50Z",
+      "comment_updated_at": "2026-07-05T10:44:50Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/acpx:433:4884905744:2026-07-05T05:02:45Z:re_review",
+      "comment_id": "4884905744",
+      "comment_version_key": "4884905744:2026-07-05T05:02:45Z",
+      "comment_url": "https://github.com/openclaw/acpx/pull/433#issuecomment-4884905744",
+      "repo": "openclaw/acpx",
+      "target_branch": null,
+      "issue_number": 433,
+      "author": "superWorldSavior",
+      "author_id": 20945750,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-05T05:02:45Z",
+      "comment_updated_at": "2026-07-05T05:02:45Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 592,
+    "total_ms": 5236,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 340
+        "ms": 382
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1157
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +487,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 242
+        "ms": 3668
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
