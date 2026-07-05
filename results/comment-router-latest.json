@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T07:01:52.625Z",
+  "generated_at": "2026-07-05T07:03:02.853Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T04:01:50.320Z",
+  "since": "2026-07-05T04:03:00.555Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100057
+    100176
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 9,
-  "commands_seen": 4,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,18 +31,123 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:100057:4884550420:2026-07-05T02:19:00Z:re_review",
-      "comment_id": "4884550420",
-      "comment_version_key": "4884550420:2026-07-05T02:19:00Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100057#issuecomment-4884550420",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100176:4884867341:2026-07-05T07:02:56Z:clawsweeper_auto_repair",
+      "comment_id": "4884867341",
+      "comment_version_key": "4884867341:2026-07-05T07:02:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100176#issuecomment-4884867341",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 100057,
-      "author": "Glucksberg",
-      "author_id": 80581902,
+      "issue_number": 100176,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-05T02:19:00Z",
-      "comment_updated_at": "2026-07-05T02:19:00Z",
+      "comment_created_at": "2026-07-05T04:45:52Z",
+      "comment_updated_at": "2026-07-05T07:02:56Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=6dfd53ccac74658df525614663532b2c820fc7ee)",
+      "review_summary": "The PR changes Active Memory’s recall timeout circuit breaker to keep tripped state through cooldown, allow one watchdog-aware half-open probe, adds focused tests, and updates docs.\n\nPR surface: Source +39, Tests +100, Docs 0. Total +139 across 3 files.\n\nReproducibility: yes. source-reproducible. Current main deletes the circuit-breaker record on cooldown expiry, so persistent failures can restart the timeout count instead of keeping the breaker tripped; I did not run a live provider-stack repro.",
+      "review_followup": "- [P1] Needs contributor or maintainer follow-up for actual runtime proof and a small manifest metadata fix; automation cannot supply the contributor-side proof.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "6dfd53ccac74658df525614663532b2c820fc7ee",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(active-memory): keep recall circuit breaker tripped across cooldown",
+        "body": "Closes #100167\n\n## What Problem This Solves\n\nResolves a problem where agents with the `active-memory` plugin enabled pay a fixed recall-timeout stall (~15s by default) on **every** turn once recall starts failing, instead of the plugin backing off. The reporter saw `status=timeout summaryChars=0` on every `main`-agent turn for 24+ hours, making latency-sensitive flows (Talk / live voice, direct chat) feel unresponsive.\n\nThe plugin already has a circuit breaker (#74054) that is supposed to skip recall after `circuitBreakerMaxTimeouts` consecutive timeouts. But on cooldown expiry it **deleted the failure record entirely**. At normal turn cadence — turns spaced further apart than `circuitBreakerCooldownMs` (default 60s, max 10m) — the consecutive-timeout count reset to zero before it could ever reach the threshold, so the breaker never re-engaged and every turn ran the sub-agent into the watchdog again.\n\n## Why This Change Was Made\n\nMake the breaker **half-open** across the cooldown instead of resetting ([`extensions/active-memory/index.ts`](extensions/active-memory/index.ts)):\n\n- After the cooldown, allow a single **probe** recall through but keep the tripped record. A probe timeout re-opens the breaker immediately (one recorded timeout, not `maxTimeouts` fresh ones); a successful recall clears it via the existing `resetCircuitBreaker` path.\n- Track the in-flight probe so only one runs at a time, and **self-heal**: if a probe is lost (aborted without recording a timeout or success), another is allowed once a full cooldown has elapsed — the breaker can never stick permanently open and silently disable recall.\n\n## User Impact\n\nA persistently failing agent/model now pays the recall timeout **at most once per cooldown window** instead of on every turn. Recovery is unchanged — the next successful recall clears the breaker. Existing config (`circuitBreakerMaxTimeouts`, `circuitBreakerCooldownMs`) is unchanged; docs updated to describe the half-open behavior.\n\n## Scope / Honest Limitations\n\nThis is deliberately scoped to the **recurring per-turn timeout tax**, which is the measurable user impact. It does **not** change *why* the embedded recall run produces zero model output (`payloads=0`, `stopReason=missing`) on the reporter's specific stack (openai `gpt-5.5` + codex app-server + `lossless-claw` per-turn projection).\n\nNotably, the issue's suggested root cause (empty prompt from `assembledMessages: 0`) does not hold up in code: [`context-engine-projection.ts`](extensions/codex/src/app-server/context-engine-projection.ts) falls back to the raw recall prompt as `promptText` when there is no assembled context, and that text is sent to Codex — so the prompt is not empty. Pinning down the real zero-output cause needs a live repro on that provider stack, which is why triage labeled the issue `needs-live-repro`. That part is left for a follow-up with live evidence.\n\nOne known limitation of this fix: turns spaced further apart than the maximum cooldown (10m) still probe on each turn by design; operators on very low-cadence chats can raise `circuitBreakerCooldownMs` to widen protection.\n\n## Evidence\n\nFocused unit tests added in [`extensions/active-memory/index.test.ts`](extensions/active-memory/index.test.ts):\n\n- After the cooldown, one probe is allowed through, the tripped record is retained (not deleted), and a **single** probe timeout re-opens the breaker immediately — the exact regression behind #100167.\n- A lost half-open probe lets another probe through after a further cooldown (no permanent stick), and a successful recall clears the breaker.\n\nExisting breaker tests (skip-within-cooldown, `circuit breaker open` log, reset-on-success) remain valid under the new behavior.\n\n> Note: I could not run the suite locally — this monorepo requires `pnpm@11` and Node `>=22.19` (not available in my environment), so CI runs the tests.\n\n\n---\n\n## Behavior proof (after fix)\n\nReal capture from the openai/`gpt-5.5` + codex app-server + `lossless-claw` stack isn't available to me (that's the `needs-live-repro` gate). But this fix is a state-machine change, so here is deterministic terminal output that exercises the **exact breaker logic from this PR** (old vs new functions, virtual clock) against a recall that always times out — i.e. the condition reported in #100167 where every turn logs `status=timeout summaryChars=0`:\n\n```text\nactive-memory recall breaker — recall always times out (as in #100167)\nconfig: maxTimeouts=3 cooldown=60s timeout=15s\n\n== Talk / live-voice cadence (30 turns, 3s apart) ==\nOLD: ran=6/30  dead-time=90s\n     RUN RUN RUN skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip RUN RUN RUN skip skip skip skip skip\nNEW: ran=4/30  dead-time=60s\n     RUN RUN RUN skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip RUN skip skip skip skip skip skip skip\n\n== Direct chat, brisk cadence (20 turns, 20s apart) ==\nOLD: ran=12/20  dead-time=180s\n     RUN RUN RUN skip skip RUN RUN RUN skip skip RUN RUN RUN skip skip RUN RUN RUN skip skip\nNEW: ran=8/20  dead-time=120s\n     RUN RUN RUN skip skip RUN skip skip RUN skip skip RUN skip skip RUN skip skip RUN skip skip\n\n== Sparse cadence (turns > cooldown apart) (8 turns, 3600s apart) ==\nOLD: ran=8/8  dead-time=120s\n     RUN RUN RUN RUN RUN RUN RUN RUN\nNEW: ran=8/8  dead-time=120s\n     RUN RUN RUN RUN RUN RUN RUN RUN\n```\n\nReading it:\n\n- **Brisk direct chat** is the clearest: OLD re-runs **3** recalls every cooldown cycle (`RUN RUN RUN skip skip …`, 180s dead-time), NEW re-runs only **1** (`RUN skip skip …`, 120s) because the tripped record is retained instead of deleted.\n- **Talk / live-voice** cadence: OLD 6 runs, NEW 4 — and NEW stays skipped far longer after tripping.\n- **Sparse cadence** (turns further apart than the cooldown): OLD == NEW, both probe every turn. This is the documented limitation — the fix caps repeated timeouts within a cooldown window, it can't help traffic slower than the cooldown. Operators raise `circuitBreakerCooldownMs` for that.\n\n<details><summary>Reproduce (plain <code>node</code>, no deps)</summary>\n\nThe script mirrors `isCircuitBreakerOpen` / `recordCircuitBreakerTimeout` from `extensions/active-memory/index.ts` verbatim and simulates turn sequences. The same logic is covered by the unit tests in `extensions/active-memory/index.test.ts`, which CI runs against the real module.\n\n</details>\n",
+        "branch": "fix/active-memory-recall-circuit-breaker",
+        "head_sha": "6dfd53ccac74658df525614663532b2c820fc7ee",
+        "author": "souvikdevloper",
+        "labels": [
+          "docs",
+          "size: S",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "docs/concepts/active-memory.md",
+            "additions": 9,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/active-memory/index.test.ts",
+            "additions": 100,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/active-memory/index.ts",
+            "additions": 43,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 152,
+        "deletions": 13,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100176",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100176.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 92,
+          "gatingTotal": 87,
+          "counts": {
+            "SUCCESS": 59,
+            "SKIPPED": 33
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100176:4885158268:2026-07-05T06:57:04Z:re_review",
+      "comment_id": "4885158268",
+      "comment_version_key": "4885158268:2026-07-05T06:57:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100176#issuecomment-4885158268",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100176,
+      "author": "souvikDevloper",
+      "author_id": 138186578,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-05T06:57:04Z",
+      "comment_updated_at": "2026-07-05T06:57:04Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -71,177 +176,63 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "Scope memory dreaming sweeps by agent",
-        "body": "## Summary\n- Add optional `plugins.entries.memory-core.config.dreaming.agents` to allowlist agent ids for Dreaming workspace sweeps.\n- Apply the allowlist in shared workspace resolution, managed promotion runs, phase sweeps, and doctor status so configured filters do not fall back to unlisted workspaces.\n- Keep doctor legacy-state migrations and public memory artifact discovery unscoped by Dreaming filters, so migrations and companion plugin artifact listing still see every configured memory workspace.\n- Document the option, expose it in the memory-core manifest schema/UI hints, and refresh generated config/API baselines.\n- Rebased onto `upstream/main` at `7d3cfa85dc`; resolved generated baseline and SDK surface budget conflicts.\n\n## Verification\n- `node scripts/run-vitest.mjs extensions/memory-core/doctor-contract-api.test.ts src/memory-host-sdk/dreaming.test.ts src/plugin-sdk/memory-host-core.test.ts src/gateway/server-methods/doctor.test.ts extensions/memory-core/src/config.test.ts extensions/memory-core/src/dreaming.test.ts extensions/memory-core/src/dreaming-phases.test.ts extensions/memory-core/src/public-artifacts.test.ts extensions/memory-wiki/src/bridge.test.ts extensions/memory-wiki/src/status.test.ts` passed 4 Vitest shards: 17 unit-fast tests, 64 gateway tests, 5 plugin-sdk tests, and 156 extension-memory tests.\n- `node scripts/run-vitest.mjs test/scripts/plugin-sdk-surface-report.test.ts` passed 1 tooling shard with 9 tests.\n- `node scripts/plugin-sdk-surface-report.mjs --check` passed.\n- `node --import tsx scripts/generate-config-doc-baseline.ts --check` passed.\n- `node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check` passed.\n- `./node_modules/.bin/oxfmt --check --threads=1 scripts/plugin-sdk-surface-report.mjs docs/.generated/config-baseline.sha256 docs/.generated/plugin-sdk-api-baseline.sha256` passed.\n- `git diff --check` passed.\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base upstream/main` returned clean with no accepted/actionable findings on `15bf23087441a79ebf0584ff43b58e4deb6cdb80`.\n\n## Real behavior proof\nBehavior addressed: Dreaming can be limited to selected agent ids, for example `agents: [\"main\"]`, instead of sweeping every configured agent workspace.\n\nReal environment tested: Local OpenClaw source checkout on branch `codex/dreaming-agent-scope` at `15bf23087441a79ebf0584ff43b58e4deb6cdb80`, using a temporary OpenClaw config, temporary agent workspaces, and the real memory-core plugin-state SQLite test store. No provider credentials, user config, or external model calls were used; the managed cron path ran with the production fallback narrative behavior for a missing subagent runtime.\n\nExact steps or command run after this patch: Ran a one-off `node --import tsx --input-type=module` runtime transcript that imported `extensions/memory-core/src/dreaming.ts`, `extensions/memory-core/src/dreaming-state.ts`, `extensions/memory-core/src/short-term-promotion.ts`, and `src/memory-host-sdk/dreaming.ts`; initialized the memory-core SQLite test store; seeded `main`, `alpha`, and `beta` workspaces with daily memory plus short-term recalls; configured `plugins.entries.memory-core.config.dreaming.agents: [\"main\", \"alpha\"]`; invoked `runShortTermDreamingPromotionIfTriggered({ trigger: \"cron\", ... })`; and asserted the unlisted `beta` workspace remained untouched.\n\nEvidence after fix:\n\n```text\nresolvedWorkspaces=[{\"workspace\":\"main\",\"agentIds\":[\"main\"]},{\"workspace\":\"alpha\",\"agentIds\":[\"alpha\"]}]\ntrigger={\"handled\":true,\"reason\":\"memory-core: short-term dreaming processed\"}\nmain: memory=true dreams=true deepReports=1\nalpha: memory=true dreams=true deepReports=1\nbeta: memory=false dreams=false deepReports=0\ninfoLogs=[\"memory-core: dreaming verbose enabled (cron=0 3 * * *, limit=10, minScore=0.000, minRecallCount=0, minUniqueQueries=0, recencyHalfLifeDays=14, maxAgeDays=30, workspaces=2).\",\"memory-core: dreaming promotion complete (workspaces=2, candidates=2, applied=2, failed=0).\"]\nresult=pass selected=main,alpha untouched=beta\n```\n\nObserved result after fix: The production Dreaming workspace resolver returned only `main` and `alpha`; the managed cron sweep wrote `MEMORY.md`, Dreaming output, and one deep report for those two workspaces; and the unlisted `beta` workspace had no `MEMORY.md`, no Dreaming output, and no deep report after the sweep.\n\nWhat was not tested: A live overnight Gateway cron daemon run against a real user config with provider-backed subagent narrative generation. The proof above directly exercises the same managed cron trigger handler and workspace selection logic without waiting for the scheduled 03:00 run or calling a paid model.\n",
-        "branch": "codex/dreaming-agent-scope",
-        "head_sha": "a0edc86c2c2935cae3973a7c8ef609378b76fd84",
-        "author": "glucksberg",
+        "title": "fix(active-memory): keep recall circuit breaker tripped across cooldown",
+        "body": "Closes #100167\n\n## What Problem This Solves\n\nResolves a problem where agents with the `active-memory` plugin enabled pay a fixed recall-timeout stall (~15s by default) on **every** turn once recall starts failing, instead of the plugin backing off. The reporter saw `status=timeout summaryChars=0` on every `main`-agent turn for 24+ hours, making latency-sensitive flows (Talk / live voice, direct chat) feel unresponsive.\n\nThe plugin already has a circuit breaker (#74054) that is supposed to skip recall after `circuitBreakerMaxTimeouts` consecutive timeouts. But on cooldown expiry it **deleted the failure record entirely**. At normal turn cadence — turns spaced further apart than `circuitBreakerCooldownMs` (default 60s, max 10m) — the consecutive-timeout count reset to zero before it could ever reach the threshold, so the breaker never re-engaged and every turn ran the sub-agent into the watchdog again.\n\n## Why This Change Was Made\n\nMake the breaker **half-open** across the cooldown instead of resetting ([`extensions/active-memory/index.ts`](extensions/active-memory/index.ts)):\n\n- After the cooldown, allow a single **probe** recall through but keep the tripped record. A probe timeout re-opens the breaker immediately (one recorded timeout, not `maxTimeouts` fresh ones); a successful recall clears it via the existing `resetCircuitBreaker` path.\n- Track the in-flight probe so only one runs at a time, and **self-heal**: if a probe is lost (aborted without recording a timeout or success), another is allowed once a full cooldown has elapsed — the breaker can never stick permanently open and silently disable recall.\n\n## User Impact\n\nA persistently failing agent/model now pays the recall timeout **at most once per cooldown window** instead of on every turn. Recovery is unchanged — the next successful recall clears the breaker. Existing config (`circuitBreakerMaxTimeouts`, `circuitBreakerCooldownMs`) is unchanged; docs updated to describe the half-open behavior.\n\n## Scope / Honest Limitations\n\nThis is deliberately scoped to the **recurring per-turn timeout tax**, which is the measurable user impact. It does **not** change *why* the embedded recall run produces zero model output (`payloads=0`, `stopReason=missing`) on the reporter's specific stack (openai `gpt-5.5` + codex app-server + `lossless-claw` per-turn projection).\n\nNotably, the issue's suggested root cause (empty prompt from `assembledMessages: 0`) does not hold up in code: [`context-engine-projection.ts`](extensions/codex/src/app-server/context-engine-projection.ts) falls back to the raw recall prompt as `promptText` when there is no assembled context, and that text is sent to Codex — so the prompt is not empty. Pinning down the real zero-output cause needs a live repro on that provider stack, which is why triage labeled the issue `needs-live-repro`. That part is left for a follow-up with live evidence.\n\nOne known limitation of this fix: turns spaced further apart than the maximum cooldown (10m) still probe on each turn by design; operators on very low-cadence chats can raise `circuitBreakerCooldownMs` to widen protection.\n\n## Evidence\n\nFocused unit tests added in [`extensions/active-memory/index.test.ts`](extensions/active-memory/index.test.ts):\n\n- After the cooldown, one probe is allowed through, the tripped record is retained (not deleted), and a **single** probe timeout re-opens the breaker immediately — the exact regression behind #100167.\n- A lost half-open probe lets another probe through after a further cooldown (no permanent stick), and a successful recall clears the breaker.\n\nExisting breaker tests (skip-within-cooldown, `circuit breaker open` log, reset-on-success) remain valid under the new behavior.\n\n> Note: I could not run the suite locally — this monorepo requires `pnpm@11` and Node `>=22.19` (not available in my environment), so CI runs the tests.\n\n\n---\n\n## Behavior proof (after fix)\n\nReal capture from the openai/`gpt-5.5` + codex app-server + `lossless-claw` stack isn't available to me (that's the `needs-live-repro` gate). But this fix is a state-machine change, so here is deterministic terminal output that exercises the **exact breaker logic from this PR** (old vs new functions, virtual clock) against a recall that always times out — i.e. the condition reported in #100167 where every turn logs `status=timeout summaryChars=0`:\n\n```text\nactive-memory recall breaker — recall always times out (as in #100167)\nconfig: maxTimeouts=3 cooldown=60s timeout=15s\n\n== Talk / live-voice cadence (30 turns, 3s apart) ==\nOLD: ran=6/30  dead-time=90s\n     RUN RUN RUN skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip RUN RUN RUN skip skip skip skip skip\nNEW: ran=4/30  dead-time=60s\n     RUN RUN RUN skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip RUN skip skip skip skip skip skip skip\n\n== Direct chat, brisk cadence (20 turns, 20s apart) ==\nOLD: ran=12/20  dead-time=180s\n     RUN RUN RUN skip skip RUN RUN RUN skip skip RUN RUN RUN skip skip RUN RUN RUN skip skip\nNEW: ran=8/20  dead-time=120s\n     RUN RUN RUN skip skip RUN skip skip RUN skip skip RUN skip skip RUN skip skip RUN skip skip\n\n== Sparse cadence (turns > cooldown apart) (8 turns, 3600s apart) ==\nOLD: ran=8/8  dead-time=120s\n     RUN RUN RUN RUN RUN RUN RUN RUN\nNEW: ran=8/8  dead-time=120s\n     RUN RUN RUN RUN RUN RUN RUN RUN\n```\n\nReading it:\n\n- **Brisk direct chat** is the clearest: OLD re-runs **3** recalls every cooldown cycle (`RUN RUN RUN skip skip …`, 180s dead-time), NEW re-runs only **1** (`RUN skip skip …`, 120s) because the tripped record is retained instead of deleted.\n- **Talk / live-voice** cadence: OLD 6 runs, NEW 4 — and NEW stays skipped far longer after tripping.\n- **Sparse cadence** (turns further apart than the cooldown): OLD == NEW, both probe every turn. This is the documented limitation — the fix caps repeated timeouts within a cooldown window, it can't help traffic slower than the cooldown. Operators raise `circuitBreakerCooldownMs` for that.\n\n<details><summary>Reproduce (plain <code>node</code>, no deps)</summary>\n\nThe script mirrors `isCircuitBreakerOpen` / `recordCircuitBreakerTimeout` from `extensions/active-memory/index.ts` verbatim and simulates turn sequences. The same logic is covered by the unit tests in `extensions/active-memory/index.test.ts`, which CI runs against the real module.\n\n</details>\n",
+        "branch": "fix/active-memory-recall-circuit-breaker",
+        "head_sha": "6dfd53ccac74658df525614663532b2c820fc7ee",
+        "author": "souvikdevloper",
         "labels": [
           "docs",
-          "gateway",
-          "extensions: memory-core",
-          "scripts",
-          "size: L",
-          "P2"
+          "size: S",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "docs/.generated/config-baseline.sha256",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/concepts/dreaming.md",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/reference/memory-config.md",
+            "path": "docs/concepts/active-memory.md",
             "additions": 9,
-            "deletions": 6,
+            "deletions": 9,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/memory-core/doctor-contract-api.test.ts",
-            "additions": 67,
+            "path": "extensions/active-memory/index.test.ts",
+            "additions": 100,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/memory-core/doctor-contract-api.ts",
-            "additions": 6,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/openclaw.plugin.json",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/config.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/dreaming-phases.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/dreaming.test.ts",
-            "additions": 85,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/dreaming.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/plugin-sdk-surface-report.mjs",
-            "additions": 13,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/doctor.test.ts",
-            "additions": 120,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/doctor.ts",
-            "additions": 10,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/memory-host-sdk/dreaming.test.ts",
-            "additions": 66,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/memory-host-sdk/dreaming.ts",
-            "additions": 29,
-            "deletions": 52,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/memory-host-sdk/workspaces.ts",
-            "additions": 83,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/memory-core-host-status.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/memory-host-core.test.ts",
-            "additions": 55,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/memory-host-core.ts",
-            "additions": 2,
-            "deletions": 2,
+            "path": "extensions/active-memory/index.ts",
+            "additions": 43,
+            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 20,
-        "additions": 571,
-        "deletions": 83,
+        "changedFiles": 3,
+        "additions": 152,
+        "deletions": 13,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100057",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100057.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100176",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100176.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 94,
-          "gatingTotal": 89,
+          "total": 92,
+          "gatingTotal": 87,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 23,
-            "SUCCESS": 65,
-            "IN_PROGRESS": 3,
-            "NEUTRAL": 1
+            "SUCCESS": 59,
+            "SKIPPED": 33
           },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -249,144 +240,24 @@
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
       "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:100057:4883978381:2026-07-04T22:18:33Z:re_review",
-      "comment_id": "4883978381",
-      "comment_version_key": "4883978381:2026-07-04T22:18:33Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100057#issuecomment-4883978381",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100057,
-      "author": "Glucksberg",
-      "author_id": 80581902,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T22:18:33Z",
-      "comment_updated_at": "2026-07-04T22:18:33Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:100057:4883941625:2026-07-04T22:03:01Z:re_review",
-      "comment_id": "4883941625",
-      "comment_version_key": "4883941625:2026-07-04T22:03:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100057#issuecomment-4883941625",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100057,
-      "author": "Glucksberg",
-      "author_id": 80581902,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T22:03:01Z",
-      "comment_updated_at": "2026-07-04T22:03:01Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:100057:4883838811:2026-07-04T21:19:39Z:re_review",
-      "comment_id": "4883838811",
-      "comment_version_key": "4883838811:2026-07-04T21:19:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100057#issuecomment-4883838811",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100057,
-      "author": "Glucksberg",
-      "author_id": 80581902,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-04T21:19:39Z",
-      "comment_updated_at": "2026-07-04T21:19:39Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5164,
+    "total_ms": 2597,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 352
+        "ms": 438
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1934
+        "ms": 1843
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -398,11 +269,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2849
+        "ms": 289
       },
       {
         "name": "append_ledger",
