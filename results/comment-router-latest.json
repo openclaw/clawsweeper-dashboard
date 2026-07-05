@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T04:24:14.644Z",
-  "repo": "openclaw/acpx",
+  "generated_at": "2026-07-05T04:24:24.681Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T01:24:13.606Z",
+  "since": "2026-07-05T01:24:24.460Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    433
+    904
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,185 +29,27 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/acpx:433:4884811011:2026-07-05T04:24:11Z:clawsweeper_auto_repair",
-      "comment_id": "4884811011",
-      "comment_version_key": "4884811011:2026-07-05T04:24:11Z",
-      "comment_url": "https://github.com/openclaw/acpx/pull/433#issuecomment-4884811011",
-      "repo": "openclaw/acpx",
-      "target_branch": null,
-      "issue_number": 433,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-05T04:20:26Z",
-      "comment_updated_at": "2026-07-05T04:24:11Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=821f77d30e8e2001052cf6456404ade9c0596b55)",
-      "review_summary": "The branch adds POSIX bridge process-group reaping, a native pipe-based lifeline helper with lazy compile/cache resolution, package build changes, and real-process tests for cooperative close and abrupt queue-owner death.\n\nReproducibility: yes. at source level. Current main has no parent-death handler and only signals the bridge PID during close; the PR body also includes live-output proof for the intended lifeline path.",
-      "review_followup": "- [P2] A narrow repair can make POSIX detachment conditional on lifeline availability and add helper-unavailable regression coverage.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "821f77d30e8e2001052cf6456404ade9c0596b55",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(acp): pipe lifeline — reap the bridge tree on abrupt owner death",
-        "body": "## Problem\n\n#432 (included here as the base commit) reaps the bridge's process group on a **cooperative** `AcpClient.close()`. But when the acpx process that owns a bridge dies **abruptly** — `SIGKILL`, OOM kill, crash — no handler runs, and the bridge tree (codex-acp + the model process + MCP servers such as `serena`) is orphaned to PID 1. Orphans accumulate across runs until the agent app-server chokes and new sessions hang at `session/new`. We hit this in production with 26 leaked processes.\n\n## Fix: a pipe lifeline\n\nA tiny native sibling watchdog, coupled to the owner by an **inherited pipe** rather than a PID:\n\n- `native/lifeline.c` (~100 lines, single POSIX source for macOS + Linux): `poll()`s its stdin, whose write end the owner holds. **EOF** — the owner died, for any reason including `SIGKILL`, because the kernel closes the pipe — reaps the bridge's process group (`SIGTERM`, 200 ms grace, then `SIGKILL` only if the group leader is still alive). A **released byte `'R'`** means cooperative close: exit without reaping (the close path already reaps).\n- Pipe identity (an fd, not a number) avoids owner-PID recycling races **by construction** — no `kqueue`/`pidfd`/poll-loop on a PID that may have been reused.\n- `AcpClient` spawns the watchdog right after the detached bridge (gated on `agentGroupLeader`), holds its stdin, and on cooperative close writes `'R'` — no raw-PID kill of the watchdog either.\n\n## No binaries shipped\n\nThe npm package ships the **C source only**. Resolution order: `ACPX_LIFELINE_HELPER` env override → package-relative prebuilt (`dist/native/…`, for source checkouts or future per-platform packages) → **lazy one-time compile** to `~/.acpx/native/lifeline-<version>-<platform>-<arch>` (`cc -O2` via `execFile`, temp file + atomic rename so concurrent spawns race safely). Any failure (no `cc`, sandboxed FS) writes a marker and **degrades silently to current behavior** — no per-spawn retries, no hard native dependency, no cross-compile release matrix.\n\n## Scope & limitations (explicit)\n\n- **POSIX-only.** Windows keeps current behavior (no group reaping, no lifeline).\n- **Process group, not full tree**: a descendant that re-detaches into its own session escapes — inherent to group-based reaping.\n- A tiny window exists between bridge spawn and watchdog spawn (owner SIGKILL in between → orphan). Documented in code.\n- Hardened per an adversarial review: strict pgid parsing (a malformed argument can never `kill(-1)` broadcast), helper never resolved from `process.cwd()` (a repo-local binary must not be executed), `POLLERR`/`POLLNVAL` degrade without reaping, second `SIGKILL` gated on leader liveness to narrow PGID reuse.\n\n## Real behavior proof\n\nSibling-topology harness, owner SIGKILLed, on real hardware:\n\n```\n# macOS arm64                              # Linux 5.15 x86_64 (production VPS)\nchain: owner=1085 bridge=1086 gc=1088      chain: owner=1883006 bridge=1883013 gc=1883021\nbefore kill -9 owner : bridge=true  gc=true\nafter  kill -9 owner : bridge=false gc=false\nPASS — sibling watchdog reaped the bridge group on owner SIGKILL   (both platforms)\n```\n\nFull suite: `857 tests, 857 pass, 0 fail`. `typecheck` + `lint` clean. Lazy-compile path verified end-to-end with a virgin cache (resolve → compile → cache hit).\n\n## Relationship to #432\n\nThis PR is **self-contained**: it includes #432's group-reaping commit as its base, because the lifeline requires the bridge to lead its own process group. If #432 (or a variant) lands first, this rebases to the lifeline-only commit. Happy to restructure either way.\n\n---\n\nMaintainer edits enabled (personal fork).\n",
-        "branch": "fix/bridge-lifeline",
-        "head_sha": "821f77d30e8e2001052cf6456404ade9c0596b55",
-        "author": "superworldsavior",
-        "labels": [
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author",
-          "proof: sufficient",
-          "P1",
-          "merge-risk: 🚨 availability"
-        ],
-        "files": [
-          {
-            "path": "native/lifeline.c",
-            "additions": 107,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "package.json",
-            "additions": 5,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/build-native-lifeline.mjs",
-            "additions": 48,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/acp/client.ts",
-            "additions": 106,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/lifeline.ts",
-            "additions": 239,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/client.test.ts",
-            "additions": 220,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/lifeline-test-helper.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/lifeline.test.ts",
-            "additions": 155,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/mock-agent.ts",
-            "additions": 38,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/package-scripts.test.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/queue-owner-lifecycle.test.ts",
-            "additions": 168,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 11,
-        "additions": 1133,
-        "deletions": 16,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-acpx-433",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-acpx-433.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 10,
-          "gatingTotal": 10,
-          "counts": {
-            "SUCCESS": 8,
-            "IN_PROGRESS": 1,
-            "SKIPPED": 1
-          },
-          "blockers": [
-            "Mutation:IN_PROGRESS"
-          ],
-          "pending": [
-            "Mutation:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1238,
+    "total_ms": 478,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 219
+        "ms": 209
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 804
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -219,11 +61,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 188
+        "ms": 257
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
