@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-05T06:59:37.515Z",
+  "generated_at": "2026-07-05T06:59:39.797Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T03:59:34.962Z",
+  "since": "2026-07-05T03:59:37.850Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    100176
+    100174
   ],
   "comment_ids": [
-    4885158268
+    4885158223
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:100176:4885158268:2026-07-05T06:57:04Z:re_review",
-      "comment_id": "4885158268",
-      "comment_version_key": "4885158268:2026-07-05T06:57:04Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100176#issuecomment-4885158268",
+      "idempotency_key": "comment-router:openclaw/openclaw:100174:4885158223:2026-07-05T06:57:03Z:re_review",
+      "comment_id": "4885158223",
+      "comment_version_key": "4885158223:2026-07-05T06:57:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100174#issuecomment-4885158223",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 100176,
+      "issue_number": 100174,
       "author": "souvikDevloper",
       "author_id": 138186578,
       "author_association": "NONE",
-      "comment_created_at": "2026-07-05T06:57:04Z",
-      "comment_updated_at": "2026-07-05T06:57:04Z",
+      "comment_created_at": "2026-07-05T06:57:03Z",
+      "comment_updated_at": "2026-07-05T06:57:03Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -73,50 +73,62 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(active-memory): keep recall circuit breaker tripped across cooldown",
-        "body": "Closes #100167\n\n## What Problem This Solves\n\nResolves a problem where agents with the `active-memory` plugin enabled pay a fixed recall-timeout stall (~15s by default) on **every** turn once recall starts failing, instead of the plugin backing off. The reporter saw `status=timeout summaryChars=0` on every `main`-agent turn for 24+ hours, making latency-sensitive flows (Talk / live voice, direct chat) feel unresponsive.\n\nThe plugin already has a circuit breaker (#74054) that is supposed to skip recall after `circuitBreakerMaxTimeouts` consecutive timeouts. But on cooldown expiry it **deleted the failure record entirely**. At normal turn cadence — turns spaced further apart than `circuitBreakerCooldownMs` (default 60s, max 10m) — the consecutive-timeout count reset to zero before it could ever reach the threshold, so the breaker never re-engaged and every turn ran the sub-agent into the watchdog again.\n\n## Why This Change Was Made\n\nMake the breaker **half-open** across the cooldown instead of resetting ([`extensions/active-memory/index.ts`](extensions/active-memory/index.ts)):\n\n- After the cooldown, allow a single **probe** recall through but keep the tripped record. A probe timeout re-opens the breaker immediately (one recorded timeout, not `maxTimeouts` fresh ones); a successful recall clears it via the existing `resetCircuitBreaker` path.\n- Track the in-flight probe so only one runs at a time, and **self-heal**: if a probe is lost (aborted without recording a timeout or success), another is allowed once a full cooldown has elapsed — the breaker can never stick permanently open and silently disable recall.\n\n## User Impact\n\nA persistently failing agent/model now pays the recall timeout **at most once per cooldown window** instead of on every turn. Recovery is unchanged — the next successful recall clears the breaker. Existing config (`circuitBreakerMaxTimeouts`, `circuitBreakerCooldownMs`) is unchanged; docs updated to describe the half-open behavior.\n\n## Scope / Honest Limitations\n\nThis is deliberately scoped to the **recurring per-turn timeout tax**, which is the measurable user impact. It does **not** change *why* the embedded recall run produces zero model output (`payloads=0`, `stopReason=missing`) on the reporter's specific stack (openai `gpt-5.5` + codex app-server + `lossless-claw` per-turn projection).\n\nNotably, the issue's suggested root cause (empty prompt from `assembledMessages: 0`) does not hold up in code: [`context-engine-projection.ts`](extensions/codex/src/app-server/context-engine-projection.ts) falls back to the raw recall prompt as `promptText` when there is no assembled context, and that text is sent to Codex — so the prompt is not empty. Pinning down the real zero-output cause needs a live repro on that provider stack, which is why triage labeled the issue `needs-live-repro`. That part is left for a follow-up with live evidence.\n\nOne known limitation of this fix: turns spaced further apart than the maximum cooldown (10m) still probe on each turn by design; operators on very low-cadence chats can raise `circuitBreakerCooldownMs` to widen protection.\n\n## Evidence\n\nFocused unit tests added in [`extensions/active-memory/index.test.ts`](extensions/active-memory/index.test.ts):\n\n- After the cooldown, one probe is allowed through, the tripped record is retained (not deleted), and a **single** probe timeout re-opens the breaker immediately — the exact regression behind #100167.\n- A lost half-open probe lets another probe through after a further cooldown (no permanent stick), and a successful recall clears the breaker.\n\nExisting breaker tests (skip-within-cooldown, `circuit breaker open` log, reset-on-success) remain valid under the new behavior.\n\n> Note: I could not run the suite locally — this monorepo requires `pnpm@11` and Node `>=22.19` (not available in my environment), so CI runs the tests.\n\n\n---\n\n## Behavior proof (after fix)\n\nReal capture from the openai/`gpt-5.5` + codex app-server + `lossless-claw` stack isn't available to me (that's the `needs-live-repro` gate). But this fix is a state-machine change, so here is deterministic terminal output that exercises the **exact breaker logic from this PR** (old vs new functions, virtual clock) against a recall that always times out — i.e. the condition reported in #100167 where every turn logs `status=timeout summaryChars=0`:\n\n```text\nactive-memory recall breaker — recall always times out (as in #100167)\nconfig: maxTimeouts=3 cooldown=60s timeout=15s\n\n== Talk / live-voice cadence (30 turns, 3s apart) ==\nOLD: ran=6/30  dead-time=90s\n     RUN RUN RUN skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip RUN RUN RUN skip skip skip skip skip\nNEW: ran=4/30  dead-time=60s\n     RUN RUN RUN skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip skip RUN skip skip skip skip skip skip skip\n\n== Direct chat, brisk cadence (20 turns, 20s apart) ==\nOLD: ran=12/20  dead-time=180s\n     RUN RUN RUN skip skip RUN RUN RUN skip skip RUN RUN RUN skip skip RUN RUN RUN skip skip\nNEW: ran=8/20  dead-time=120s\n     RUN RUN RUN skip skip RUN skip skip RUN skip skip RUN skip skip RUN skip skip RUN skip skip\n\n== Sparse cadence (turns > cooldown apart) (8 turns, 3600s apart) ==\nOLD: ran=8/8  dead-time=120s\n     RUN RUN RUN RUN RUN RUN RUN RUN\nNEW: ran=8/8  dead-time=120s\n     RUN RUN RUN RUN RUN RUN RUN RUN\n```\n\nReading it:\n\n- **Brisk direct chat** is the clearest: OLD re-runs **3** recalls every cooldown cycle (`RUN RUN RUN skip skip …`, 180s dead-time), NEW re-runs only **1** (`RUN skip skip …`, 120s) because the tripped record is retained instead of deleted.\n- **Talk / live-voice** cadence: OLD 6 runs, NEW 4 — and NEW stays skipped far longer after tripping.\n- **Sparse cadence** (turns further apart than the cooldown): OLD == NEW, both probe every turn. This is the documented limitation — the fix caps repeated timeouts within a cooldown window, it can't help traffic slower than the cooldown. Operators raise `circuitBreakerCooldownMs` for that.\n\n<details><summary>Reproduce (plain <code>node</code>, no deps)</summary>\n\nThe script mirrors `isCircuitBreakerOpen` / `recordCircuitBreakerTimeout` from `extensions/active-memory/index.ts` verbatim and simulates turn sequences. The same logic is covered by the unit tests in `extensions/active-memory/index.test.ts`, which CI runs against the real module.\n\n</details>\n",
-        "branch": "fix/active-memory-recall-circuit-breaker",
-        "head_sha": "6dfd53ccac74658df525614663532b2c820fc7ee",
+        "title": "feat(workboard): expose dispatch --max-starts to raise the per-pass start cap",
+        "body": "Closes #100169\n\n## What Problem This Solves\n\nResolves a problem where operators running `openclaw workboard dispatch` (or calling the `workboard.cards.dispatch` Gateway RPC) could not raise the number of new worker runs started per dispatch pass. The dispatcher hard-caps new starts at **3 per pass**, and there was no CLI flag or RPC parameter to change it — the only workaround was patching the installed plugin bundle. On a board with sustained ready volume, throughput was pinned far below what the host could support.\n\nInternally, `dispatchAndStartWorkboardCards` already accepted `options.maxStarts`, but nothing above it populated the value: the CLI `dispatch` command exposed only `--board`/`--json`, and the Gateway handler read only `boardId` off the request.\n\n## Why This Change Was Made\n\nThread `maxStarts` end to end so the existing internal option is reachable by operators:\n\n- **CLI** (`extensions/workboard/src/cli.ts`): add `--max-starts <count>` (validated as a positive integer) to the `dispatch` command and forward it in the Gateway params, but only when the flag is supplied.\n- **Gateway** (`extensions/workboard/src/gateway.ts`): read `maxStarts` off the incoming request params and pass it into `dispatchAndStartWorkboardCards`, preserving the built-in default of `3` when the param is absent.\n\nScope is deliberately narrow. The default cap and the one-card-per-owner selection rule are unchanged, so behavior is identical when the flag/param is omitted. **Persistent config and parallelizing the currently-sequential start loop are intentionally left out** — the issue triage flagged both as needing a maintainer product/resource-policy decision first (new plugin config surface; changed host/subagent concurrency semantics). This PR ships only the \"narrowest safe first step\" that triage endorsed.\n\n## User Impact\n\nOperators can now tune dispatch throughput per pass:\n\n```bash\nopenclaw workboard dispatch --max-starts 10\n```\n\nWith no flag, nothing changes — dispatch still starts at most 3 workers per pass. The one-card-per-owner rule still applies, so the effective number of starts can be lower than the cap. Non-positive values are rejected with a clear error.\n\n## Evidence\n\nFocused tests added (CI will run them):\n\n- `extensions/workboard/src/cli.test.ts`\n  - forwards `--max-starts` into the `workboard.cards.dispatch` params\n  - omits `maxStarts` from the params when the flag is absent\n  - rejects a non-positive `--max-starts` value\n- `extensions/workboard/src/gateway.test.ts`\n  - threads `maxStarts` from Gateway request params into dispatch (two eligible cards under distinct owners, `maxStarts: 1` starts exactly one)\n\nDocs updated in `docs/cli/workboard.md` (synopsis, example, and the dispatch-selection notes).\n\n> Note: I could not run the suite locally — this monorepo requires `pnpm@11` and Node `>=22.19` (the local toolchain had neither), so validation is left to CI.\n\n\n---\n\n## Behavior proof (after fix)\n\nDeterministic terminal output exercising the **exact `--max-starts` parser from this PR** (`extensions/workboard/src/cli.ts`), old vs new, across representative inputs. It shows the strict-decimal change rejecting notation that `Number()` silently coerced:\n\n```text\nworkboard --max-starts parsing (old Number() vs new strict decimal)\n\ninput      old Number()   new strict\n\"7\"        7              7        \n\"10\"       10             10       \n\"0\"        REJECTED       REJECTED \n\"1e3\"      1000           REJECTED   <-- coercion fixed\n\"0x10\"     16             REJECTED   <-- coercion fixed\n\"5.5\"      REJECTED       REJECTED \n\" 4 \"      4              4        \n\"-2\"       REJECTED       REJECTED \n\"abc\"      REJECTED       REJECTED \n```\n\n`1e3` and `0x10` previously parsed to 1000 / 16; they are now rejected, while plain decimals still work. The `maxStarts` threading itself (CLI flag → gateway params → dispatcher cap) is covered by the focused tests in `cli.test.ts` / `gateway.test.ts`, which CI runs against the real modules.\n",
+        "branch": "feat/workboard-dispatch-max-starts",
+        "head_sha": "931288a46e75d98230f94fb244681d5c48d24465",
         "author": "souvikdevloper",
         "labels": [
           "docs",
           "size: S",
-          "P1",
-          "rating: 🦪 silver shellfish",
+          "P2",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: 📣 needs proof",
+          "plugin: workboard"
         ],
         "files": [
           {
-            "path": "docs/concepts/active-memory.md",
-            "additions": 9,
-            "deletions": 9,
+            "path": "docs/cli/workboard.md",
+            "additions": 3,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/active-memory/index.test.ts",
-            "additions": 100,
+            "path": "extensions/workboard/src/cli.test.ts",
+            "additions": 52,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/active-memory/index.ts",
-            "additions": 43,
-            "deletions": 4,
+            "path": "extensions/workboard/src/cli.ts",
+            "additions": 31,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/workboard/src/gateway.test.ts",
+            "additions": 47,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/workboard/src/gateway.ts",
+            "additions": 5,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 152,
-        "deletions": 13,
+        "changedFiles": 5,
+        "additions": 138,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100176",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100176.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100174",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100174.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
@@ -1222,19 +1234,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2866,
+    "total_ms": 2128,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 866
+        "ms": 478
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1676
+        "ms": 1455
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -1250,7 +1262,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 313
+        "ms": 181
       },
       {
         "name": "append_ledger",
