@@ -74,7 +74,8 @@ For open issues with complete, current kept-open reviews, ClawSweeper also
 projects selected structured review conclusions into advisory GitHub labels for
 maintainer filtering and project views. These labels expose states such as
 current-main reproduction, source reproduction, linked open PRs, queueable
-fixes, missing info, and product/security review needs. They are advisory only
+fixes, verified small bugs suitable for `good first issue`, missing info, and
+product/security review needs. They are advisory only
 and do not trigger repair, merge, or close behavior. Label-only syncs record
 `labels_synced_at` in the durable report so GitHub `updated_at` changes caused
 by ClawSweeper-owned label writes do not look like fresh target-side activity to
