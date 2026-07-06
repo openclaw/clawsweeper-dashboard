@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T11:18:01.311Z",
+  "generated_at": "2026-07-06T11:18:09.865Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T08:18:01.100Z",
+  "since": "2026-07-06T08:18:07.688Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100824
+    100827
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,165 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100827:4892108828:2026-07-06T11:18:02Z:clawsweeper_auto_repair",
+      "comment_id": "4892108828",
+      "comment_version_key": "4892108828:2026-07-06T11:18:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100827#issuecomment-4892108828",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100827,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T11:11:04Z",
+      "comment_updated_at": "2026-07-06T11:18:02Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=5377351fc58314aade0e1874d8269885d77e48e0)",
+      "review_summary": "The branch adds process-exit close hooks for shared, agent, and proxy-capture SQLite caches, revalidates cached proxy stores, reorders CLI debug-proxy finalization, and adds lifecycle regression tests.\n\nPR surface: Source +53, Tests +123. Total +176 across 8 files.\n\nReproducibility: yes. source-reproducible: with debug proxy capture enabled and a state DB open failure, the PR registers an exit listener before initialization succeeds; the CLI wrapper then exits and the listener calls finalizeDebugProxyCapture, which reopens the failing store path.",
+      "review_followup": "- [P2] There is a narrow, mechanical PR-branch repair: guard the debug-proxy exit finalizer behind successful initialization and cover the failure path.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "5377351fc58314aade0e1874d8269885d77e48e0",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(state): close SQLite handle caches on process exit and rebind stale proxy-capture stores",
+        "body": "Fixes #100637.\n\n## What Problem This Solves\n\nOpenClaw's three process-global SQLite handle caches — the shared state DB (`src/state/openclaw-state-db.ts`), per-agent DBs (`src/state/openclaw-agent-db.ts`), and debug proxy-capture stores (`src/proxy-capture/store.sqlite.ts`) — had no end-of-life owner. Processes that end without an orderly shutdown (CLI one-shots, the ACP bridge) exited with open `DatabaseSync` handles, skipping the final WAL truncate checkpoint and leaving stale `-wal`/`-shm` files for the next opener to recover.\n\nWhile wiring the fix, review also surfaced a latent proxy-capture defect that the fix would have turned into a crash: `DebugProxyCaptureStoreImpl.isClosed` only reported a local flag, never the liveness of the `DatabaseSync` it wraps. With `OPENCLAW_DEBUG_PROXY_ENABLED=1`, `initializeDebugProxyCapture` opens the state DB (arming the exit-close hook) **before** `run-main.ts` registers its `finalizeDebugProxyCapture` exit listener — so at exit, finalize would fetch the cached store bound to the closed handle and crash with `ERR_INVALID_STATE` from inside an exit listener.\n\n## Why This Change Was Made\n\n\"Close what you open\" at the owner boundary, once, instead of per-server wiring:\n\n1. **`registerSqliteCacheExitClose(closeAll)`** (`src/infra/sqlite-wal.ts`): registers a best-effort `process.once(\"exit\")` close and returns an unregister callback.\n2. **Register-on-first-open / unregister-in-close-all pairing** in all three cache owners. The pairing matters: test teardowns (`close*ForTest`) unregister the listener, so Vitest workers running many isolated test files do not accumulate `exit` listeners or pin dead module registries; a post-close reopen re-arms the hook.\n3. **Proxy-capture cache revalidation**: `isClosed` now also reports a dead underlying handle, so the store cache rebinds a fresh store (which reopens the shared DB) instead of handing out a dead connection. This fixes the exit-time crash above.\n4. `closeOpenClawAgentDatabasesForTest` becomes an alias of the new canonical `closeOpenClawAgentDatabases` (mirroring the state DB module's existing pair) and gains the sibling's `isOpen` guard — the reopen branch in `openOpenClawAgentDatabase` proves closed-but-cached handles are a real state.\n5. **Exit-listener ordering in `run-main.ts`**: the `finalizeDebugProxyCapture` exit listener now registers *before* `initializeDebugProxyCapture` opens the state DB, so at exit finalize writes `endSession` on the still-open handle and the state DB's own hook then closes/truncates it — full hygiene for debug-proxy runs instead of a mid-exit reopen.\n\nOrderly shutdown paths (e.g. gateway `server-close.ts` → `closePluginStateDatabase`) remain canonical; the exit hook is a safety net behind them.\n\n**Considered and rejected:**\n- *Per-server drain-then-close in `serveAcpGateway`* (shape of the five candidate PRs on #100637): wrong ownership layer, and closing early in shutdown is undone by any in-flight write because `openOpenClawStateDatabase` silently reopens. The owner-level exit hook runs at the last possible moment instead.\n- *Zero busy-timeout for the exit-path checkpoint*: the TRUNCATE checkpoint inherits `busy_timeout=30s`, so a pathologically hung peer connection could delay exit. The identical exposure already ships in the gateway's orderly close path, and all repo transactions are short and synchronous; a defensive divergence between exit-close and runtime-close semantics isn't warranted by any observed state.\n\n**Known residuals (accepted):**\n- If some earlier code path opens the state DB before `bootstrapCliProxyCaptureAndDispatcher` runs, the state exit hook predates the finalize listener and that debug-proxy process falls back to today's behavior (finalize reopens; WAL recovered by the next opener). Never worse than current main.\n- Signal-default terminations (no handler → no `exit` event) and hard kills also keep today's behavior; WAL recovery is the designed fallback there.\n\n## User Impact\n\nClean process exits now deterministically release SQLite handles and truncate/remove WAL sidecar files across every entry point (gateway, CLI one-shots, ACP bridge). Debug-proxy-enabled CLI runs no longer risk an exit-time crash once the exit hook exists. No config or API surface changes; `close*ForTest` call sites keep working.\n\n## Evidence\n\n- Focused suites on Blacksmith Testbox (remote, clean checkout sync): `src/state/openclaw-state-db.test.ts`, `src/state/openclaw-agent-db.test.ts`, `src/proxy-capture/store.sqlite.test.ts`, `src/proxy-capture/runtime.test.ts`, `src/infra/sqlite-wal.test.ts`, `src/cli/run-main.exit.test.ts`, `src/cli/run-main.test.ts` — all green across 4 Vitest shards (earlier 3-shard run: https://github.com/openclaw/openclaw/actions/runs/28784467318).\n- `pnpm check:changed` (delegated to Testbox) — exit 0 on the rebased branch, all lanes ok.\n- New regression coverage:\n  - child-process (tsx) tests prove a process that never closes explicitly exits with zero-byte/absent `-wal` files for both state and agent DBs (rollback-journal filesystems short-circuit safely);\n  - a lifecycle test pins the register→dedupe→unregister→re-register listener pairing;\n  - a proxy-capture test pins the rebind path (`closeOpenClawStateDatabaseForTest` under a cached store → re-fetch → `endSession` does not throw).\n- **Live E2E proof of the riskiest path** (Testbox, run: https://github.com/openclaw/openclaw/actions/runs/28785920585): `OPENCLAW_DEBUG_PROXY_ENABLED=1 pnpm openclaw gateway status --json` with a fresh `OPENCLAW_STATE_DIR` — zero `ERR_INVALID_STATE` output, `capture_sessions` row recorded with `ended=1` (finalize wrote on the still-open handle), and the state DB `-wal` absent after exit (hook closed and truncated last).\n- Review process: 8-angle adversarial finder pass + fable-5 fresh-eyes verification + independent gpt-5.5 (codex) review of the final diff; the cross-file angle is what surfaced the debug-proxy exit crash before landing.\n\n## AI Assistance\n\n- **AI-assisted**: Yes (Claude Fable 5; independent review pass by GPT-5.5 via Codex CLI).\n",
+        "branch": "fix/100637-state-db-exit-close",
+        "head_sha": "5377351fc58314aade0e1874d8269885d77e48e0",
+        "author": "amknight",
+        "labels": [
+          "cli",
+          "maintainer",
+          "size: S",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/cli/run-main.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/sqlite-wal.ts",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/proxy-capture/store.sqlite.test.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/proxy-capture/store.sqlite.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-agent-db.test.ts",
+            "additions": 44,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-agent-db.ts",
+            "additions": 16,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.test.ts",
+            "additions": 58,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 8,
+        "additions": 181,
+        "deletions": 5,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100827",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100827.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 101,
+          "gatingTotal": 96,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 35,
+            "SUCCESS": 63,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 344,
+    "total_ms": 2484,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 195
+        "ms": 393
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1767
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +203,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 133
+        "ms": 295
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
