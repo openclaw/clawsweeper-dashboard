@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T02:10:03.860Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-06T02:10:31.623Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T23:10:01.374Z",
+  "since": "2026-07-05T23:10:31.313Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    100553
+    1929
   ],
-  "comment_ids": [
-    4888514578
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,173 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:100553:4888514578:2026-07-06T02:07:27Z:re_review",
-      "comment_id": "4888514578",
-      "comment_version_key": "4888514578:2026-07-06T02:07:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100553#issuecomment-4888514578",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100553,
-      "author": "zhangqueping",
-      "author_id": 3436352,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T02:07:27Z",
-      "comment_updated_at": "2026-07-06T02:07:27Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: suppress false 'did not schedule a reminder' guard note after compaction retry",
-        "body": "## Summary\n\n**Problem**: When a compaction retry occurs during an agent run, the `successfulCronAdds` counter is reset to 0, causing the reminder guard to incorrectly append \"I did not schedule a reminder in this turn\" even though a cron job was successfully created in a prior attempt of the same run.\n\n**Solution**: Add a `hadSuccessfulCronAdd` boolean flag that survives the compaction retry reset, and check it in the guard logic to suppress the false positive.\n\n**What changed**: Added `hadSuccessfulCronAdd` flag to the embedded agent subscribe state, preserved it across compaction retries, threaded it through the attempt → run result chain, and checked it in the reminder guard logic in `agent-runner.ts`.\n\n**What did NOT change**: The `successfulCronAdds` counter behavior is unchanged. The `coveredByExistingCron` store check still works as a fallback. No changes to cron tool execution, store writing, or session management.\n\nFixes #52972\n\n## What Problem This Solves\n\nUsers scheduling cron reminders via the agent (e.g., \"Remind me to ping Markus at 5pm\") see a contradictory system note appended to the agent's confirmation:\n\n```\nI'll remind you at 5pm.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.\n```\n\nThe cron job IS successfully created (confirmed via `openclaw cron list`), but the guard note falsely claims it wasn't.\n\n### Root Cause\n\nIn `embedded-agent-subscribe.ts`, the `resetForCompactionRetry()` function resets `successfulCronAdds` to 0 when an agent run triggers a context compaction and retry. However, the `agent-runner.ts` guard logic only checks `successfulCronAdds === 0` — it has no awareness that a cron was added in a prior attempt before the reset.\n\nThe `hadDeterministicSideEffect` flag correctly records that cron was added, but this flag is not passed through to the guard logic. The `coveredByExistingCron` store check serves as a fallback but depends on exact `sessionKey` matching, which may not always succeed.\n\n## Root Cause\n\nWhen a compaction retry occurs:\n1. Agent calls `cron.add` successfully → `successfulCronAdds = 1`\n2. Context overflow triggers compaction\n3. `resetForCompactionRetry()` preserves `hadDeterministicSideEffect = true` but resets `successfulCronAdds = 0`\n4. Agent retries with compacted context — cron tool result is replayed, not re-executed\n5. Guard logic sees `successfulCronAdds === 0` and appends the false note\n\n## Real behavior proof\n\n**Behavior addressed**: The reminder guard note is no longer appended when a cron job was successfully created in any attempt of the current run, even after a compaction retry.\n\n**Real environment tested**: Linux x86_64, Node 24, openclaw/openclaw main branch\n\n**Exact steps or command run after this patch**:\n```terminal\n# Code-level verification: the hadSuccessfulCronAdd flag flows from\n# subscribe state through attempt result to the guard check:\n#\n# 1. subscribe.ts init: hadSuccessfulCronAdd = false\n# 2. On cron.add success: successfulCronAdds += 1\n# 3. On compaction retry: hadSuccessfulCronAdd = hadSuccessfulCronAdd || successfulCronAdds > 0\n#    → hadSuccessfulCronAdd becomes true\n# 4. Then: successfulCronAdds = 0 (reset)\n# 5. getHadSuccessfulCronAdd() returns true (flag preserved)\n# 6. Guard check: hadSuccessfulCronAdd === true → skip note\n\n# Verify the flag is initialized and threaded correctly:\ncd openclaw\ngrep -n \"hadSuccessfulCronAdd\" src/agents/embedded-agent-subscribe.ts\ngrep -n \"hadSuccessfulCronAdd\" src/agents/embedded-agent-runner/run/attempt.ts\ngrep -n \"hadSuccessfulCronAdd\" src/auto-reply/reply/agent-runner.ts\n```\n\n**After-fix evidence**:\n```terminal_output\n# The guard logic in agent-runner.ts now checks hadSuccessfulCronAdd:\n#\n# const hadSuccessfulCronAdd = runResult.hadSuccessfulCronAdd === true;\n#\n# const guardedReplyPayloads =\n#   hasReminderCommitment &&\n#   successfulCronAdds === 0 &&\n#   !hadSuccessfulCronAdd &&        // ← NEW: suppresses false positive\n#   !coveredByExistingCron\n#     ? appendUnscheduledReminderNote(replyPayloads)\n#     : replyPayloads;\n#\n# The getter combines the persistent flag with current counter:\n# getHadSuccessfulCronAdd: () => state.hadSuccessfulCronAdd || state.successfulCronAdds > 0\n```\n\n**Observed result after the fix**: When `hadSuccessfulCronAdd` is true (cron was added in a prior attempt before compaction reset), the guard note is suppressed. The agent's confirmation message is delivered without the misleading \"I did not schedule a reminder\" note. The existing test `\"keeps reminder commitment unchanged when cron.add succeeded\"` (with `successfulCronAdds: 1`) continues to pass as before. The new path via `hadSuccessfulCronAdd: true` follows the same suppression logic.\n\n**What was not tested**: Full Gateway integration test with actual compaction trigger — requires live Gateway environment with model backend to trigger context overflow and compaction retry.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk — additive change, new optional boolean field with safe default (`false`)\n- [x] No changes to cron tool execution, store persistence, or session management\n- [x] Guard logic change is purely additive — extra condition suppresses false positives, never adds new guard notes\n- [x] All existing test paths unchanged — `successfulCronAdds` counter behavior preserved\n- [x] No lockfile or dependency changes",
-        "branch": "fix/issue-52972-incorrect-reminder-note-after-cron-schedule",
-        "head_sha": "397be881fba60db67d1873cf1c7fbd12fad625a4",
-        "author": "zhangqueping",
-        "labels": [
-          "agents",
-          "size: XS"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.handlers.types.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.ts",
-            "additions": 10,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 7,
-        "additions": 28,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100553",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100553.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 99,
-          "gatingTotal": 94,
-          "counts": {
-            "SUCCESS": 56,
-            "SKIPPED": 33,
-            "IN_PROGRESS": 6,
-            "FAILURE": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:FAILURE",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "checks-node-compact-large-whole-1:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2250,
+    "total_ms": 551,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 618
+        "ms": 295
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1854
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -213,7 +61,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 214
+        "ms": 242
       },
       {
         "name": "append_ledger",
