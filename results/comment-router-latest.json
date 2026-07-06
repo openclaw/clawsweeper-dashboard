@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T17:30:00.995Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-06T17:30:33.212Z",
+  "repo": "openclaw/clownfish",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T14:29:59.402Z",
+  "since": "2026-07-06T14:30:32.745Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    100997
+    259
   ],
-  "comment_ids": [
-    4895752582
-  ],
-  "status_comment_id": 4895752920,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,203 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:100997:4895752582:2026-07-06T17:28:40Z:re_review",
-      "comment_id": "4895752582",
-      "comment_version_key": "4895752582:2026-07-06T17:28:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100997#issuecomment-4895752582",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 100997,
-      "author": "ZOOWH",
-      "author_id": 265460861,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T17:28:40Z",
-      "comment_updated_at": "2026-07-06T17:28:40Z",
-      "status_comment_id": 4895752920,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 100997,
-          "dispatch_key": "router-5ccb6348fa47f228",
-          "dispatched_at": "2026-07-06T17:30:01.820Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-06T17:30:03.024Z",
-          "response_comment_id": "4895752920",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(discord): add reconcileUnknownSend adapter for durable delivery recovery (#100979)",
-        "body": "Fixes #100979\n\n## What Problem This Solves\n\nWhen a Discord send fails during a full network outage, the delivery queue entry is marked `send_attempt_started`. On gateway reconnect, the drain finds this entry but Discord has no `reconcileUnknownSend` adapter — so it refuses blind replay and permanently drops the message.\n\nSlack already has this adapter (`extensions/slack/src/channel.ts:582-589`). Discord was missing it.\n\n## Why This Change Was Made\n\nAdded `durableFinal.reconcileUnknownSend` to Discord's message adapter with a safety gate — only returns `not_sent` when the last recorded error is a connection-phase failure that proves the HTTP request never reached Discord:\n\n- `PRE_DISPATCH_ERROR_RE` matches: `UND_ERR_CONNECT_TIMEOUT`, `ECONNREFUSED`, `ENOTFOUND`, `EAI_AGAIN`, `ENETUNREACH`, `ERR_CONNECT_TIMEOUT`, `EADDRNOTAVAIL`, `ETIMEDOUT`\n- Falls back to `unresolved` when the error is ambiguous (e.g. HTTP 500, or no error at all after a process crash) to preserve the duplicate-send guard\n- Added `lastError` to `ChannelMessageUnknownSendContext` so adapters can make informed decisions\n\nThe `not_sent` verdict for connection-phase errors is correct because the HTTP request never reached Discord.\n\n## Evidence\n\n### Proof — Live outage/recovery on production gateway:\n\n```\n# 1. Send with invalid proxy → ECONNREFUSED (simulates network outage)\n$ https_proxy=http://127.0.0.1:19999 openclaw message send --channel discord --target \"channel:<id>\" -m \"proof-outage-...\"\nOutboundDeliveryError: fetch failed | connect ECONNREFUSED 127.0.0.1:19999 | ECONNREFUSED\n\n# 2. Queue entry shows send_attempt_started + connection error\n$ sqlite3 state/openclaw.sqlite \"SELECT id, status, recovery_state, last_error FROM delivery_queue_entries WHERE channel='discord' AND status='pending';\"\n2c8faad1...|pending|send_attempt_started|fetch failed | connect ECONNREFUSED 127.0.0.1:19999 | ECONNREFUSED\n\n# 3. Gateway reconnect drain recovers the entry\n[discord] reconnect drain: reconcileUnknownSend → not_sent (ECONNREFUSED proves pre-dispatch)\n[discord] Delivery entry 2c8faad1... replayed and delivered\n\n# 4. Queue drained, message delivered to Discord (no duplicates)\n$ sqlite3 state/openclaw.sqlite \"SELECT id FROM delivery_queue_entries WHERE id='2c8faad1...';\"\n(empty — entry removed after successful delivery)\n\n$ curl .../channels/<id>/messages\n1523739584113147914: proof-outage-...  ← single delivery, no duplicate\n```\n\n### Tests:\n- `declares reconcileUnknownSend adapter for reconnect drain recovery`\n- `returns not_sent when lastError is a connection-phase failure`\n- `returns unresolved when lastError is not a connection-phase error`\n- `returns unresolved when lastError is missing and retryCount > 0`\n\n### Pre-submit:\n```\noxfmt --check → clean\ngit diff --check → clean\nautoreview → patch is correct with no defects\npnpm test extensions/discord → 5/5 tests passed\n```",
-        "branch": "fix/100979-discord-reconcile-send",
-        "head_sha": "c3f6c13bd8e5dba4e3345e6578831387423a41c0",
-        "author": "zoowh",
-        "labels": [
-          "channel: discord",
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/discord/src/channel.ts",
-            "additions": 51,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/durable-delivery.test.ts",
-            "additions": 68,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/message/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue-recovery.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.discord-group.json",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
-            "additions": 8,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 134,
-        "deletions": 5,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100997",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100997.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 95,
-          "gatingTotal": 90,
-          "counts": {
-            "SUCCESS": 53,
-            "SKIPPED": 24,
-            "IN_PROGRESS": 17,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-06T17:30:01.274Z"
-    }
-  ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4339,
+    "total_ms": 847,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 540
+        "ms": 452
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1038
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -239,11 +57,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2735
+        "ms": 380
       },
       {
         "name": "append_ledger",
