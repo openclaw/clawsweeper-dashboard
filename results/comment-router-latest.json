@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T11:01:15.169Z",
-  "repo": "openclaw/acpx",
+  "generated_at": "2026-07-06T11:01:24.791Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T08:01:14.851Z",
+  "since": "2026-07-06T08:01:21.526Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    434
+    100817
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,141 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100817:4891971181:2026-07-06T11:01:13Z:clawsweeper_needs_human",
+      "comment_id": "4891971181",
+      "comment_version_key": "4891971181:2026-07-06T11:01:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100817#issuecomment-4891971181",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100817,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T10:55:13Z",
+      "comment_updated_at": "2026-07-06T11:01:13Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=e5bb6076c5f46adad14e2f4766ecdac606efebb9)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "e5bb6076c5f46adad14e2f4766ecdac606efebb9",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(sessions): exclude status done from terminal-main transcript rollover guard (#99964)",
+        "body": "## What Problem This Solves\n\nAfter a successful main-agent run in OpenClaw 2026.6.11, the session can roll over into a new session ID on the next inbound message. The old transcript is archived as `.jsonl.reset.*` even though the session completed normally with `status: \"done\"`.\n\nThe rollover is caused by `resolveTerminalMainSessionTranscriptRegistryCheck()` in `src/config/sessions/lifecycle.ts` treating `status: \"done\"` sessions the same as `timeout`/`killed` sessions. When the transcript file mtime is newer than `sessions.json.updatedAt` — which is normal after post-run transcript writes — the guard triggers and forces a new session ID instead of reusing the existing one.\n\nFixes #99964.\n\n## Why This Change Was Made\n\nIn `resolveTerminalMainSessionTranscriptRegistryCheck()`, the guard already skips `status: \"failed\"` rows because \"failed rows with a present transcript stay reusable for retry/recovery.\" The same logic applies to `status: \"done\"` — a successfully completed session should remain reusable for the next user message.\n\nThis change adds a parallel exclusion for `status: \"done\"`, returning `undefined` (skip the check) just like `status: \"failed\"`. The guard still applies to `status: \"timeout\"`, `status: \"killed\"`, and `endedAt`-only terminal rows.\n\n**Not modified**: Session persistence, transcript archiving, gateway message delivery, idle/expiry reset logic.\n\n## User Impact\n\nUsers running the main agent no longer experience spurious session rollovers after successful runs. Session continuity is preserved across inbound messages, and transcripts are not incorrectly archived as `.jsonl.reset`.\n\n## Evidence\n\n**Behavior addressed**: Successful (`done`) main-agent sessions roll over when transcript mtime > registry updatedAt\n\n**Real environment tested**: `npx tsx` importing production code directly\n\n**Exact steps or command run after this patch**:\n\n```\n$ npx tsx scripts/repro-99964-before-after.mjs\n```\n\n**Evidence after fix**:\n\n```\n[PASS] status=done: check=false (want=false)\n[PASS] status=failed: check=false (want=false)\n[PASS] status=timeout: check=true (want=true)\n[PASS] status=killed: check=true (want=true)\n[PASS] endedAt only (no status): check=true (want=true)\n\n5/5 passed\n```\n\n--- [BEFORE fix] ---\n```\n[FAIL --> [CRITICAL_FAIL]] status=done: check=true (want=false)\n  → done sessions were incorrectly triggering the rollover guard\n```\n\n--- [AFTER fix] ---\n```\n[PASS] status=done: check=false (want=false)\n  → done sessions skip the guard and stay reusable\n```\n\n**Observed result after fix**: `resolveTerminalMainSessionTranscriptRegistryCheck` returns `undefined` for `status: \"done\"` — the session is reusable. `timeout`, `killed`, and `endedAt`-only terminal rows still trigger the check as expected.\n\n**What was not tested**: Full gateway hot-reload cycle, cross-agent session migration, Windows/macOS filesystem mtime precision edge cases.\n\n## Regression Test Plan\n\n```\n$ npx vitest run src/gateway/server-methods/agent.test.ts --run\n Test Files  2 passed (2)\n      Tests  376 passed (376)\n\n$ node scripts/run-oxlint.mjs src/config/sessions/lifecycle.ts \\\n    src/gateway/server-methods/agent.test.ts\n→ exit 0\n```\n\n## AI Assistance\n\nThis PR was created with assistance from Claude Opus 4.8 (Anthropic). The author understands and takes responsibility for all code changes.\n",
+        "branch": "fix/issue-99964-done-session-rollover",
+        "head_sha": "e5bb6076c5f46adad14e2f4766ecdac606efebb9",
+        "author": "maweibin",
+        "labels": [
+          "gateway",
+          "size: S",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/config/sessions/lifecycle.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.test.ts",
+            "additions": 45,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 51,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100817",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100817.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "gatingTotal": 97,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 35,
+            "SUCCESS": 59,
+            "FAILURE": 5,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-small-3:FAILURE",
+            "checks-node-compact-small-5:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [
+            "checks-node-compact-small-3:FAILURE",
+            "checks-node-compact-small-5:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 505,
+    "total_ms": 3605,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 305
+        "ms": 404
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2847
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +179,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 188
+        "ms": 329
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
