@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T01:21:00.000Z",
+  "generated_at": "2026-07-06T01:21:22.996Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-05T22:20:59.720Z",
+  "since": "2026-07-05T22:21:21.357Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100516
+    100377
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,148 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100377:4886719486:2026-07-06T01:21:17Z:clawsweeper_auto_repair",
+      "comment_id": "4886719486",
+      "comment_version_key": "4886719486:2026-07-06T01:21:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100377#issuecomment-4886719486",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100377,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-05T16:22:27Z",
+      "comment_updated_at": "2026-07-06T01:21:17Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=f3156912ea622a640b74c1d7a5153fa4583708a3)",
+      "review_summary": "The branch pre-activates configured heartbeat channel plugins at gateway startup, adds an `allowBundledFallback` resolver option, disables heartbeat wake-path bootstrap/bundled fallback, and updates outbound heartbeat tests.\n\nPR surface: Source +89, Tests +94. Total +183 across 6 files.\n\nReproducibility: yes. from source inspection: configure heartbeat `target: \"last\"` with a session whose `lastChannel` is an external plugin channel absent from the active registry. Current main bootstraps that plugin during heartbeat resolution, while this PR disables the wake-time bootstrap and startup pre-activation skips `last`.",
+      "review_followup": "- [P1] Human review should keep this PR blocked until the contributor fixes the `target: last` compatibility regression and adds real gateway proof.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "f3156912ea622a640b74c1d7a5153fa4583708a3",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(heartbeat): skip plugin bootstrap and bundled fallback during delivery target resolution",
+        "body": "## What Problem This Solves\n\nFixes a heartbeat wake-loop latency regression where delivery-target resolution blocks for ~60s per tick when the configured channel plugin is not already in the active runtime registry.\n\n### Background\n\nCommit [`6470bb7625`](https://github.com/openclaw/openclaw/commit/6470bb7625) (fix(heartbeat): bootstrap plugin session targets, #93630) solved a real problem: when a user configured `heartbeat.target` to a channel id that was not in the built-in known-deliverable-channel list (e.g. a third-party plugin id), `normalizeDeliverableOutboundChannel()` returned `undefined` and the target was silently dropped to `\"none\"`.\n\nThe fix called `resolveOutboundChannelPlugin({ allowBootstrap: true })` in the heartbeat delivery-target path. However, this triggers `resolveRuntimePluginRegistry()` → `loadOpenClawPlugins()`, which scans **all** installed plugins — not just the target channel.\n\n### Root cause analysis\n\nThe `bootstrapOutboundChannelPlugin` guard in `channel-bootstrap.runtime.ts` has a `bootstrapAttempts` Set that caches per `(registryVersion, channel)` key:\n- **Successful bootstrap**: key stays cached → subsequent ticks skip instantly\n- **Failed bootstrap** (plugin not installed / config issue / transient failure): key is deleted → every tick re-runs the full plugin scan\n\nThis is the pathological case: a misconfigured or not-yet-installed heartbeat plugin channel causes repeated ~60s scans on every wake tick.\n\n### When this bug is triggered\n\n1. `heartbeat.target` is not `\"none\"` or `\"last\"`\n2. The target channel is not in the active runtime registry\n3. `heartbeat.to` is set (non-empty)\n\n## Why This Change Was Made\n\nThree-part fix:\n\n### Part 1: Hot path optimization\n\nThree heartbeat-path call sites in `targets.ts` now pass `allowBootstrap: false, allowBundledFallback: false`. A new `allowBundledFallback` parameter is added to `resolveOutboundChannelPlugin` (default `true`) so hot paths can skip both the bootstrap scan AND the `getBundledChannelPlugin` lazy-load fallback.\n\n### Part 2: Startup pre-activation\n\nA new `preactivateHeartbeatChannelPlugins()` function in `src/infra/outbound/heartbeat-pre-activate.ts` runs **once at gateway startup** (in `activateGatewayScheduledServices`, before `startHeartbeatRunner`). It reads the heartbeat config, finds every effective non-standard channel target, and calls `resolveOutboundChannelPlugin({ allowBootstrap: true })` to load the plugin into the active registry before the wake loop starts.\n\nThis preserves the delivery compatibility that PR #93630 established — external plugin channel heartbeat targets still get bootstrapped — but moves the bootstrap cost from the hot path (every tick) to startup (once).\n\n### Part 3: Per-agent heartbeat coverage (rev 2)\n\nThe pre-activation function iterates both `agents.defaults.heartbeat` AND `agents.list[].heartbeat` entries, merging per-agent overrides over defaults (matching `resolveHeartbeatConfig` in the runner). This ensures per-agent external plugin heartbeat targets — which the runner schedules independently of the default — are also pre-activated before the wake loop starts.\n\nStandard deliverable channels (telegram, discord, etc.) and targets of `\"none\"`/`\"last\"` are no-ops in pre-activation.\n\n## User Impact\n\n- **Normal deployment (plugin active)**: No change — plugin found in registry, <10ms resolution both before and after\n- **Plugin not yet active** (external channel, delayed activation, per-agent override): Pre-activation resolves it at startup (~135–739ms once) instead of every heartbeat tick (~60s each). All effective heartbeat configs (default + per-agent) are covered.\n- **Plugin not installed / misconfigured**: Fast fail at startup (best-effort bootstrap) and fast fail on hot path — no repeated scans\n\n## Compatibility\n\n- `allowBundledFallback` defaults to `true` — all non-heartbeat callers unchanged\n- Pre-activation is a no-op for standard channel targets and `target: none/last`\n- Pre-activation covers per-agent `agents.list[].heartbeat` entries with the same merge semantics as `resolveHeartbeatConfig` in the runner\n- `resolveOutboundTarget` (general-purpose outbound) continues to pass `params.allowBootstrap` through transparently\n\n## Evidence\n\n### Unit tests (96/96 passed)\n\n```\nsrc/infra/outbound/targets.test.ts                  85 passed\nsrc/infra/outbound/heartbeat-pre-activate.test.ts   11 passed\n```\n\nNew tests cover: per-agent external plugin target without default heartbeat, per-agent target overriding default, entries without heartbeat blocks skipped, target deduplication across agents.\n\n### Probe timing (isolated vitest)\n\n```\nPre-activation bootstrap (cold scan):  739ms (external-channel, once at startup)\nPre-activation bootstrap (cold scan):  135ms (plugin-channel, once at startup)\nHot path (allowBootstrap: false):       <10ms (registry lookup, every tick)\n```\n\n### Lint / type / format checks\n\n```\noxlint:    clean\ntsgo:      clean (check:test-types)\nformat:    clean (oxfmt --check)\nbuild:     clean (pnpm build)\n```\n\n### Review response\n\n- **Rev 1 review**: Added startup pre-activation (`preactivateHeartbeatChannelPlugins`) to preserve delivery compatibility lost by removing bootstrap from the hot path. ([clawsweeper review](https://github.com/openclaw/openclaw/pull/100377#issuecomment-4886719486))\n- **Rev 2 review**: Extended pre-activation to iterate `agents.list[].heartbeat` entries so per-agent external plugin heartbeat targets are also covered — matches the effective configs `resolveHeartbeatAgents` schedules. ([clawsweeper review](https://github.com/openclaw/openclaw/pull/100377#issuecomment-4886719486))\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "fix/heartbeat-delivery-bootstrap-latency",
+        "head_sha": "f3156912ea622a640b74c1d7a5153fa4583708a3",
+        "author": "xialonglee",
+        "labels": [
+          "gateway",
+          "size: M",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/channel-resolution.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/heartbeat-pre-activate.test.ts",
+            "additions": 155,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/outbound/heartbeat-pre-activate.ts",
+            "additions": 72,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/outbound/targets.test.ts",
+            "additions": 33,
+            "deletions": 94,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/targets.ts",
+            "additions": 13,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 283,
+        "deletions": 100,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100377",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100377.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 460,
+    "total_ms": 1877,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 267
+        "ms": 322
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1302
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +186,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 181
+        "ms": 226
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
