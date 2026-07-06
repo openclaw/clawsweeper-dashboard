@@ -1,23 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T07:27:20.266Z",
+  "generated_at": "2026-07-06T07:27:24.988Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T04:27:17.405Z",
+  "since": "2026-07-06T04:27:22.451Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    99631
-  ],
-  "comment_ids": [
-    4890162348
+    100674
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,18 +30,129 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:99631:4890162348:2026-07-06T07:24:33Z:re_review",
-      "comment_id": "4890162348",
-      "comment_version_key": "4890162348:2026-07-06T07:24:33Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99631#issuecomment-4890162348",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100674:4889904784:2026-07-06T07:27:18Z:clawsweeper_auto_repair",
+      "comment_id": "4889904784",
+      "comment_version_key": "4889904784:2026-07-06T07:27:18Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100674#issuecomment-4889904784",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99631,
-      "author": "moguangyu5-design",
-      "author_id": 237363243,
+      "issue_number": 100674,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T07:24:33Z",
-      "comment_updated_at": "2026-07-06T07:24:33Z",
+      "comment_created_at": "2026-07-06T06:49:47Z",
+      "comment_updated_at": "2026-07-06T07:27:18Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=cedd82da888e96d51ea208c464c6cf1ff64f212f)",
+      "review_summary": "The PR changes staged compaction merge messages to copy each chunk's first numeric timestamp and adds a regression test around the merge-call inputs.\n\nPR surface: Source +3, Tests +27. Total +30 across 2 files.\n\nReproducibility: yes. for source-level behavior: current main builds synthetic staged-merge messages and the downstream serializer omits user-message timestamps from the LLM prompt. I did not run a live compaction session in this read-only review.",
+      "review_followup": "- [P1] The PR needs contributor or maintainer revision plus real behavior proof; ClawSweeper should not auto-repair while the external proof gate remains insufficient.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "cedd82da888e96d51ea208c464c6cf1ff64f212f",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(compaction): preserve chunk timestamps in staged-split merge messages",
+        "body": "## Summary\n\n**Problem**: `summarizeInStages` wraps partial summaries into synthetic `AgentMessage` items with `timestamp: Date.now()`, causing all merge messages to share the same timestamp. The LLM merger loses chronological context and cannot distinguish older history from newer history during the final merge pass.\n\n**Solution**: Use the first message timestamp from each chunk instead of `Date.now()` for the synthetic merge messages, preserving relative chronological ordering.\n\n**What changed**: `src/agents/compaction.ts` line 392 — changed `timestamp: Date.now()` to `timestamp: plan.chunks[i]?.[0]?.timestamp ?? Date.now()`. Added regression test verifying timestamp preservation.\n\n**What did NOT change**: The merge instruction template, chunk splitting logic, identifier preservation, and all non-staged summarization paths.\n\nFixes #100636\n\n## What Problem This Solves\n\nIn staged compaction summarization, when the context is too large for a single pass, `summarizeInStages` splits messages into chunks, summarizes each chunk independently, then merges the partial summaries. The merge step creates synthetic messages:\n\n```typescript\n// Before fix: all merge messages get Date.now()\n{ role: \"user\", content: \"Summary of chunk A (older history)\", timestamp: 1783318900000 }\n{ role: \"user\", content: \"Summary of chunk B (newer history)\", timestamp: 1783318900000 }\n```\n\nThe LLM merger sees identical timestamps and cannot distinguish temporal ordering, leading to potential information loss when recent context should be prioritized over older history.\n\n## Root Cause\n\n`src/agents/compaction.ts:392` — `timestamp: Date.now()` strips chronological metadata from all merge messages, replacing distinct chunk timestamps with a single value.\n\n## Real behavior proof\n\n**Behavior addressed**: Merge messages preserve chunk timestamps instead of all sharing `Date.now()`.\n\n**Real environment tested**: Linux x64, Node v24.13.1\n\n**Exact steps or command run after this patch**:\n```terminal\ncd openclaw\nnpx tsx -e \"\n// Simulate before/after behavior\nconst OLD = summaries => summaries.map(s => ({ role:'user', content:s, timestamp: Date.now() }));\nconst NEW = (summaries, ts) => summaries.map((s, i) => ({ role:'user', content:s, timestamp: ts[i] ?? Date.now() }));\n\nconsole.log('Before fix:', OLD(['old', 'new']).map(m => m.timestamp));\n// → [1783318972149, 1783318972149] — identical, no ordering\n\nconsole.log('After fix:', NEW(['old', 'new'], [1000, 5000]).map(m => m.timestamp));\n// → [1000, 5000] — distinct, chronological order preserved\n\"\n```\n\n**After-fix evidence**:\n```terminal_output\n=== Issue #100636 — L2 Evidence ===\nEnvironment: linux x64 Node v24.13.1\n\n❌ Before fix: all messages get Date.now()\n  msg[0].timestamp: 1783318972149 (= now)\n  msg[1].timestamp: 1783318972149 (= now, same as msg[0])\n  LLM sees: chunk A = chunk B = same time → chronological order lost\n\n✅ After fix: messages preserve chunk timestamps\n  msg[0].timestamp: 1000 (= chunk A start, older)\n  msg[1].timestamp: 5000 (= chunk B start, newer)\n  LLM sees: chunk A (older) → chunk B (newer) → chronological order preserved\n\n✅ Fix verified — timestamp preservation enables correct merge ordering\n```\n\n**Full test suite**:\n```terminal_output\npnpm test src/agents/compaction.identifier-preservation.test.ts\n Test Files  2 passed (2)  // |agents-core| + |agents-support|\n      Tests  14 passed (14)\n  including:\n  ✅ preserves chunk timestamps in staged-split merge messages instead of all Date.now()\n  ✅ keeps identifier-preservation guidance on staged split + merge summarization\n     with timestamp preservation\n  ✅ avoids duplicate additional-focus headers in split+merge path\n```\n\n**Observed result after the fix**: When `summarizeInStages` splits messages into chunks, each synthetic merge message now carries the timestamp of the first message in its corresponding chunk. The LLM merger receives distinct, chronologically-ordered timestamps. The `Date.now()` fallback only applies when a chunk happens to be empty (which doesn't occur in practice).\n\n**What was not tested**: Full end-to-end agent compaction with real model backend — requires live API access.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk — single-line change, fallback preserves existing behavior\n- [x] `plan.chunks[i]?.[0]?.timestamp ?? Date.now()` — safe optional chaining\n- [x] All 14 existing tests pass including the new regression test\n- [x] No lockfile, dependency, or config changes",
+        "branch": "fix/issue-100636-preserve-chunk-timestamps",
+        "head_sha": "cedd82da888e96d51ea208c464c6cf1ff64f212f",
+        "author": "zhangqueping",
+        "labels": [
+          "agents",
+          "size: XS",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/compaction.identifier-preservation.test.ts",
+            "additions": 28,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/compaction.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 34,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100674",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100674.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 100,
+          "gatingTotal": 95,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 34,
+            "SUCCESS": 60,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE",
+            "check-docs:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE",
+            "check-docs:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100674:4889748787:2026-07-06T06:29:31Z:re_review",
+      "comment_id": "4889748787",
+      "comment_version_key": "4889748787:2026-07-06T06:29:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100674#issuecomment-4889748787",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100674,
+      "author": "zhangqueping",
+      "author_id": 3436352,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T06:29:31Z",
+      "comment_updated_at": "2026-07-06T06:29:31Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -73,114 +181,70 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway-protocol): accept Paperclip adapter metadata in AgentParamsSchema",
-        "body": "Closes #99458\n\n## What Problem This Solves\n\nFixes an issue where agents dispatched through the Paperclip `openclaw_gateway` adapter fail on every heartbeat run because the gateway's `AgentParamsSchema` rejects the root-level `paperclip` metadata field that the adapter injects. The schema used `{ additionalProperties: false }` without declaring `paperclip`, so valid heartbeat payloads were refused with `invalid agent params: at root: unexpected property 'paperclip'`.\n\n## Why This Change Was Made\n\nAdded `paperclip: Type.Optional(Type.Unknown())` to `AgentParamsSchema` in `packages/gateway-protocol/src/schema/agent.ts`. This is the minimal additive fix: the field is tolerated at the gateway boundary without affecting runtime routing, while all other unknown top-level properties are still rejected. A regression test verifies both that the Paperclip payload passes and that unrelated unknown fields still fail validation.\n\n## User Impact\n\nUsers and operators running Paperclip-orchestrated agents through the OpenClaw gateway will see heartbeat dispatches succeed instead of failing silently and stalling queued tasks. No changes are required for non-Paperclip callers.\n\n## Evidence\n\n- Added two focused tests in `packages/gateway-protocol/src/schema/agent.test.ts`:\n  - `accepts the Paperclip adapter's paperclip metadata field`\n  - `still rejects other unknown top-level properties`\n- Ran the test file locally:\n\n```text\npnpm exec vitest run packages/gateway-protocol/src/schema/agent.test.ts --reporter=verbose\n\nTest Files  2 passed (2)\nTests  10 passed (10)\n```\n\n- Built the package to confirm the schema change compiles cleanly:\n\n```text\npnpm --filter @openclaw/gateway-protocol build\n✔ Build complete\n```\n\n- Verified formatting with `pnpm exec oxfmt --check` on the changed files.\n",
-        "branch": "fix/99458-agent-params-paperclip",
-        "head_sha": "cd02be67e4230ea43ca9ba23d7f94cccfdfff3cb",
-        "author": "moguangyu5-design",
+        "title": "fix(compaction): preserve chunk timestamps in staged-split merge messages",
+        "body": "## Summary\n\n**Problem**: `summarizeInStages` wraps partial summaries into synthetic `AgentMessage` items with `timestamp: Date.now()`, causing all merge messages to share the same timestamp. The LLM merger loses chronological context and cannot distinguish older history from newer history during the final merge pass.\n\n**Solution**: Use the first message timestamp from each chunk instead of `Date.now()` for the synthetic merge messages, preserving relative chronological ordering.\n\n**What changed**: `src/agents/compaction.ts` line 392 — changed `timestamp: Date.now()` to `timestamp: plan.chunks[i]?.[0]?.timestamp ?? Date.now()`. Added regression test verifying timestamp preservation.\n\n**What did NOT change**: The merge instruction template, chunk splitting logic, identifier preservation, and all non-staged summarization paths.\n\nFixes #100636\n\n## What Problem This Solves\n\nIn staged compaction summarization, when the context is too large for a single pass, `summarizeInStages` splits messages into chunks, summarizes each chunk independently, then merges the partial summaries. The merge step creates synthetic messages:\n\n```typescript\n// Before fix: all merge messages get Date.now()\n{ role: \"user\", content: \"Summary of chunk A (older history)\", timestamp: 1783318900000 }\n{ role: \"user\", content: \"Summary of chunk B (newer history)\", timestamp: 1783318900000 }\n```\n\nThe LLM merger sees identical timestamps and cannot distinguish temporal ordering, leading to potential information loss when recent context should be prioritized over older history.\n\n## Root Cause\n\n`src/agents/compaction.ts:392` — `timestamp: Date.now()` strips chronological metadata from all merge messages, replacing distinct chunk timestamps with a single value.\n\n## Real behavior proof\n\n**Behavior addressed**: Merge messages preserve chunk timestamps instead of all sharing `Date.now()`.\n\n**Real environment tested**: Linux x64, Node v24.13.1\n\n**Exact steps or command run after this patch**:\n```terminal\ncd openclaw\nnpx tsx -e \"\n// Simulate before/after behavior\nconst OLD = summaries => summaries.map(s => ({ role:'user', content:s, timestamp: Date.now() }));\nconst NEW = (summaries, ts) => summaries.map((s, i) => ({ role:'user', content:s, timestamp: ts[i] ?? Date.now() }));\n\nconsole.log('Before fix:', OLD(['old', 'new']).map(m => m.timestamp));\n// → [1783318972149, 1783318972149] — identical, no ordering\n\nconsole.log('After fix:', NEW(['old', 'new'], [1000, 5000]).map(m => m.timestamp));\n// → [1000, 5000] — distinct, chronological order preserved\n\"\n```\n\n**After-fix evidence**:\n```terminal_output\n=== Issue #100636 — L2 Evidence ===\nEnvironment: linux x64 Node v24.13.1\n\n❌ Before fix: all messages get Date.now()\n  msg[0].timestamp: 1783318972149 (= now)\n  msg[1].timestamp: 1783318972149 (= now, same as msg[0])\n  LLM sees: chunk A = chunk B = same time → chronological order lost\n\n✅ After fix: messages preserve chunk timestamps\n  msg[0].timestamp: 1000 (= chunk A start, older)\n  msg[1].timestamp: 5000 (= chunk B start, newer)\n  LLM sees: chunk A (older) → chunk B (newer) → chronological order preserved\n\n✅ Fix verified — timestamp preservation enables correct merge ordering\n```\n\n**Full test suite**:\n```terminal_output\npnpm test src/agents/compaction.identifier-preservation.test.ts\n Test Files  2 passed (2)  // |agents-core| + |agents-support|\n      Tests  14 passed (14)\n  including:\n  ✅ preserves chunk timestamps in staged-split merge messages instead of all Date.now()\n  ✅ keeps identifier-preservation guidance on staged split + merge summarization\n     with timestamp preservation\n  ✅ avoids duplicate additional-focus headers in split+merge path\n```\n\n**Observed result after the fix**: When `summarizeInStages` splits messages into chunks, each synthetic merge message now carries the timestamp of the first message in its corresponding chunk. The LLM merger receives distinct, chronologically-ordered timestamps. The `Date.now()` fallback only applies when a chunk happens to be empty (which doesn't occur in practice).\n\n**What was not tested**: Full end-to-end agent compaction with real model backend — requires live API access.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk — single-line change, fallback preserves existing behavior\n- [x] `plan.chunks[i]?.[0]?.timestamp ?? Date.now()` — safe optional chaining\n- [x] All 14 existing tests pass including the new regression test\n- [x] No lockfile, dependency, or config changes",
+        "branch": "fix/issue-100636-preserve-chunk-timestamps",
+        "head_sha": "cedd82da888e96d51ea208c464c6cf1ff64f212f",
+        "author": "zhangqueping",
         "labels": [
-          "app: web-ui",
-          "gateway",
-          "cli",
+          "agents",
           "size: XS",
-          "P1"
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/agent.test.ts",
-            "additions": 29,
+            "path": "src/agents/compaction.identifier-preservation.test.ts",
+            "additions": 28,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/gateway-protocol/src/schema/agent.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/gateway-boot-lifecycle.ts",
-            "additions": 1,
-            "deletions": 1,
+            "path": "src/agents/compaction.ts",
+            "additions": 6,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 40,
-        "deletions": 3,
+        "changedFiles": 2,
+        "additions": 34,
+        "deletions": 4,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99631",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99631.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100674",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100674.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 99,
-          "gatingTotal": 94,
+          "total": 100,
+          "gatingTotal": 95,
           "counts": {
-            "SUCCESS": 50,
-            "SKIPPED": 30,
-            "IN_PROGRESS": 18,
+            "CANCELLED": 2,
+            "SKIPPED": 34,
+            "SUCCESS": 60,
+            "FAILURE": 3,
             "NEUTRAL": 1
           },
           "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "ios-build:IN_PROGRESS"
+            "Real behavior proof:CANCELLED",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE",
+            "check-docs:FAILURE"
           ],
           "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "ios-build:IN_PROGRESS"
+            "Real behavior proof:CANCELLED"
           ],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE",
+            "check-docs:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
@@ -190,17 +254,17 @@
     }
   ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 3183,
+    "total_ms": 2784,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 792
+        "ms": 424
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2053
+        "ms": 2094
       },
       {
         "name": "classify_comment_commands",
@@ -220,11 +284,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 321
+        "ms": 238
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
