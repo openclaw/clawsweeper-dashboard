@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T10:22:01.276Z",
+  "generated_at": "2026-07-06T10:22:51.462Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T07:22:00.720Z",
+  "since": "2026-07-06T07:22:48.665Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    88992
+    100691
   ],
   "comment_ids": [
-    4891669558
+    4891676292
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4891676674,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 0,
@@ -31,19 +31,212 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100691:4891676292:2026-07-06T10:21:23Z:re_review",
+      "comment_id": "4891676292",
+      "comment_version_key": "4891676292:2026-07-06T10:21:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100691#issuecomment-4891676292",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 100691,
+      "author": "LZY3538",
+      "author_id": 293718838,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T10:21:23Z",
+      "comment_updated_at": "2026-07-06T10:21:23Z",
+      "status_comment_id": 4891676674,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 100691,
+          "dispatch_key": "router-ee669bbfddd9d747",
+          "dispatched_at": "2026-07-06T10:22:52.613Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-06T10:22:53.760Z",
+          "response_comment_id": "4891676674",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(acp): close shared state database on gateway shutdown (#100637)",
+        "body": "## What Problem This Solves\n\nFixes #100637: The standalone ACP gateway process (`serveAcpGateway`) opens a SQLite `DatabaseSync` connection through `createSqliteAcpEventLedger()` but never closes it on SIGINT/SIGTERM shutdown. This leaks file descriptors and causes SQLite file locking issues during hot reload.\n\nAdditionally, the original fix had an unbounded `Promise.allSettled` drain that could stall shutdown indefinitely if an ACP event handler never settled. This revision bounds the drain with a 2s timeout (matching the gateway shutdown pattern).\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/acp/server.ts` | Import `closeOpenClawStateDatabase`; track in-flight `handleGatewayEvent` promises; drain bounded by `ACP_SHUTDOWN_EVENT_DRAIN_TIMEOUT_MS` (2s) via `Promise.race`; close shared state DB after drain; call `onClosed()` after cleanup |\n| `src/acp/server.startup.test.ts` | 3 new tests: DB close on shutdown, bounded drain ordering, stalled-handler timeout (15 tests total) |\n| `src/acp/server.shutdown-proof.test.ts` | **Real-behavior proof**: uses real `node:sqlite` `DatabaseSync` handles (no mocks) to prove `closeOpenClawStateDatabase` releases the underlying handle |\n\n## Evidence\n\n### Unit + proof tests (46/46 pass)\n\n```\n=== server.startup.test.ts (unit + drain regression) ===\n Test Files  1 passed (1)\n      Tests  15 passed (15)\n\n=== server.shutdown-proof.test.ts (real DatabaseSync proof) ===\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n\n=== event-ledger.test.ts ===\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n\n=== openclaw-state-db.test.ts ===\n Test Files  1 passed (1)\n      Tests  18 passed (18)\n```\n\n### Real-behavior proof detail\n\n`server.shutdown-proof.test.ts` exercises the shared state DB lifecycle with **real `node:sqlite` `DatabaseSync` instances** — the exact same API that the ACP event ledger uses internally. The test:\n\n1. Opens the shared state DB through `openOpenClawStateDatabase` (same path `createSqliteAcpEventLedger` takes)\n2. Asserts `db.isOpen === true` and `isOpenClawStateDatabaseOpen() === true`\n3. Calls `closeOpenClawStateDatabase` — the core of the ACP shutdown fix\n4. Asserts `db.isOpen === false` (proves the underlying `DatabaseSync` handle was actually closed, not just dropped from the module cache)\n5. Asserts `isOpenClawStateDatabaseOpen() === false` (proves no cached handle remains)\n\n### Drain timeout regression test detail\n\n`server.startup.test.ts` \"continues shutdown after the event drain timeout when a handler stalls\":\n\n1. Creates a handler that never settles (simulated stalled `sessionUpdate`)\n2. Fires a gateway event → handler begins, tracked in `inFlightEvents`\n3. Triggers SIGINT shutdown → hits `Promise.race([allSettled, timeout])`\n4. Advances fake timers past 2s → timeout wins\n5. Verifies `closeOpenClawStateDatabase` was called (shutdown completed despite stalled handler)\n\n### Diff scope\n\n```\n src/acp/server.shutdown-proof.test.ts | 48 +++++++++++++++++++++++++++++++++++\n src/acp/server.startup.test.ts        | 37 +++++++++++++++++++++++++++\n src/acp/server.ts                     | 18 +++++++++++--\n 3 files changed, 101 insertions(+), 2 deletions(-)\n```\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        "branch": "fix/acp-shutdown-state-db-close",
+        "head_sha": "022ef7e2f850d994dedcc4be4f6732184690d7f8",
+        "author": "lzy3538",
+        "labels": [
+          "size: M",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/acp/server.shutdown-proof.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/acp/server.startup.test.ts",
+            "additions": 115,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/server.ts",
+            "additions": 40,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 203,
+        "deletions": 13,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100691",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100691.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "CHANGES_REQUESTED",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 34,
+            "SKIPPED": 32,
+            "IN_PROGRESS": 31,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:FAILURE",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "check-prod-types:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-06T10:22:51.789Z"
+    }
+  ],
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 765,
+    "total_ms": 6179,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 546
+        "ms": 688
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 2095
       },
       {
         "name": "classify_comment_commands",
@@ -63,7 +256,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 209
+        "ms": 3372
       },
       {
         "name": "append_ledger",
