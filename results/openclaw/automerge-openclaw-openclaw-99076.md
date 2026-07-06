@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-99076"
 mode: "autonomous"
-run_id: "28709319944"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28709319944"
-head_sha: "b81ec965760407132abf36a276f1cb83016b7db3"
-workflow_conclusion: "success"
+run_id: "28763432958"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28763432958"
+head_sha: "742c65da99a62423a646353c4d4438cb700d4d70"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-04T15:00:57.039Z"
+published_at: "2026-07-06T02:34:18.396Z"
 canonical: "#99076"
 canonical_issue: null
 canonical_pr: "#99076"
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28709319944](https://github.com/openclaw/clawsweeper/actions/runs/28709319944)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28763432958](https://github.com/openclaw/clawsweeper/actions/runs/28763432958)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
@@ -54,7 +54,7 @@ Make PR #99076 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/99076 |  | source PR #99076 is paused by clawsweeper:human-review; refusing to mutate the PR branch |
+| repair_contributor_branch | blocked |  |  | source PR branch changed while the repair worker was preparing its push; requeue against the latest head |
 | automerge_repair_outcome_comment | updated | #99076 |  |  |
 
 ## Apply Actions
