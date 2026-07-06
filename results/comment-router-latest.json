@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T08:47:28.625Z",
-  "repo": "openclaw/crabbox",
+  "generated_at": "2026-07-06T08:47:36.924Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T05:47:28.292Z",
+  "since": "2026-07-06T05:47:34.951Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    952
+    100733
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,121 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100733:4890785749:2026-07-06T08:47:30Z:clawsweeper_auto_repair",
+      "comment_id": "4890785749",
+      "comment_version_key": "4890785749:2026-07-06T08:47:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100733#issuecomment-4890785749",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100733,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T08:41:42Z",
+      "comment_updated_at": "2026-07-06T08:47:30Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=414af42e70b9674650b4fecf11c04301f100ab7e)",
+      "review_summary": "Adds an `AcpEventLedger.close()` lifecycle method that closes the shared SQLite state database and calls it during ACP gateway shutdown.\n\nPR surface: Source +11. Total +11 across 2 files.\n\nReproducibility: yes. Source inspection of the PR head shows `AcpEventLedger.close` is required while `createLedgerApi()` still returns an object without `close`; I did not run tests because this review is read-only.",
+      "review_followup": "- [P2] The remaining blocker is a narrow repair on the PR branch: keep the intended SQLite close path but satisfy the ledger lifecycle contract for in-memory/test implementations.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "414af42e70b9674650b4fecf11c04301f100ab7e",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(acp): add close() to SQLite event ledger and release on shutdown (#100637)",
+        "body": "Fixes #100637.\n\n## What Problem This Solves\n\n`createSqliteAcpEventLedger()` in `src/acp/event-ledger.ts` opens a SQLite `DatabaseSync` connection through `openOpenClawStateDatabase()` but never exposes a way to close it. During ACP gateway hot-reload or shutdown, the cached handle survives in `cachedDatabases`, causing SQLite file lock contention when the new process attempts to reopen the same database.\n\n## Why This Change Was Made\n\nAdded a `close()` method to `AcpEventLedger` that calls `closeOpenClawStateDatabase()`, following the same pattern already used by `plugin-state-store.sqlite.ts`, `task-registry.store.sqlite.ts`, and `task-flow-registry.store.sqlite.ts`. Wired into the ACP `serveAcpGateway` shutdown handler so the state database is released on SIGINT/SIGTERM and hot-reload.\n\n## User Impact\n\nACP gateway hot-reload no longer leaks SQLite file descriptors. Clean shutdown releases all state database handles, eliminating file lock contention on restart.\n\n## Evidence\n\n### 1. Live Gateway Environment\n\n```\n$ openclaw gateway status\nService: systemd user (enabled)\nGateway: bind=loopback (127.0.0.1), port=18789\nRuntime: running (pid 1402, state active)\nConnectivity probe: ok\n```\n\n### 2. BEFORE vs AFTER — File Descriptor Leak Proof (current head 414af42e)\n\nRepro script `scripts/repro-100637-ledger-close.mjs` creates an ACP event ledger, reads from it (triggering DB open via `openOpenClawStateDatabase` cache), then calls `close()`:\n\n```\n$ node --import tsx/esm scripts/repro-100637-ledger-close.mjs\n=======================================================\nIssue #100637: ACP event ledger close() proof\n=======================================================\n\n--- [BEFORE] No close() method ---\n  FDs before create: 31\n  FDs after read():   34 (delta: +3)\n  --> [CRITICAL_FAIL] LEDGER HAS NO CLOSE — handles leak on shutdown\n\n--- [AFTER] ledger.close() releases handles ---\n  FDs before create:   31\n  FDs after read():    34 (delta: +3)\n  FDs after close():   31 (delta: -3)\n  --> [SUCCESS] close() releases handles, clean shutdown\n\n=======================================================\nRESULT: BEFORE/AFTER PROOF PASSED\n=======================================================\n```\n\n**Observed**: Before the fix, 3 file descriptors are opened during `read()` and never released — they leak on shutdown. After the fix, `close()` reclaims all 3, returning to the baseline fd count.\n\n### 3. Regression Tests (current head 414af42e)\n\n```\n$ node scripts/run-vitest.mjs src/acp/server.startup.test.ts --run\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n```\n\n### 4. Full Lifecycle Audit\n\n**Open path**: `createSqliteAcpEventLedger()` → `read()` → `openOpenClawStateDatabase()` → `new DatabaseSync(path)` → cached in `cachedDatabases` Map\n\n**Close path (before fix)**: NOTHING — `cachedDatabases` survives process signals\n\n**Close path (after fix)**: `serveAcpGateway.shutdown()` → `eventLedger?.close()` → `closeOpenClawStateDatabase()` → iterates `cachedDatabases`, calls `db.close()` + `walMaintenance.close()`, clears cache\n\n**Attestation**: After analyzing `src/state/openclaw-state-db.ts#L972-L998`, we verify that `closeOpenClawStateDatabase()` correctly closes every cached `DatabaseSync` instance, calls `walMaintenance.close()` for WAL cleanup, and clears the cache. The repair propagates from `eventLedger.close()` through this global cache teardown, confirming all open handles are released at the OS level.\n\n### Edge Case Coverage\n\n| Scenario | Behavior |\n|---|---|\n| Shutdown before ledger creation | `eventLedger` is null → `?.close()` no-ops safely |\n| Double shutdown | `if (stopped) return` guard prevents double-close |\n| `closeOpenClawStateDatabase()` on empty cache | `cachedDatabases.clear()` is idempotent |\n\n## Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/acp/server.startup.test.ts --run` — 12/12 passed\n- `scripts/repro-100637-ledger-close.mjs` — BEFORE/AFTER PASSED\n- Gateway live: running, probe ok\n\n## Root Cause\n\nIn `createSqliteAcpEventLedger()` (`src/acp/event-ledger.ts#L839`), the returned `AcpEventLedger` object had no `close()` method. The `read()` helper calls `openOpenClawStateDatabase(dbOptions)` which caches `DatabaseSync` instances in a global `cachedDatabases` Map (`src/state/openclaw-state-db.ts#L951`). Every other store that uses this cache (`plugin-state-store.sqlite.ts`, `task-registry.store.sqlite.ts`, `task-flow-registry.store.sqlite.ts`) calls `closeOpenClawStateDatabase()` in its own `close()` path. The ACP event ledger was the only consumer that did not participate in this lifecycle contract.\n\n## AI Assistance\n\n- **AI-assisted**: Yes\n- **Model used**: Claude Opus 4.8 (1M context)\n",
+        "branch": "fix/issue-100637-acp-ledger-close",
+        "head_sha": "414af42e70b9674650b4fecf11c04301f100ab7e",
+        "author": "maweibin",
+        "labels": [
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/acp/event-ledger.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/server.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 12,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100733",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100733.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 54,
+          "gatingTotal": 49,
+          "counts": {
+            "SUCCESS": 7,
+            "SKIPPED": 47
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 555,
+    "total_ms": 2295,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 322
+        "ms": 425
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1532
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +159,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 222
+        "ms": 312
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
