@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T20:12:55.755Z",
+  "generated_at": "2026-07-06T20:12:55.225Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T17:12:55.371Z",
+  "since": "2026-07-06T17:12:53.093Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101124
+    101127
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,168 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101127:4897140755:2026-07-06T20:12:49Z:clawsweeper_needs_human",
+      "comment_id": "4897140755",
+      "comment_version_key": "4897140755:2026-07-06T20:12:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101127#issuecomment-4897140755",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101127,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T20:06:18Z",
+      "comment_updated_at": "2026-07-06T20:12:49Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Human review is needed because this PR has a concrete code blocker, insufficient real proof, a protected maintainer label, and a new browser-control security boundary.; Needs attention: The PR adds a security-sensitive direct browser-control route and needs maintainer security approval before merge.; Review finding: [P2] Start browser control before rejecting direct extension pairs — extensions/browser/src/br... (sha=bbf7d6c6e162f1c5054036ed795593e3a073ec41)",
+      "review_summary": "Adds a direct `wss://` Chrome extension-to-Gateway pairing path with a `/browser/extension` WebSocket route, a `--gateway-url` CLI option, tests, and updated Chrome extension docs.\n\nPR surface: Source +205, Tests +150, Docs +6. Total +361 across 8 files.\n\nReproducibility: yes. source-level: the new handler returns 503 when `getBrowserControlState()` is null, while current browser request paths start the lazy service before dispatch. I did not run a live remote Chrome pairing scenario.",
+      "review_followup": "- [P1] Human review is needed because this PR has a concrete code blocker, insufficient real proof, a protected maintainer label, and a new browser-control security boundary.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "bbf7d6c6e162f1c5054036ed795593e3a073ec41",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(browser): pair the Chrome extension directly to a remote gateway",
+        "body": "Related: #53599\n\n## What Problem This Solves\n\nWhen Chrome runs on a different machine than the Gateway (the common managed-hosting shape: Gateway on a VPS, your signed-in Chrome on your laptop), there was no way to share that browser with an agent through the extension. The extension relay only listened on the Gateway host's loopback, so pairing a laptop Chrome required installing an OpenClaw node host on the laptop just to bridge the socket. This is the cross-machine gap called out in #53599: the old cross-machine relay was removed, and the restored extension (#100619) only covered same-host and node-host topologies.\n\n## Why This Change Was Made\n\nThis adds the **direct extension to Gateway** topology so the browser machine needs nothing but the Chrome extension: no OpenClaw install, Node, CLI, or open inbound port. The Gateway exposes a `/browser/extension` WebSocket route; the extension connects straight to it over `wss://`.\n\nKey design decision: the route is registered with `auth: \"plugin\"` and no `nodeCapability`, so the Gateway does **not** pre-enforce its token auth. This is deliberate: browser WebSockets cannot set an `Authorization` header, so the handler instead self-validates the same host-local relay secret (hashed, constant-time compare) carried in the pairing string's `?token=`, exactly like a signed webhook. It also origin-checks `chrome-extension://` and resolves the extension profile before attaching the socket to the **same** `ExtensionRelayBridge` the loopback relay already uses, so all CDP synthesis, the OpenClaw tab-group consent boundary, and the in-process Playwright `/cdp` client are unchanged. The pairing path ends in `/extension`, so the extension's existing pairing parser accepts a `wss://gateway/browser/extension#<secret>` string with **zero extension code changes**.\n\nNon-goals: this does not change the same-host or node-host paths, add any new config/env surface, or alter the loopback relay's auth.\n\n## User Impact\n\nOperators running a remote Gateway can now share a laptop's signed-in Chrome with an agent by installing only the extension:\n\n```bash\n# on the Gateway:\nopenclaw browser extension pair --gateway-url wss://your-gateway.example.com\n# -> prints wss://your-gateway.example.com/browser/extension#<secret>\n# load + pair the extension on the laptop; it connects straight to the Gateway.\n```\n\nNo node host, no inbound port on the laptop. Serve the Gateway over TLS (`wss://`) so the pairing secret and CDP traffic are encrypted. Same-host and node-host pairing are unchanged.\n\n## Evidence\n\n- **Full validation (Blacksmith Testbox, rebased on latest `main`):** `tsgo:extensions` + `tsgo:extensions:test` clean (exit 0), `lint:extensions` clean, full browser suite **1485 passed | 1 skipped**.\n- **Unit tests (run in CI):** 6 new tests in `gateway-relay-route.test.ts` cover the handler's branches: non-relay path returns `false` (Gateway continues), `503` when the control service is down, `403` on a non-`chrome-extension://` origin, `404` for a non-extension profile, `401` on a bad/absent secret, and successful `attach` on a valid secret.\n- **Live proof of the relay loop:** a real headed Chrome for Testing loading the built extension paired over the `/browser/extension` route, `chrome.debugger` attached with **no** remote-debugging prompt, and CDP drove a real tab in the orange OpenClaw tab group (`Runtime.evaluate` round-tripped page content; screenshot captured). This reuses the same extension to bridge to CDP to Chrome path proven end-to-end in #100619.\n- **Gateway dispatch verified against core source** (the real-Gateway upgrade seam): for an unprotected `auth:\"plugin\"` route with no `nodeCapability`, `server-http.ts` computes `shouldEnforceDefaultPluginGatewayAuth` = false (`PROTECTED_PLUGIN_ROUTE_PREFIXES` is only `[\"/api/channels\"]`), skips gateway token auth, and calls `handlePluginUpgrade`, where `matchedPluginRoutesRequireGatewayAuth` = false and `getMissingPluginRouteRuntimeContext` = undefined, so it invokes the plugin route's `handleUpgrade`. That is the exact seam this handler relies on (`src/gateway/server-http.ts`, `src/gateway/server/plugins-http.ts`, `src/gateway/server/plugins-http/route-auth.ts`).\n- **Docs:** `docs/tools/chrome-extension.md` now documents all three topologies (same host / direct-to-Gateway / via node host) and the per-host secret model.\n",
+        "branch": "claude/browser-ext-remote-gateway",
+        "head_sha": "bbf7d6c6e162f1c5054036ed795593e3a073ec41",
+        "author": "steipete",
+        "labels": [
+          "docs",
+          "maintainer",
+          "size: M",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "docs/tools/chrome-extension.md",
+            "additions": 20,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/plugin-registration.ts",
+            "additions": 22,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/browser/extension-relay/gateway-relay-route.test.ts",
+            "additions": 150,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/browser/src/browser/extension-relay/gateway-relay-route.ts",
+            "additions": 139,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/browser/src/browser/extension-relay/relay-server.ts",
+            "additions": 10,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/browser/runtime-lifecycle.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/cli/browser-cli-extension.ts",
+            "additions": 36,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/cli/browser-cli.ts",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 8,
+        "additions": 387,
+        "deletions": 26,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101127",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101127.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "gatingTotal": 90,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 35,
+            "SUCCESS": 57,
+            "FAILURE": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "check-docs:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [
+            "check-docs:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 657,
+    "total_ms": 2323,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 369
+        "ms": 278
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1840
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +206,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 274
+        "ms": 181
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
