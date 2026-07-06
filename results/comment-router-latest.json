@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T20:01:05.636Z",
+  "generated_at": "2026-07-06T20:01:10.516Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T17:01:05.402Z",
+  "since": "2026-07-06T17:01:07.865Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    101116
+    101105
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4897078595
+  ],
+  "status_comment_id": 4897078958,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,23 +31,176 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101105:4897078595:2026-07-06T19:59:52Z:re_review",
+      "comment_id": "4897078595",
+      "comment_version_key": "4897078595:2026-07-06T19:59:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101105#issuecomment-4897078595",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 101105,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T19:59:52Z",
+      "comment_updated_at": "2026-07-06T19:59:52Z",
+      "status_comment_id": 4897078958,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 101105,
+          "dispatch_key": "router-106be468329a06f1",
+          "dispatched_at": "2026-07-06T20:01:11.203Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-06T20:01:12.226Z",
+          "response_comment_id": "4897078958",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(macos): preserve device identity storage",
+        "body": "## Summary\nThe macOS identity store no longer chooses App Group storage unless the running bundle has the matching `com.apple.security.application-groups` entitlement. Unentitled macOS app builds fall back to the legacy Application Support identity directory instead of repeatedly using an App Group path they cannot reliably persist.\n\nTo keep that fallback upgrade-safe, an unentitled build now migrates a readable existing App Group `identity/device.json` into the selected legacy store before generating a fresh identity. The same installation keeps its device id across the storage switch instead of presenting a new one.\n\nExisting unrecognized `identity/device.json` files are also preserved in both the Swift and TypeScript loaders. The loader can still return a fresh in-memory identity when it cannot decode the file, but it no longer replaces existing identity bytes unless it is creating a missing file or performing a proven safe normalization.\n\n## Root cause\n`apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceIdentity.swift` selected App Group storage whenever `FileManager.containerURL(forSecurityApplicationGroupIdentifier:)` returned a URL:\n\n```before\nif let appGroupStateDirURL {\n    return appGroupStateDirURL\n}\n```\n\nOn affected shipped macOS builds, that could select the App Group container even though the bundle did not carry the matching App Groups entitlement. When persistence at that path failed, `loadOrCreate` returned generated identities, leading to pairing churn.\n\nThe Swift and TypeScript `loadOrCreate` implementations also treated an existing but unrecognized identity file like a missing file:\n\n```before\ncase .unknown:\n    break\n```\n\nThat path generated and saved a new identity over existing bytes.\n\n## Fix\nSwift now checks the running bundle entitlement before selecting App Group identity storage:\n\n```after\nif appGroupStateDirAvailable, let appGroupStateDirURL {\n    return appGroupStateDirURL\n}\n```\n\nWhen the entitlement is absent, the existing legacy Application Support fallback wins. To make that switch upgrade-safe, an unentitled build first tries to migrate a readable App Group identity into the legacy store:\n\n```after\nif let migrated = self.migratedIdentity(from: migrationSourceURL, to: url) {\n    return migrated\n}\n```\n\n`migrationSourceURL` is the App Group `identity/<file>` and is non-nil only when the entitlement is absent and the App Group container resolves. Migration reads and re-saves an already-valid identity, so the same device id survives while future writes go to the store the build can actually persist. Both loaders still preserve existing unrecognized identity files and only persist a generated identity when the file is missing.\n\n## Why this is the right boundary\nThe storage decision belongs in `DeviceIdentityPaths`, because every Swift caller reaches identity storage through that path resolver. The no-overwrite guard and the one-time migration belong in the identity loaders, because Swift and TypeScript both own `identity/device.json` and must preserve existing state consistently. OpenClawKit has no `openclaw doctor --fix` surface, so the bounded migration at the load boundary is the owner for this preservation.\n\nThis resolves the ClawSweeper P1 (`DeviceIdentity.swift`: preserve existing App Group identities before falling back) by implementing the recommended maintainer option: preserve/migrate a valid readable App Group identity into the chosen legacy store before an unentitled build switches to legacy storage. It does not accept a one-time re-pair and does not require provisioning the app with App Groups.\n\nThe TypeScript node loader has no App Group container (`resolveStateDir` in `src/config/paths.ts` never selects one), so this migration is macOS-only; the TypeScript side keeps only the no-overwrite guard.\n\n## Verification\n- `swift test --filter DeviceIdentityStoreTests` builds `OpenClawKit` and passes all 13 cases (10 existing plus 3 new: migrate-on-fallback, keep-existing-legacy, no-source-when-entitled) on Apple Swift 6.3.2 / arm64 macOS.\n- `git diff --check` passed.\n- New Swift regression fails on pristine `528ae815c9bf` (pre-migration head) and passes with this patch.\n- The App Group container path requires a provisioned signed macOS bundle, so the migration driver injects the App Group directory; the entitlement/container system APIs themselves are not exercisable from an unsigned local build.\n\n## Real behavior proof\nBehavior addressed: An unentitled macOS build that already held a readable App Group `identity/device.json` presented a new device id after upgrading, because the entitlement-aware fallback read empty legacy storage and minted a fresh identity.\nReal environment tested: The production `DeviceIdentityStore.loadOrCreate` and `DeviceIdentityPaths.appGroupMigrationSourceURL` were driven on a real on-disk App Group + legacy layout on the pre-migration head `528ae815c9bf` behavior (single-argument loader, unchanged by this patch) and on PR head `711afa6454f066784e14ac10366c655f19ba0b1a`, on Apple Swift 6.3.2 arm64 macOS. Only the App Group container location was injected; the loader, decoder, save, and migration selection are the production functions.\nExact steps or command run after this patch: Wrote a valid existing `identity/device.json` under the App Group directory, then invoked the production loader for an unentitled build with empty legacy storage: the pre-fix path via `DeviceIdentityStore.loadOrCreate(fileURL:)` and the fixed path via `DeviceIdentityStore.loadOrCreate(fileURL:migrationSourceURL:)`, and read back the returned device id and files. Driven under `swift test --filter AppGroupMigrationProofScratch`, capturing the returned device id values to disk.\nEvidence after fix:\n```\nexistingAppGroupDeviceId=56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c\n# BEFORE: unentitled build falls back to empty legacy storage (pre-fix path)\nbefore.returnedDeviceId=92bed52befa0e1ea4975a47d7fef066c50d103d9ff0992f8b45b7bb83bfee63a\nbefore.matchesExistingAppGroupIdentity=no\nbefore.mintedNewLegacyFile=yes\n# AFTER: unentitled build migrates the readable app group identity into legacy\nafter.returnedDeviceId=56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c\nafter.matchesExistingAppGroupIdentity=yes\nafter.survivesLegacyReload=yes\nafter.appGroupFileUnchanged=yes\n```\nObserved result after fix: On identical inputs the pre-fix path returns a new device id and writes a fresh legacy file, while the fixed path returns the same device id the install already had, keeps it across a reload, and leaves the App Group file byte-for-byte unchanged.\nWhat was not tested: No signed macOS app relaunch or gateway restart was run on a provisioned App Group container here; the entitlement and container-resolution system APIs need a signed bundle. No full `pnpm build` was run because the change is Swift-only.\n\n## Related\nFixes #99283.\nRelated to #99522.\nDistinct from #79715, which fixed Swift and TypeScript schema compatibility but did not make App Group selection entitlement-aware.\n",
+        "branch": "fix/macos-device-identity-preserve-existing",
+        "head_sha": "711afa6454f066784e14ac10366c655f19ba0b1a",
+        "author": "yetval",
+        "labels": [
+          "size: M",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceIdentity.swift",
+            "additions": 76,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Tests/OpenClawKitTests/DeviceIdentityStoreTests.swift",
+            "additions": 133,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/device-identity.state-dir.test.ts",
+            "additions": 14,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/device-identity.test.ts",
+            "additions": 26,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/device-identity.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 252,
+        "deletions": 15,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101105",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101105.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 105,
+          "gatingTotal": 100,
+          "counts": {
+            "SUCCESS": 69,
+            "SKIPPED": 29,
+            "IN_PROGRESS": 6,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "ios-build:IN_PROGRESS",
+            "android-build-play:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "ios-build:IN_PROGRESS",
+            "android-build-play:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-06T20:01:10.707Z"
+    }
+  ],
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 460,
+    "total_ms": 4850,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 223
+        "ms": 736
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1898
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -57,11 +212,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 226
+        "ms": 2159
       },
       {
         "name": "append_ledger",
