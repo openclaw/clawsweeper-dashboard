@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T22:54:16.744Z",
+  "generated_at": "2026-07-06T22:54:25.299Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T19:54:16.128Z",
+  "since": "2026-07-06T19:54:22.890Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    89040
+    100972
   ],
   "comment_ids": [
-    4898331220
+    4898332223
   ],
-  "status_comment_id": 4898325602,
+  "status_comment_id": 4898332490,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101193:4898322293:2026-07-06T22:51:18Z:re_review",
-      "comment_id": "4898322293",
-      "comment_version_key": "4898322293:2026-07-06T22:51:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101193#issuecomment-4898322293",
+      "idempotency_key": "comment-router:openclaw/openclaw:100972:4898332223:2026-07-06T22:52:59Z:re_review",
+      "comment_id": "4898332223",
+      "comment_version_key": "4898332223:2026-07-06T22:52:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100972#issuecomment-4898332223",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101193,
-      "author": "steipete",
-      "author_id": 58493,
+      "target_branch": "main",
+      "issue_number": 100972,
+      "author": "ZOOWH",
+      "author_id": 265460861,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T22:51:18Z",
-      "comment_updated_at": "2026-07-06T22:51:18Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-06T22:52:59Z",
+      "comment_updated_at": "2026-07-06T22:52:59Z",
+      "status_comment_id": 4898332490,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,27 +68,105 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 100972,
+          "dispatch_key": "router-69f8cc28b1c8eafb",
+          "dispatched_at": "2026-07-06T22:54:26.414Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-06T22:54:29.166Z",
+          "response_comment_id": "4895800838",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(signal): retry inbound messages on reply session initialization conflict (#100944)",
+        "body": "Fixes #100944\n\n## What Problem This Solves\n\nOn Signal, a DM sent shortly after a previous reply completes can be silently dropped. The debounce flush hits `reply session initialization conflicted` and the `onError` handler only logs the error — no retry, no user feedback.\n\nSlack (#99647) and Telegram already have bounded retry-with-backoff for this exact error. Signal was the only channel missing it.\n\n## Why This Change Was Made\n\nPorted the Slack/Telegram retry pattern to Signal's debounce flush handler:\n\n- `isRetryableSignalInboundError()` — traverses nested `cause`/`error` chains via `collectErrorGraphCandidates` from `openclaw/plugin-sdk/error-runtime`, matching Slack's error-graph pattern in `message-handler.ts:78-84`. This handles wrapped errors like `new Error(\"Signal dispatch failed\", { cause: new Error(\"reply session initialization conflicted...\") })` where `String(error)` would only see the outer message.\n- `retrySignalFlushError()` — standalone function that re-enqueues entries via `inboundDebouncer.enqueue()` after a 1s delay, up to 3 attempts per debounce key\n- `retryAttemptsByKey` — per-conversation retry counter, cleared on success\n- Pattern matches `extensions/slack/src/monitor/message-handler.ts:68-158`\n\n## User Impact\n\nSignal DMs arriving shortly after a reply completion are now retried up to 3 times instead of silently dropped. Non-retryable errors still propagate to `onError`.\n\n## Evidence\n\n### Proof 1 — Error graph traversal (Slack parity):\n`isRetryableSignalInboundError` now uses the same `collectErrorGraphCandidates` + `formatErrorMessage` pattern as Slack:\n```\nextensions/slack/src/monitor/message-handler.ts:78-84:\n  collectErrorGraphCandidates(error, (current) => [current.cause, current.error])\n    .some((candidate) => REPLY_SESSION_INIT_CONFLICT_RE.test(formatErrorMessage(candidate)))\n\nextensions/signal/src/monitor/event-handler.ts:642-645:\n  collectErrorGraphCandidates(error, (current) => [current.cause, current.error])\n    .some((candidate) => REPLY_SESSION_INIT_CONFLICT_RE.test(formatErrorMessage(candidate)))\n```\nBoth use the public `openclaw/plugin-sdk/error-runtime` export (re-exports from `src/infra/errors.ts`).\n\n### Proof 2 — Wrapped error retry test:\n```\npnpm test extensions/signal → 30 files, 424 tests passed\n```\nIncluding the focused regression test: wrapped `Signal dispatch failed` with nested `reply session initialization conflicted` cause correctly triggers re-enqueue (was silently dropped before the fix).\n\n### Proof 3 — Module verification:\n```\nnode --import tsx → module loads cleanly\n```\n\n### Proof 4 — Pre-submit:\n```\noxfmt --check → clean\ngit diff --check → clean\nautoreview → patch is correct\n```",
+        "branch": "fix/100944-signal-retry-session-conflict-v2",
+        "head_sha": "da4f4b567940fa420f6fdb82541c9d4b8b0f0479",
+        "author": "zoowh",
+        "labels": [
+          "channel: signal",
+          "size: M",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/signal/src/monitor/event-handler.inbound-context.test.ts",
+            "additions": 92,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/signal/src/monitor/event-handler.ts",
+            "additions": 93,
+            "deletions": 34,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 185,
+        "deletions": 34,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100972",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100972.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 87,
+          "gatingTotal": 82,
+          "counts": {
+            "SUCCESS": 59,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-06T22:54:25.677Z"
     }
   ],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2134,
+    "total_ms": 7180,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 600
+        "ms": 695
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1566
+        "ms": 1699
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -104,11 +182,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1518
+        "ms": 4746
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
