@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T19:41:44.399Z",
+  "generated_at": "2026-07-06T19:41:49.557Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T16:41:41.602Z",
+  "since": "2026-07-06T16:41:49.241Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101105
+    101109
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,271 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101105:4896854047:2026-07-06T19:41:35Z:clawsweeper_auto_repair",
-      "comment_id": "4896854047",
-      "comment_version_key": "4896854047:2026-07-06T19:41:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101105#issuecomment-4896854047",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101105,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T19:32:45Z",
-      "comment_updated_at": "2026-07-06T19:41:35Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=528ae815c9bf6f2402204b1a1c2151bb192c187e)",
-      "review_summary": "The PR changes Swift macOS device identity storage to require an App Groups entitlement before using the App Group container and adds Swift/TypeScript guards and tests that preserve unrecognized identity files instead of overwriting them.\n\nPR surface: Source +3, Tests +28, Other +72. Total +103 across 5 files.\n\nReproducibility: Partially. Source inspection shows the shipped path can choose App Group storage before legacy and the PR changes that priority for unentitled macOS builds; however, no signed macOS app relaunch/gateway restart proof was provided for the central branch.",
-      "review_followup": "- [P1] Human/contributor follow-up is needed to resolve the upgrade identity-preservation decision and provide signed macOS proof; ClawSweeper should not queue repair while external real-behavior proof is still insufficient.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "528ae815c9bf6f2402204b1a1c2151bb192c187e",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(macos): preserve device identity storage",
-        "body": "## Summary\nThe macOS identity store no longer chooses App Group storage unless the running bundle has the matching `com.apple.security.application-groups` entitlement. Unentitled macOS app builds fall back to the legacy Application Support identity directory instead of repeatedly using an App Group path they cannot reliably persist.\n\nExisting unrecognized `identity/device.json` files are also preserved in both the Swift and TypeScript loaders. The loader can still return a fresh in-memory identity when it cannot decode the file, but it no longer replaces existing identity bytes unless it is creating a missing file or performing a proven safe normalization.\n\n## Root cause\n`apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceIdentity.swift` selected App Group storage whenever `FileManager.containerURL(forSecurityApplicationGroupIdentifier:)` returned a URL:\n\n```before\nif let appGroupStateDirURL {\n    return appGroupStateDirURL\n}\n```\n\nOn affected shipped macOS builds, that could select the App Group container even though the bundle did not carry the matching App Groups entitlement. When persistence at that path failed, `loadOrCreate` returned generated identities, leading to pairing churn.\n\nThe Swift and TypeScript `loadOrCreate` implementations also treated an existing but unrecognized identity file like a missing file:\n\n```before\ncase .unknown:\n    break\n```\n\nThat path generated and saved a new identity over existing bytes.\n\n## Fix\nSwift now checks the running bundle entitlement before selecting App Group identity storage:\n\n```after\nif appGroupStateDirAvailable, let appGroupStateDirURL {\n    return appGroupStateDirURL\n}\n```\n\nWhen the entitlement is absent, the existing legacy Application Support fallback wins. Both loaders now preserve existing unrecognized identity files and only persist a generated identity when the file is missing:\n\n```after\nif FileManager.default.fileExists(atPath: url.path) {\n    return self.generate()\n}\n```\n\n## Why this is the right boundary\nThe storage decision belongs in `DeviceIdentityPaths`, because every Swift caller reaches identity storage through that path resolver. The no-overwrite guard belongs in the identity loaders, because Swift and TypeScript both own `identity/device.json` and must preserve existing state consistently.\n\nThis does not add a new migration or compatibility branch. It narrows steady-state storage selection to a bundle capability the app actually has, and it keeps existing identity bytes intact when the loader cannot prove a safe normalization.\n\n## Verification\n- `PATH=/opt/node/bin:$PATH PNPM_CONFIG_MODULES_DIR=/root/openclaw/node_modules node scripts/run-vitest.mjs src/infra/device-identity.test.ts` passed.\n- `PATH=/opt/node/bin:$PATH /root/openclaw/node_modules/.bin/oxfmt --check apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceIdentity.swift apps/shared/OpenClawKit/Tests/OpenClawKitTests/DeviceIdentityStoreTests.swift src/infra/device-identity.ts src/infra/device-identity.test.ts` passed.\n- `git diff --check` passed.\n- New TypeScript regression fails on pristine main and passes with this patch.\n- `swift --version` failed locally with `swift: command not found`, so `cd apps/shared/OpenClawKit && swift test --filter DeviceIdentityStoreTests` was not run in this container.\n- `node scripts/crabbox-wrapper.mjs run --help` failed its Crabbox binary sanity check, `/root/crabbox/bin/crabbox` is missing, and `go version` is not installed, so remote Swift/macOS validation was unavailable here.\n- `PATH=/opt/node/bin:$PATH node scripts/run-oxlint.mjs src/infra/device-identity.ts src/infra/device-identity.test.ts` was blocked before target linting by an unrelated Telegram boundary artifact error in `extensions/telegram/src/bot-info.ts`.\n- `PATH=/opt/node/bin:$PATH node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo` was blocked by unrelated missing UI package resolution for `@openclaw/uirouter`, `@openclaw/libterminal/browser`, and `ghostty-web` in this fresh worktree dependency layout.\n- Autoreview closeout could not initialize because the in-process app-server client hit a read-only filesystem error.\n\n## Real behavior proof\nBehavior addressed: Existing identity storage was selected or rewritten in ways that could make the same macOS installation present a new device identity.\nReal environment tested: Node 22.19 on Linux drove the production TypeScript identity loader against a real on-disk `identity/device.json` on pristine main `6bc661ce14c83ab854118a166197e318eea9ee87` and on this patched tree; the Swift App Group entitlement branch was not executed in a signed macOS app here.\nExact steps or command run after this patch: Imported `src/infra/device-identity.ts` with `node --import tsx`, wrote the same existing unrecognized `identity/device.json`, invoked `loadOrCreateDeviceIdentity(file)`, and read the file back from disk.\nEvidence after fix:\n```\n# BEFORE (pristine main 6bc661ce14)\nidentityMatchesStoredExample=no\nfileChanged=yes\nstoredKeys=createdAtMs,deviceId,privateKeyPem,publicKeyPem,version\nstableDeviceIdStillPresent=no\n# AFTER (this patch, identical input)\nidentityMatchesStoredExample=no\nfileChanged=no\nstoredKeys=schema,stableDeviceId\nstableDeviceIdStillPresent=yes\n```\nObserved result after fix: The same existing identity file changes on main and remains byte-for-byte unchanged after this patch, so the loader no longer replaces preserved identity state with a generated stored record.\nWhat was not tested: No signed macOS app restart on macOS 27 was run here; local Swift and remote Crabbox validation were unavailable in this container.\n\n## Related\nFixes #99283.\nRelated to #99522.\nDistinct from #79715, which fixed Swift and TypeScript schema compatibility but did not make App Group selection entitlement-aware.\n",
-        "branch": "fix/macos-device-identity-preserve-existing",
-        "head_sha": "528ae815c9bf6f2402204b1a1c2151bb192c187e",
-        "author": "yetval",
-        "labels": [
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceIdentity.swift",
-            "additions": 30,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/shared/OpenClawKit/Tests/OpenClawKitTests/DeviceIdentityStoreTests.swift",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/device-identity.state-dir.test.ts",
-            "additions": 14,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/device-identity.test.ts",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/device-identity.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 117,
-        "deletions": 14,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101105",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101105.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 104,
-          "gatingTotal": 99,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 70,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:101105:4896507188:2026-07-06T18:50:16Z:re_review",
-      "comment_id": "4896507188",
-      "comment_version_key": "4896507188:2026-07-06T18:50:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101105#issuecomment-4896507188",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101105,
-      "author": "yetval",
-      "author_id": 102706514,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T18:50:16Z",
-      "comment_updated_at": "2026-07-06T18:50:16Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-run",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(macos): preserve device identity storage",
-        "body": "## Summary\nThe macOS identity store no longer chooses App Group storage unless the running bundle has the matching `com.apple.security.application-groups` entitlement. Unentitled macOS app builds fall back to the legacy Application Support identity directory instead of repeatedly using an App Group path they cannot reliably persist.\n\nExisting unrecognized `identity/device.json` files are also preserved in both the Swift and TypeScript loaders. The loader can still return a fresh in-memory identity when it cannot decode the file, but it no longer replaces existing identity bytes unless it is creating a missing file or performing a proven safe normalization.\n\n## Root cause\n`apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceIdentity.swift` selected App Group storage whenever `FileManager.containerURL(forSecurityApplicationGroupIdentifier:)` returned a URL:\n\n```before\nif let appGroupStateDirURL {\n    return appGroupStateDirURL\n}\n```\n\nOn affected shipped macOS builds, that could select the App Group container even though the bundle did not carry the matching App Groups entitlement. When persistence at that path failed, `loadOrCreate` returned generated identities, leading to pairing churn.\n\nThe Swift and TypeScript `loadOrCreate` implementations also treated an existing but unrecognized identity file like a missing file:\n\n```before\ncase .unknown:\n    break\n```\n\nThat path generated and saved a new identity over existing bytes.\n\n## Fix\nSwift now checks the running bundle entitlement before selecting App Group identity storage:\n\n```after\nif appGroupStateDirAvailable, let appGroupStateDirURL {\n    return appGroupStateDirURL\n}\n```\n\nWhen the entitlement is absent, the existing legacy Application Support fallback wins. Both loaders now preserve existing unrecognized identity files and only persist a generated identity when the file is missing:\n\n```after\nif FileManager.default.fileExists(atPath: url.path) {\n    return self.generate()\n}\n```\n\n## Why this is the right boundary\nThe storage decision belongs in `DeviceIdentityPaths`, because every Swift caller reaches identity storage through that path resolver. The no-overwrite guard belongs in the identity loaders, because Swift and TypeScript both own `identity/device.json` and must preserve existing state consistently.\n\nThis does not add a new migration or compatibility branch. It narrows steady-state storage selection to a bundle capability the app actually has, and it keeps existing identity bytes intact when the loader cannot prove a safe normalization.\n\n## Verification\n- `PATH=/opt/node/bin:$PATH PNPM_CONFIG_MODULES_DIR=/root/openclaw/node_modules node scripts/run-vitest.mjs src/infra/device-identity.test.ts` passed.\n- `PATH=/opt/node/bin:$PATH /root/openclaw/node_modules/.bin/oxfmt --check apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceIdentity.swift apps/shared/OpenClawKit/Tests/OpenClawKitTests/DeviceIdentityStoreTests.swift src/infra/device-identity.ts src/infra/device-identity.test.ts` passed.\n- `git diff --check` passed.\n- New TypeScript regression fails on pristine main and passes with this patch.\n- `swift --version` failed locally with `swift: command not found`, so `cd apps/shared/OpenClawKit && swift test --filter DeviceIdentityStoreTests` was not run in this container.\n- `node scripts/crabbox-wrapper.mjs run --help` failed its Crabbox binary sanity check, `/root/crabbox/bin/crabbox` is missing, and `go version` is not installed, so remote Swift/macOS validation was unavailable here.\n- `PATH=/opt/node/bin:$PATH node scripts/run-oxlint.mjs src/infra/device-identity.ts src/infra/device-identity.test.ts` was blocked before target linting by an unrelated Telegram boundary artifact error in `extensions/telegram/src/bot-info.ts`.\n- `PATH=/opt/node/bin:$PATH node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo` was blocked by unrelated missing UI package resolution for `@openclaw/uirouter`, `@openclaw/libterminal/browser`, and `ghostty-web` in this fresh worktree dependency layout.\n- Autoreview closeout could not initialize because the in-process app-server client hit a read-only filesystem error.\n\n## Real behavior proof\nBehavior addressed: Existing identity storage was selected or rewritten in ways that could make the same macOS installation present a new device identity.\nReal environment tested: Node 22.19 on Linux drove the production TypeScript identity loader against a real on-disk `identity/device.json` on pristine main `6bc661ce14c83ab854118a166197e318eea9ee87` and on this patched tree; the Swift App Group entitlement branch was not executed in a signed macOS app here.\nExact steps or command run after this patch: Imported `src/infra/device-identity.ts` with `node --import tsx`, wrote the same existing unrecognized `identity/device.json`, invoked `loadOrCreateDeviceIdentity(file)`, and read the file back from disk.\nEvidence after fix:\n```\n# BEFORE (pristine main 6bc661ce14)\nidentityMatchesStoredExample=no\nfileChanged=yes\nstoredKeys=createdAtMs,deviceId,privateKeyPem,publicKeyPem,version\nstableDeviceIdStillPresent=no\n# AFTER (this patch, identical input)\nidentityMatchesStoredExample=no\nfileChanged=no\nstoredKeys=schema,stableDeviceId\nstableDeviceIdStillPresent=yes\n```\nObserved result after fix: The same existing identity file changes on main and remains byte-for-byte unchanged after this patch, so the loader no longer replaces preserved identity state with a generated stored record.\nWhat was not tested: No signed macOS app restart on macOS 27 was run here; local Swift and remote Crabbox validation were unavailable in this container.\n\n## Related\nFixes #99283.\nRelated to #99522.\nDistinct from #79715, which fixed Swift and TypeScript schema compatibility but did not make App Group selection entitlement-aware.\n",
-        "branch": "fix/macos-device-identity-preserve-existing",
-        "head_sha": "528ae815c9bf6f2402204b1a1c2151bb192c187e",
-        "author": "yetval",
-        "labels": [
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceIdentity.swift",
-            "additions": 30,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/shared/OpenClawKit/Tests/OpenClawKitTests/DeviceIdentityStoreTests.swift",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/device-identity.state-dir.test.ts",
-            "additions": 14,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/device-identity.test.ts",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/device-identity.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 117,
-        "deletions": 14,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101105",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101105.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 104,
-          "gatingTotal": 99,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 70,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3118,
+    "total_ms": 520,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 440
+        "ms": 305
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2340
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -309,7 +61,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 312
+        "ms": 204
       },
       {
         "name": "append_ledger",
