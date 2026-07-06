@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T07:29:46.844Z",
+  "generated_at": "2026-07-06T07:30:08.649Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T04:29:44.799Z",
+  "since": "2026-07-06T04:30:08.288Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    100689
+    98336
   ],
-  "comment_ids": [
-    4890188863
-  ],
-  "status_comment_id": 4890189242,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 5,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,236 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100689:4890083083:2026-07-06T07:29:36Z:clawsweeper_needs_human",
-      "comment_id": "4890083083",
-      "comment_version_key": "4890083083:2026-07-06T07:29:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100689#issuecomment-4890083083",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100689,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T07:14:33Z",
-      "comment_updated_at": "2026-07-06T07:29:36Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=06a7e723c6936c1219f2969c0300f7761216c2d9)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "06a7e723c6936c1219f2969c0300f7761216c2d9",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(auto-reply): force-clear stale active reply operation on session reset (#99082)",
-        "body": "Fixes #99082\n\n## What Problem This Solves\n\nWhen `/reset` is issued in a multi-agent room, the session rotates: the old session is archived and a new one is created. But the reply-run registry is keyed by the stable **session key**, not the session id. A running reply operation owned by the archived session id survives the reset — blocking the new session's first visible reply (including the \"Session reset.\" acknowledgement) for the full stuck-session recovery window (default ~6 minutes).\n\nThis reliably wedges all but one agent per room after reset: the first agent to finish resetting delivers its ack, but every other agent's stale reply operation under the archived session id keeps the slot latched, queuing all inbound messages behind it.\n\n## Why This Change Was Made\n\nTwo changes across two layers:\n\n**Layer 1 — Registry-level helper:**\n- **`reply-run-registry.ts`**: Added `forceClearReplyRunForResetBySessionId(sessionId)` — releases non-queued (running/compacting) reply operations owned by the given session id. Queued reservations are intentionally preserved so `get-reply-run.ts` can rebind them to the new session id via `updateSessionId`.\n\n**Layer 2 — Reset cleanup integration:**\n- **`session-reset-cleanup.ts`**: Added optional `activeReplySessionIds` parameter to `clearSessionResetRuntimeState`. When provided, each archived session id is force-cleared from the reply registry.\n- **`session-reset-service.ts`** + **`session.ts`**: Pass the archived session id as `activeReplySessionIds` during reset cleanup.\n\n## User Impact\n\n`/reset` in multi-agent rooms now unblocks all agents promptly instead of wedging all but one for ~6 minutes. The reset acknowledgement and queued messages can proceed once the old session is rotated.\n\nQueued reply reservations (the default initial phase) survive the cleanup — session init can still rebind them to the new session id, so no legitimate in-flight replies are dropped.\n\n## Evidence\n\n### Proof 1 — Production function call (`node --import tsx`):\n\n```\n=== #99082 Proof: Reset clears stale active reply operation ===\n\n[1] Active running operation from archived session is force-cleared\n  PASS: force-clear returned true\n  PASS: registry slot is free\n[2] Queued reservation from archived session survives reset\n  PASS: force-clear returned false (queued preserved)\n  PASS: queued op still exists\n[3] Fresh session's active operation is untouched\n  PASS: force-clear returned false (wrong sessionId)\n  PASS: fresh op still active\n[4] Full reset cleanup clears active reply + queues\n  PASS: activeReplyRunsCleared=1\n  PASS: registry slot freed\n  PASS: new session can register reply op\n[5] Full reset cleanup preserves queued reservations\n  PASS: activeReplyRunsCleared=0 (queued preserved)\n  PASS: queued op survives\n\n=== ALL PASS (11 passed, 0 failed) ===\n```\n\nThe proof script calls the exact production functions (`createReplyOperation`, `forceClearReplyRunForResetBySessionId`, `clearSessionResetRuntimeState`) with the same session-key/session-id shapes used in the reset flow.\n\n### Proof 2 — Focused tests:\n\n```\nnode scripts/run-vitest.mjs src/auto-reply/reply/session-reset-cleanup.test.ts --run\n  Test Files  1 passed (1) / Tests  4 passed (4)\n```\n\nNew regression tests:\n- `releases an active reply operation owned by the archived reset session id`\n- `leaves queued reservations so session init can rebind them`\n- `does not clear a fresh active reply whose sessionId does not match the archived id`\n\n### Proof 3 — Formatting:\n```\npnpm exec oxfmt --check <all changed files> → clean (after auto-fix)\ngit diff --check → clean\n```\n",
-        "branch": "fix/99082-reset-stale-reply-cleanup",
-        "head_sha": "06a7e723c6936c1219f2969c0300f7761216c2d9",
-        "author": "zoowh",
-        "labels": [
-          "gateway",
-          "agents",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-tool-handler-state.test-helpers.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.empty-error-retry.test.ts",
-            "additions": 43,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
-            "additions": 88,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.test-support.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/types.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.handlers.tools.media.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.handlers.tools.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.handlers.tools.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.handlers.types.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.ts",
-            "additions": 19,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session-reset-cleanup.test.ts",
-            "additions": 62,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session-reset-cleanup.ts",
-            "additions": 21,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-reset-service.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 19,
-        "additions": 289,
-        "deletions": 29,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100689",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100689.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 99,
-          "gatingTotal": 94,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 33,
-            "SUCCESS": 62,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "target is not open"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2296,
+    "total_ms": 608,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 352
+        "ms": 351
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1677
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -272,15 +57,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 236
+        "ms": 247
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
