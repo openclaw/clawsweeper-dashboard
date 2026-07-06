@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T17:44:21.817Z",
+  "generated_at": "2026-07-06T17:45:09.910Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T14:44:19.764Z",
+  "since": "2026-07-06T14:45:07.738Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    101023
+    101051
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4895880469
+  ],
+  "status_comment_id": 4895880934,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101023:4895840612:2026-07-06T17:44:16Z:clawsweeper_needs_human",
-      "comment_id": "4895840612",
-      "comment_version_key": "4895840612:2026-07-06T17:44:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101023#issuecomment-4895840612",
+      "idempotency_key": "comment-router:openclaw/openclaw:101051:4895880469:2026-07-06T17:43:27Z:re_review",
+      "comment_id": "4895880469",
+      "comment_version_key": "4895880469:2026-07-06T17:43:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101051#issuecomment-4895880469",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101023,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T17:39:01Z",
-      "comment_updated_at": "2026-07-06T17:44:16Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "target_branch": "main",
+      "issue_number": 101051,
+      "author": "RomneyDa",
+      "author_id": 6581799,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-07-06T17:43:27Z",
+      "comment_updated_at": "2026-07-06T17:43:27Z",
+      "status_comment_id": 4895880934,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -66,63 +68,177 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 101051,
+          "dispatch_key": "router-3f576c5453f4094e",
+          "dispatched_at": "2026-07-06T17:45:10.919Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-06T17:45:12.067Z",
+          "response_comment_id": "4895880934",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(outbound): restore current-conversation binding map when persist fails",
-        "body": "## What Problem This Solves\n\nFixes an issue where plugin channels that use the generic current-conversation\nbinding (any channel without a custom binding adapter) could route inbound\nmessages to the wrong or a deleted session target after a failed durable write.\n\nThe binding mutators — bind, touch, unbind, and expiry prune-on-read — update the\nprocess-wide in-memory binding map first and then persist it to SQLite. If the\npersist throws (disk full, read-only DB, transaction failure), the map is left\nahead of disk. Because the map is only loaded from disk once per process\n(`bindingsLoaded` is a one-time flag), the diverged bindings are then served for\nthe rest of the process lifetime — until a restart — even though the caller\nalready received the error. Inbound messages get delivered to a stale binding\n(a resolved session that was actually unbound, or a target that never persisted).\n\nThe one-time load path has the same weakness in the other direction: it flips\n`bindingsLoaded` and clears the map before the DB read completes, so a failing\ninitial read latches an empty cache until restart.\n\n## Why This Change Was Made\n\nEach mutating path now snapshots the in-memory map, and if the durable write\nthrows it restores that snapshot before rethrowing, so runtime state never drifts\nahead of disk. This mirrors the rollback pattern already merged for the cron\nscheduler in #99960 (`persistOrRestore` in `src/cron/service/ops.ts`). The\nunbind-by-session path snapshots after its expiry scan settles (that scan can\nitself persist prune deletes), so a later batch failure cannot resurrect a\nbinding the scan already dropped from disk. The one-time load now reads into a\nlocal first and marks the cache loaded only after the read succeeds.\n\nScope is deliberately narrow: no change to the write mechanism, the store schema,\nor the broader session-binding surface. The snapshot is a shallow map copy, which\nis sufficient because records are always replaced wholesale (never mutated in\nplace), keeping the hot binding paths cheap.\n\n## User Impact\n\nOperators no longer end up with a process serving conversation bindings that\ndisagree with what is on disk after a transient storage failure. A failed\nmutation now leaves the in-memory state exactly as it was before\nthe attempt, and the error still surfaces to the caller. No config, API, or\nbehavior change on the success path.\n\nAffected paths: bind, touch, unbind by binding id, unbind by target session\nkey, and the expiry prune-on-read.\n\n## Evidence\n\nFocused fault-injection tests (`src/infra/outbound/current-conversation-bindings.test.ts`)\nmock the durable write to throw and assert the in-memory map is restored for each\nmutating path (bind, touch, unbind-by-id, unbind-by-session, prune-on-read), plus\nthe mixed unbind-by-session case where an expired binding is pruned mid-scan\nbefore the batch fails, and a failing initial load that must not latch an empty\ncache. This is the same proof shape used and merged for the cron rollback in\n#99960 (`src/cron/service/ops.test.ts`, \"cron service ops persist rollback\").\n\n```\n$ node scripts/run-vitest.mjs src/infra/outbound/current-conversation-bindings.test.ts\n Test Files  1 passed (1)\n      Tests  17 passed (17)   # 10 existing + 7 new\n```\n\n- `pnpm tsgo:core` — clean (0 type errors)\n- oxlint / oxfmt — clean\n",
-        "branch": "fix/conversation-bindings-persist-rollback",
-        "head_sha": "bcd4668cb2358809ac6fda32214d4afd2ad7c341",
-        "author": "masatohoshino",
+        "title": "chore: add provider and scheduler runtime evidence",
+        "body": "Fixes #101010\n\n## What Problem This Solves\n\nProvider and scheduler QA commands could report success without directly proving the runtime behavior they represent. Telegram startup lacked leased-token `getMe` evidence, heartbeat active-hours lacked a bounded real scheduler observation, and the OpenTelemetry smoke delegated production to a broader scenario instead of exercising the diagnostics exporter directly.\n\n## Why This Change Was Made\n\nThis adds three bounded executable proofs using the shared QA evidence writer: Telegram starts the real monitor only with a dedicated leased QA token and otherwise records blocked evidence without credential data; heartbeat runs the real scheduler through active, quiet-hours, and reloaded configuration states; and the OpenTelemetry smoke starts the diagnostics service directly against a contained OTLP receiver. The older child-process OpenTelemetry path is removed rather than retained as a compatibility layer.\n\n## User Impact\n\nMaintainers get contained runtime evidence for Telegram startup, heartbeat active-hours behavior, and exported telemetry. Generic `TELEGRAM_BOT_TOKEN` credentials are never consumed by the Telegram proof, and environments without a dedicated leased token produce an explicit blocked result rather than a false pass.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs test/e2e/qa-lab/runtime/telegram-bot-token-runtime.test.ts test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts` — 32 tests passed at `2162797f670293842a73fb9957fe805b9d076dd7`.\n- Direct heartbeat executable — passed after observing an in-window fire, a quiet-hours skip, and a post-reload fire.\n- Direct Telegram executable — recorded `blocked` with no dedicated leased token; a generic `TELEGRAM_BOT_TOKEN` also remains blocked and is not disclosed.\n- Direct OpenTelemetry executable — passed with 5 spans, 6 metrics, 1 OTLP log, 1 trace request, 1 metric request, and 1 log request.\n- Root dependency manifests and shrinkwrap are unchanged; the executables are invoked by direct file paths.\n- Blacksmith Testbox `tbx_01kww4af8ceg2nf05btch8w679` confirmed dedicated Telegram token and credential-broker inputs were absent. Hosted Vitest and direct execution were blocked before startup because delegated sync omitted tracked `extensions/qa-lab/src/mantis/cli.ts`; local exact-head proof above covers the changed surfaces.\n- Fresh branch autoreview returned no accepted or actionable findings.\n",
+        "branch": "dallin/wave2-provider-runtime",
+        "head_sha": "2162797f670293842a73fb9957fe805b9d076dd7",
+        "author": "romneyda",
         "labels": [
-          "size: M",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
+          "scripts",
+          "maintainer",
+          "size: XL"
         ],
         "files": [
           {
-            "path": "src/infra/outbound/current-conversation-bindings.test.ts",
-            "additions": 197,
+            "path": "scripts/test-projects.test-support.mjs",
+            "additions": 8,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/outbound/current-conversation-bindings.ts",
-            "additions": 47,
-            "deletions": 9,
+            "path": "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts",
+            "additions": 168,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
+            "additions": 223,
+            "deletions": 387,
             "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts",
+            "additions": 34,
+            "deletions": 239,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/e2e/qa-lab/runtime/telegram-bot-token-runtime.test.ts",
+            "additions": 43,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/e2e/qa-lab/runtime/telegram-bot-token-runtime.ts",
+            "additions": 220,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 244,
-        "deletions": 9,
+        "changedFiles": 7,
+        "additions": 729,
+        "deletions": 626,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101023",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101023.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101051",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101051.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 102,
-          "gatingTotal": 97,
+          "total": 77,
+          "gatingTotal": 72,
           "counts": {
-            "CANCELLED": 3,
-            "SKIPPED": 33,
-            "SUCCESS": 65,
+            "SUCCESS": 30,
+            "IN_PROGRESS": 34,
+            "SKIPPED": 12,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
-            "Real behavior proof:CANCELLED"
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -130,25 +246,25 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "processed_at": "2026-07-06T17:45:10.214Z"
     }
   ],
-  "ledger_claimed": false,
+  "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2263,
+    "total_ms": 5039,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 218
+        "ms": 603
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1816
+        "ms": 1554
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -160,11 +276,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 199
+        "ms": 2855
       },
       {
         "name": "append_ledger",
