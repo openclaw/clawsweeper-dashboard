@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T12:36:59.341Z",
+  "generated_at": "2026-07-06T12:37:57.327Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T09:36:57.832Z",
+  "since": "2026-07-06T09:37:54.985Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100798
+    100858
+  ],
+  "comment_ids": [
+    4892845517
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100798:4891665102:2026-07-06T12:36:53Z:clawsweeper_needs_human",
-      "comment_id": "4891665102",
-      "comment_version_key": "4891665102:2026-07-06T12:36:53Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100798#issuecomment-4891665102",
+      "idempotency_key": "comment-router:openclaw/openclaw:100858:4892845517:2026-07-06T12:35:03Z:re_review",
+      "comment_id": "4892845517",
+      "comment_version_key": "4892845517:2026-07-06T12:35:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100858#issuecomment-4892845517",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 100798,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 100858,
+      "author": "wm0018",
+      "author_id": 13618944,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T10:20:01Z",
-      "comment_updated_at": "2026-07-06T12:36:53Z",
+      "comment_created_at": "2026-07-06T12:35:03Z",
+      "comment_updated_at": "2026-07-06T12:35:03Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -70,122 +73,126 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "feat(android): in-chat model picker with favorites and recents",
-        "body": "Related: #100699\n\n## What Problem This Solves\n\nFixes an issue where Android users could not switch models in chat at all: the app had no model picker anywhere — the model catalog was only visible as a read-only provider readiness overview in Settings. iOS/macOS users can switch the session model from the composer; Android had no equivalent.\n\n## Why This Change Was Made\n\nAdds a model chip to the Android chat composer that opens a bottom-sheet picker fed by the existing gateway model catalog, with Pinned / Recent / Models sections: star to pin/unpin without closing the sheet, tap to select. Selection patches the session via `sessions.patch { key, model }` (the same wire contract iOS/macOS use); pins and recents (capped at 5) persist in the app's plain preferences, and a recent is recorded only after gateway acceptance. A selection mutex orders model patches ahead of sends so the first post-selection message can never leave on the previous model. Because `sessions.patch` requires `operator.admin`, fresh Android connects now request that scope — exact parity with iOS, which already requests admin for token/password connects; previously paired device tokens keep their granted scopes (existing stored-scope narrowing) and simply can't patch models until re-paired, mirroring how `operator.talk.secrets` rolled out.\n\n**Security note (deliberate decision, please weigh in):** `sessions.patch` is classified `operator.admin` in the gateway method descriptors, so this PR adds `operator.admin` to Android's fresh-connect scope request. This is exact parity with iOS, which already requests admin for every token/password connect (`shouldRequestOperatorAdminScope` in `apps/ios/Sources/Model/NodeAppModel.swift`), and follows the same rollout pattern as `operator.talk.secrets`: previously paired device tokens keep their narrower granted scopes. The alternative — a narrower gateway permission for model-only session patches — is a protocol/security contract change beyond this client PR's boundary; if maintainers prefer that, it should be its own gateway-side follow-up, and this scope request can be revisited then.\n\n## User Impact\n\nAndroid users can now switch the session model from the chat composer, pin favorites, and reach recently used models first. On gateways where the operator connection lacks admin scope, selection fails with a visible chat error and no state is polluted.\n\n## Evidence\n\n- `./gradlew :app:testPlayDebugUnitTest` focused suites green: `ChatModelPickerTest` (section ordering, provider-qualified ref derivation), `SecurePrefsTest` (favorites/recents persistence round-trip, dedupe/cap), `ChatControllerModelSelectionTest` (recent recorded only on RPC success, rejection surfaces error and records nothing, send-after-select ordering), `ConnectionManagerTest`/`GatewayBootstrapAuthTest` (fresh-connect scope set incl. `operator.admin`, stored-token narrowing unchanged).\n- `:app:ktlintFormat` clean on changed files; `:app:ktlintCheck` failures are pre-existing in five untouched test files (called out for transparency).\n- `corepack pnpm native:i18n:sync` run for the new picker strings.\n",
-        "branch": "feat/android-model-picker-pins-nash",
-        "head_sha": "47040a7a612f4a183954b39b8dcc5ceb75c56250",
-        "author": "steipete",
+        "title": "feat(message): add universal pagination contract with cursor support for MSTeams",
+        "body": "## What Problem This Solves\n\nPartially addresses #71452 — provides the shared pagination contract and CLI cursor support, and wires MSTeams search, list-pins, and channel-list as the first provider implementation.\n\nPreviously, `renderPaginationHint` inspected provider-specific raw payload fields (`hasMore`, `nextBatch`, `@odata.nextLink`, `total_results`) with no shared contract. Users had no CLI mechanism to request the next page even when \"More results available\" was shown.\n\n## Why This Change Was Made\n\nIntroduces a universal cursor-based pagination model across the shared runner, formatter, and CLI layers, replacing ad-hoc per-provider field inspection with a single `MessageActionPagination` type. Channel handlers opt in by placing a private `_pagination` key in their result details; the runner normalizes it before the payload reaches the formatter or JSON output.\n\n### Architecture\n\n```\nCLI --cursor <token>  ->  params.cursor  ->  plugin handler  ->  API\n                                                                |\n                       result.details._pagination        <------+\n                                                                |\n                       extractPagination(handled)          ->  result.pagination\n                                                                |\n                       renderPaginationHint(result.pagination)  ->  \"More results. Use --cursor ...\"\n                       buildMessageCliJson(result)              ->  { pagination: { hasMore, nextCursor } }\n```\n\n### Key decisions\n\n- **Opaque `nextCursor` string**: channels produce whatever token their API uses (offset number, nextLink URL, batch token). The CLI and formatter never parse it.\n- **Private `_pagination` key**: zero SDK changes. Channels opt in voluntarily. The `extractPagination()` function strips it from details before the payload is consumed.\n- **After-extract-delete semantics**: `extractPagination` runs before `extractToolPayload`, so end-user payload is clean.\n- **`--cursor` CLI flag** on `read`, `pins`, `search` — the three list-producing actions.\n- **Cursor URL validation**: `searchMessagesMSTeams` validates cursor URLs against known Microsoft Graph API origins (`v1.0`, `beta`) before forwarding auth headers.\n- **Legacy fallback**: `renderPayloadPaginationHint` preserves existing payload-based hints for providers not yet migrated to `MessageActionPagination`.\n\n## User Impact\n\n**MSTeams users** can now paginate search results, pin lists, and channel lists.\n\n**Other channels** (Discord, Slack, Matrix, Feishu) continue to work unchanged via the legacy fallback and will get pagination in follow-up PRs using the same contract.\n\n## Evidence\n\n### Real CLI output (production `formatMessageCliText` code path)\n\n**Step 1 — first page:**\n\n```\n$ openclaw message search \"deploy\" --channel msteams --target \"19:abc@thread.tacv2\" --limit 5\n\nSearch results\n| Time                 | Author   | Text                                            | Id       |\n|----------------------|----------|-------------------------------------------------|----------|\n| 2026-07-01T10:00:00Z | alice    | deploy v2.3.1 to production                     | msg-0    |\n| 2026-07-01T10:05:00Z | bob      | deploy failed: port conflict                    | msg-1    |\n| 2026-07-01T10:08:00Z | alice    | deploy retry with --force                       | msg-2    |\n| 2026-07-01T10:12:00Z | ci-bot   | deploy v2.3.1 succeeded                         | msg-3    |\n| 2026-07-02T09:00:00Z | charlie  | deploy v2.3.2 scheduled                         | msg-4    |\nMore results available. Use --cursor \"https://graph.microsoft.com/v1.0/chats/19:abc@thread.tacv2/messages?$search=%22deploy%22&$top=5&$skiptoken=abc123\" for the next page.\n```\n\n**Step 2 — next page using the cursor from step 1:**\n\n```\n$ openclaw message search \"deploy\" --channel msteams --target \"19:abc@thread.tacv2\" --limit 5 --cursor \"https://graph.microsoft.com/v1.0/chats/19:abc@thread.tacv2/messages?$search=%22deploy%22&$top=5&$skiptoken=abc123\"\n\nSearch results\n| Time                 | Author   | Text                                            | Id       |\n|----------------------|----------|-------------------------------------------------|----------|\n| 2026-07-02T09:15:00Z | dave     | deploy v2.3.2 rolled out to staging             | msg-5    |\n| 2026-07-03T14:00:00Z | alice    | deploy hotfix v2.3.2a                           | msg-6    |\n```\n\nNo \"More results\" hint — `hasMore: false`, pagination exhausted.\n\n**List-pins with truncation:**\n\n```\n$ openclaw message pins --channel msteams --target \"19:abc@thread.tacv2\" --limit 3\n\nPinned messages\n| Time                 | Author   | Text                                            | Id       |\n|----------------------|----------|-------------------------------------------------|----------|\n| 2026-07-01T08:00:00Z | admin    | Team onboarding guide                           | pin-0    |\n| 2026-07-02T08:00:00Z | admin    | Q3 OKR tracker                                  | pin-1    |\n| 2026-07-03T08:00:00Z | admin    | Summer PTO policy                               | pin-2    |\nMore results available. Use --cursor \"https://graph.microsoft.com/v1.0/chats/19:abc@thread.tacv2/pinnedMessages?$expand=message&$skiptoken=page2\" for the next page.\n```\n\n**Channel-list with truncation:**\n\n```\n$ openclaw message channel-list --channel msteams --team-id \"team-123\"\n\nchannel-list via msteams.\n| Key       | Value    |\n|-----------|----------|\n| channels  | 3 items  |\nTip: use --json for full output.\nMore results available.\n```\n\n**--json output includes pagination:**\n\n```json\n{\n  \"action\": \"search\",\n  \"channel\": \"msteams\",\n  \"pagination\": {\n    \"hasMore\": true,\n    \"nextCursor\": \"https://graph.microsoft.com/v1.0/chats/19:abc@thread.tacv2/messages?...\"\n  }\n}\n```\n\n### Cursor URL validation\n\n```\ncursor = \"https://evil.example.com/steal-token\"\nError: MSTeams cursor must be a Microsoft Graph API URL (v1.0 or beta)\n```\n\n### Tests\n\n| Suite | Tests |\n|---|---|\n| message-format.test.ts | 11 |\n| message.test.ts | 6 |\n| channel.actions.test.ts (MSTeams) | 54 |\n| graph-messages.search.test.ts (MSTeams) | 7 |\n| graph-messages.actions.test.ts (MSTeams) | 3 |\n| graph-messages.read.test.ts (MSTeams) | 16 |\n| message-action-normalization.test.ts | 18 |\n| runtime.test.ts (Discord) | 111 |\n| lint-suppressions.test.ts | 3 |\n| **Total** | **289 passed** |\n\n### Typecheck + lint + cycles\n\n| Check | Result |\n|---|---|\n| pnpm tsgo | pass |\n| pnpm check:import-cycles | 0 cycles |\n| node scripts/run-oxlint-shards.mjs | pass |\n\n## Files Changed (15 files, +268/-86)\n\n docs/cli/message.md, extensions/msteams/src/channel.ts, extensions/msteams/src/channel.actions.test.ts,\n extensions/msteams/src/graph-messages.ts, extensions/msteams/src/graph-messages.search.test.ts,\n src/cli/program/message/register.permissions-search.ts, src/cli/program/message/register.pins.ts,\n src/cli/program/message/register.read-edit-delete.ts, src/commands/message.ts, src/commands/message-format.ts,\n src/commands/message-format.test.ts, src/infra/outbound/message-action-runner.ts,\n test/scripts/lint-suppressions.test.ts\n\n## Follow-up\n\nIf the contract shape is accepted, subsequent PRs will wire pagination for:\n\n| Channel | Actions | Cursor source |\n|---|---|---|\n| Discord | search | offset (number -> string) |\n| Discord | read | last message snowflake ID |\n| Slack | read | response_metadata.next_cursor |\n| Matrix | read | nextBatch |\n| Feishu | list-pins | pageToken |\n",
+        "branch": "feat/message-pagination-universal",
+        "head_sha": "c1f4ddfe45128eb9896120d5b7f97a59fbe3dbb2",
+        "author": "wm0018",
         "labels": [
-          "app: android",
-          "maintainer",
-          "size: L",
+          "docs",
+          "channel: msteams",
+          "cli",
+          "commands",
+          "size: M",
           "P2",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
           "merge-risk: 🚨 security-boundary",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "apps/.i18n/native-source.json",
-            "additions": 55,
-            "deletions": 31,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/android/app/src/main/java/ai/openclaw/app/SecurePrefs.kt",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
-            "additions": 52,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/android/app/src/main/java/ai/openclaw/app/node/ConnectionManager.kt",
+            "path": "docs/cli/message.md",
             "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/channel.actions.test.ts",
+            "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatModelPicker.kt",
-            "additions": 35,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
-            "additions": 204,
-            "deletions": 5,
+            "path": "extensions/msteams/src/channel.ts",
+            "additions": 23,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "apps/android/app/src/test/java/ai/openclaw/app/GatewayBootstrapAuthTest.kt",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "apps/android/app/src/test/java/ai/openclaw/app/SecurePrefsTest.kt",
-            "additions": 44,
+            "path": "extensions/msteams/src/graph-messages.search.test.ts",
+            "additions": 37,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "apps/android/app/src/test/java/ai/openclaw/app/chat/ChatControllerModelSelectionTest.kt",
-            "additions": 130,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "apps/android/app/src/test/java/ai/openclaw/app/node/ConnectionManagerTest.kt",
-            "additions": 7,
-            "deletions": 1,
+            "path": "extensions/msteams/src/graph-messages.ts",
+            "additions": 67,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "apps/android/app/src/test/java/ai/openclaw/app/ui/chat/ChatModelPickerTest.kt",
-            "additions": 51,
+            "path": "src/cli/program/message/register.permissions-search.ts",
+            "additions": 1,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/program/message/register.pins.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/program/message/register.read-edit-delete.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/message-format.test.ts",
+            "additions": 29,
+            "deletions": 44,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/message-format.ts",
+            "additions": 59,
+            "deletions": 33,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/message.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/message-action-runner.ts",
+            "additions": 43,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/lint-suppressions.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 13,
-        "additions": 667,
-        "deletions": 38,
+        "additions": 268,
+        "deletions": 86,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100798",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100798.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100858",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100858.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 74,
-          "gatingTotal": 69,
+          "total": 94,
+          "gatingTotal": 89,
           "counts": {
-            "SUCCESS": 60,
-            "SKIPPED": 13,
-            "FAILURE": 1
+            "SUCCESS": 67,
+            "SKIPPED": 25,
+            "FAILURE": 1,
+            "NEUTRAL": 1
           },
           "blockers": [
             "QA Smoke CI:FAILURE"
@@ -205,15 +212,15 @@
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1699,
+    "total_ms": 2617,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 317
+        "ms": 677
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1178
+        "ms": 1649
       },
       {
         "name": "classify_comment_commands",
@@ -221,7 +228,7 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -233,7 +240,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 180
+        "ms": 275
       },
       {
         "name": "append_ledger",
