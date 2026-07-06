@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T12:17:49.056Z",
-  "repo": "openclaw/clownfish",
+  "generated_at": "2026-07-06T12:18:00.019Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T09:17:48.761Z",
+  "since": "2026-07-06T09:17:57.484Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    246
+    100870
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,125 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100870:4892627771:2026-07-06T12:17:53Z:clawsweeper_auto_repair",
+      "comment_id": "4892627771",
+      "comment_version_key": "4892627771:2026-07-06T12:17:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100870#issuecomment-4892627771",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100870,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T12:12:12Z",
+      "comment_updated_at": "2026-07-06T12:17:53Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=2b3e8cab2d20027bbace95bc0b49d729d6404eab)",
+      "review_summary": "The PR adds a five-minute effective watchdog cap for held session write locks and wraps retained session lock release in a 30-second teardown timeout.\n\nPR surface: Source +25. Total +25 across 2 files.\n\nReproducibility: yes. for the review blockers by source inspection: the PR head computes maxHoldMs with Math.min against a new five-minute cap, and the release race schedules a timeout without clearing it. I did not run a live current-main stuck-session reproduction for the original bug.",
+      "review_followup": "- [P1] The PR needs contributor revision for the lock-timing regressions and real behavior proof before maintainers can consider merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "2b3e8cab2d20027bbace95bc0b49d729d6404eab",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: cap watchdog maxHoldMs and add lock release timeout on attempt t…",
+        "body": "## What Problem This Solves\r\n\r\nWhen an agent run fails abnormally during tool execution (e.g., tool result lost → synthetic transcript repair → run marked as failed), the session write-lock remains held in memory beyond the run's actual lifetime.\r\n\r\nThe watchdog's force-release threshold inherits the full `maxHoldMs` derived from agent timeout + 120s grace. For a 15-minute agent timeout, this yields `maxHoldMs = 1,020,000ms` (~17 minutes). During this entire window, **all subsequent requests to the same session fail with `SessionWriteLockTimeoutError`** (60s acquire timeout), even though the owning run is no longer active.\r\n\r\nThe existing `orphan-self-pid` detection only applies to locks NOT in the in-memory `state.held` Map. When the lock is still tracked in memory (because `release()` was never called or `dispose()` hung), orphan detection is skipped and only the watchdog can reclaim it.\r\n\r\n### Observed behavior\r\n\r\n```\r\nsession file locked (timeout 60000ms): pid=96661 alive=true ageMs=72859\r\n```\r\n\r\nThe session remained completely unresponsive for 7+ minutes until the lock file was manually deleted.\r\n\r\n## Why This Change Was Made\r\n\r\nTwo complementary fixes that bound the maximum time a session can remain locked after an abnormal run termination:\r\n\r\n1. **Watchdog cap** — The watchdog now enforces a maximum hold of 5 minutes regardless of configured agent timeout. Normal runs release locks promptly via `dispose()` and are unaffected; this only fires when a run fails to release.\r\n2. **Teardown timeout** — The attempt finally block now races `releaseRetainedSessionLock()` against a 30-second timeout. If dispose hangs (e.g., waiting for `retainedLockIdle` on a dead execution path), the finally block completes and the watchdog handles cleanup.\r\n\r\n## User Impact\r\n\r\nSessions with long agent timeouts (e.g., 15 minutes for cron/loop tasks) will recover from abnormal run failures within ~5 minutes instead of up to 17 minutes. For the common case where the teardown timeout fires first, recovery happens within 30 seconds + next watchdog cycle (60s).\r\n\r\n## Evidence\r\n\r\n**Root cause trace:**\r\n1. Agent run executing `exec` tool → command not found → tool result lost\r\n2. Synthetic error result injected for transcript repair\r\n3. Run terminates but lock not released (dispose hung or never called)\r\n4. Lock still in `SESSION_LOCKS.heldEntries()` → `heldByThisProcess = true` → orphan-self-pid skipped\r\n5. Watchdog threshold = 17 minutes → session blocked for entire duration\r\n\r\n**Test results:**\r\n- `session-write-lock.test.ts`: 106 tests passed ✅\r\n- `attempt.session-lock.test.ts`: 222 tests passed ✅\r\n- oxlint: 0 warnings, 0 errors ✅",
+        "branch": "fix/session-lock-watchdog-run-awareness",
+        "head_sha": "2b3e8cab2d20027bbace95bc0b49d729d6404eab",
+        "author": "ditingdapeng",
+        "labels": [
+          "agents",
+          "size: XS",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.ts",
+            "additions": 14,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 28,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100870",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100870.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 100,
+          "gatingTotal": 95,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 64,
+            "SKIPPED": 34,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 499,
+    "total_ms": 2854,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 280
+        "ms": 449
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2068
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +163,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 205
+        "ms": 301
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
