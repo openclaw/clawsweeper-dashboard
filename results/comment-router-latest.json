@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T14:35:35.988Z",
+  "generated_at": "2026-07-06T14:36:49.961Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T11:35:35.696Z",
+  "since": "2026-07-06T11:36:47.338Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    100931
+    100858
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4893997690
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +31,201 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100858:4893997690:2026-07-06T14:33:00Z:re_review",
+      "comment_id": "4893997690",
+      "comment_version_key": "4893997690:2026-07-06T14:33:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100858#issuecomment-4893997690",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100858,
+      "author": "wm0018",
+      "author_id": 13618944,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T14:33:00Z",
+      "comment_updated_at": "2026-07-06T14:33:00Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(message): add universal pagination contract with cursor support for MSTeams",
+        "body": "## What Problem This Solves\n\nPartially addresses #71452 — provides the shared pagination contract and CLI cursor support, and wires MSTeams search, read, list-pins, and channel-list as the first provider implementation.\n\nPreviously, `renderPaginationHint` inspected provider-specific raw payload fields (`hasMore`, `nextBatch`, `@odata.nextLink`, `total_results`) with no shared contract. Users had no CLI mechanism to request the next page even when \"More results available\" was shown.\n\n## Why This Change Was Made\n\nIntroduces a universal cursor-based pagination model across the shared runner, formatter, and CLI layers, replacing ad-hoc per-provider field inspection with a single `MessageActionPagination` type. Channel handlers opt in by placing a private `_pagination` key in their result details; the runner normalizes it before the payload reaches the formatter or JSON output.\n\n### Architecture\n\n```\nCLI --cursor <token>  ->  params.cursor  ->  plugin handler  ->  API\n                                                                |\n                       result.details._pagination        <------+\n                                                                |\n                       extractPagination(handled)          ->  result.pagination\n                                                                |\n                       renderPaginationHint(result.pagination)  ->  \"More results. Use --cursor ...\"\n                       buildMessageCliJson(result)              ->  { pagination: { hasMore, nextCursor } }\n```\n\n### Key decisions\n\n- **Opaque `nextCursor` string**: channels produce whatever token their API uses (nextLink URL, offset number, batch token). The CLI and formatter never parse it.\n- **Private `_pagination` key**: zero SDK changes. Channels opt in voluntarily. The `extractPagination()` function strips it from details before the payload is consumed.\n- **After-extract-delete semantics**: `extractPagination` runs before `extractToolPayload`, so end-user payload is clean.\n- **`--cursor` CLI flag** on `read`, `pins`, `search` — all three wired end-to-end for MSTeams.\n- **Cursor URL validation**: `searchMessagesMSTeams` and `listMessagesMSTeams` validate cursor URLs against known Microsoft Graph API origins (`v1.0`, `beta`) before forwarding auth headers.\n- **Legacy fallback**: `renderPayloadPaginationHint` preserves existing payload-based hints for providers not yet migrated to `MessageActionPagination`. Discord `total_results`-vs-count comparison is restored as a three-stage fallback chain.\n\n## User Impact\n\n**MSTeams users** can now paginate all three list-producing actions:\n\n| Action | Cursor support | Mechanism |\n|--------|:---:|---|\n| `search` | cursor pagination | `searchMessagesMSTeams` via `@odata.nextLink` URL |\n| `read` | batch list + cursor | `listMessagesMSTeams` (new) — no `--message-id` = list mode |\n| `pins` | cursor pagination | `listPinsMSTeams` exposes `@odata.nextLink` when truncated |\n\n**Other channels** (Discord, Slack, Matrix, Feishu) continue to work unchanged via `renderPayloadPaginationHint` legacy fallback and will get pagination in follow-up PRs.\n\n## Evidence\n\n### Real CLI output (production `formatMessageCliText` code path)\n\n```\n$ openclaw message search \"deploy\" --channel msteams --target \"19:abc@thread.tacv2\" --limit 5\n\nSearch results\n| Time                 | Author   | Text                                            | Id       |\n|----------------------|----------|-------------------------------------------------|----------|\n| 2026-07-05T10:00:00Z | alice    | deploy v2.3.1 to production                     | msg-0    |\n| 2026-07-05T10:05:00Z | bob      | deploy failed: port conflict                    | msg-1    |\n| 2026-07-05T10:08:00Z | alice    | deploy retry with --force                       | msg-2    |\n| 2026-07-05T10:12:00Z | ci-bot   | deploy v2.3.1 succeeded                         | msg-3    |\n| 2026-07-06T09:00:00Z | charlie  | deploy v2.3.2 scheduled                         | msg-4    |\nMore results available. Use --cursor \"https://graph.microsoft.com/v1.0/...$skiptoken=page2\" for the next page.\n\n$ openclaw message search \"deploy\" --channel msteams --target \"19:abc@thread.tacv2\" --limit 5 --cursor \"https://graph.microsoft.com/v1.0/...$skiptoken=page2\"\n\nSearch results\n| Time                 │ Author   │ Text                                            │ Id       │\n|----------------------|----------|-------------------------------------------------|----------|\n| 2026-07-06T09:15:00Z | dave     │ deploy v2.3.2 rolled out to staging             │ msg-5    │\n| 2026-07-06T14:00:00Z | alice    │ deploy hotfix v2.3.2a                           │ msg-6    │\n\n$ openclaw message read --channel msteams --target \"19:abc@thread.tacv2\" --limit 5\n\nMessages\n| Time                 | Author   | Text                                            | Id       |\n|----------------------|----------|-------------------------------------------------|----------|\n| 2026-07-06T15:00:00Z | eve      | LGTM ship it                                    | msg-100  |\n| 2026-07-06T15:02:00Z | frank    | +1 on the fix                                   | msg-101  |\n| 2026-07-06T15:05:00Z | alice    | @eve review the hotfix first                    | msg-102  |\n| 2026-07-06T15:10:00Z | eve      | already approved, merging                       | msg-103  |\n| 2026-07-06T15:12:00Z | ci-bot   | hotfix v2.3.2a deployed                         | msg-104  |\nMore results available. Use --cursor \"https://graph.microsoft.com/v1.0/...$top=5&$skiptoken=page2\" for the next page.\n\n$ openclaw message read --channel msteams --target \"19:abc@thread.tacv2\" --limit 5 --cursor \"https://graph.microsoft.com/v1.0/...$top=5&$skiptoken=page2\"\n\nMessages\n| Time                 | Author   | Text                                            | Id       |\n|----------------------|----------|-------------------------------------------------|----------|\n| 2026-07-06T15:15:00Z | grace    | nice work everyone                              | msg-105  |\n| 2026-07-06T15:20:00Z | alice    | standup tomorrow at 9                           | msg-106  |\n\n$ openclaw message pins --channel msteams --target \"19:abc@thread.tacv2\" --limit 3\n\nPinned messages\n| Time                 | Author   | Text                                            | Id       |\n|----------------------|----------|-------------------------------------------------|----------|\n| 2026-06-01T08:00:00Z | admin    | Team onboarding guide                           | pin-0    |\n| 2026-06-15T08:00:00Z | admin    | Q3 OKR tracker                                  | pin-1    |\n| 2026-07-01T08:00:00Z | admin    | Summer PTO policy                               | pin-2    |\nMore results available. Use --cursor \"https://graph.microsoft.com/v1.0/...$skiptoken=page3\" for the next page.\n\n$ openclaw message pins --channel msteams --target \"19:abc@thread.tacv2\" --limit 3 --cursor \"https://graph.microsoft.com/v1.0/...$skiptoken=page3\"\n\nPinned messages\n| Time                 | Author   | Text                                            | Id       |\n|----------------------|----------|-------------------------------------------------|----------|\n| 2026-07-05T08:00:00Z | admin    | Incident response runbook                       | pin-3    |\n| 2026-07-06T09:00:00Z | admin    | Deploy freeze July 7-9                          | pin-4    |\n```\n\n### Cursor URL validation\n\n```\ncursor = \"https://evil.example.com/steal-token\"\nError: MSTeams cursor must be a Microsoft Graph API URL (v1.0 or beta)\n```\n\n### Tests\n\n| Suite | Tests |\n|---|---|\n| message-format.test.ts | 11 |\n| message.test.ts | 6 |\n| channel.actions.test.ts (MSTeams) | 54 |\n| graph-messages.search.test.ts (MSTeams) | 7 |\n| graph-messages.actions.test.ts (MSTeams) | 13 |\n| graph-messages.read.test.ts (MSTeams) | 16 |\n| message-action-normalization.test.ts | 18 |\n| runtime.test.ts (Discord) | 111 |\n| lint-suppressions.test.ts | 3 |\n| **Total** | **300+ passed** |\n\n### CI\n\n| Check | Result |\n|---|---|\n| pnpm tsgo | pass |\n| node scripts/run-oxlint-shards.mjs | pass |\n| pnpm check:import-cycles | 0 cycles |\n\n## Files Changed (16 files)\n\n```\n docs/cli/message.md\n extensions/msteams/src/channel.actions.test.ts\n extensions/msteams/src/channel.runtime.ts\n extensions/msteams/src/channel.ts\n extensions/msteams/src/graph-messages.search.test.ts\n extensions/msteams/src/graph-messages.ts\n src/cli/program/message/register.permissions-search.ts\n src/cli/program/message/register.pins.ts\n src/cli/program/message/register.read-edit-delete.ts\n src/commands/message-format.test.ts\n src/commands/message-format.ts\n src/commands/message.ts\n src/infra/outbound/message-action-runner.ts\n test/scripts/lint-suppressions.test.ts\n```\n\n## Follow-up\n\nIf the contract shape is accepted, subsequent PRs will wire pagination for:\n\n| Channel | Actions | Cursor source |\n|---|---|---|\n| Discord | search | offset (number -> string) |\n| Discord | read | last message snowflake ID |\n| Slack | read | response_metadata.next_cursor |\n| Matrix | read | nextBatch |\n| Feishu | list-pins | pageToken |\n",
+        "branch": "feat/message-pagination-universal",
+        "head_sha": "08cbf019ecc33db9cf808c88b5d174234a2a0f7e",
+        "author": "wm0018",
+        "labels": [
+          "docs",
+          "channel: msteams",
+          "cli",
+          "commands",
+          "size: M",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "docs/cli/message.md",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/channel.actions.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/channel.runtime.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/channel.ts",
+            "additions": 62,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/graph-messages.search.test.ts",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/graph-messages.ts",
+            "additions": 150,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/program/message/register.permissions-search.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/program/message/register.pins.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/program/message/register.read-edit-delete.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/message-format.test.ts",
+            "additions": 29,
+            "deletions": 44,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/message-format.ts",
+            "additions": 63,
+            "deletions": 24,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/message.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/message-action-runner.ts",
+            "additions": 43,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/lint-suppressions.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 14,
+        "additions": 396,
+        "deletions": 84,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100858",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100858.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "SUCCESS": 68,
+            "SKIPPED": 25,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 505,
+    "total_ms": 2810,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 279
+        "ms": 497
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2111
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -53,7 +233,7 @@
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "claim_dispatch_commands",
@@ -61,11 +241,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 214
+        "ms": 187
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
