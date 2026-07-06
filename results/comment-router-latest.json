@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T12:02:47.754Z",
+  "generated_at": "2026-07-06T12:03:11.401Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T09:02:47.365Z",
+  "since": "2026-07-06T09:03:09.568Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100857
+    100691
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 0,
+  "scanned_comments": 7,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,327 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100691:4890113690:2026-07-06T12:03:06Z:clawsweeper_auto_repair",
+      "comment_id": "4890113690",
+      "comment_version_key": "4890113690:2026-07-06T12:03:06Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100691#issuecomment-4890113690",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100691,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T07:17:55Z",
+      "comment_updated_at": "2026-07-06T12:03:06Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=aeb01d3ac53fd320f25d52b037f505298106b18f)",
+      "review_summary": "The PR changes ACP gateway shutdown to track and drain in-flight gateway events, close the shared state database, and adds ACP shutdown tests plus a standalone SQLite close proof script.\n\nPR surface: Source +28, Tests +162, Other +97. Total +287 across 4 files.\n\nReproducibility: yes. for source-level reproduction: current main creates the SQLite ACP ledger through the shared state DB cache and the ACP signal shutdown path does not close that cache. I did not run a live hot-reload or file-lock reproduction in this read-only review.",
+      "review_followup": "- [P2] Manual review is needed because the timeout-path repair and canonical choice among sibling lifecycle fixes require maintainer judgment plus contributor real-path proof.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "aeb01d3ac53fd320f25d52b037f505298106b18f",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(acp): close shared state database on gateway shutdown (#100637)",
+        "body": "## What Problem This Solves\n\nFixes #100637: The standalone ACP gateway process (`serveAcpGateway`) opens a SQLite `DatabaseSync` connection through `createSqliteAcpEventLedger()` but never closes it on SIGINT/SIGTERM shutdown. This leaks file descriptors and causes SQLite file locking issues during hot reload.\n\nThe fix tracks in-flight gateway event handlers, drains them with a bounded 2s timeout, then closes the shared state DB via `closeOpenClawStateDatabase`.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/acp/server.ts` | Import `closeOpenClawStateDatabase`; track in-flight `handleGatewayEvent` promises in a `Set`; drain bounded by `ACP_SHUTDOWN_EVENT_DRAIN_TIMEOUT_MS` (2s, matching gateway pattern) via `Promise.race`; close shared state DB after drain; move `onClosed()` after cleanup |\n| `src/acp/server.startup.test.ts` | 3 new tests: DB close on shutdown, drain ordering with suspended handler, stalled-handler timeout (15 total) |\n| `src/acp/server.shutdown-proof.test.ts` | Real `DatabaseSync` handle close probe (no mocks) |\n| `scripts/acp-shutdown-proof.mjs` | Standalone real-process proof script for terminal capture |\n\n## Evidence\n\n### Real-behavior proof (standalone process, real `node:sqlite` handles)\n\n```\n$ node --import tsx scripts/acp-shutdown-proof.mjs\n=== ACP shutdown real-behavior proof ===\ndb path: /tmp/acp-proof-h3F2Y3/openclaw.sqlite\n\n1. openOpenClawStateDatabase\n  ok: DatabaseSync handle is open\n  ok: shared state DB cache reports open\n  ok: SQLite file exists on disk\n\n2. closeOpenClawStateDatabase (ACP shutdown path)\n  ok: DatabaseSync handle is closed\n  ok: shared state DB cache reports closed\n\n3. reopen after close (simulates hot-reloaded ACP process)\n  ok: reopened handle is a fresh DatabaseSync\n  ok: reopened handle is a new object (not stale cached)\n  ok: reopened handle is closed after cleanup\n\nRESULT: PASS — shared state DB lifecycle verified with real DatabaseSync handles\n```\n\nThis proves at the Node.js runtime level that:\n- `closeOpenClawStateDatabase` actually closes the underlying `node:sqlite` `DatabaseSync` handle (`.isOpen` transitions to `false`)\n- The module cache is correctly cleared (`isOpenClawStateDatabaseOpen()` returns `false`)\n- Hot-reload works: reopening after close produces a fresh handle, not a stale cached one\n\n### Unit tests (46/46 pass)\n\n```\nserver.startup.test.ts      1 passed  15 tests\nserver.shutdown-proof.test.ts  1 passed   1 test\nevent-ledger.test.ts        1 passed  12 tests\nopenclaw-state-db.test.ts   1 passed  18 tests\n```\n\n### Diff scope\n\n```\n src/acp/server.shutdown-proof.test.ts |  48 ++++++\n src/acp/server.startup.test.ts        |  34 ++++\n src/acp/server.ts                     |  18 ++-\n scripts/acp-shutdown-proof.mjs         |  94 ++++++++++\n 4 files changed, 191 insertions(+), 3 deletions(-)\n```\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        "branch": "fix/acp-shutdown-state-db-close",
+        "head_sha": "aeb01d3ac53fd320f25d52b037f505298106b18f",
+        "author": "lzy3538",
+        "labels": [
+          "scripts",
+          "size: M",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/acp-shutdown-proof.mjs",
+            "additions": 97,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/acp/server.shutdown-proof.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/acp/server.startup.test.ts",
+            "additions": 115,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/server.ts",
+            "additions": 40,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 300,
+        "deletions": 13,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100691",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100691.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "CHANGES_REQUESTED",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "SUCCESS": 66,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100691:4892091213:2026-07-06T11:09:06Z:re_review",
+      "comment_id": "4892091213",
+      "comment_version_key": "4892091213:2026-07-06T11:09:06Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100691#issuecomment-4892091213",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100691,
+      "author": "LZY3538",
+      "author_id": 293718838,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T11:09:06Z",
+      "comment_updated_at": "2026-07-06T11:09:06Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(acp): close shared state database on gateway shutdown (#100637)",
+        "body": "## What Problem This Solves\n\nFixes #100637: The standalone ACP gateway process (`serveAcpGateway`) opens a SQLite `DatabaseSync` connection through `createSqliteAcpEventLedger()` but never closes it on SIGINT/SIGTERM shutdown. This leaks file descriptors and causes SQLite file locking issues during hot reload.\n\nThe fix tracks in-flight gateway event handlers, drains them with a bounded 2s timeout, then closes the shared state DB via `closeOpenClawStateDatabase`.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/acp/server.ts` | Import `closeOpenClawStateDatabase`; track in-flight `handleGatewayEvent` promises in a `Set`; drain bounded by `ACP_SHUTDOWN_EVENT_DRAIN_TIMEOUT_MS` (2s, matching gateway pattern) via `Promise.race`; close shared state DB after drain; move `onClosed()` after cleanup |\n| `src/acp/server.startup.test.ts` | 3 new tests: DB close on shutdown, drain ordering with suspended handler, stalled-handler timeout (15 total) |\n| `src/acp/server.shutdown-proof.test.ts` | Real `DatabaseSync` handle close probe (no mocks) |\n| `scripts/acp-shutdown-proof.mjs` | Standalone real-process proof script for terminal capture |\n\n## Evidence\n\n### Real-behavior proof (standalone process, real `node:sqlite` handles)\n\n```\n$ node --import tsx scripts/acp-shutdown-proof.mjs\n=== ACP shutdown real-behavior proof ===\ndb path: /tmp/acp-proof-h3F2Y3/openclaw.sqlite\n\n1. openOpenClawStateDatabase\n  ok: DatabaseSync handle is open\n  ok: shared state DB cache reports open\n  ok: SQLite file exists on disk\n\n2. closeOpenClawStateDatabase (ACP shutdown path)\n  ok: DatabaseSync handle is closed\n  ok: shared state DB cache reports closed\n\n3. reopen after close (simulates hot-reloaded ACP process)\n  ok: reopened handle is a fresh DatabaseSync\n  ok: reopened handle is a new object (not stale cached)\n  ok: reopened handle is closed after cleanup\n\nRESULT: PASS — shared state DB lifecycle verified with real DatabaseSync handles\n```\n\nThis proves at the Node.js runtime level that:\n- `closeOpenClawStateDatabase` actually closes the underlying `node:sqlite` `DatabaseSync` handle (`.isOpen` transitions to `false`)\n- The module cache is correctly cleared (`isOpenClawStateDatabaseOpen()` returns `false`)\n- Hot-reload works: reopening after close produces a fresh handle, not a stale cached one\n\n### Unit tests (46/46 pass)\n\n```\nserver.startup.test.ts      1 passed  15 tests\nserver.shutdown-proof.test.ts  1 passed   1 test\nevent-ledger.test.ts        1 passed  12 tests\nopenclaw-state-db.test.ts   1 passed  18 tests\n```\n\n### Diff scope\n\n```\n src/acp/server.shutdown-proof.test.ts |  48 ++++++\n src/acp/server.startup.test.ts        |  34 ++++\n src/acp/server.ts                     |  18 ++-\n scripts/acp-shutdown-proof.mjs         |  94 ++++++++++\n 4 files changed, 191 insertions(+), 3 deletions(-)\n```\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        "branch": "fix/acp-shutdown-state-db-close",
+        "head_sha": "aeb01d3ac53fd320f25d52b037f505298106b18f",
+        "author": "lzy3538",
+        "labels": [
+          "scripts",
+          "size: M",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/acp-shutdown-proof.mjs",
+            "additions": 97,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/acp/server.shutdown-proof.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/acp/server.startup.test.ts",
+            "additions": 115,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/server.ts",
+            "additions": 40,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 300,
+        "deletions": 13,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100691",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100691.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "CHANGES_REQUESTED",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "SUCCESS": 66,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100691:4891676292:2026-07-06T10:21:23Z:re_review",
+      "comment_id": "4891676292",
+      "comment_version_key": "4891676292:2026-07-06T10:21:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100691#issuecomment-4891676292",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100691,
+      "author": "LZY3538",
+      "author_id": 293718838,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T10:21:23Z",
+      "comment_updated_at": "2026-07-06T10:21:23Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100691:4891217794:2026-07-06T09:29:33Z:re_review",
+      "comment_id": "4891217794",
+      "comment_version_key": "4891217794:2026-07-06T09:29:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100691#issuecomment-4891217794",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100691,
+      "author": "LZY3538",
+      "author_id": 293718838,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T09:29:33Z",
+      "comment_updated_at": "2026-07-06T09:29:33Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 648,
+    "total_ms": 3327,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 377
+        "ms": 306
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1510
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +365,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 260
+        "ms": 1483
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
