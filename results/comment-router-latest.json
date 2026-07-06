@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T11:10:35.632Z",
+  "generated_at": "2026-07-06T11:10:43.981Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T08:10:35.039Z",
+  "since": "2026-07-06T08:10:39.587Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    100825
+    100691
   ],
   "comment_ids": [
-    4892077685
+    4892091213
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4892091691,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:100733:4892077685:2026-07-06T11:07:32Z:re_review",
-      "comment_id": "4892077685",
-      "comment_version_key": "4892077685:2026-07-06T11:07:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100733#issuecomment-4892077685",
+      "idempotency_key": "comment-router:openclaw/openclaw:100691:4892091213:2026-07-06T11:09:06Z:re_review",
+      "comment_id": "4892091213",
+      "comment_version_key": "4892091213:2026-07-06T11:09:06Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100691#issuecomment-4892091213",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100733,
-      "author": "maweibin",
-      "author_id": 18023423,
+      "target_branch": "main",
+      "issue_number": 100691,
+      "author": "LZY3538",
+      "author_id": 293718838,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T11:07:32Z",
-      "comment_updated_at": "2026-07-06T11:07:32Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-06T11:09:06Z",
+      "comment_updated_at": "2026-07-06T11:09:06Z",
+      "status_comment_id": 4892091691,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,27 +68,190 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 100691,
+          "dispatch_key": "router-61d1d82c4a0036c1",
+          "dispatched_at": "2026-07-06T11:10:45.109Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-06T11:10:46.447Z",
+          "response_comment_id": "4892091691",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(acp): close shared state database on gateway shutdown (#100637)",
+        "body": "## What Problem This Solves\n\nFixes #100637: The standalone ACP gateway process (`serveAcpGateway`) opens a SQLite `DatabaseSync` connection through `createSqliteAcpEventLedger()` but never closes it on SIGINT/SIGTERM shutdown. This leaks file descriptors and causes SQLite file locking issues during hot reload.\n\nThe fix tracks in-flight gateway event handlers, drains them with a bounded 2s timeout, then closes the shared state DB via `closeOpenClawStateDatabase`.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/acp/server.ts` | Import `closeOpenClawStateDatabase`; track in-flight `handleGatewayEvent` promises in a `Set`; drain bounded by `ACP_SHUTDOWN_EVENT_DRAIN_TIMEOUT_MS` (2s, matching gateway pattern) via `Promise.race`; close shared state DB after drain; move `onClosed()` after cleanup |\n| `src/acp/server.startup.test.ts` | 3 new tests: DB close on shutdown, drain ordering with suspended handler, stalled-handler timeout (15 total) |\n| `src/acp/server.shutdown-proof.test.ts` | Real `DatabaseSync` handle close probe (no mocks) |\n| `scripts/acp-shutdown-proof.mjs` | Standalone real-process proof script for terminal capture |\n\n## Evidence\n\n### Real-behavior proof (standalone process, real `node:sqlite` handles)\n\n```\n$ node --import tsx scripts/acp-shutdown-proof.mjs\n=== ACP shutdown real-behavior proof ===\ndb path: /tmp/acp-proof-h3F2Y3/openclaw.sqlite\n\n1. openOpenClawStateDatabase\n  ok: DatabaseSync handle is open\n  ok: shared state DB cache reports open\n  ok: SQLite file exists on disk\n\n2. closeOpenClawStateDatabase (ACP shutdown path)\n  ok: DatabaseSync handle is closed\n  ok: shared state DB cache reports closed\n\n3. reopen after close (simulates hot-reloaded ACP process)\n  ok: reopened handle is a fresh DatabaseSync\n  ok: reopened handle is a new object (not stale cached)\n  ok: reopened handle is closed after cleanup\n\nRESULT: PASS — shared state DB lifecycle verified with real DatabaseSync handles\n```\n\nThis proves at the Node.js runtime level that:\n- `closeOpenClawStateDatabase` actually closes the underlying `node:sqlite` `DatabaseSync` handle (`.isOpen` transitions to `false`)\n- The module cache is correctly cleared (`isOpenClawStateDatabaseOpen()` returns `false`)\n- Hot-reload works: reopening after close produces a fresh handle, not a stale cached one\n\n### Unit tests (46/46 pass)\n\n```\nserver.startup.test.ts      1 passed  15 tests\nserver.shutdown-proof.test.ts  1 passed   1 test\nevent-ledger.test.ts        1 passed  12 tests\nopenclaw-state-db.test.ts   1 passed  18 tests\n```\n\n### Diff scope\n\n```\n src/acp/server.shutdown-proof.test.ts |  48 ++++++\n src/acp/server.startup.test.ts        |  34 ++++\n src/acp/server.ts                     |  18 ++-\n scripts/acp-shutdown-proof.mjs         |  94 ++++++++++\n 4 files changed, 191 insertions(+), 3 deletions(-)\n```\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        "branch": "fix/acp-shutdown-state-db-close",
+        "head_sha": "31f6f2ed2a0379289433c9d15e852fb416ebfded",
+        "author": "lzy3538",
+        "labels": [
+          "scripts",
+          "size: M",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/acp-shutdown-proof.mjs",
+            "additions": 98,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/acp/server.shutdown-proof.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/acp/server.startup.test.ts",
+            "additions": 115,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/server.ts",
+            "additions": 40,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 301,
+        "deletions": 13,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100691",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100691.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "CHANGES_REQUESTED",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 30,
+            "SKIPPED": 33,
+            "IN_PROGRESS": 35,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-06T11:10:44.317Z"
     }
   ],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2048,
+    "total_ms": 7691,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 580
+        "ms": 2057
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2324
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -100,11 +263,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 1455
+        "ms": 3286
       },
       {
         "name": "append_ledger",
