@@ -1,18 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T16:58:26.227Z",
+  "generated_at": "2026-07-06T16:59:02.164Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T13:58:24.526Z",
+  "since": "2026-07-06T13:58:59.637Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100996
+    100962
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4895476510
+  ],
+  "status_comment_id": 4895476894,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100996:4895422365:2026-07-06T16:58:21Z:clawsweeper_needs_human",
-      "comment_id": "4895422365",
-      "comment_version_key": "4895422365:2026-07-06T16:58:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100996#issuecomment-4895422365",
+      "idempotency_key": "comment-router:openclaw/openclaw:100962:4895476510:2026-07-06T16:57:45Z:re_review",
+      "comment_id": "4895476510",
+      "comment_version_key": "4895476510:2026-07-06T16:57:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100962#issuecomment-4895476510",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100996,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": "main",
+      "issue_number": 100962,
+      "author": "hugenshen",
+      "author_id": 16300669,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T16:52:00Z",
-      "comment_updated_at": "2026-07-06T16:58:21Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "comment_created_at": "2026-07-06T16:57:45Z",
+      "comment_updated_at": "2026-07-06T16:57:45Z",
+      "status_comment_id": 4895476894,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -66,93 +68,113 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 100962,
+          "dispatch_key": "router-871099484fd4a19a",
+          "dispatched_at": "2026-07-06T16:59:02.850Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-06T16:59:03.836Z",
+          "response_comment_id": "4895476894",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(line): surface partial delivery when rich or media send fails alongside text",
-        "body": "## What Problem This Solves\n\nWhen a LINE reply contains **both** quick-reply buttons **and** rich or media content (an image, a flex/template bubble, or a location), the plugin sends the rich/media messages first so the quick replies can stay attached to the trailing text bubble. That first send was wrapped in a `try/catch` that only logged the error and never rethrew:\n\n```ts\nif (hasQuickReplies && hasRichOrMedia) {\n  try {\n    await sendLineMessages([...richMessages, ...mediaMessages], false);\n  } catch (err) {\n    deps.onReplyError?.(err); // swallowed — text still sends below\n  }\n}\n```\n\nSo if the image/flex/location push failed (e.g. LINE rejects an unreachable image URL or a malformed flex), the text still sent and the channel reported a **full success** (`recordChannelRuntimeState({ lastOutboundAt })`). The user silently lost the rich/media bubble with no failure surfaced.\n\nThis path is not covered by the generic honest-delivery handling: `monitor-durable.ts` opts payloads carrying `channelData.line` or media **out** of the durable delivery path, so exactly these payloads depend on this custom `deliver()` callback being honest — and it was not. The sibling branch in the same file (rich/media without quick replies) already lets the error propagate, so the two paths were inconsistent.\n\n## Why This Change Was Made\n\n`deliverLineAutoReply` is consumed by the core dispatcher (`dispatchReplyWithBufferedBlockDispatcher`), which already has a first-class contract for partial delivery: `isVisiblePartialDeliveryError` (`src/auto-reply/dispatch.ts`) treats a thrown error carrying `visibleReplySent: true` as \"the visible reply was sent, but delivery partially failed\" — it records the sent text on the reply fence and rethrows so the failure is surfaced, without resending the text.\n\nThe fix unifies both branches of the `chunks.length > 0` block: a rich/media send failure from either ordering is captured and returned from `deliverLineAutoReply` alongside `replyTokenUsed` (as a `visibleReplySent`-tagged error), rather than thrown from deep inside. The monitor callback adopts the consumed reply-token state, then surfaces the partial failure. Returning-then-surfacing (instead of throwing directly) keeps `replyTokenUsed` correct so later blocks in the same turn route through the right delivery path instead of retrying an already-consumed reply token. This makes the previously-swallowing quick-reply branch consistent with the already-throwing sibling. The `visibleReplySent` tag marks the text as visibly delivered so the foreground reply-fence does not treat the reply as undelivered.\n\nThe swallow has existed since the plugin was first added (`c96ffa7186`, #1630); it is an original inconsistency, not a deliberate design choice.\n\n## User Impact\n\n- LINE replies that mix quick replies with an image/flex/location no longer report success when the rich/media bubble fails to send. Operators/health now see the failure instead of a false clean delivery, while the text the user did receive is preserved (no duplicate resend).\n- No config, schema, or behavior change on the success path; happy-path delivery and quick-reply ordering are unchanged.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs extensions/line/src/auto-reply-delivery.test.ts` — **8/8 pass** (2 new: rich failure alongside quick-reply text, and rich failure after text without quick replies; both assert the returned `visiblePartialDeliveryError` carries `visibleReplySent: true`, that `replyTokenUsed` stays adopted, and that the text still reached the user).\n- `pnpm exec oxfmt --check` on the touched files — clean.\n- `pnpm tsgo:extensions` — passes (exit 0).\n- Codex (gpt-5.5) structured review of the diff — no code findings; design confirmed correct.\n- Scope: 2 production files (`extensions/line/src/auto-reply-delivery.ts` and `extensions/line/src/monitor.ts`) + the delivery test (+113/-10 total). No cross-channel or durable-path changes.\n\n## Compatibility / Migration\n\n- Backward compatible? `Yes`\n- Config/env changes? `No`\n- Migration needed? `No`\n\n## Risks and Mitigations\n\n- Risk: on a partial failure the reply is surfaced as failed, so `recordChannelRuntimeState({ lastOutboundAt })` is skipped for that reply.\n  - Mitigation: intended — a partially-failed delivery should not record a clean outbound success. The reply-token state is still adopted before surfacing, so same-turn follow-ups route correctly (this was an earlier review concern, now handled by returning the failure instead of throwing from inside the delivery helper).\n- Note (not introduced by this PR): the shared ACP block-reply finalizer (`dispatch-acp.ts`) counts any thrown `deliver` as a failed visible delivery via the dispatcher's `failedCounts`, independent of `visibleReplySent`. A \"throw after visible text was sent\" shape already exists in shipped LINE code (the sibling branch and the original monitor callback both throw without a catch), and it is only reachable when a session is explicitly bound to an ACP runtime (a default LINE turn on the embedded agent never reaches `finalizeAcpTurnOutput`). This PR does not change that behavior; `visibleReplySent` only feeds the orthogonal foreground reply-fence.\n",
-        "branch": "fix/line-quick-reply-partial-delivery",
-        "head_sha": "c8e9d41878a5a2d9852d18e452c30b3d50424209",
-        "author": "masatohoshino",
+        "title": "test(gateway): lock config mutation allowlist contract",
+        "body": "# PR: test(gateway): lock config mutation allowlist contract\n\n**Branch:** `codex/gateway-config-allowlist-contract`  \n**Commit:** `8424fcad05`  \n**Compare:** https://github.com/openclaw/openclaw/compare/main...hugenshen:codex/gateway-config-allowlist-contract?expand=1\n\n---\n\n## What Problem This Solves\n\nThe `gateway` built-in tool is a **persistent control-plane write surface**: agent-driven `config.apply` / `config.patch` can change live gateway config without operator CLI involvement. Per `SECURITY.md` and [Control plane tools risk](https://docs.openclaw.ai/gateway/security#control-plane-tools-risk), **the model/agent is not a trusted principal** — the runtime must fail closed and only permit a narrow, hand-maintained allowlist.\n\nThat allowlist lives in `src/agents/tools/gateway-tool.ts:54` as `ALLOWED_GATEWAY_CONFIG_PATHS`. Today it is a **mutable string array with no contract lock**:\n\n| Existing coverage                                            | What it proves                                                                   | Gap                                                                            |\n| ------------------------------------------------------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |\n| `gateway-tool-guard-coverage.test.ts` (~43 behavioral cases) | Many real patches are allowed/blocked (auth, plugins, sandbox, hooks, MCP, etc.) | Does **not** fail when someone adds/removes/reorders allowlist patterns        |\n| `gateway-tool.test.ts`                                       | Tool schema exposes `replacePaths`; description mentions it                      | Does **not** exercise guard semantics with `replacePaths`                      |\n| `src/gateway/server.config-patch.test.ts`                    | Gateway RPC rejects destructive array shrinks without `replacePaths`             | Tests **server merge policy**, not the gateway-tool path allowlist after merge |\n\n**Risk without this PR:** a maintainer can widen the agent-tunable surface (e.g. add `plugins.allow`, `gateway.auth.token`, `tools.exec.host`) and existing guard tests may still pass if nobody adds a new behavioral case. The allowlist drift stays invisible until review catches it manually.\n\n---\n\n## Why This Change Was Made\n\nAdd a **focused contract test** that complements (not replaces) `gateway-tool-guard-coverage.test.ts`:\n\n1. **Snapshot lock** — exact sorted contents of `ALLOWED_GATEWAY_CONFIG_PATHS` (18 patterns today)\n2. **Compact forbidden-path table** — representative high-impact paths that must stay blocked\n3. **`replacePaths` guard boundary** — wholesale `agents.list` replacement must still respect the allowlist\n\nMinimal prod change: export the allowlist for tests only (`ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST`). No runtime behavior change.\n\n---\n\n## Security / Trust Boundary Context\n\n`assertGatewayConfigMutationAllowed` (`gateway-tool.ts:379`) is the model → operator trust gate. It runs **before** the gateway RPC and applies two independent checks:\n\n```\nconfig.patch / config.apply raw\n        │\n        ▼\n applyMergePatch (mergeObjectArraysById + optional replacePaths)\n        │\n        ▼\n collectChangedConfigPaths(current, next)\n        │\n        ├─► Gate 1: every changed path must match ALLOWED_GATEWAY_CONFIG_PATHS\n        │         (prefix match; `*` = one segment wildcard)\n        │\n        └─► Gate 2: newly enabled dangerous flags blocked\n                  (same enumeration as `openclaw security audit`)\n```\n\n**Gate 1** is what this PR locks. **Gate 2** (dangerous flags) remains covered by existing guard-coverage cases (e.g. `browser.ssrfPolicy`, `sandbox.docker.dangerouslyAllowContainerNamespaceJoin`).\n\nPublic docs already describe the intended contract:\n\n> Agent-driven `gateway config.apply` and `gateway config.patch` edits are fail-closed by default: only a narrow set of low-risk runtime tuning, mention-gating, and visible-reply paths are agent-tunable. Global model defaults and prompt overlays stay operator-controlled.\n\n— [Control plane tools risk](https://docs.openclaw.ai/gateway/security#control-plane-tools-risk)\n\n---\n\n## Locked Allowlist (18 patterns)\n\n| Category                         | Patterns                                                                                                         | Rationale                                                  |\n| -------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |\n| Agent runtime tuning (defaults)  | `agents.defaults.thinkingDefault`, `.subagents.thinking`, `.reasoningDefault`, `.fastModeDefault`                | Low-risk model behavior knobs                              |\n| Agent runtime tuning (per-agent) | `agents.list[].id`, `.model`, `.thinkingDefault`, `.subagents.thinking`, `.reasoningDefault`, `.fastModeDefault` | Scoped per-agent tuning only                               |\n| Mention gating (depth 1–5)       | `channels.*.requireMention` … `channels.*.*.*.*.*.requireMention`                                                | Must cover deepest adapter path (Telegram topic overrides) |\n| Visible reply UX                 | `messages.visibleReplies`, `messages.groupChat.visibleReplies`, `messages.groupChat.unmentionedInbound`          | Bounded delivery UX, not secrets/privilege                 |\n\n**Explicitly NOT on the allowlist** (operator-only): `gateway.auth.*`, `plugins.allow`, `plugins.load.paths`, `tools.exec.*`, `hooks.*`, global `agents.defaults.model`, prompt overlays, sandbox overrides, MCP servers, etc. — already blocked in guard-coverage; this PR adds contract-level regression for three canonical forbidden paths.\n\n---\n\n## New Test Coverage\n\n**File:** `src/agents/tools/gateway-tool-allowlist.contract.test.ts`\n\n| Test                                                                                 | Asserts                                                             |\n| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |\n| `locks the exact allowed path patterns`                                              | Sorted snapshot of all 18 patterns; any add/remove/reorder fails CI |\n| `blocks protected path mutations: gateway.auth.token`                                | Auth secret rewrite blocked                                         |\n| `blocks protected path mutations: plugins.allow`                                     | Plugin trust boundary blocked                                       |\n| `blocks protected path mutations: tools.exec.host`                                   | Exec routing escalation blocked                                     |\n| `allows agents.list wholesale replace via replacePaths when edits stay allowlisted`  | `replacePaths: [\"agents.list\"]` + model-only change passes          |\n| `blocks agents.list wholesale replace via replacePaths when protected fields change` | `replacePaths: [\"agents.list\"]` + `sandbox` change still blocked    |\n\n### `replacePaths` semantics covered here\n\n- **Without** `replacePaths`: id-keyed merge (default) — already heavily tested in guard-coverage\n- **With** `replacePaths: [\"agents.list\"]`: whole-array replacement is simulated at the **gateway-tool guard** layer\n- **Server-side** destructive-array rules (`server.config-patch.test.ts`) are orthogonal; this PR ensures the tool guard still fail-closes protected nested fields even when the caller opts into array replacement\n\n---\n\n## User Impact\n\n- **Runtime:** none\n- **Operators:** none\n- **Maintainers:** intentional allowlist changes require updating both:\n  1. `ALLOWED_GATEWAY_CONFIG_PATHS` in `gateway-tool.ts`\n  2. `LOCKED_ALLOWLIST` in `gateway-tool-allowlist.contract.test.ts`\n\n  That is intentional — widening the agent-tunable surface should be a deliberate, reviewed act.\n\n---\n\n## Evidence\n\n### Local proof\n\n```sh\npnpm test src/agents/tools/gateway-tool-allowlist.contract.test.ts\nnode --import tsx scripts/proof-gateway-allowlist-contract.mjs\n```\n\n```\nTest Files  1 passed (1)\n     Tests  6 passed (6)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Agent-driven `gateway config.patch` must fail closed on protected paths and accept only allowlisted mutations.\n- **Real environment tested:** macOS (Darwin), Node.js v22.22.0.\n- **Exact steps or command run after this patch:**\n  1. `node --import tsx scripts/proof-gateway-allowlist-contract.mjs`\n  2. `pnpm test src/agents/tools/gateway-tool-allowlist.contract.test.ts`\n- **Evidence after fix:**\n\n```text\n$ node --import tsx scripts/proof-gateway-allowlist-contract.mjs\n=== gateway config.patch guard (production assertGatewayConfigMutationAllowed) ===\n  ok: allowlisted agents.defaults.thinkingDefault patch accepted\nallowlisted patch: agents.defaults.thinkingDefault off -> on\n  ok: protected gateway.auth.token patch rejected\nprotected patch error: Error: gateway config.patch cannot change protected config paths: gateway.auth.token\n  ok: replacePaths agents.list model-only change accepted\n\nALL PROOF ASSERTIONS PASSED\n```\n\n- **Observed result after fix:** Allowlisted thinking-default patch passes; `gateway.auth.token` rewrite is rejected with the production guard error; `replacePaths: [\"agents.list\"]` still respects the allowlist for model-only edits.\n- **What was not tested:** Live gateway RPC round-trip; proof exercises the same production guard used by the gateway tool before RPC.\n\n### Diff size\n\n```\nsrc/agents/tools/gateway-tool.ts                        | +3   (test-only export)\nsrc/agents/tools/gateway-tool-allowlist.contract.test.ts | +103 (contract tests)\n```\n\n### Evidence map\n\n| Surface                       | Entry point                              | Owner                       | Caller                                         | Sibling                           | Tests                                               |\n| ----------------------------- | ---------------------------------------- | --------------------------- | ---------------------------------------------- | --------------------------------- | --------------------------------------------------- |\n| Gateway config mutation guard | `assertGatewayConfigMutationAllowed`     | `gateway-tool.ts`           | `createGatewayTool` config.apply/patch actions | Gateway server `config.patch` RPC | **This PR** + `gateway-tool-guard-coverage.test.ts` |\n| Dangerous flag gate           | `collectEnabledInsecureOrDangerousFlags` | `dangerous-config-flags.ts` | same guard                                     | `openclaw security audit`         | guard-coverage (unchanged)                          |\n| Array merge policy            | `applyMergePatch` + `replacePaths`       | `merge-patch.ts`            | gateway-tool + gateway RPC                     | `server.config-patch.test.ts`     | **This PR** (tool guard slice) + server tests       |\n\n---\n\n## Out of Scope / Follow-ups\n\nThis PR does **not**:\n\n- Extract `ALLOWED_GATEWAY_CONFIG_PATHS` into schema-derived metadata (separate maintenance PR)\n- Add security-audit reachability findings for open channels + `gateway` tool exposure (separate audit PR)\n- Duplicate all 43 guard-coverage behavioral cases in the contract file\n\nSuggested follow-up if allowlist keeps growing: generate `LOCKED_ALLOWLIST` from a single exported constant or schema artifact to avoid dual-edit friction.\n\n---\n\n## Checklist\n\n- [x] No runtime behavior change\n- [x] Test-only export marked `@internal`\n- [x] Fail-closed contract: widening allowlist requires explicit test update\n- [x] `replacePaths` boundary covered at gateway-tool guard layer\n- [ ] CI (pending upstream run after PR open)\n\n---\n\n## Create PR\n\n```sh\ngh pr create \\\n  --title \"test(gateway): lock config mutation allowlist contract\" \\\n  --body-file pr-gateway-allowlist-contract-body.md\n```\n\nOr open: https://github.com/openclaw/openclaw/compare/main...hugenshen:codex/gateway-config-allowlist-contract?expand=1",
+        "branch": "codex/gateway-config-allowlist-contract",
+        "head_sha": "d9c8ad69da84598368064ff46d2049a646da8f91",
+        "author": "hugenshen",
         "labels": [
-          "channel: line",
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
+          "scripts",
+          "agents",
+          "size: M",
+          "P3",
+          "rating: 🦪 silver shellfish",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/line/src/auto-reply-delivery.test.ts",
-            "additions": 66,
+            "path": "pr-gateway-allowlist-contract-body.md",
+            "additions": 198,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "extensions/line/src/auto-reply-delivery.ts",
-            "additions": 36,
-            "deletions": 8,
-            "changeType": "MODIFIED"
+            "path": "scripts/proof-gateway-allowlist-contract.mjs",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "ADDED"
           },
           {
-            "path": "extensions/line/src/monitor.ts",
-            "additions": 11,
-            "deletions": 2,
+            "path": "src/agents/tools/gateway-tool-allowlist.contract.test.ts",
+            "additions": 103,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/tools/gateway-tool.ts",
+            "additions": 3,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 113,
-        "deletions": 10,
+        "changedFiles": 4,
+        "additions": 375,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100996",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100996.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100962",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100962.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 93,
-          "gatingTotal": 88,
+          "total": 100,
+          "gatingTotal": 95,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 34,
-            "SUCCESS": 56,
+            "SUCCESS": 67,
+            "SKIPPED": 32,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-06T16:59:02.350Z"
     }
   ],
-  "ledger_claimed": false,
+  "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1911,
+    "total_ms": 4743,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 279
+        "ms": 538
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1407
+        "ms": 1972
       },
       {
         "name": "classify_comment_commands",
@@ -172,7 +194,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 200
+        "ms": 2204
       },
       {
         "name": "append_ledger",
