@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T14:48:01.523Z",
+  "generated_at": "2026-07-06T14:48:17.920Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T11:47:59.275Z",
+  "since": "2026-07-06T11:48:15.082Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100913
+    100461
   ],
   "comment_ids": [
-    4894119130
+    4894139498
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4894140013,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:100913:4894119130:2026-07-06T14:44:59Z:re_review",
-      "comment_id": "4894119130",
-      "comment_version_key": "4894119130:2026-07-06T14:44:59Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100913#issuecomment-4894119130",
+      "idempotency_key": "comment-router:openclaw/openclaw:100461:4894139498:2026-07-06T14:46:50Z:re_review",
+      "comment_id": "4894139498",
+      "comment_version_key": "4894139498:2026-07-06T14:46:50Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100461#issuecomment-4894139498",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100913,
-      "author": "lzyyzznl",
-      "author_id": 41978486,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T14:44:59Z",
-      "comment_updated_at": "2026-07-06T14:44:59Z",
-      "status_comment_id": null,
+      "target_branch": "main",
+      "issue_number": 100461,
+      "author": "fuller-stack-dev",
+      "author_id": 263060202,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-07-06T14:46:50Z",
+      "comment_updated_at": "2026-07-06T14:46:50Z",
+      "status_comment_id": 4894140013,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,48 +68,657 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 100461,
+          "dispatch_key": "router-6cbb2db4a26db018",
+          "dispatched_at": "2026-07-06T14:48:18.648Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-06T14:48:19.895Z",
+          "response_comment_id": "4894140013",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(acp): add close() lifecycle method to SQLite event ledger",
-        "body": "## Summary\n\n**Problem**: When the Gateway hot-reloads or shuts down via SIGINT/SIGTERM, `DatabaseSync` connections opened by `createSqliteAcpEventLedger()` remain open because the ledger object does not expose a `close()` lifecycle method for teardown. The underlying `openOpenClawStateDatabase()` caches handles in a module-level Map (`cachedDatabases` in `src/state/openclaw-state-db.ts`). When the gateway reloads, old `AcpEventLedger` instances are garbage-collected but the `DatabaseSync` handles they opened stay alive in the cache, leaking file descriptors and holding SQLite file locks. Subsequent gateway instances fail with locking errors because the old connections still hold advisory locks on the database file. This is the classic resource management anti-pattern: objects that acquire system resources (file handles, database connections) must expose explicit release methods so callers can integrate cleanup into their lifecycle.\n\n**Solution**: Add `close: () => void` to the `AcpEventLedger` interface so every ledger implementation must provide resource cleanup during its teardown phase. The SQLite-backed implementation (`createSqliteAcpEventLedger`) delegates to `closeOpenClawStateDatabase()` — an existing utility function that closes all cached `DatabaseSync` handles, runs WAL maintenance shutdown, clears internal Kysely statement caches, and removes entries from the `cachedDatabases` Map. The in-memory variant (`createInMemoryAcpEventLedger`) provides a no-op since it holds no external resources. The shared ledger API factory (`createLedgerApi`) also provides a no-op `close()` so all callers satisfy the interface without extra boilerplate. The gateway entry point (`serveAcpGateway` in `src/acp/server.ts`) now calls `eventLedger.close()` in its `shutdown()` handler before `gateway.stop()`, ensuring database handles are released on SIGINT, SIGTERM, and intentional stop events. The close call is ordered before gateway disconnect to prevent race conditions where a half-closed gateway triggers new ledger writes during teardown.\n\n**What changed**: Three locations across two source files, approximately 8 lines of net new code. (1) `src/acp/event-ledger.ts`: add `closeOpenClawStateDatabase` to the import block from `\"../state/openclaw-state-db.js\"` (line 15 area); add `close: () => void` to the `AcpEventLedger` type definition (alongside the 7 existing method signatures); implement `close()` in `createSqliteAcpEventLedger` via `closeOpenClawStateDatabase()` (inserted before the closing brace of the returned ledger object, around line 913); add no-op `close() {}` to `createLedgerApi` (shared factory, around line 429) and to `createInMemoryAcpEventLedger` (in-memory variant, around line 446). The approach uses delegation rather than inheritance — `createSqliteAcpEventLedger` calls a module-level utility, while the in-memory variants override with a no-op at the object-literal level. (2) `src/acp/server.ts`: hoist `eventLedger` variable from `const` to `let` declaration at function scope (line 57 area) so the `shutdown` closure captures the reference; assign `eventLedger = createSqliteAcpEventLedger()` at the creation site (replacing `const eventLedger`, around line 163); call `eventLedger?.close()` in `shutdown()` between the `stopped` flag guard and the `gateway.stop()` call (line 123 area). The optional-chaining `?.` safely handles the narrow window where shutdown fires before the ledger is created.\n\n**What didn't change**: No behavioral changes to existing ledger operations (startSession, recordUserPrompt, recordUpdate, markIncomplete, readReplay, readReplayBySessionId, readReplayBySessionKey) — these methods work exactly as before with identical signatures and semantics. No changes to the state database layer (`src/state/openclaw-state-db.ts`) — `closeOpenClawStateDatabase()` already existed prior to this change and has independent test coverage. No lockfile changes (`pnpm-lock.yaml` is untouched), no config changes (`openclaw-config.yaml` unchanged), no dependency additions or removals. All existing callers of `AcpEventLedger` either use `createSqliteAcpEventLedger()` (now provides a real `close()`) or `createInMemoryAcpEventLedger()` / `createLedgerApi()` (both provide no-op `close()`). The only consumer that needed explicit close-wiring was `serveAcpGateway` in `src/acp/server.ts`. No exported API signatures change — `AcpEventLedger` gains a member but all existing ledger-construction functions remain binary-compatible for callers that do not destructure the type. The in-memory ledger used in tests (`createInMemoryAcpEventLedger`, `createLedgerApi`) gets a no-op close, making all existing test code completely unaffected with zero test modifications required.\n\n**Existing coverage note**: The state database test suite in `src/state/openclaw-state-db.test.ts` already validates `closeOpenClawStateDatabase()` across multiple scenarios including open-handle teardown, idempotent close of already-closed handles, and WAL maintenance shutdown. The event-ledger test \"persists SQLite-backed replay state across ledger instances\" exercises the close-reopen pattern using `closeOpenClawStateDatabaseForTest()`, confirming that without explicit close, cached handles persist across instances — and with close, handles are properly released.\n\n**Design rationale**: Two alternatives were considered before selecting the interface-level `close()` approach described above. (A) Call `closeOpenClawStateDatabase()` directly in `serveAcpGateway`'s shutdown without touching `AcpEventLedger` — requires fewer changes but breaks encapsulation (the server knows about state-db internals it shouldn't). (B) Add `close()` only to `createSqliteAcpEventLedger` as an implementation detail without updating the interface — TypeScript structural typing would accept it but the contract would be invisible to callers using the `AcpEventLedger` type. The chosen approach (interface method + delegation) keeps storage details behind the abstraction while making the lifecycle contract explicit in the type system. An additional consideration was whether to make `close` return `Promise<void>` for async cleanup — rejected because the underlying `closeOpenClawStateDatabase()` is synchronous (it wraps synchronous Node.js sqlite `DatabaseSync.close()`), and forcing an async signature would require unnecessary Promise-wrapping for the in-memory variant.\n\nFixes #100637\n\n---\n\n## Real behavior proof\n\n**Behavior addressed**: SQLite-backed event ledger now exposes a `close()` method that releases underlying database connection handles on gateway shutdown, preventing file descriptor and lock leaks during hot-reload cycles.\n**Real environment tested**: Linux x86_64 / OpenClaw main@e35c7a3c95 (identical to default gateway deployment platform)\n**Exact steps or command run after this patch**: ```bash\npnpm tsgo:core\npnpm test -- src/acp/event-ledger.test.ts\npnpm test -- src/acp/translator.event-ledger.test.ts\npnpm test -- src/acp/\n```\n**After-fix evidence**: ```\n$ pnpm tsgo:core\n# exits 0 — zero type errors\n\n$ pnpm test -- src/acp/event-ledger.test.ts\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n\n$ pnpm test -- src/acp/translator.event-ledger.test.ts\n Test Files  1 passed (1)\n      Tests  3 passed (3)\n\n$ pnpm test -- src/acp/\n Test Files  12 passed (12)\n      Tests  109 passed (109)\n```\n**Observed result after the fix**: TypeScript strict compilation clean with zero errors across the entire core project (incremental build using `tsconfig.core.json`, no new warnings or type violations detected by `pnpm tsgo:core`, incremental cache artifact updated). All 109 tests across 12 test files in `src/acp/` pass successfully — zero regressions, zero flakes detected across multiple runs. The `close()` method on `createSqliteAcpEventLedger()` calls `closeOpenClawStateDatabase()` which iterates the `cachedDatabases` Map, runs `walMaintenance.close()` for each handle (checkpointing WAL journal and releasing WAL/SHM file locks on disk), clears internal Kysely prepared-statement caches via `clearNodeSqliteKyselyCacheForDatabase()`, closes each `DatabaseSync` via `db.close()`, and clears the entire map to release references for GC. The in-memory variant provides a verifiable no-op `close()` matching the interface without side effects. The gateway shutdown handler (`serveAcpGateway` in `src/acp/server.ts`) calls `eventLedger?.close()` after verifying `stopped` is false via the early-return guard, ensuring single-execution semantics. The call is positioned before `gateway.stop()` to prevent new ledger operations from racing with connection teardown — if a gateway event fires during shutdown, the `stopped` flag prevents new I/O, making the ordering safe.\n**What was not tested**: Full gateway hot-reload E2E test exercising the complete shutdown-init-restart cycle with concurrent ledger operations under active load. The `closeOpenClawStateDatabase()` utility is independently tested in the state database test suite (see `src/state/openclaw-state-db.test.ts`) — verifying it handles open handles, already-closed handles, WAL maintenance errors, and the empty-map case. This change only wires that existing, tested cleanup into the ledger lifecycle. A comprehensive hot-reload E2E test would require a running gateway instance with active SQLite state database and simulated reload triggers, which is outside the scope of unit-level validation. Additionally, the multi-instance scenario (two consecutive `createSqliteAcpEventLedger()` calls without intervening `close()`) is implicitly tested by the existing test \"persists SQLite-backed replay state across ledger instances\" which calls `closeOpenClawStateDatabaseForTest()` between instances — confirming that without close, handles persist across instances, and the close method properly resets that state.\n\n## Root cause\n\n**Trigger condition**: Any gateway shutdown or hot-reload event (SIGINT, SIGTERM, process stop, internal reload trigger).\n\n**Root cause analysis** — 5 Whys: (1) Why do SQLite file locks leak on hot-reload? → Because the old `DatabaseSync` connections from the previous ledger instance stay open, holding advisory locks on the SQLite WAL and SHM files. (2) Why do connections stay open after the ledger is discarded? → Because the ledger object is abandoned without closing its underlying database handles — the handles live on in the `cachedDatabases` module-level Map. (3) Why can't the ledger close those handles? → Because `AcpEventLedger` has no `close()` or `dispose()` lifecycle method — callers have no API surface to trigger cleanup. (4) Why was no lifecycle method designed? → Because `createSqliteAcpEventLedger` was initially built with only operational methods (startSession, recordUpdate, readReplay), treating the SQLite connection as an internal implementation detail with implicit lifecycle via the global `cachedDatabases` cache rather than an explicit per-instance resource. (5) Why did the shutdown path not clean up cached handles? → Because `serveAcpGateway`'s `shutdown()` only called `gateway.stop()` and `onClosed()`, and the `closeOpenClawStateDatabase()` utility function — which already existed and was independently tested — was never wired into the ledger lifecycle or the gateway shutdown handler.\n\n**Code locations**: The `cachedDatabases` Map is defined at line ~42 of `src/state/openclaw-state-db.ts`. The `openOpenClawStateDatabase()` function (line ~92) creates or returns cached `DatabaseSync` handles. The `closeOpenClawStateDatabase()` function (line ~153) closes all cached handles but was never called from the ledger layer. The `createSqliteAcpEventLedger()` function (line ~843 of `src/acp/event-ledger.ts`) creates ledger objects without teardown. The `serveAcpGateway()` shutdown handler (line ~117 of `src/acp/server.ts`) only called `gateway.stop()` without ledger cleanup.\n\n**Affected scope**: All gateway deployments using the default SQLite-backed ACP event ledger configuration. CLI-only usage is unaffected as process exit releases all OS file handles. Gateway deployments with regular hot-reload cycles (common in development and CI environments) are most affected.\n\n## Linked context\n\n- **Issue**: #100637\n- **Related PRs**: #100691 (CHANGES_REQUESTED — stalled), #100827 (waiting-on-author — stalled)\n- **In scope**: Lifecycle method addition — interface, SQLite impl, in-memory no-op, shutdown wiring\n- **Out of scope**: Broader gateway resource cleanup (other handles follow separate teardown paths), other callers of `openOpenClawStateDatabase` (they manage their own lifecycle)\n\n## Tests and validation\n\n### Unit tests\n\nAll 109 tests pass across 12 test files in `src/acp/`, confirming no regressions in ledger operations, replay behavior, session management, and retention/eviction logic:\n```\n$ pnpm test -- src/acp/\n Test Files  12 passed (12)\n      Tests  109 passed (109)\n```\n\nThe relevant test files (run with Vitest v4.1.9, all passing):\n- `src/acp/event-ledger.test.ts` — 12 tests covering SQLite and in-memory ledger CRUD, replay, retention/eviction, reset on session restart, migration from file-based ledger, and cross-instance persistence (the test already calls `closeOpenClawStateDatabaseForTest()` between instances, confirming the close-before-reopen pattern works correctly)\n- `src/acp/translator.event-ledger.test.ts` — 3 tests covering ACP translator integration with the ledger for session replay and recovery scenarios\n- `src/acp/translator.test.ts`, `src/acp/server.test.ts`, and other `src/acp/` test files — 94 additional tests confirming no broader regressions in the ACP module\n\n### TypeScript compilation\n\n```\n$ pnpm tsgo:core -p tsconfig.core.json --incremental\n# Process exits 0 with zero type errors, no new warnings or violations\n# Incremental build artifact updated at .artifacts/tsgo-cache/core.tsbuildinfo\n```\n\nThe `closeOpenClawStateDatabase()` utility function, which the SQLite ledger's `close()` delegates to, is independently tested in `src/state/openclaw-state-db.test.ts` with dedicated coverage for: closing open handles correctly, closing already-closed handles (idempotency guarantee), proper WAL maintenance shutdown sequence ordering, and post-close behavior verification to confirm handles are fully released. All state database tests pass as part of the full project test suite.\n\n## Risk checklist\n\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [ ] I have updated relevant documentation\n- [ ] Breaking changes (if any) are documented in Summary\n\n<!--\n- Session-state risk: No session state is modified by this change. The `close()` method is teardown-only and runs after all logical operations have completed. In the shutdown path, the `stopped` flag prevents double-execution. If `close()` is called while ledger operations are in-flight (should not happen in the current shutdown ordering), `closeOpenClawStateDatabase()` safely closes handles and subsequent operations will re-open them via the cache-on-open pattern in `openOpenClawStateDatabase()`.\n- Merge-risk explanation: Minimal risk. The change is additive — a new lifecycle method with no-op defaults for in-memory callers means zero behavioral impact on existing code paths. The SQLite implementation delegates to `closeOpenClawStateDatabase()` which has been part of the codebase and independently tested. The only wiring change is a single `eventLedger?.close()` call in the shutdown handler, guarded by the `stopped` flag for idempotency. Rollback is trivial (remove the close call and the interface addition).\n-->\n\n## Current review state\n\n- [x] Self-review completed\n- [ ] At least one maintainer review\n- [ ] All CI checks passed\n",
-        "branch": "fix/sqlite-ledger-close",
-        "head_sha": "65b07677692883480ae8eca8b7cdfd7ea79853f5",
-        "author": "lzyyzznl",
+        "title": "feat(ui): redesign chat composer controls",
+        "body": "## Summary\n\n- redesign the Control UI chat composer around a compact 48rem desktop maximum that shrinks continuously into mobile\n- integrate attachment, settings, model, context, camera, voice, stop, and send controls without shifting the text area\n- add a provider-aware model picker with logos, staged Save/Discard changes, reasoning slider, speed controls, and configured catalog preservation\n- align sender/agent bubbles and metadata while fixing five-line input growth, token estimates, response following, stale run activity, dismissible errors, realtime voice draft leakage, and timestamp-hover layout reflow\n- clear the previous CI failures in production types, test types, lint, and generated docs\n\n## Behavioral proof\n\nCaptured from current `upstream/main` and the PR's current visual implementation with the repository E2E Gateway fixture. The fixture includes a 200k context window with 38k tokens used, so the 19% context wheel is visible in the refreshed screenshots. The final head adds test timing, locale output, and current-main merges without changing this rendered layout.\n\n### Before: current `upstream/main`\n\n<img width=\"1366\" height=\"768\" alt=\"Current main desktop chat composer before the redesign\" src=\"https://github.com/user-attachments/assets/6f1ac946-1863-4908-adcb-72a33328dcb9\" />\n\n#### Before interaction\n\n<img width=\"900\" height=\"506\" alt=\"Current main desktop composer interaction before the redesign\" src=\"https://github.com/user-attachments/assets/38ce2599-14d9-4b0e-ab95-246308d9ab17\" />\n\n### After: current PR visual state\n\n#### Desktop composer\n\n<img width=\"1366\" height=\"768\" alt=\"Redesigned desktop composer with model controls and 19 percent context wheel\" src=\"https://github.com/user-attachments/assets/6e274fd6-4a70-414d-bf81-fdf78e4e7a22\" />\n\n#### Mobile composer\n\n<img width=\"393\" height=\"852\" alt=\"Responsive mobile composer with camera voice controls and 19 percent context wheel\" src=\"https://github.com/user-attachments/assets/3b5cd5ae-179c-427b-afd9-04cab638311c\" />\n\n#### Provider and model picker\n\n<img width=\"1366\" height=\"768\" alt=\"Provider-aware model picker with staged model reasoning and speed controls\" src=\"https://github.com/user-attachments/assets/49d0eb03-ac17-4614-8b8c-ef24a37da727\" />\n\n#### Combined settings\n\n<img width=\"1366\" height=\"768\" alt=\"Combined chat and voice settings popover\" src=\"https://github.com/user-attachments/assets/b83b0259-8e35-4e3b-9161-b026c0f1328f\" />\n\n#### Desktop interaction\n\n<img width=\"900\" height=\"506\" alt=\"Redesigned desktop composer interaction\" src=\"https://github.com/user-attachments/assets/d2b6b36f-f291-423a-94b7-1301575db664\" />\n\n#### Mobile interaction\n\n<img width=\"240\" height=\"522\" alt=\"Redesigned mobile composer interaction\" src=\"https://github.com/user-attachments/assets/aacf7aea-3140-4981-865d-aef441104288\" />\n\n#### Timestamp details without layout shift\n\n<img width=\"904\" height=\"1041\" alt=\"Live Rosita timestamp details rendered as an overlay without moving the conversation or composer\" src=\"https://github.com/user-attachments/assets/87108674-2849-47a6-a8bf-8c6a91280c64\" />\n\nThe timestamp regression was measured before and after the fix: opening message context previously increased the metadata/message group by about 59px; the anchored overlay now leaves the message and footer geometry unchanged.\n\n## Verification\n\n- `node scripts/run-vitest.mjs ui/src/pages/chat/chat-view.test.ts ui/src/lib/sessions/index.test.ts ui/src/pages/chat/chat-controls.test.ts ui/src/pages/chat/chat-composer.test.ts`\n- `node scripts/run-vitest.mjs ui/src/pages/chat/chat-responsive.browser.test.ts ui/src/pages/chat/chat-composer-redesign.e2e.test.ts ui/src/pages/chat/browser-talk-start-stop.e2e.test.ts`\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile /tmp/pr100461-core-final-base.tsbuildinfo`\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile /tmp/pr100461-core-test-final-base.tsbuildinfo`\n- `pnpm lint`\n- `pnpm ui:i18n:check`\n- `node scripts/run-vitest.mjs test/scripts/control-ui-i18n.test.ts test/scripts/package-acceptance-workflow.test.ts ui/src/pages/chat/chat-view.test.ts`\n- `pnpm docs:map:check`\n- `pnpm build:ci-artifacts`\n- targeted `oxfmt --check` for all PR-owned files\n- `git diff --check`\n- [Exact-head CI run 28776673177](https://github.com/openclaw/openclaw/actions/runs/28776673177) (green on rerun; the initial tooling attempt hit an unchanged current-main process-cleanup timing test, which passed focused local proof and the GitHub rerun)\n- `$autoreview --mode branch --base upstream/main` (clean after the current-main merge, rejected-save rollback correction, locale completion, and timestamp overlay fix)\n- `$autoreview --mode local` (clean for the rejected-save timing correction; the only later local finding was unchanged current-main restart code and was excluded by the final branch review)\n\nThe full repository `pnpm format:check` currently reports the same unrelated formatting baseline failures on current `upstream/main`; every file owned by this PR passes targeted formatting.\n\nThe branch includes `upstream/main` at `e53131ea1c11921bbe2f966d2ca1760c41705c32`. Exact PR head: `8b14741f28fc61e629c6aa1a322070ccd8f5b6dd`.\n\n## Real behavior proof\n\nBehavior addressed: Control UI chat composer layout, provider/model selection, reasoning and speed controls, combined chat/voice settings, attachments, mobile camera capture, voice start/stop, send-state switching, context display, message alignment, timestamp details, run lifecycle state, error dismissal, response auto-scroll, and realtime voice draft handling.\n\nReal environment tested: Chromium at 1366x768 desktop and 393x852 mobile with the repository E2E Gateway fixture, plus the live Rosita Control UI for configured provider/model inventory and timestamp-overlay verification.\n\nExact steps or command run after this patch: Opened Chat, selected providers/models, staged and saved/discarded reasoning and speed changes, exercised rejected model saves, opened Settings, checked five-line overflow, started/stopped voice capture, verified microphone-to-send switching, opened mobile camera capture, streamed agent responses, and opened timestamp details while measuring message geometry.\n\nEvidence after fix: Fresh current-main/current-head screenshots and animated interaction captures above, focused unit/E2E/browser coverage, exact-head geometry measurements, and clean type/lint/docs/build gates.\n\nObserved result after fix: The composer remains centered at a 48rem maximum and shrinks continuously into mobile; context usage remains visible; provider catalogs and staged picker state stay consistent; failed model saves roll back; text growth caps at five lines; voice/camera/send controls switch correctly; completed runs clear activity; streamed responses follow the viewport; and timestamp details no longer reflow the conversation.\n\nWhat was not tested: Physical mobile camera hardware and a live external realtime voice provider; browser media and Gateway responses used deterministic fixtures.\n\n## Release note\n\nRedesigns the Control UI chat composer across desktop and mobile and fixes model-selection, run-state, scrolling, realtime voice, timestamp-hover, and CI regressions.\n",
+        "branch": "codex/control-ui-chat-composer",
+        "head_sha": "1e3418e9f46c2dea062401513869d7e439c8b871",
+        "author": "fuller-stack-dev",
         "labels": [
           "app: web-ui",
-          "size: L",
+          "gateway",
+          "scripts",
+          "maintainer",
+          "size: XL",
           "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look",
+          "proof: 📸 screenshot"
         ],
         "files": [
           {
-            "path": "src/acp/event-ledger.ts",
-            "additions": 11,
+            "path": "scripts/control-ui-mock-dev.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/models-list-result.ts",
+            "additions": 33,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/models.test.ts",
+            "additions": 68,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/public/provider-icons/ATTRIBUTION.md",
+            "additions": 42,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-abacus.svg",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-alibaba.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-amp.svg",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-antigravity.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-augment.svg",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-bedrock.svg",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-chutes.svg",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-claude.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-clawrouter.svg",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-codebuff.svg",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-codex.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-commandcode.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-copilot.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-crof.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-crossmodel.svg",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-cursor.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-deepgram.svg",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-deepseek.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-devin.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-doubao.svg",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-elevenlabs.svg",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-factory.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-gemini.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-grok.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-groq.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-jetbrains.svg",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-kilo.svg",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-kimi.svg",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-kiro.svg",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-litellm.svg",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-llmproxy.svg",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-manus.svg",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-mimo.svg",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-minimax.svg",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-mistral.svg",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-ollama.svg",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-opencode.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-opencodego.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-openrouter.svg",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-perplexity.svg",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-poe.svg",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-qoder.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-sakana.svg",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-stepfun.svg",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-synthetic.svg",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-t3chat.svg",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-venice.svg",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-vertexai.svg",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-warp.svg",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-windsurf.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-zai.svg",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/public/provider-icons/ProviderIcon-zed.svg",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/src/api/types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/app/public-assets.ts",
+            "additions": 2,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/acp/server.ts",
-            "additions": 6,
-            "deletions": 1,
+            "path": "ui/src/components/app-sidebar.ts",
+            "additions": 7,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/components/icons.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/components/provider-quota-pill.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/e2e/browser-talk-start-stop.e2e.test.ts",
+            "additions": 5,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/e2e/chat-composer-redesign.e2e.test.ts",
+            "additions": 724,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "ui/src/e2e/chat-flow.e2e.test.ts",
+            "additions": 12,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/e2e/chat-quota-pill-93041.e2e.test.ts",
+            "additions": 13,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/ar.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/de.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/es.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/fa.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/fr.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/hi.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/id.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/it.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/ja-JP.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/ko.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/nl.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/pl.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/pt-BR.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/raw-copy-baseline.json",
+            "additions": 3,
+            "deletions": 38,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/ru.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/th.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/tr.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/uk.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/vi.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/zh-CN.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/.i18n/zh-TW.meta.json",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/ar.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/de.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/en.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/es.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/fa.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/fr.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/hi.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/id.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/it.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/ja-JP.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/ko.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/nl.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/pl.ts",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/i18n/locales/pt-BR.ts",
+            "additions": 13,
+            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 17,
-        "deletions": 2,
+        "changedFiles": 143,
+        "additions": 7000,
+        "deletions": 1489,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100913",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100913.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100461",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100461.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -118,16 +727,15 @@
           "total": 93,
           "gatingTotal": 88,
           "counts": {
-            "SUCCESS": 47,
-            "SKIPPED": 27,
-            "IN_PROGRESS": 18,
+            "SUCCESS": 44,
+            "SKIPPED": 25,
+            "IN_PROGRESS": 23,
             "NEUTRAL": 1
           },
           "blockers": [
             "build-artifacts:IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
@@ -135,19 +743,24 @@
             "checks-node-compact-small-4:IN_PROGRESS",
             "checks-node-compact-small-5:IN_PROGRESS",
             "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
             "build-artifacts:IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
@@ -155,34 +768,40 @@
             "checks-node-compact-small-4:IN_PROGRESS",
             "checks-node-compact-small-5:IN_PROGRESS",
             "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "processed_at": "2026-07-06T14:48:18.130Z"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2513,
+    "total_ms": 5338,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 528
+        "ms": 726
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1700
+        "ms": 2093
       },
       {
         "name": "classify_comment_commands",
@@ -198,11 +817,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 265
+        "ms": 2488
       },
       {
         "name": "append_ledger",
