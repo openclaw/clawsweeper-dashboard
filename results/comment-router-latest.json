@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T04:43:32.329Z",
+  "generated_at": "2026-07-06T04:43:37.737Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T01:43:31.838Z",
+  "since": "2026-07-06T01:43:36.109Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    100599
+    100583
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4889151801
+  ],
+  "status_comment_id": 4889152080,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,19 +31,227 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100583:4889151801:2026-07-06T04:42:20Z:re_review",
+      "comment_id": "4889151801",
+      "comment_version_key": "4889151801:2026-07-06T04:42:20Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100583#issuecomment-4889151801",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 100583,
+      "author": "liuhaiyang14",
+      "author_id": 69886048,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-06T04:42:20Z",
+      "comment_updated_at": "2026-07-06T04:42:20Z",
+      "status_comment_id": 4889152080,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 100583,
+          "dispatch_key": "router-74f8b285436e940f",
+          "dispatched_at": "2026-07-06T04:43:38.351Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-06T04:43:39.238Z",
+          "response_comment_id": "4889152080",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tasks): reconcile CLI subagent cancellation",
+        "body": "## What Problem This Solves\n\nThis is a narrow cancellation-path follow-up for TaskFlow rows that already have a tracked child relationship but do not get fully reconciled today.\n\nIn local upgrade-replay incidents, operator cancellation could fail to clear active task state or could clear only the registry row while leaving a backing child session alive:\n\n- stale subagent wrapper rows could return `Subagent was not running.` and stay non-terminal, blocking flow cancellation with `One or more child tasks are still active.`\n- `runtime=cli` task rows whose `childSessionKey` points at a `:subagent:` child could be marked cancelled without killing the backing child session, allowing the child to continue appending events or reappear after restart\n\nThis PR keeps the fix at the operator cancellation entrypoint. It does not replace #90505, which is a broader maintenance-side reconciliation fix for killed subagent task rows and carries a separate session-state transition/docs tradeoff.\n\n## Summary\n\n- cancel CLI-tracked tasks with `childSessionKey` pointing at a `:subagent:` child by killing the backing subagent session before marking the registry row cancelled\n- preserve backing subagent terminal/finalizing outcomes before cancelling CLI mirror rows, so a late `succeeded`/`failed`/finalizing state is not overwritten by operator cancellation\n- keep direct/main CLI follow-up rows registry-only so cancelling them does not kill the user's main session\n- allow found-but-not-running subagent wrappers to fall through to registry cancellation instead of returning `Subagent was not running.`\n- keep childless ACP `context_engine_turn_maintenance` rows non-cancellable without an owner handoff, because active deferred maintenance rows need an owner-aware cancellation path\n\n## Relationship to existing work\n\nRelated issue: #90444.\n\nThis is a narrow follow-up to the uncovered operator-facing cancellation cases described in #90444. It intentionally does not change the broader maintenance reconciliation model covered by #90505.\n\n#90505 remains the larger active/candidate fix for killed subagent task-row finalization. This PR only addresses cancellation entrypoints that can otherwise leave TaskFlow rows or backing child sessions inconsistent even when an operator explicitly tries to repair the state with `tasks cancel` / `tasks flow cancel`.\n\n## Evidence\n\nLocal production/operator evidence, sanitized:\n\n- `openclaw tasks cancel` returned `Subagent was not running.` for a found-but-stopped subagent wrapper, but the task row stayed non-terminal and continued blocking flow cancellation.\n- A `runtime=cli` task with a `:subagent:` child session was marked cancelled in the task registry without stopping the backing child session; after restart/restore, the child could continue producing events and the task could effectively reappear as running.\n- After applying the CLI/subagent cancellation-path behavior locally, restarting the gateway, and replaying the affected cleanup, `running=0`, `queued=0`, and task audit no longer reported stale running/queued/cancel-stuck rows for these cases.\n\nFocused validation on this branch:\n\n- `node scripts/test-projects.mjs src/tasks/task-registry.test.ts src/agents/embedded-agent-runner/context-engine-maintenance.test.ts`\n  - `src/tasks/task-registry.test.ts`: `Tests 113 passed (113)`\n  - `src/agents/embedded-agent-runner/context-engine-maintenance.test.ts`: `Tests 21 passed (21)`\n- `git diff --check`\n- `pnpm exec oxfmt --check src/tasks/task-registry.ts src/tasks/task-registry.test.ts src/agents/embedded-agent-runner/context-engine-maintenance.ts src/agents/embedded-agent-runner/context-engine-maintenance.test.ts`\n\n## Negative Boundaries\n\n- Does not change the `lost -> succeeded` maintenance reconciliation rule discussed in #90505.\n- Does not attempt to solve the larger session write-lock / session-state design line.\n- Does not kill direct/main CLI child sessions; those remain registry-only cancellation to avoid terminating the user's main conversation.\n- Does not overwrite backing subagent terminal/finalizing outcomes when a CLI mirror row cancellation races with completion.\n- Does not mark childless `acp/context_engine_turn_maintenance` rows cancelled without an owner-aware cancellation handoff; stale maintenance cleanup should be handled by a separate owner-aware follow-up.\n",
+        "branch": "codex/taskflow-cancel-reconcile",
+        "head_sha": "3cdcd498491d853743d6e5a8eecceb52bab96ac8",
+        "author": "liuhaiyang14",
+        "labels": [
+          "size: L",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/tasks/task-registry.test.ts",
+            "additions": 260,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tasks/task-registry.ts",
+            "additions": 180,
+            "deletions": 86,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 440,
+        "deletions": 86,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100583",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100583.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 93,
+          "gatingTotal": 88,
+          "counts": {
+            "SUCCESS": 22,
+            "IN_PROGRESS": 43,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "pnpm-store-warmup:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "pnpm-store-warmup:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-06T04:43:37.933Z"
+    }
+  ],
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 815,
+    "total_ms": 3596,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 480
+        "ms": 555
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1057
       },
       {
         "name": "classify_comment_commands",
@@ -49,7 +259,7 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -57,15 +267,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 324
+        "ms": 1956
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
