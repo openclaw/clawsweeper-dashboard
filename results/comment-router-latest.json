@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T04:35:18.774Z",
+  "generated_at": "2026-07-06T04:35:40.878Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T01:35:16.877Z",
+  "since": "2026-07-06T01:35:40.632Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100583
+    100593
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 0,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,167 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100583:4888933941:2026-07-06T04:35:13Z:clawsweeper_auto_repair",
-      "comment_id": "4888933941",
-      "comment_version_key": "4888933941:2026-07-06T04:35:13Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100583#issuecomment-4888933941",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100583,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T03:55:08Z",
-      "comment_updated_at": "2026-07-06T04:35:13Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=3341cd4d9dbdc1b2993bfa3385521d468c4500c5)",
-      "review_summary": "The PR changes task-registry cancellation to kill CLI rows backed by subagent child sessions, reconcile subagent kill outcomes, and allow selected childless maintenance rows to be cancelled, with task-registry regressions.\n\nPR surface: Source +97, Tests +259. Total +356 across 2 files.\n\nReproducibility: yes. for the PR blocker from source inspection: active deferred context-engine maintenance tasks are childless ACP maintenance rows, and the new allowlist would mark that shape cancelled without an owner abort path. I did not run tests in this read-only review.",
-      "review_followup": "- [P2] A bounded repair should add owner-aware active-maintenance protection and regression coverage before this PR can merge.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "3341cd4d9dbdc1b2993bfa3385521d468c4500c5",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(tasks): reconcile CLI subagent cancellation",
-        "body": "## What Problem This Solves\n\nThis is a narrow cancellation-path follow-up for TaskFlow rows that already have a tracked child relationship but do not get fully reconciled today.\n\nIn local upgrade-replay incidents, operator cancellation could fail to clear active task state or could clear only the registry row while leaving a backing child session alive:\n\n- stale subagent wrapper rows could return `Subagent was not running.` and stay non-terminal, blocking flow cancellation with `One or more child tasks are still active.`\n- childless ACP `context_engine_turn_maintenance` rows could return `Task has no cancellable child session.` and leave queued maintenance-lane state behind\n- `runtime=cli` task rows whose `childSessionKey` points at a `:subagent:` child could be marked cancelled without killing the backing child session, allowing the child to continue appending events or reappear after restart\n\nThis PR keeps the fix at the operator cancellation entrypoint. It does not replace #90505, which is a broader maintenance-side reconciliation fix for killed subagent task rows and carries a separate session-state transition/docs tradeoff.\n\n## Summary\n\n- cancel CLI-tracked tasks with `childSessionKey` pointing at a `:subagent:` child by killing the backing subagent session before marking the registry row cancelled\n- preserve backing subagent terminal/finalizing outcomes before cancelling CLI mirror rows, so a late `succeeded`/`failed`/finalizing state is not overwritten by operator cancellation\n- keep direct/main CLI follow-up rows registry-only so cancelling them does not kill the user's main session\n- allow found-but-not-running subagent wrappers to fall through to registry cancellation instead of returning `Subagent was not running.`\n- allow childless ACP `context_engine_turn_maintenance` rows to be cancelled as stale maintenance-lane records\n\n## Relationship to existing work\n\nRelated issue: #90444.\n\nThis is a narrow follow-up to the uncovered operator-facing cancellation cases described in #90444. It intentionally does not change the broader maintenance reconciliation model covered by #90505.\n\n#90505 remains the larger active/candidate fix for killed subagent task-row finalization. This PR only addresses cancellation entrypoints that can otherwise leave TaskFlow rows or backing child sessions inconsistent even when an operator explicitly tries to repair the state with `tasks cancel` / `tasks flow cancel`.\n\n## Evidence\n\nLocal production/operator evidence, sanitized:\n\n- `openclaw tasks cancel` returned `Subagent was not running.` for a found-but-stopped subagent wrapper, but the task row stayed non-terminal and continued blocking flow cancellation.\n- `openclaw tasks cancel` returned `Task has no cancellable child session.` for a childless `acp/context_engine_turn_maintenance` row, leaving queued maintenance state behind.\n- A `runtime=cli` task with a `:subagent:` child session was marked cancelled in the task registry without stopping the backing child session; after restart/restore, the child could continue producing events and the task could effectively reappear as running.\n- After applying this cancellation-path behavior locally, restarting the gateway, and replaying the affected cleanup, `running=0`, `queued=0`, and task audit no longer reported stale running/queued/cancel-stuck rows for these cases.\n\nFocused validation on this branch:\n\n- `node scripts/test-projects.mjs src/tasks/task-registry.test.ts`\n  - `Test Files 1 passed (1)`\n  - `Tests 113 passed (113)`\n- `git diff --check`\n- `pnpm exec oxfmt --check src/tasks/task-registry.ts src/tasks/task-registry.test.ts`\n\n## Negative Boundaries\n\n- Does not change the `lost -> succeeded` maintenance reconciliation rule discussed in #90505.\n- Does not attempt to solve the larger session write-lock / session-state design line.\n- Does not kill direct/main CLI child sessions; those remain registry-only cancellation to avoid terminating the user's main conversation.\n- Does not overwrite backing subagent terminal/finalizing outcomes when a CLI mirror row cancellation races with completion.\n",
-        "branch": "codex/taskflow-cancel-reconcile",
-        "head_sha": "3341cd4d9dbdc1b2993bfa3385521d468c4500c5",
-        "author": "liuhaiyang14",
-        "labels": [
-          "size: L",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/tasks/task-registry.test.ts",
-            "additions": 259,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-registry.ts",
-            "additions": 183,
-            "deletions": 86,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 442,
-        "deletions": 86,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100583",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100583.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 100,
-          "gatingTotal": 95,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:100583:4889002463:2026-07-06T04:12:26Z:re_review",
-      "comment_id": "4889002463",
-      "comment_version_key": "4889002463:2026-07-06T04:12:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100583#issuecomment-4889002463",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100583,
-      "author": "liuhaiyang14",
-      "author_id": 69886048,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-06T04:12:26Z",
-      "comment_updated_at": "2026-07-06T04:12:26Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2835,
+    "total_ms": 420,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 253
+        "ms": 237
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1626
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -205,7 +61,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 899
+        "ms": 174
       },
       {
         "name": "append_ledger",
