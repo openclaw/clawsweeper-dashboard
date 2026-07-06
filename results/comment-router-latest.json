@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T09:59:35.253Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-06T09:59:54.147Z",
+  "repo": "openclaw/gitcrawl",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T06:59:32.779Z",
+  "since": "2026-07-06T06:59:53.868Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100691
+    93
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,251 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100691:4890113690:2026-07-06T09:59:27Z:clawsweeper_auto_repair",
-      "comment_id": "4890113690",
-      "comment_version_key": "4890113690:2026-07-06T09:59:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100691#issuecomment-4890113690",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100691,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T07:17:55Z",
-      "comment_updated_at": "2026-07-06T09:59:27Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=0cd51d5084efa353535ad35a6e0a5b8e7936b052)",
-      "review_summary": "The PR imports the shared state DB close helper into `serveAcpGateway`, tracks in-flight gateway event handlers, drains them during shutdown, closes the shared SQLite state DB, and adds ACP startup tests for shutdown cleanup and drain ordering.\n\nPR surface: Source +14, Tests +77. Total +91 across 2 files.\n\nReproducibility: yes. for source-level reproduction: current main creates the SQLite ACP ledger through the shared state DB cache and the ACP signal shutdown path does not close that cache. I did not run a live hot-reload/file-lock reproduction in this read-only review.",
-      "review_followup": "- [P1] Human review is needed because contributor real-behavior proof is missing and maintainers must choose the canonical fix among competing PRs; ClawSweeper should not repair-proof a contributor setup automatically.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "0cd51d5084efa353535ad35a6e0a5b8e7936b052",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(acp): close shared state database on gateway shutdown (#100637)",
-        "body": "## What Problem This Solves\n\nFixes #100637: The standalone ACP gateway process (`serveAcpGateway`) opens a SQLite `DatabaseSync` connection through `createSqliteAcpEventLedger()` but never closes it on SIGINT/SIGTERM shutdown. This leaks file descriptors and causes SQLite file locking issues during hot reload.\n\nAdditionally, steipete identified a race condition in the original fix: `onEvent` fires `handleGatewayEvent` without tracking its promise. If SIGINT arrives while a handler is in-flight (suspended on `connection.sessionUpdate`), the handler could resume after shutdown and reopen the cached SQLite handle via `openOpenClawStateDatabase`.\n\n## Root Cause\n\n1. `src/acp/server.ts` shutdown handler only called `gateway.stop()` — never called `closeOpenClawStateDatabase()`\n2. `onEvent` used `void` to discard the `handleGatewayEvent` promise — no tracking of in-flight handlers\n3. `onClosed()` was called synchronously inside `gateway.stop()` → `onClose` callback, before any drain or DB close\n\n## Changes\n\n- `src/acp/server.ts`:\n  - Import `closeOpenClawStateDatabase` from shared state DB module\n  - Track in-flight `handleGatewayEvent` promises in a `Set<Promise<void>>`\n  - Skip new events in `onEvent` when shutdown has started\n  - In `shutdown()`: drain in-flight handlers via `Promise.allSettled` before closing the shared state DB\n  - Move `onClosed()` out of the `onClose` callback so the shutdown promise resolves after drain+close, not during `gateway.stop()`\n- `src/acp/server.startup.test.ts`:\n  - Add test proving DB close on shutdown (13 → 14 tests)\n  - Add regression test: suspend `sessionUpdate`, trigger shutdown, verify DB is NOT closed while handler is in-flight, then resolve and verify DB IS closed after drain\n\n## Evidence\n\n### Tests (14/14 pass)\n\n```\n$ pnpm test src/acp/server.startup.test.ts\n Test Files  1 passed (1)\n      Tests  14 passed (14)\n\n$ pnpm test src/acp/event-ledger.test.ts\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n\n$ pnpm test src/state/openclaw-state-db.test.ts\n Test Files  1 passed (1)\n      Tests  18 passed (18)\n```\n\n### Race condition regression test\n\nThe new test \"drains in-flight gateway events before closing the shared state database on shutdown\":\n1. Creates a deferred promise that suspends `handleGatewayEvent`\n2. Fires a gateway event → handler begins, promise tracked in `inFlightEvents`\n3. Triggers SIGINT shutdown\n4. **Assert**: `closeOpenClawStateDatabase` has NOT been called (handler still in-flight)\n5. Resolves the deferred → handler completes\n6. **Assert**: `closeOpenClawStateDatabase` was called exactly once (after drain)\n\n### Diff scope\n\n```\n src/acp/server.startup.test.ts | 55 ++++++++++++++++++++++++++++++++++++++++--\n src/acp/server.ts              | 26 ++++++++++++---------\n 2 files changed, 70 insertions(+), 11 deletions(-)\n```\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nCo-Authored-By: Claude <noreply@anthropic.com>",
-        "branch": "fix/acp-shutdown-state-db-close",
-        "head_sha": "0cd51d5084efa353535ad35a6e0a5b8e7936b052",
-        "author": "lzy3538",
-        "labels": [
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/acp/server.startup.test.ts",
-            "additions": 78,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/server.ts",
-            "additions": 26,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 104,
-        "deletions": 13,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100691",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100691.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "CHANGES_REQUESTED",
-        "checks": {
-          "total": 100,
-          "gatingTotal": 95,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 34,
-            "SUCCESS": 59,
-            "FAILURE": 4,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-small-whole-2:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-docs:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [
-            "checks-node-compact-small-whole-2:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-docs:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:100691:4891217794:2026-07-06T09:29:33Z:re_review",
-      "comment_id": "4891217794",
-      "comment_version_key": "4891217794:2026-07-06T09:29:33Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100691#issuecomment-4891217794",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100691,
-      "author": "LZY3538",
-      "author_id": 293718838,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T09:29:33Z",
-      "comment_updated_at": "2026-07-06T09:29:33Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(acp): close shared state database on gateway shutdown (#100637)",
-        "body": "## What Problem This Solves\n\nFixes #100637: The standalone ACP gateway process (`serveAcpGateway`) opens a SQLite `DatabaseSync` connection through `createSqliteAcpEventLedger()` but never closes it on SIGINT/SIGTERM shutdown. This leaks file descriptors and causes SQLite file locking issues during hot reload.\n\nAdditionally, steipete identified a race condition in the original fix: `onEvent` fires `handleGatewayEvent` without tracking its promise. If SIGINT arrives while a handler is in-flight (suspended on `connection.sessionUpdate`), the handler could resume after shutdown and reopen the cached SQLite handle via `openOpenClawStateDatabase`.\n\n## Root Cause\n\n1. `src/acp/server.ts` shutdown handler only called `gateway.stop()` — never called `closeOpenClawStateDatabase()`\n2. `onEvent` used `void` to discard the `handleGatewayEvent` promise — no tracking of in-flight handlers\n3. `onClosed()` was called synchronously inside `gateway.stop()` → `onClose` callback, before any drain or DB close\n\n## Changes\n\n- `src/acp/server.ts`:\n  - Import `closeOpenClawStateDatabase` from shared state DB module\n  - Track in-flight `handleGatewayEvent` promises in a `Set<Promise<void>>`\n  - Skip new events in `onEvent` when shutdown has started\n  - In `shutdown()`: drain in-flight handlers via `Promise.allSettled` before closing the shared state DB\n  - Move `onClosed()` out of the `onClose` callback so the shutdown promise resolves after drain+close, not during `gateway.stop()`\n- `src/acp/server.startup.test.ts`:\n  - Add test proving DB close on shutdown (13 → 14 tests)\n  - Add regression test: suspend `sessionUpdate`, trigger shutdown, verify DB is NOT closed while handler is in-flight, then resolve and verify DB IS closed after drain\n\n## Evidence\n\n### Tests (14/14 pass)\n\n```\n$ pnpm test src/acp/server.startup.test.ts\n Test Files  1 passed (1)\n      Tests  14 passed (14)\n\n$ pnpm test src/acp/event-ledger.test.ts\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n\n$ pnpm test src/state/openclaw-state-db.test.ts\n Test Files  1 passed (1)\n      Tests  18 passed (18)\n```\n\n### Race condition regression test\n\nThe new test \"drains in-flight gateway events before closing the shared state database on shutdown\":\n1. Creates a deferred promise that suspends `handleGatewayEvent`\n2. Fires a gateway event → handler begins, promise tracked in `inFlightEvents`\n3. Triggers SIGINT shutdown\n4. **Assert**: `closeOpenClawStateDatabase` has NOT been called (handler still in-flight)\n5. Resolves the deferred → handler completes\n6. **Assert**: `closeOpenClawStateDatabase` was called exactly once (after drain)\n\n### Diff scope\n\n```\n src/acp/server.startup.test.ts | 55 ++++++++++++++++++++++++++++++++++++++++--\n src/acp/server.ts              | 26 ++++++++++++---------\n 2 files changed, 70 insertions(+), 11 deletions(-)\n```\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nCo-Authored-By: Claude <noreply@anthropic.com>",
-        "branch": "fix/acp-shutdown-state-db-close",
-        "head_sha": "0cd51d5084efa353535ad35a6e0a5b8e7936b052",
-        "author": "lzy3538",
-        "labels": [
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/acp/server.startup.test.ts",
-            "additions": 78,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/server.ts",
-            "additions": 26,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 104,
-        "deletions": 13,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100691",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100691.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "CHANGES_REQUESTED",
-        "checks": {
-          "total": 100,
-          "gatingTotal": 95,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 34,
-            "SUCCESS": 59,
-            "FAILURE": 4,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-small-whole-2:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-docs:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [
-            "checks-node-compact-small-whole-2:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-docs:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2833,
+    "total_ms": 496,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 433
+        "ms": 267
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2028
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -285,11 +57,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 352
+        "ms": 217
       },
       {
         "name": "append_ledger",
