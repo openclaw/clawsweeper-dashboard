@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T13:33:48.466Z",
-  "repo": "openclaw/clownfish",
+  "generated_at": "2026-07-06T13:34:17.733Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T10:33:48.091Z",
+  "since": "2026-07-06T10:34:15.225Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    248
+    100896
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,146 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100896:4893352649:2026-07-06T13:34:11Z:clawsweeper_needs_human",
+      "comment_id": "4893352649",
+      "comment_version_key": "4893352649:2026-07-06T13:34:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100896#issuecomment-4893352649",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100896,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T13:28:26Z",
+      "comment_updated_at": "2026-07-06T13:34:11Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Human review remains because the external PR needs contributor-supplied real Discord reconnect-window proof before merge; no narrow code repair was identified in this review.; Cleared: No concrete security or supply-chain concern was found; the diff only changes Discord plugin runtime retry/lifecycle code and tests. (sha=4820a3a393a17ac453f95a4c7077d361028ceefd)",
+      "review_summary": "Adds a Discord gateway-disconnected retry condition, drains Discord pending delivery queue entries after reconnect, passes config into the gateway lifecycle, and adds retry/lifecycle tests.\n\nPR surface: Source +72, Tests +105. Total +177 across 5 files.\n\nReproducibility: yes. at source level: current main lacks a Discord reconnect drain and gateway-disconnected retry condition, while the linked issue describes outbound messages lost during reconnect windows. I did not run a live Discord reconnect reproduction in this read-only review.",
+      "review_followup": "- [P1] Human review remains because the external PR needs contributor-supplied real Discord reconnect-window proof before merge; no narrow code repair was identified in this review.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "4820a3a393a17ac453f95a4c7077d361028ceefd",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(discord): messages sent during gateway reconnect are silently dropped",
+        "body": "Closes #56610\n\n## What Problem This Solves\n\nFixes an issue where Discord outbound messages sent while the gateway websocket was reconnecting (close codes 1005/1006 during network blips or Discord-side resets) would fail and never be delivered. The failed sends landed in the durable outbound delivery queue as pending entries, but nothing on the Discord side ever drained that queue after the gateway came back, so the messages were silently dropped from the user's perspective. WhatsApp and Telegram already drain their queued deliveries on reconnect; Discord was the gap.\n\n## Why This Change Was Made\n\nTwo small, config-free changes inside the Discord plugin, mirroring the existing WhatsApp/Telegram reconnect-drain pattern:\n\n1. `withDiscordDeliveryRetry` now treats a send failure as retryable when the account's registered gateway reports `isConnected === false`, so in-flight sends ride out short reconnect windows instead of failing immediately. The gateway is looked up with the resolved account id (the same id the lifecycle registers under, fixing the default-account lookup gap flagged on the earlier attempt in #94320), and connectivity is re-read per retry attempt so the loop stops treating errors as transport blips once the gateway is back. `DiscordError` (HTTP 4xx client errors) stays non-retryable.\n2. The gateway lifecycle's status observer now fires an `onReconnect` hook on every connected transition after the initial READY, which drains pending `discord:<accountId>` queue entries via the shared `drainPendingDeliveries` SDK runtime helper. The initial connection is excluded because startup recovery already replays queued sends.\n\nNo new config surface, no protocol changes, no core changes; everything stays inside `extensions/discord` plus the existing plugin SDK seams.\n\n## User Impact\n\nMessages an agent sends during a Discord gateway reconnect are now delivered once the connection is re-established instead of being silently lost. Operators no longer need to restart the gateway or manually replay the delivery queue after a network blip.\n\n## Evidence\n\n- New unit tests:\n  - `extensions/discord/src/retry.test.ts`: statusless transport errors retry while the registered gateway is disconnected; no retry when connected; `DiscordError` stays non-retryable either way; `withDiscordDeliveryRetry` end-to-end with a registered disconnected/connected gateway.\n  - `extensions/discord/src/monitor/provider.lifecycle.test.ts`: reconnect (websocket reopen -> READY) triggers exactly one `drainPendingDeliveries` call with `drainKey: \"discord:default\"` and a selector matching discord entries (including entries with an unset account id) while rejecting other channels; the initial connection triggers no drain.\n- Focused run: `pnpm test extensions/discord/src/retry.test.ts extensions/discord/src/monitor/provider.lifecycle.test.ts` — 2 files, 48 tests passed.\n- Full plugin suite: `pnpm test extensions/discord` — 163 files, 1871 tests passed.\n- Typecheck: `pnpm tsgo:extensions && pnpm tsgo:extensions:test` — clean.\n- Lint/format: `scripts/run-oxlint.mjs` on touched files and `oxfmt --check` — clean.\n- Known proof gap: no live Discord reconnect reproduction was captured for this PR (that was the blocker that stalled #94320). The reconnect-drain path is exercised by the lifecycle test at the same seam the real gateway debug/READY events flow through; happy to assist with a live repro run if maintainers want one before landing.\n",
+        "branch": "feat/56610-discord-reconnect-delivery-drain",
+        "head_sha": "4820a3a393a17ac453f95a4c7077d361028ceefd",
+        "author": "tiffanychum",
+        "labels": [
+          "channel: discord",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/discord/src/delivery-retry.ts",
+            "additions": 20,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/provider.lifecycle.test.ts",
+            "additions": 57,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/provider.lifecycle.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/provider.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/retry.test.ts",
+            "additions": 49,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 180,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100896",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100896.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 93,
+          "gatingTotal": 88,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 34,
+            "SUCCESS": 56,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 612,
+    "total_ms": 2745,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 363
+        "ms": 397
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 2095
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +184,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 237
+        "ms": 225
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
