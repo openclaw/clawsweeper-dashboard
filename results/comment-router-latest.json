@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T07:29:22.177Z",
+  "generated_at": "2026-07-06T07:29:34.689Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T04:29:21.842Z",
+  "since": "2026-07-06T04:29:34.369Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100702
+    100703
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
+  "scanned_comments": 1,
   "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
@@ -29,251 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100696:4890140931:2026-07-06T07:29:11Z:clawsweeper_needs_human",
-      "comment_id": "4890140931",
-      "comment_version_key": "4890140931:2026-07-06T07:29:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100696#issuecomment-4890140931",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100696,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T07:21:42Z",
-      "comment_updated_at": "2026-07-06T07:29:11Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=88255cf581aa345db18d25bd70217d84937ca226)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "88255cf581aa345db18d25bd70217d84937ca226",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(compaction): preserve source message timestamps in synthetic merge messages during multi-stage summarization",
-        "body": "Fixes #100636.\n\n## What Problem This Solves\n\nIn `summarizeInStages()` (`src/agents/compaction.ts#L389-L393`), synthetic merge messages for multi-stage summarization all received `timestamp: Date.now()`, stripping the original chronological ordering of the source chunks. The LLM merger could not distinguish which summary chunk represents older vs newer history.\n\n## Why This Change Was Made\n\nChanged the synthetic `AgentMessage` construction to preserve the earliest message timestamp from each source chunk (`plan.chunks[idx][0].timestamp`) instead of `Date.now()`. Falls back to the last message timestamp, then `Date.now()`.\n\n## User Impact\n\nMulti-stage compaction summaries now preserve relative time ordering. The LLM merger can identify older vs newer context, improving summary quality for long sessions.\n\n## Evidence\n\n### 1. BEFORE vs AFTER — Live Production Module Proof (current head 88255cf5)\n\nRepro script: `scripts/repro-100636-before-after.mjs`. Exercises `splitMessagesByTokenShare()` from the exact patched production module with 10 timestamped messages (10000s-1000s ago), producing 3 chunks:\n\n```\n$ node --import tsx/esm scripts/repro-100636-before-after.mjs\n============================================================\nIssue #100636: summarizeInStages timestamp proof\n============================================================\nMessages: 10 | Chunks: 3\n\n--- [BEFORE] Date.now() for all (current main) ---\n(simulates: timestamp = Date.now() at line 392)\n\n  Chunk 0 (1 msgs): timestamp=Date.now()\n  Chunk 1 (1 msgs): timestamp=Date.now()\n  Chunk 2 (8 msgs): timestamp=Date.now()\n\n  --> [CRITICAL_FAIL] All 3 chunks have IDENTICAL timestamp\n  --> LLM merger CANNOT distinguish old vs new history\n\n--- [AFTER] Original timestamps preserved (this PR) ---\n(simulates: timestamp = plan.chunks[idx][0].timestamp ?? plan.chunks[idx][last].timestamp ?? Date.now())\n\n  Chunk 0 (1 msgs): ts=1783311848029 (10000s ago)\n  Chunk 1 (1 msgs): ts=1783313848029 (8000s ago)\n  Chunk 2 (8 msgs): ts=1783315848029 (6000s ago)\n\n  --> [SUCCESS] Chunks carry monotonically increasing timestamps: PASS\n  --> LLM merger CAN distinguish oldest chunk (10000s) from newest (6000s)\n\n============================================================\nRESULT: BEFORE/AFTER PROOF PASSED\n============================================================\n```\n\n**BEFORE (current main)**: All 3 chunks get `Date.now()` — identical, no ordering info.\n**AFTER (this PR)**: Chunks carry original timestamps in correct chronological order (10000s → 8000s → 6000s ago).\n\n### 2. Live Gateway Environment\n\nGateway running as systemd user service, connected to `127.0.0.1:18789`:\n\n```\n$ openclaw gateway status\nService: systemd user (enabled)\nFile logs: /tmp/openclaw/openclaw-2026-07-06.log\nGateway: bind=loopback (127.0.0.1), port=18789 (service args)\nDashboard: http://127.0.0.1:18789/\nRuntime: running (pid 1402, state active, sub running, last exit 0, reason 0)\nConnectivity probe: ok\nCapability: admin-capable\nListening: 127.0.0.1:18789\n```\n\n### 3. Gateway Runtime Logs — Compaction Subsystem (PII redacted)\n\nThe live gateway logged 8 compaction events from `src/logging/subsystem.ts:361`, proving the module reaches the multi-stage path where synthetic merge messages are constructed (line 389-393):\n\n```\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n```\n\n### 4. Full Test Suite — Verbose Output (current head 88255cf5)\n\n```\n$ node scripts/run-vitest.mjs src/agents/compaction.test.ts --run --reporter=verbose\n\n RUN  v4.1.9\n\n ✓ splitMessagesByTokenShare > splits messages into two non-empty parts\n ✓ splitMessagesByTokenShare > preserves message order across parts\n ✓ splitMessagesByTokenShare > keeps tool_use and matching toolResult in the same chunk\n ✓ splitMessagesByTokenShare > keeps multiple toolResults with their assistant in the same chunk\n ✓ splitMessagesByTokenShare > keeps displaced toolResults with their assistant chunk\n ✓ splitMessagesByTokenShare > splits after a completed tool_call/result pair when over budget\n ✓ splitMessagesByTokenShare > splits before a trailing completed tool-call pair\n ✓ splitMessagesByTokenShare > does not block splits after aborted tool-call assistants\n ✓ splitMessagesByTokenShare > splits before unfinished tool-call turns that never get a result\n ✓ pruneHistoryForContextShare > drops older chunks until the history budget is met\n ✓ pruneHistoryForContextShare > keeps the newest messages when pruning\n ✓ pruneHistoryForContextShare > keeps history when already within budget\n ✓ pruneHistoryForContextShare > returns droppedMessagesList containing dropped messages\n ✓ pruneHistoryForContextShare > returns empty droppedMessagesList when no pruning needed\n ✓ pruneHistoryForContextShare > removes orphaned tool_result messages when tool_use is dropped\n ✓ pruneHistoryForContextShare > keeps tool_result when its tool_use is also kept\n ✓ pruneHistoryForContextShare > removes multiple orphaned tool_results from the same dropped tool_use\n\n Test Files  1 passed (1)\n      Tests  17 passed (17)\n```\n\n### 5. Codex Review (current head 88255cf5)\n\n```\n$ codex --cd /home/0668000787/open-source-pr/openclaw/openclaw review --base upstream/main\n\nThe change replaces a static Date.now() timestamp with timestamps derived\nfrom the original chunk messages, preserving chronological ordering for the\nLLM merger. The fallback chain handles edge cases (empty/null chunks,\nmissing first-message timestamp) safely.\n```\n\n### Edge Case Coverage\n\n| Scenario | Fallback path |\n|---|---|\n| Empty chunk | `?.[0]?.timestamp` → undefined → `?.[[len-1]]?.timestamp` → `Date.now()` |\n| No first-msg timestamp | Cascades to last message timestamp |\n| No timestamps at all | Final `?? Date.now()` |\n| `plan.mode === \"single\"` | Unaffected — no synthetic messages created |\n\n## Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/agents/compaction.test.ts --run --reporter=verbose` — 17/17 passed\n- `codex review --base upstream/main` — clean, zero warnings\n- Gateway runtime: compaction subsystem active (8 log entries), probe ok\n- BEFORE/AFTER proof: `scripts/repro-100636-before-after.mjs` — PASSED\n\n## Root Cause\n\nIn `summarizeInStages()` (`src/agents/compaction.ts#L389-L393`), `partialSummaries.map()` creates synthetic `AgentMessage` items for the merger LLM. All receive `timestamp: Date.now()`, generating identical timestamps regardless of source chunk position. For `plan.mode === \"single\"`, no synthetic messages are created; the issue is specific to multi-stage paths. Original timestamps exist in `plan.chunks[idx][*].timestamp` but are discarded in `.map()`.\n\n## AI Assistance\n\n- **AI-assisted**: Yes\n- **Model used**: Claude Opus 4.8 (1M context)\n",
-        "branch": "fix/issue-100636-compaction-summary-timestamp",
-        "head_sha": "88255cf581aa345db18d25bd70217d84937ca226",
-        "author": "maweibin",
-        "labels": [
-          "agents",
-          "size: XS",
-          "P3",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/compaction.ts",
-            "additions": 9,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 9,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100696",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100696.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "gatingTotal": 97,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 37,
-            "SUCCESS": 55,
-            "FAILURE": 7,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:100696:4889985824:2026-07-06T07:00:59Z:re_review",
-      "comment_id": "4889985824",
-      "comment_version_key": "4889985824:2026-07-06T07:00:59Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100696#issuecomment-4889985824",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100696,
-      "author": "maweibin",
-      "author_id": 18023423,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T07:00:59Z",
-      "comment_updated_at": "2026-07-06T07:00:59Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(compaction): preserve source message timestamps in synthetic merge messages during multi-stage summarization",
-        "body": "Fixes #100636.\n\n## What Problem This Solves\n\nIn `summarizeInStages()` (`src/agents/compaction.ts#L389-L393`), synthetic merge messages for multi-stage summarization all received `timestamp: Date.now()`, stripping the original chronological ordering of the source chunks. The LLM merger could not distinguish which summary chunk represents older vs newer history.\n\n## Why This Change Was Made\n\nChanged the synthetic `AgentMessage` construction to preserve the earliest message timestamp from each source chunk (`plan.chunks[idx][0].timestamp`) instead of `Date.now()`. Falls back to the last message timestamp, then `Date.now()`.\n\n## User Impact\n\nMulti-stage compaction summaries now preserve relative time ordering. The LLM merger can identify older vs newer context, improving summary quality for long sessions.\n\n## Evidence\n\n### 1. BEFORE vs AFTER — Live Production Module Proof (current head 88255cf5)\n\nRepro script: `scripts/repro-100636-before-after.mjs`. Exercises `splitMessagesByTokenShare()` from the exact patched production module with 10 timestamped messages (10000s-1000s ago), producing 3 chunks:\n\n```\n$ node --import tsx/esm scripts/repro-100636-before-after.mjs\n============================================================\nIssue #100636: summarizeInStages timestamp proof\n============================================================\nMessages: 10 | Chunks: 3\n\n--- [BEFORE] Date.now() for all (current main) ---\n(simulates: timestamp = Date.now() at line 392)\n\n  Chunk 0 (1 msgs): timestamp=Date.now()\n  Chunk 1 (1 msgs): timestamp=Date.now()\n  Chunk 2 (8 msgs): timestamp=Date.now()\n\n  --> [CRITICAL_FAIL] All 3 chunks have IDENTICAL timestamp\n  --> LLM merger CANNOT distinguish old vs new history\n\n--- [AFTER] Original timestamps preserved (this PR) ---\n(simulates: timestamp = plan.chunks[idx][0].timestamp ?? plan.chunks[idx][last].timestamp ?? Date.now())\n\n  Chunk 0 (1 msgs): ts=1783311848029 (10000s ago)\n  Chunk 1 (1 msgs): ts=1783313848029 (8000s ago)\n  Chunk 2 (8 msgs): ts=1783315848029 (6000s ago)\n\n  --> [SUCCESS] Chunks carry monotonically increasing timestamps: PASS\n  --> LLM merger CAN distinguish oldest chunk (10000s) from newest (6000s)\n\n============================================================\nRESULT: BEFORE/AFTER PROOF PASSED\n============================================================\n```\n\n**BEFORE (current main)**: All 3 chunks get `Date.now()` — identical, no ordering info.\n**AFTER (this PR)**: Chunks carry original timestamps in correct chronological order (10000s → 8000s → 6000s ago).\n\n### 2. Live Gateway Environment\n\nGateway running as systemd user service, connected to `127.0.0.1:18789`:\n\n```\n$ openclaw gateway status\nService: systemd user (enabled)\nFile logs: /tmp/openclaw/openclaw-2026-07-06.log\nGateway: bind=loopback (127.0.0.1), port=18789 (service args)\nDashboard: http://127.0.0.1:18789/\nRuntime: running (pid 1402, state active, sub running, last exit 0, reason 0)\nConnectivity probe: ok\nCapability: admin-capable\nListening: 127.0.0.1:18789\n```\n\n### 3. Gateway Runtime Logs — Compaction Subsystem (PII redacted)\n\nThe live gateway logged 8 compaction events from `src/logging/subsystem.ts:361`, proving the module reaches the multi-stage path where synthetic merge messages are constructed (line 389-393):\n\n```\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n{\"subsystem\":\"compaction\",\"filePath\":\"src/logging/subsystem.ts\",\"fileLine\":\"361\"}\n```\n\n### 4. Full Test Suite — Verbose Output (current head 88255cf5)\n\n```\n$ node scripts/run-vitest.mjs src/agents/compaction.test.ts --run --reporter=verbose\n\n RUN  v4.1.9\n\n ✓ splitMessagesByTokenShare > splits messages into two non-empty parts\n ✓ splitMessagesByTokenShare > preserves message order across parts\n ✓ splitMessagesByTokenShare > keeps tool_use and matching toolResult in the same chunk\n ✓ splitMessagesByTokenShare > keeps multiple toolResults with their assistant in the same chunk\n ✓ splitMessagesByTokenShare > keeps displaced toolResults with their assistant chunk\n ✓ splitMessagesByTokenShare > splits after a completed tool_call/result pair when over budget\n ✓ splitMessagesByTokenShare > splits before a trailing completed tool-call pair\n ✓ splitMessagesByTokenShare > does not block splits after aborted tool-call assistants\n ✓ splitMessagesByTokenShare > splits before unfinished tool-call turns that never get a result\n ✓ pruneHistoryForContextShare > drops older chunks until the history budget is met\n ✓ pruneHistoryForContextShare > keeps the newest messages when pruning\n ✓ pruneHistoryForContextShare > keeps history when already within budget\n ✓ pruneHistoryForContextShare > returns droppedMessagesList containing dropped messages\n ✓ pruneHistoryForContextShare > returns empty droppedMessagesList when no pruning needed\n ✓ pruneHistoryForContextShare > removes orphaned tool_result messages when tool_use is dropped\n ✓ pruneHistoryForContextShare > keeps tool_result when its tool_use is also kept\n ✓ pruneHistoryForContextShare > removes multiple orphaned tool_results from the same dropped tool_use\n\n Test Files  1 passed (1)\n      Tests  17 passed (17)\n```\n\n### 5. Codex Review (current head 88255cf5)\n\n```\n$ codex --cd /home/0668000787/open-source-pr/openclaw/openclaw review --base upstream/main\n\nThe change replaces a static Date.now() timestamp with timestamps derived\nfrom the original chunk messages, preserving chronological ordering for the\nLLM merger. The fallback chain handles edge cases (empty/null chunks,\nmissing first-message timestamp) safely.\n```\n\n### Edge Case Coverage\n\n| Scenario | Fallback path |\n|---|---|\n| Empty chunk | `?.[0]?.timestamp` → undefined → `?.[[len-1]]?.timestamp` → `Date.now()` |\n| No first-msg timestamp | Cascades to last message timestamp |\n| No timestamps at all | Final `?? Date.now()` |\n| `plan.mode === \"single\"` | Unaffected — no synthetic messages created |\n\n## Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/agents/compaction.test.ts --run --reporter=verbose` — 17/17 passed\n- `codex review --base upstream/main` — clean, zero warnings\n- Gateway runtime: compaction subsystem active (8 log entries), probe ok\n- BEFORE/AFTER proof: `scripts/repro-100636-before-after.mjs` — PASSED\n\n## Root Cause\n\nIn `summarizeInStages()` (`src/agents/compaction.ts#L389-L393`), `partialSummaries.map()` creates synthetic `AgentMessage` items for the merger LLM. All receive `timestamp: Date.now()`, generating identical timestamps regardless of source chunk position. For `plan.mode === \"single\"`, no synthetic messages are created; the issue is specific to multi-stage paths. Original timestamps exist in `plan.chunks[idx][*].timestamp` but are discarded in `.map()`.\n\n## AI Assistance\n\n- **AI-assisted**: Yes\n- **Model used**: Claude Opus 4.8 (1M context)\n",
-        "branch": "fix/issue-100636-compaction-summary-timestamp",
-        "head_sha": "88255cf581aa345db18d25bd70217d84937ca226",
-        "author": "maweibin",
-        "labels": [
-          "agents",
-          "size: XS",
-          "P3",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/compaction.ts",
-            "additions": 9,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 9,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100696",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100696.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "gatingTotal": 97,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 37,
-            "SUCCESS": 55,
-            "FAILURE": 7,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 618,
+    "total_ms": 510,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 324
+        "ms": 307
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2255
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -289,11 +61,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 283
+        "ms": 190
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
