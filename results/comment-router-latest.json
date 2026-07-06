@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T16:19:18.194Z",
+  "generated_at": "2026-07-06T16:19:36.831Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T13:19:14.453Z",
+  "since": "2026-07-06T13:19:36.572Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    100913
+    100982
   ],
-  "comment_ids": [
-    4895075958
-  ],
-  "status_comment_id": 4895076502,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,195 +29,19 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:100913:4895075958:2026-07-06T16:17:40Z:re_review",
-      "comment_id": "4895075958",
-      "comment_version_key": "4895075958:2026-07-06T16:17:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100913#issuecomment-4895075958",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 100913,
-      "author": "lzyyzznl",
-      "author_id": 41978486,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T16:17:40Z",
-      "comment_updated_at": "2026-07-06T16:17:40Z",
-      "status_comment_id": 4895076502,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 100913,
-          "dispatch_key": "router-a391e90146d2e617",
-          "dispatched_at": "2026-07-06T16:19:18.888Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-06T16:19:19.871Z",
-          "response_comment_id": "4895076502",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(acp): add close() lifecycle method to SQLite event ledger",
-        "body": "## Summary\n\n**Problem**: When the Gateway hot-reloads or shuts down via SIGINT/SIGTERM, `DatabaseSync` connections opened by `createSqliteAcpEventLedger()` remain open because the ledger object does not expose a `close()` lifecycle method for teardown. The underlying `openOpenClawStateDatabase()` caches handles in a module-level Map (`cachedDatabases` in `src/state/openclaw-state-db.ts`). When the gateway reloads, old `AcpEventLedger` instances are garbage-collected but the `DatabaseSync` handles they opened stay alive in the cache, leaking file descriptors and holding SQLite file locks. Subsequent gateway instances fail with locking errors because the old connections still hold advisory locks on the database file. This is the classic resource management anti-pattern: objects that acquire system resources (file handles, database connections) must expose explicit release methods so callers can integrate cleanup into their lifecycle.\n\n**Solution**: Add `close: () => void` to the `AcpEventLedger` interface so every ledger implementation must provide resource cleanup during its teardown phase. The SQLite-backed implementation (`createSqliteAcpEventLedger`) delegates to `closeOpenClawStateDatabase()` — an existing utility function that closes all cached `DatabaseSync` handles, runs WAL maintenance shutdown, clears internal Kysely statement caches, and removes entries from the `cachedDatabases` Map. The in-memory variant (`createInMemoryAcpEventLedger`) provides a no-op since it holds no external resources. The shared ledger API factory (`createLedgerApi`) also provides a no-op `close()` so all callers satisfy the interface without extra boilerplate. The gateway entry point (`serveAcpGateway` in `src/acp/server.ts`) now uses a **drain-then-close** shutdown sequence: `gateway.stop()` (block new events) → `agent.drain()` (await in-flight event handlers) → `eventLedger?.close()` (release database handles). This ordering ensures no handler can resume after the ledger is closed and reopen the shared state DB cache.\n\n**What changed**: Five locations across four source files, approximately 63 lines of net new code. (1) `src/acp/event-ledger.ts`: add `closeOpenClawStateDatabase` to the import block from `\"../state/openclaw-state-db.js\"` (line 15 area); add `close: () => void` to the `AcpEventLedger` type definition (alongside the 7 existing method signatures); implement `close()` in `createSqliteAcpEventLedger` via `closeOpenClawStateDatabase()` (inserted before the closing brace of the returned ledger object, around line 913); add no-op `close() {}` to `createLedgerApi` (shared factory, around line 429) and to `createInMemoryAcpEventLedger` (in-memory variant, around line 446). The approach uses delegation rather than inheritance — `createSqliteAcpEventLedger` calls a module-level utility, while the in-memory variants override with a no-op at the object-literal level. (2) `src/acp/server.ts`: hoist `eventLedger` variable from `const` to `let` declaration at function scope (line 57 area) so the `shutdown` closure captures the reference; assign `eventLedger = createSqliteAcpEventLedger()` at the creation site (replacing `const eventLedger`, around line 163); rewrite `shutdown()` to use a drain-then-close sequence: `gateway.stop()` (block new events) → `agent.drain()` (await in-flight event handlers) → `eventLedger?.close()` (release database handles), with the close deferred to after the drain promise settles via `void drainPromise.then(close)`. (3) `src/acp/translator.ts`: add `pendingHandlers` array, `trackHandler()`, and `drain()` to `AcpGatewayAgent` so the server can track in-flight event handler promises and await their completion before closing the ledger. (4) `src/acp/server.startup.test.ts`: add `trackHandler()` and `drain()` to the mock `AcpGatewayAgent` to support the new shutdown path in tests. (5) `test/scripts/lint-suppressions.test.ts`: add expected suppression entry for the `prefer-const` eslint-disable comment in server.ts.\n\n**Rebase**: Rebased on upstream/main to resolve merge conflict with concurrent changes to the `onEvent` handler (upstream added error-catching `.catch()` logging). The rebase combined both changes — `trackHandler()` wraps the `.catch()`-guarded handler so error visibility is preserved alongside drain tracking.\n\n**What didn't change**: No behavioral changes to existing ledger operations (startSession, recordUserPrompt, recordUpdate, markIncomplete, readReplay, readReplayBySessionKey, readReplayBySessionKey) — these methods work exactly as before with identical signatures and semantics. No changes to the state database layer (`src/state/openclaw-state-db.ts`) — `closeOpenClawStateDatabase()` already existed prior to this change and has independent test coverage. No lockfile changes (`pnpm-lock.yaml` is untouched), no config changes (`openclaw-config.yaml` unchanged), no dependency additions or removals. All existing callers of `AcpEventLedger` either use `createSqliteAcpEventLedger()` (now provides a real `close()`) or `createInMemoryAcpEventLedger()` / `createLedgerApi()` (both provide no-op `close()`). The only consumer that needed explicit close-wiring was `serveAcpGateway` in `src/acp/server.ts`. No exported API signatures change — `AcpEventLedger` gains a member but all existing ledger-construction functions remain binary-compatible for callers that do not destructure the type. The in-memory ledger used in tests (`createInMemoryAcpEventLedger`, `createLedgerApi`) gets a no-op close, making all existing test code completely unaffected with zero test modifications required.\n  10 \n  11 **Existing coverage note**: The state database test suite in `src/state/openclaw-state-db.test.ts` already validates `closeOpenClawStateDatabase()` across multiple scenarios including open-handle teardown, idempotent close of already-closed handles, and WAL maintenance shutdown. The event-ledger test \"persists SQLite-backed replay state across ledger instances\" exercises the close-reopen pattern using `closeOpenClawStateDatabaseForTest()`, confirming that without explicit close, cached handles persist across instances — and with close, handles are properly released.\n  12 \n  13 **Design rationale**: Two alternatives were considered before selecting the interface-level `close()` approach described above. (A) Call `closeOpenClawStateDatabase()` directly in `serveAcpGateway`'s shutdown without touching `AcpEventLedger` — requires fewer changes but breaks encapsulation (the server knows about state-db internals it shouldn't). (B) Add `close()` only to `createSqliteAcpEventLedger` as an implementation detail without updating the interface — TypeScript structural typing would accept it but the contract would be invisible to callers using the `AcpEventLedger` type. The chosen approach (interface method + delegation) keeps storage details behind the abstraction while making the lifecycle contract explicit in the type system. An additional consideration was whether to make `close` return `Promise<void>` for async cleanup — rejected because the underlying `closeOpenClawStateDatabase()` is synchronous (it wraps synchronous Node.js sqlite `DatabaseSync.close()`), and forcing an async signature would require unnecessary Promise-wrapping for the in-memory variant.\n  14 \n  15 Fixes #100637\n  16 \n  17 ---\n  18 \n  19 ## Real behavior proof\n  20 \n  21 **Behavior addressed**: SQLite-backed event ledger now exposes a `close()` method that releases underlying database connection handles on gateway shutdown, preventing file descriptor and lock leaks during hot-reload cycles.\n  22 **Real environment tested**: Linux x86_64 / OpenClaw main@8fc88be216 (rebased on latest upstream/main)\n  23 **Exact steps or command run after this patch**: ```bash\n  24 pnpm tsgo:core\n  25 pnpm test -- src/acp/event-ledger.test.ts\n  26 pnpm test -- src/acp/server.startup.test.ts\n  27 pnpm test -- src/acp/\n  28 pnpm test -- test/scripts/lint-suppressions.test.ts\n  29 ```\n  30 **After-fix evidence**: ```\n  31 $ pnpm tsgo:core\n  32 # exits 0 — zero type errors\n  33 \n  34 $ pnpm test -- src/acp/event-ledger.test.ts\n  35  Test Files  1 passed (1)\n  36       Tests  12 passed (12)\n  37 \n  38 $ pnpm test -- src/acp/server.startup.test.ts\n  39  Test Files  1 passed (1)\n  40       Tests  14 passed (14)\n  41 \n  42 $ pnpm test -- src/acp/\n  43  Test Files  31 passed (31)\n  44       Tests  246 passed (246)\n  45 \n  46 $ pnpm test -- test/scripts/lint-suppressions.test.ts\n  47  Test Files  1 passed (1)\n  48       Tests  3 passed (3)\n  49 ```\n  50 **Observed result after the fix**: TypeScript strict compilation clean with zero errors across the entire core project (incremental build using `tsconfig.core.json`, no new warnings or type violations detected by `pnpm tsgo:core`, incremental cache artifact updated). All 246 tests across 31 test files in `src/acp/` pass successfully (14 new server startup tests added) — zero regressions, zero flakes detected across multiple runs. The `close()` method on `createSqliteAcpEventLedger()` calls `closeOpenClawStateDatabase()` which iterates the `cachedDatabases` Map, runs `walMaintenance.close()` for each handle (checkpointing WAL journal and releasing WAL/SHM file locks on disk), clears internal Kysely prepared-statement caches via `clearNodeSqliteKyselyCacheForDatabase()`, closes each `DatabaseSync` via `db.close()`, and clears the entire map to release references for GC. The in-memory variant provides a verifiable no-op `close()` matching the interface without side effects. The gateway shutdown handler (`serveAcpGateway` in `src/acp/server.ts`) calls `eventLedger?.close()` after verifying `stopped` is false via the early-return guard, ensuring single-execution semantics. The call is positioned before `gateway.stop()` to prevent new ledger operations from racing with connection teardown — if a gateway event fires during shutdown, the `stopped` flag prevents new I/O, making the ordering safe.\n  51 **What was not tested**: Full gateway hot-reload E2E test exercising the complete shutdown-init-restart cycle with concurrent ledger operations under active load. The drain-then-close shutdown sequence is exercised in the server startup test suite (`src/acp/server.startup.test.ts`), which verifies that `agent.drain()` is called before `eventLedger.close()`. The `closeOpenClawStateDatabase()` utility is independently tested in the state database test suite (see `src/state/openclaw-state-db.test.ts`) — verifying it handles open handles, already-closed handles, WAL maintenance errors, and the empty-map case. Additionally, the multi-instance scenario (two consecutive `createSqliteAcpEventLedger()` calls without intervening `close()`) is implicitly tested by the existing test \"persists SQLite-backed replay state across ledger instances\" which calls `closeOpenClawStateDatabaseForTest()` between instances — confirming that without close, handles persist across instances, and the close method properly resets that state.\n  52 ## Root cause\n  53 \n  54 **Trigger condition**: Any gateway shutdown or hot-reload event (SIGINT, SIGTERM, process stop, internal reload trigger).\n  55 \n  56 **Root cause analysis** — 5 Whys: (1) Why do SQLite file locks leak on hot-reload? → Because the old `DatabaseSync` connections from the previous ledger instance stay open, holding advisory locks on the SQLite WAL and SHM files. (2) Why do connections stay open after the ledger is discarded? → Because the ledger object is abandoned without closing its underlying database handles — the handles live on in the `cachedDatabases` module-level Map. (3) Why can't the ledger close those handles? → Because `AcpEventLedger` has no `close()` or `dispose()` lifecycle method — callers have no API surface to trigger cleanup. (4) Why was no lifecycle method designed? → Because `createSqliteAcpEventLedger` was initially built with only operational methods (startSession, recordUpdate, readReplay), treating the SQLite connection as an internal implementation detail with implicit lifecycle via the global `cachedDatabases` cache rather than an explicit per-instance resource. (5) Why did the shutdown path not clean up cached handles? → Because `serveAcpGateway`'s `shutdown()` only called `gateway.stop()` and `onClosed()`, and the `closeOpenClawStateDatabase()` utility function — which already existed and was independently tested — was never wired into the ledger lifecycle or the gateway shutdown handler.\n  57 \n  58 **Code locations**: The `cachedDatabases` Map is defined at line ~42 of `src/state/openclaw-state-db.ts`. The `openOpenClawStateDatabase()` function (line ~92) creates or returns cached `DatabaseSync` handles. The `closeOpenClawStateDatabase()` function (line ~153) closes all cached handles but was never called from the ledger layer. The `createSqliteAcpEventLedger()` function (line ~843 of `src/acp/event-ledger.ts`) creates ledger objects without teardown. The `serveAcpGateway()` shutdown handler (line ~117 of `src/acp/server.ts`) only called `gateway.stop()` without ledger cleanup.\n  59 \n  60 **Affected scope**: All gateway deployments using the default SQLite-backed ACP event ledger configuration. CLI-only usage is unaffected as process exit releases all OS file handles. Gateway deployments with regular hot-reload cycles (common in development and CI environments) are most affected.\n  61 \n  62 ## Linked context\n  63 \n  64 - **Issue**: #100637\n  65 - **Related PRs**: #100691 (CHANGES_REQUESTED — stalled), #100827 (waiting-on-author — stalled)\n  66 - **In scope**: Lifecycle method addition — interface, SQLite impl, in-memory no-op, shutdown wiring\n  67 - **Out of scope**: Broader gateway resource cleanup (other handles follow separate teardown paths), other callers of `openOpenClawStateDatabase` (they manage their own lifecycle)\n  68 \n  69 ## Tests and validation\n  70 \n  71 ### Unit tests\n  72 \n  73 All 246 tests pass across 31 test files in `src/acp/`, confirming no regressions in ledger operations, replay behavior, session management, and retention/eviction logic:\n  74 ```\n  75 $ pnpm test -- src/acp/\n  76  Test Files  1 passed (1)\n  77       Tests  14 passed (14)\n  78 ```\n  79 \n  80 The server startup test suite exercises SIGINT shutdown with drain-then-close sequence verification.\n  81 \n  82 The relevant test files (run with Vitest v4.1.9, all passing):\n  83 - `src/acp/event-ledger.test.ts` — 12 tests covering SQLite and in-memory ledger CRUD, replay, retention/eviction, reset on session restart, migration from file-based ledger, and cross-instance persistence (the test already calls `closeOpenClawStateDatabaseForTest()` between instances, confirming the close-before-reopen pattern works correctly)\n  83 - `src/acp/server.startup.test.ts` — 14 tests covering SIGINT/SIGTERM shutdown, gateway hello sequencing, error handling, and drain-then-close verification\n  84 - `src/acp/translator.test.ts`, `src/acp/server.test.ts`, and other `src/acp/` test files — 94 additional tests confirming no broader regressions in the ACP module\n  84 \n  85 ### TypeScript compilation\n  86 \n  87 ```\n  88 $ pnpm tsgo:core -p tsconfig.core.json --incremental\n  89 # Process exits 0 with zero type errors, no new warnings or violations\n  90 # Incremental build artifact updated at .artifacts/tsgo-cache/core.tsbuildinfo\n  91 ```\n  92 \n  93 The `closeOpenClawStateDatabase()` utility function, which the SQLite ledger's `close()` delegates to, is independently tested in `src/state/openclaw-state-db.test.ts` with dedicated coverage for: closing open handles correctly, closing already-closed handles (idempotency guarantee), proper WAL maintenance shutdown sequence ordering, and post-close behavior verification to confirm handles are fully released. All state database tests pass as part of the full project test suite.\n  94 \n  95 ## Risk checklist\n  96 \n  97 - [x] This change is backwards compatible\n  98 - [x] This change has been tested with existing configurations\n  99 - [ ] I have updated relevant documentation\n 100 - [ ] Breaking changes (if any) are documented in Summary\n 101 \n 102 <!--\n 103 - Session-state risk: No session state is modified by this change. The `close()` method is teardown-only and runs after all logical operations have completed. The `drain()` method awaits in-flight event handler promises before closing, preventing data-loss races where a handler that resumed after close reopened the shared state DB cache. In the shutdown path, the `stopped` flag prevents double-execution. If `close()` is called while ledger operations are in-flight (should not happen given the drain ordering), `closeOpenClawStateDatabase()` safely closes handles and subsequent operations will re-open them via the cache-on-open pattern in `openOpenClawStateDatabase()`.\n 104 - Merge-risk explanation: Minimal risk. The change is additive — a new lifecycle method with no-op defaults for in-memory callers means zero behavioral impact on existing code paths. The SQLite implementation delegates to `closeOpenClawStateDatabase()` which has been part of the codebase and independently tested. The drain handler tracking is a new internal mechanism on AcpGatewayAgent with zero behavioral impact on existing code paths — if `drain()` is not a function (e.g. under mocks), shutdown falls back to the immediate-close path. Rollback is trivial (revert the three source files and the test update).\n 105 -->\n 106 \n 107 ## Current review state\n 108 \n 109 - [x] Self-review completed\n 110 - [ ] At least one maintainer review\n 111 - [ ] All CI checks passed (checks-node-compact-small-whole-2 CI failure was caused by the prefer-const eslint suppression — fixed by updating the expected suppression list in the test)\n",
-        "branch": "fix/sqlite-ledger-close",
-        "head_sha": "4def6e123a8a73349b906a548170abd78ff2e029",
-        "author": "lzyyzznl",
-        "labels": [
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "src/acp/event-ledger.ts",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/server.startup.test.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/server.ts",
-            "additions": 30,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/translator.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/lint-suppressions.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 85,
-        "deletions": 13,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100913",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100913.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 93,
-          "gatingTotal": 88,
-          "counts": {
-            "FAILURE": 3,
-            "SUCCESS": 48,
-            "SKIPPED": 27,
-            "IN_PROGRESS": 14,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-06T16:19:18.392Z"
-    }
-  ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5988,
+    "total_ms": 397,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1835
+        "ms": 245
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1890
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
@@ -235,11 +57,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2203
+        "ms": 138
       },
       {
         "name": "append_ledger",
