@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T20:19:18.114Z",
+  "generated_at": "2026-07-06T20:19:15.951Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T17:19:17.751Z",
+  "since": "2026-07-06T17:19:13.317Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101140
+    100917
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 6,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,321 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100917:4893772666:2026-07-06T20:19:09Z:clawsweeper_needs_human",
+      "comment_id": "4893772666",
+      "comment_version_key": "4893772666:2026-07-06T20:19:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100917#issuecomment-4893772666",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100917,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T14:10:39Z",
+      "comment_updated_at": "2026-07-06T20:19:09Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] The remaining action is maintainer security/compatibility acceptance of the health URL boundary, not a narrow automated code repair.; Needs attention: The diff improves an unguarded SSRF-sensitive fetch path, but the exact private-literal health URL trust boundary needs maintainer acceptance before merge. (sha=1b3fbaa11ec0743a86a192dff808f732d215fbec)",
+      "review_summary": "This PR routes provider local-service health probes through `fetchWithSsrFGuard` and adds a local-service SSRF policy plus tests for loopback, RFC1918/ULA literals, metadata literals, and DNS-rebind behavior.\n\nPR surface: Source +90, Tests +136. Total +226 across 2 files.\n\nReproducibility: yes. by source inspection. Current main calls global `fetch` inside `probeHealth`, while PR head routes that readiness probe through the strict SSRF guard with allow/block tests for the main policy classes.",
+      "review_followup": "- [P2] The remaining action is maintainer security/compatibility acceptance of the health URL boundary, not a narrow automated code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "1b3fbaa11ec0743a86a192dff808f732d215fbec",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): route provider-local-service health probe through fetchWithSsrFGuard",
+        "body": "## What Problem This Solves\n\nThe `probeHealth` function in `src/agents/provider-local-service.ts:268` polls the operator-configured `service.healthUrl` via the un-guarded global `fetch`. From openclaw's perspective the health URL is operator-controlled but the upstream is not trusted: a misconfigured `service.healthUrl` (one whose DNS A record rebinds to a private/internal IP, or whose endpoint streams an unbounded body that the probe can't bound) currently bypasses every protection owned by `fetchWithSsrFGuard`. `probeHealth` runs on a 250 ms interval from `startAndWaitForLocalService` (`provider-local-service.ts:309`) until the local service becomes healthy, so an SSRF miss here is amplified into a repeated fetch loop against the hostile target.\n\nThis PR wraps the probe fetch with `fetchWithSsrFGuard` in STRICT mode and feeds it a narrow local-service SSRF policy (`resolveLocalServiceProbePolicy`) that supports operator-configured local/private literal healthUrls (loopback `127.0.0.1`, `::1`, `localhost`; RFC 1918 IPv4 `192.168.x.x` / `10.x.x.x` / `172.16-31.x.x`; IPv6 unique-local `fc00::/7`) without making public hostnames bypass the private-network block. The existing `.catch(...).finally(...)` chain (timeout translation, `controller.abort` cleanup, response-body cancel) is preserved verbatim; the guard's `release` runs in the outer `finally` so the dispatcher and DNS-pin resources are reclaimed regardless of whether the probe returns ok, hits a network error, or is aborted.\n\n## Changes\n\n- `src/agents/provider-local-service.ts:7-12` — extend the `@openclaw/net-policy/ip` import to add `isCloudMetadataIpAddress`, `isRfc1918Ipv4Address`, `parseCanonicalIpAddress`.\n- `src/agents/provider-local-service.ts:227-298` — extend `resolveLocalServiceProbePolicy(url)` so that beyond loopback literals (`127.0.0.1`, `::1`, `localhost`) it now also accepts other private-network literal IPs (RFC 1918 IPv4 + IPv6 unique-local `fc00::/7`) by adding the literal to `allowedHostnames` (which makes the guard skip the pre-DNS private-network check) while keeping cloud metadata (`169.254.169.254`, `100.100.100.200`, `fd00:ec2::254`), `0.0.0.0`/unspecified, broadcast, and public-looking hostnames on the strict-only `hostnameAllowlist` path so the guard still re-validates resolved IPs (DNS-rebind defense). The helper's IPv6 path now uses the bracket-stripped `unwrapped` form consistently (Node's `URL.hostname` keeps the brackets for IPv6 literals). The `assertAllowedTrustedHostnameResolvedAddressesOrThrow` post-DNS check that fires when `allowedHostnames` matches keeps blocking link-local + cloud metadata even when the resolved IP is private, so the round-2 DNS-rebind bypass cannot be re-introduced via this path.\n- `src/agents/provider-local-service.ts:300-307` — add private `isUniqueLocalIpv6Address(raw)` helper that wraps `parseCanonicalIpAddress` + `range() === \"uniqueLocal\"` so the policy helper does not have to import the IPv6 sentinel rules directly.\n- `src/agents/provider-local-service.test.ts` — add 7 new policy unit tests inside the existing `describe(\"resolveLocalServiceProbePolicy\")` block (RFC 1918 IPv4 `192.168.1.20`, `10.0.0.5`, `172.20.10.4` → `allowedHostnames` present; IPv6 ULA `fd00::1` → `allowedHostnames` present; IPv4 cloud metadata `169.254.169.254` and IPv6 cloud metadata `fd00:ec2::254` → `allowedHostnames` absent; `0.0.0.0` and `255.255.255.255` → `allowedHostnames` absent). Add 1 new end-to-end test that drives `fetchWithSsrFGuard` directly with `resolveLocalServiceProbePolicy(\"http://192.168.1.20:8000/v1/models\")` + a `lookupFn` returning `192.168.1.20`, asserts the response status is 200 and the fetchImpl ran exactly once, and calls `result.release()` so the dispatcher is reclaimed. The existing 12 real-loopback tests + 5 round-2 policy unit tests + 1 DNS-rebind negative control continue to pass unchanged.\n\n## Real behavior proof\n\n- **Behavior addressed**: `probeHealth` now routes its GET to `service.healthUrl` through `fetchWithSsrFGuard` with a narrow local-service policy that preserves loopback literals + RFC 1918 IPv4 literals + IPv6 unique-local literals as exact-host-trusted targets while keeping cloud metadata (`169.254.169.254`, `100.100.100.200`, `fd00:ec2::254`) blocked and keeping the public-hostname DNS-rebind defense intact.\n- **Real environment tested**: Linux x86_64, Node 22.19, `node scripts/run-vitest.mjs src/agents/provider-local-service.test.ts --run` (vitest suite) + `node --import tsx scripts/repro/round3-real-managed-local-service.mts` (standalone repro, run locally + output pasted here, script not committed).\n- **Exact steps or command run after this patch**:\n  ```bash\n  node scripts/run-vitest.mjs src/agents/provider-local-service.test.ts --run\n  node --import tsx scripts/repro/round3-real-managed-local-service.mts   # round-4 standalone, not committed\n  ```\n- **Evidence after fix** (vitest suite):\n  ```\n  Test Files  1 passed (1)\n       Tests  26 passed (26)\n    Start at  01:32:20\n    Duration  4.49s\n  ```\n  - 12 pre-existing tests pass unchanged (real loopback probes via `freePort()` + `process.execPath` + inline `http.createServer` flow through the guard and succeed).\n  - 6 round-2 policy unit tests pass: IPv4 / IPv6 / `localhost` loopback literals get `allowedHostnames`; public hostnames (`api.example.com`) and look-local hostnames (`my-service.internal`) get only `hostnameAllowlist`.\n  - 1 round-2 end-to-end DNS-rebind negative control passes: `http://api.example.com/v1/models` + `lookupFn` returning `192.168.1.1` is rejected with `Blocked: resolves to private/internal/special-use IP address` and the fetchImpl is never called.\n  - 7 new policy unit tests pass (round 3 — preserve operator-configured private-network literals):\n    - `http://192.168.1.20:8000/v1/models` → `{ allowedHostnames: [\"192.168.1.20\"], hostnameAllowlist: [\"192.168.1.20\"] }` (RFC 1918 IPv4 LAN preserved).\n    - `http://10.0.0.5:11434/v1/models` → `{ allowedHostnames: [\"10.0.0.5\"], hostnameAllowlist: [\"10.0.0.5\"] }` (RFC 1918 10/8 preserved).\n    - `http://172.20.10.4:9000/v1/models` → `{ allowedHostnames: [\"172.20.10.4\"], hostnameAllowlist: [\"172.20.10.4\"] }` (RFC 1918 172.16/12 preserved).\n    - `http://[fd00::1]:11434/v1/models` → `{ allowedHostnames: [\"fd00::1\"], hostnameAllowlist: [\"fd00::1\"] }` (IPv6 unique-local preserved, brackets stripped).\n    - `http://169.254.169.254/v1/models` → only `hostnameAllowlist: [\"169.254.169.254\"]` (cloud metadata stays blocked — guard's link-local + metadata check fires on the literal in the post-DNS pass).\n    - `http://[fd00:ec2::254]/v1/models` → only `hostnameAllowlist: [\"fd00:ec2::254\"]` (IPv6 cloud metadata stays blocked).\n    - `http://0.0.0.0:8000/v1/models` and `http://255.255.255.255/v1/models` → `allowedHostnames` is `undefined` (unspecified / broadcast are not RFC 1918 or ULA, so they fall through to the strict path).\n  - 1 new end-to-end test (round 3) passes: `http://192.168.1.20:8000/v1/models` + `lookupFn` returning `192.168.1.20` resolves successfully through the guard's pinned dispatcher; `result.response.status === 200`, `fetchImpl` was called exactly once, and `await result.release()` reclaims the dispatcher. This proves an operator-configured RFC 1918 healthUrl literal is no longer rejected as a private-network target (the round-2 finding), while the round-2 DNS-rebind negative control continues to reject public hostnames that resolve to private IPs.\n  - Reverting `isOperatorPrivateLiteral` to skip the new branch makes the 3 RFC 1918 IPv4 unit tests + the new end-to-end allow test fail (the guard rejects `192.168.1.20` as a private network target).\n- **Evidence after fix** (round 4 — standalone repro of the production guarded-fetch path against a real loopback HTTP server, output pasted from `node --import tsx scripts/repro/round3-real-managed-local-service.mts`, script not committed):\n  ```\n  [repro] real HTTP server listening on http://127.0.0.1:40539/v1/models\n  [repro] resolveLocalServiceProbePolicy(healthUrl) -> {\"allowedHostnames\":[\"127.0.0.1\"],\"hostnameAllowlist\":[\"127.0.0.1\"]}\n  [repro] calling production fetchWithSsrFGuard(...)\n  [repro] response status=200 ok=true\n  [repro] response body={\"ok\":true}\n  [repro] HTTP server received 1 request(s) to /v1/models\n  [repro] PASS: production guarded fetch reached the local loopback server and returned 200 ok\n  ```\n  This is the same call shape that `probeHealth` makes on every 250 ms readiness tick (`provider-local-service.ts:281` → `fetchWithSsrFGuard({ url, headers, signal, auditContext: \"provider-local-service:probe\", policy: resolveLocalServiceProbePolicy(url) })`). The repro imports the production `fetchWithSsrFGuard` and `resolveLocalServiceProbePolicy` helpers directly, binds a real `node:http` server to a real loopback port, drives the production guarded-fetch entrypoint through the real TCP socket, and asserts the server received exactly one request to `/v1/models` and returned `200 ok {\"ok\":true}`. The loopback literal policy shape is the same code path the round-3 RFC1918 / ULA fix uses (both add the literal to `allowedHostnames`), so this standalone run generalises to operator-configured private-network healthUrl literals.\n- **Observed result after fix**: Real loopback probes continue to flow end-to-end through the guard (12 existing vitest tests + 1 standalone repro run); a real RFC 1918 IPv4 literal healthUrl now also flows end-to-end through the guard (new round-3 vitest end-to-end test); cloud metadata literals stay rejected; a public hostname that resolves to a private IP is still rejected before any network I/O (round-2 vitest negative control).\n- **What was not tested**: Live managed local-service deployment over a true LAN interface (the CI host has no `192.168.x.x` interface to bind to, so a literal RFC 1918 happy path can only be proven in CI by the production `fetchWithSsrFGuard` wrapper + a real pinned dispatcher + a mocked `lookupFn` returning the matching private IP, exactly the round-3 vitest end-to-end test). The loopback policy shape and the RFC 1918 / ULA policy shape are identical (`{ allowedHostnames: [literal], hostnameAllowlist: [literal] }`), so the standalone loopback repro run proves the same guard + DNS pin + private-network-check integration that a live LAN deployment would exercise; the round-3 vitest end-to-end test proves the RFC 1918 policy path independently. Operator acceptance of the exact literal-private URL policy boundary is required from the owning maintainer before merge; that decision is outside contributor scope and is documented in the verdict.\n\n## Out of scope (separate follow-ups)\n\n- `src/agents/runtime/proxy.ts:299` (`streamProxy`) — sibling surface with the same pattern, submitted as a separate PR to keep each change XS. (PR #100916, currently 🐚 ready for maintainer look.)\n- `src/agents/minimax-vlm.ts` and `src/infra/push-apns.relay.ts` — additional unguarded outgoing fetch sites identified during exploration; tracked as future SSRF-wiring PRs.\n\n## Risk\n\n- **Scope**: 1 prod file + 1 test file; +121 source/test LoC net (60 source, 61 test).\n- **Behavior**: Same outgoing request shape as before, plus a narrow policy object routed through `resolveLocalServiceProbePolicy`. `probeHealth`'s boolean contract, error-handling, and abort wiring are unchanged.\n- **No API/signature changes**: `probeHealth` remains internal (not exported); only the internals of the function changed. `resolveLocalServiceProbePolicy` remains the new export from round 2; the helper now additionally accepts RFC 1918 IPv4 + IPv6 ULA literals as exact-host-trusted targets.\n- **Compatibility**: Round-1 → round-2 already rejected `192.168.1.20` as a private-network target; this round restores that behavior by adding the literal to `allowedHostnames`. Cloud metadata literals stay rejected (the guard's existing link-local + metadata block fires in the post-DNS pass even when `allowedHostnames` matched, see `ssrf.ts:413` `assertAllowedTrustedHostnameResolvedAddressesOrThrow`). All 12 pre-existing real-loopback tests + the round-2 DNS-rebind negative control continue to pass unchanged.\n- **Type check**: `node scripts/run-tsgo.mjs` clean on the touched branch (exit 0).\n- **Lint**: `node scripts/run-oxlint.mjs src/agents/provider-local-service.ts src/agents/provider-local-service.test.ts` clean (exit 0).\n- **Sibling coordination**: Distinct file from `proxy.ts`; the round-3 fix is local to `resolveLocalServiceProbePolicy` and does not change any guard / dispatcher / SSRF helper internals. The new helper reuses `isRfc1918Ipv4Address` / `isCloudMetadataIpAddress` / `parseCanonicalIpAddress` from `@openclaw/net-policy/ip`, the same package `configured-local-origin-bypass.ts:3` imports for the analogous trust-boundary checks.",
+        "branch": "fix/provider-local-service-probe-ssrf-guard",
+        "head_sha": "1b3fbaa11ec0743a86a192dff808f732d215fbec",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "src/agents/provider-local-service.test.ts",
+            "additions": 136,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/provider-local-service.ts",
+            "additions": 91,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 227,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100917",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100917.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 100,
+          "gatingTotal": 95,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 34,
+            "SUCCESS": 63,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100917:4896785021:2026-07-06T19:22:30Z:re_review",
+      "comment_id": "4896785021",
+      "comment_version_key": "4896785021:2026-07-06T19:22:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100917#issuecomment-4896785021",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100917,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T19:22:30Z",
+      "comment_updated_at": "2026-07-06T19:22:30Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): route provider-local-service health probe through fetchWithSsrFGuard",
+        "body": "## What Problem This Solves\n\nThe `probeHealth` function in `src/agents/provider-local-service.ts:268` polls the operator-configured `service.healthUrl` via the un-guarded global `fetch`. From openclaw's perspective the health URL is operator-controlled but the upstream is not trusted: a misconfigured `service.healthUrl` (one whose DNS A record rebinds to a private/internal IP, or whose endpoint streams an unbounded body that the probe can't bound) currently bypasses every protection owned by `fetchWithSsrFGuard`. `probeHealth` runs on a 250 ms interval from `startAndWaitForLocalService` (`provider-local-service.ts:309`) until the local service becomes healthy, so an SSRF miss here is amplified into a repeated fetch loop against the hostile target.\n\nThis PR wraps the probe fetch with `fetchWithSsrFGuard` in STRICT mode and feeds it a narrow local-service SSRF policy (`resolveLocalServiceProbePolicy`) that supports operator-configured local/private literal healthUrls (loopback `127.0.0.1`, `::1`, `localhost`; RFC 1918 IPv4 `192.168.x.x` / `10.x.x.x` / `172.16-31.x.x`; IPv6 unique-local `fc00::/7`) without making public hostnames bypass the private-network block. The existing `.catch(...).finally(...)` chain (timeout translation, `controller.abort` cleanup, response-body cancel) is preserved verbatim; the guard's `release` runs in the outer `finally` so the dispatcher and DNS-pin resources are reclaimed regardless of whether the probe returns ok, hits a network error, or is aborted.\n\n## Changes\n\n- `src/agents/provider-local-service.ts:7-12` — extend the `@openclaw/net-policy/ip` import to add `isCloudMetadataIpAddress`, `isRfc1918Ipv4Address`, `parseCanonicalIpAddress`.\n- `src/agents/provider-local-service.ts:227-298` — extend `resolveLocalServiceProbePolicy(url)` so that beyond loopback literals (`127.0.0.1`, `::1`, `localhost`) it now also accepts other private-network literal IPs (RFC 1918 IPv4 + IPv6 unique-local `fc00::/7`) by adding the literal to `allowedHostnames` (which makes the guard skip the pre-DNS private-network check) while keeping cloud metadata (`169.254.169.254`, `100.100.100.200`, `fd00:ec2::254`), `0.0.0.0`/unspecified, broadcast, and public-looking hostnames on the strict-only `hostnameAllowlist` path so the guard still re-validates resolved IPs (DNS-rebind defense). The helper's IPv6 path now uses the bracket-stripped `unwrapped` form consistently (Node's `URL.hostname` keeps the brackets for IPv6 literals). The `assertAllowedTrustedHostnameResolvedAddressesOrThrow` post-DNS check that fires when `allowedHostnames` matches keeps blocking link-local + cloud metadata even when the resolved IP is private, so the round-2 DNS-rebind bypass cannot be re-introduced via this path.\n- `src/agents/provider-local-service.ts:300-307` — add private `isUniqueLocalIpv6Address(raw)` helper that wraps `parseCanonicalIpAddress` + `range() === \"uniqueLocal\"` so the policy helper does not have to import the IPv6 sentinel rules directly.\n- `src/agents/provider-local-service.test.ts` — add 7 new policy unit tests inside the existing `describe(\"resolveLocalServiceProbePolicy\")` block (RFC 1918 IPv4 `192.168.1.20`, `10.0.0.5`, `172.20.10.4` → `allowedHostnames` present; IPv6 ULA `fd00::1` → `allowedHostnames` present; IPv4 cloud metadata `169.254.169.254` and IPv6 cloud metadata `fd00:ec2::254` → `allowedHostnames` absent; `0.0.0.0` and `255.255.255.255` → `allowedHostnames` absent). Add 1 new end-to-end test that drives `fetchWithSsrFGuard` directly with `resolveLocalServiceProbePolicy(\"http://192.168.1.20:8000/v1/models\")` + a `lookupFn` returning `192.168.1.20`, asserts the response status is 200 and the fetchImpl ran exactly once, and calls `result.release()` so the dispatcher is reclaimed. The existing 12 real-loopback tests + 5 round-2 policy unit tests + 1 DNS-rebind negative control continue to pass unchanged.\n\n## Real behavior proof\n\n- **Behavior addressed**: `probeHealth` now routes its GET to `service.healthUrl` through `fetchWithSsrFGuard` with a narrow local-service policy that preserves loopback literals + RFC 1918 IPv4 literals + IPv6 unique-local literals as exact-host-trusted targets while keeping cloud metadata (`169.254.169.254`, `100.100.100.200`, `fd00:ec2::254`) blocked and keeping the public-hostname DNS-rebind defense intact.\n- **Real environment tested**: Linux x86_64, Node 22.19, `node scripts/run-vitest.mjs src/agents/provider-local-service.test.ts --run` (vitest suite) + `node --import tsx scripts/repro/round3-real-managed-local-service.mts` (standalone repro, run locally + output pasted here, script not committed).\n- **Exact steps or command run after this patch**:\n  ```bash\n  node scripts/run-vitest.mjs src/agents/provider-local-service.test.ts --run\n  node --import tsx scripts/repro/round3-real-managed-local-service.mts   # round-4 standalone, not committed\n  ```\n- **Evidence after fix** (vitest suite):\n  ```\n  Test Files  1 passed (1)\n       Tests  26 passed (26)\n    Start at  01:32:20\n    Duration  4.49s\n  ```\n  - 12 pre-existing tests pass unchanged (real loopback probes via `freePort()` + `process.execPath` + inline `http.createServer` flow through the guard and succeed).\n  - 6 round-2 policy unit tests pass: IPv4 / IPv6 / `localhost` loopback literals get `allowedHostnames`; public hostnames (`api.example.com`) and look-local hostnames (`my-service.internal`) get only `hostnameAllowlist`.\n  - 1 round-2 end-to-end DNS-rebind negative control passes: `http://api.example.com/v1/models` + `lookupFn` returning `192.168.1.1` is rejected with `Blocked: resolves to private/internal/special-use IP address` and the fetchImpl is never called.\n  - 7 new policy unit tests pass (round 3 — preserve operator-configured private-network literals):\n    - `http://192.168.1.20:8000/v1/models` → `{ allowedHostnames: [\"192.168.1.20\"], hostnameAllowlist: [\"192.168.1.20\"] }` (RFC 1918 IPv4 LAN preserved).\n    - `http://10.0.0.5:11434/v1/models` → `{ allowedHostnames: [\"10.0.0.5\"], hostnameAllowlist: [\"10.0.0.5\"] }` (RFC 1918 10/8 preserved).\n    - `http://172.20.10.4:9000/v1/models` → `{ allowedHostnames: [\"172.20.10.4\"], hostnameAllowlist: [\"172.20.10.4\"] }` (RFC 1918 172.16/12 preserved).\n    - `http://[fd00::1]:11434/v1/models` → `{ allowedHostnames: [\"fd00::1\"], hostnameAllowlist: [\"fd00::1\"] }` (IPv6 unique-local preserved, brackets stripped).\n    - `http://169.254.169.254/v1/models` → only `hostnameAllowlist: [\"169.254.169.254\"]` (cloud metadata stays blocked — guard's link-local + metadata check fires on the literal in the post-DNS pass).\n    - `http://[fd00:ec2::254]/v1/models` → only `hostnameAllowlist: [\"fd00:ec2::254\"]` (IPv6 cloud metadata stays blocked).\n    - `http://0.0.0.0:8000/v1/models` and `http://255.255.255.255/v1/models` → `allowedHostnames` is `undefined` (unspecified / broadcast are not RFC 1918 or ULA, so they fall through to the strict path).\n  - 1 new end-to-end test (round 3) passes: `http://192.168.1.20:8000/v1/models` + `lookupFn` returning `192.168.1.20` resolves successfully through the guard's pinned dispatcher; `result.response.status === 200`, `fetchImpl` was called exactly once, and `await result.release()` reclaims the dispatcher. This proves an operator-configured RFC 1918 healthUrl literal is no longer rejected as a private-network target (the round-2 finding), while the round-2 DNS-rebind negative control continues to reject public hostnames that resolve to private IPs.\n  - Reverting `isOperatorPrivateLiteral` to skip the new branch makes the 3 RFC 1918 IPv4 unit tests + the new end-to-end allow test fail (the guard rejects `192.168.1.20` as a private network target).\n- **Evidence after fix** (round 4 — standalone repro of the production guarded-fetch path against a real loopback HTTP server, output pasted from `node --import tsx scripts/repro/round3-real-managed-local-service.mts`, script not committed):\n  ```\n  [repro] real HTTP server listening on http://127.0.0.1:40539/v1/models\n  [repro] resolveLocalServiceProbePolicy(healthUrl) -> {\"allowedHostnames\":[\"127.0.0.1\"],\"hostnameAllowlist\":[\"127.0.0.1\"]}\n  [repro] calling production fetchWithSsrFGuard(...)\n  [repro] response status=200 ok=true\n  [repro] response body={\"ok\":true}\n  [repro] HTTP server received 1 request(s) to /v1/models\n  [repro] PASS: production guarded fetch reached the local loopback server and returned 200 ok\n  ```\n  This is the same call shape that `probeHealth` makes on every 250 ms readiness tick (`provider-local-service.ts:281` → `fetchWithSsrFGuard({ url, headers, signal, auditContext: \"provider-local-service:probe\", policy: resolveLocalServiceProbePolicy(url) })`). The repro imports the production `fetchWithSsrFGuard` and `resolveLocalServiceProbePolicy` helpers directly, binds a real `node:http` server to a real loopback port, drives the production guarded-fetch entrypoint through the real TCP socket, and asserts the server received exactly one request to `/v1/models` and returned `200 ok {\"ok\":true}`. The loopback literal policy shape is the same code path the round-3 RFC1918 / ULA fix uses (both add the literal to `allowedHostnames`), so this standalone run generalises to operator-configured private-network healthUrl literals.\n- **Observed result after fix**: Real loopback probes continue to flow end-to-end through the guard (12 existing vitest tests + 1 standalone repro run); a real RFC 1918 IPv4 literal healthUrl now also flows end-to-end through the guard (new round-3 vitest end-to-end test); cloud metadata literals stay rejected; a public hostname that resolves to a private IP is still rejected before any network I/O (round-2 vitest negative control).\n- **What was not tested**: Live managed local-service deployment over a true LAN interface (the CI host has no `192.168.x.x` interface to bind to, so a literal RFC 1918 happy path can only be proven in CI by the production `fetchWithSsrFGuard` wrapper + a real pinned dispatcher + a mocked `lookupFn` returning the matching private IP, exactly the round-3 vitest end-to-end test). The loopback policy shape and the RFC 1918 / ULA policy shape are identical (`{ allowedHostnames: [literal], hostnameAllowlist: [literal] }`), so the standalone loopback repro run proves the same guard + DNS pin + private-network-check integration that a live LAN deployment would exercise; the round-3 vitest end-to-end test proves the RFC 1918 policy path independently. Operator acceptance of the exact literal-private URL policy boundary is required from the owning maintainer before merge; that decision is outside contributor scope and is documented in the verdict.\n\n## Out of scope (separate follow-ups)\n\n- `src/agents/runtime/proxy.ts:299` (`streamProxy`) — sibling surface with the same pattern, submitted as a separate PR to keep each change XS. (PR #100916, currently 🐚 ready for maintainer look.)\n- `src/agents/minimax-vlm.ts` and `src/infra/push-apns.relay.ts` — additional unguarded outgoing fetch sites identified during exploration; tracked as future SSRF-wiring PRs.\n\n## Risk\n\n- **Scope**: 1 prod file + 1 test file; +121 source/test LoC net (60 source, 61 test).\n- **Behavior**: Same outgoing request shape as before, plus a narrow policy object routed through `resolveLocalServiceProbePolicy`. `probeHealth`'s boolean contract, error-handling, and abort wiring are unchanged.\n- **No API/signature changes**: `probeHealth` remains internal (not exported); only the internals of the function changed. `resolveLocalServiceProbePolicy` remains the new export from round 2; the helper now additionally accepts RFC 1918 IPv4 + IPv6 ULA literals as exact-host-trusted targets.\n- **Compatibility**: Round-1 → round-2 already rejected `192.168.1.20` as a private-network target; this round restores that behavior by adding the literal to `allowedHostnames`. Cloud metadata literals stay rejected (the guard's existing link-local + metadata block fires in the post-DNS pass even when `allowedHostnames` matched, see `ssrf.ts:413` `assertAllowedTrustedHostnameResolvedAddressesOrThrow`). All 12 pre-existing real-loopback tests + the round-2 DNS-rebind negative control continue to pass unchanged.\n- **Type check**: `node scripts/run-tsgo.mjs` clean on the touched branch (exit 0).\n- **Lint**: `node scripts/run-oxlint.mjs src/agents/provider-local-service.ts src/agents/provider-local-service.test.ts` clean (exit 0).\n- **Sibling coordination**: Distinct file from `proxy.ts`; the round-3 fix is local to `resolveLocalServiceProbePolicy` and does not change any guard / dispatcher / SSRF helper internals. The new helper reuses `isRfc1918Ipv4Address` / `isCloudMetadataIpAddress` / `parseCanonicalIpAddress` from `@openclaw/net-policy/ip`, the same package `configured-local-origin-bypass.ts:3` imports for the analogous trust-boundary checks.",
+        "branch": "fix/provider-local-service-probe-ssrf-guard",
+        "head_sha": "1b3fbaa11ec0743a86a192dff808f732d215fbec",
+        "author": "wangmiao0668000666",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "src/agents/provider-local-service.test.ts",
+            "additions": 136,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/provider-local-service.ts",
+            "additions": 91,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 227,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100917",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100917.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 100,
+          "gatingTotal": 95,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 34,
+            "SUCCESS": 63,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100917:4895887999:2026-07-06T17:44:19Z:re_review",
+      "comment_id": "4895887999",
+      "comment_version_key": "4895887999:2026-07-06T17:44:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100917#issuecomment-4895887999",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100917,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T17:44:19Z",
+      "comment_updated_at": "2026-07-06T17:44:19Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100917:4894877965:2026-07-06T15:57:16Z:re_review",
+      "comment_id": "4894877965",
+      "comment_version_key": "4894877965:2026-07-06T15:57:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100917#issuecomment-4894877965",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100917,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T15:57:16Z",
+      "comment_updated_at": "2026-07-06T15:57:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 587,
+    "total_ms": 5187,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 353
+        "ms": 433
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 2177
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +359,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 224
+        "ms": 2544
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
