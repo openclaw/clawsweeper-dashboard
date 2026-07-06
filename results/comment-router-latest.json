@@ -1,20 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T05:56:32.405Z",
+  "generated_at": "2026-07-06T05:56:54.306Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T02:56:30.113Z",
+  "since": "2026-07-06T02:56:50.971Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    99418
+    100585
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4889516824
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:99418:4888438424:2026-07-06T01:46:22Z:re_review",
-      "comment_id": "4888438424",
-      "comment_version_key": "4888438424:2026-07-06T01:46:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99418#issuecomment-4888438424",
+      "idempotency_key": "comment-router:openclaw/openclaw:100585:4889516824:2026-07-06T05:54:07Z:re_review",
+      "comment_id": "4889516824",
+      "comment_version_key": "4889516824:2026-07-06T05:54:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100585#issuecomment-4889516824",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99418,
-      "author": "sheyanmin",
-      "author_id": 44184140,
+      "issue_number": 100585,
+      "author": "krissding",
+      "author_id": 296022613,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T01:46:22Z",
-      "comment_updated_at": "2026-07-06T01:46:22Z",
+      "comment_created_at": "2026-07-06T05:54:07Z",
+      "comment_updated_at": "2026-07-06T05:54:07Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -71,45 +73,54 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(infra): add NaN guard for date parse in session cost usage",
-        "body": "## What Problem This Solves\n\n`sessions.usage.logs` directly parsed top-level transcript timestamps. An invalid timestamp produced `NaN`, which became `null` at the Gateway JSON boundary instead of the endpoint's numeric timestamp contract.\n\nCloses #99413.\n\n## Why This Change Was Made\n\nThe maintainer fixup routes detail logs through the module's existing `parseTimestamp` owner instead of adding a second post-hoc finite-number guard. This gives detail logs and usage summaries one canonical rule:\n\n- valid top-level timestamps keep their epoch-millisecond value;\n- invalid top-level timestamps can use the finite nested message timestamp;\n- entries without any valid timestamp use numeric `0`.\n\nThe refactor removes duplicate parsing logic and adds an inline note at the JSON-sensitive boundary.\n\n## User Impact\n\nSession usage log timestamps remain finite JSON numbers even when a transcript contains malformed metadata. Valid transcripts are unchanged, and a usable nested timestamp is no longer discarded.\n\n## Evidence\n\nExact prepared head: `484e1f32c928f2246f2b6c9d00ed760a3e0ff036`.\n\n- Native `scripts/pr` exact-head hosted gates passed: [CI run 28770108392](https://github.com/openclaw/openclaw/actions/runs/28770108392).\n- Fresh final-head AutoReview: no accepted/actionable findings.\n- Regression coverage exercises malformed/no-fallback → `0`, malformed/finite nested fallback → nested epoch milliseconds, and valid ISO → unchanged epoch milliseconds.\n- Source-blind sanitized-AWS Gateway validation passed on lease `cbx_1e6bd425c785` (`blue-crab`), public networking, no Tailscale, no hydration, and `CI` as the only allowed environment variable: [run `run_ff47f44bb6d0`](https://crabbox.openclaw.ai/portal/runs/run_ff47f44bb6d0).\n- The source-blind run called the real Gateway `sessions.usage.logs` path without inspecting the implementation. It observed `[0, 1700000000123, 1704164645000]`, all finite JSON numbers with no `null`; repeat output was stable; valid-ISO and removed-nested-fallback mutations produced the expected values; a missing session returned no fabricated logs.\n- `git diff --check` passed.\n\nNo live provider call was needed; this is local transcript parsing exposed through the running Gateway RPC.\n\nAI-assisted: implementation review, fixup, and validation used AI assistance; all cited commands, SHAs, and run identifiers are real.\n",
-        "branch": "fix/issue-99413-nan-timestamp-guard",
-        "head_sha": "67954e42f2d92e0e0c8b1846e2a32c82af76ed45",
-        "author": "sheyanmin",
+        "title": "fix(cli): harden JSON.parse in secrets apply and model-auth status",
+        "body": "## What Problem This Solves\n\nTwo unguarded `JSON.parse()` calls in the CLI can crash with raw `SyntaxError` exceptions instead of producing user-friendly errors or graceful fallbacks:\n\n1. **`src/cli/secrets-cli.ts:56`** — `readPlanFile()` calls `JSON.parse(raw)` on a plan file read from disk. A corrupt/malformed plan file throws a raw `SyntaxError` with stack trace instead of a friendly error message telling the user how to regenerate the plan.\n\n2. **`src/cli/capability-cli.ts:938`** — `runModelAuthStatus()` captures stdout from `modelsStatusCommand`, finds a line starting with `{`, and parses it. If the captured output contains a malformed JSON fragment, the `model-auth status` command crashes instead of gracefully returning `{}`.\n\n## Why This Change Was Made\n\nBoth are minimal defensive wrappings:\n- `readPlanFile`: wrap in try/catch, throw a friendly `Error` with the file path and the regenerate command\n- `runModelAuthStatus`: wrap in try/catch, return `{}` as graceful degradation (caller already handles empty results)\n\n## Evidence\n\n### Real terminal output (7 assertions, real file I/O):\n```\n$ npx tsx _proof-harden-jsonparse.ts\n=== Proof: Hardened JSON.parse in CLI ===\n\nsecrets-cli readPlanFile (real file round-trip):\nPASS   Before fix: raw SyntaxError on corrupt file\nPASS   After fix: friendly Error with file path and malformed JSON guidance\nPASS   Valid plan file parses correctly (no regression)\n\ncapability-cli runModelAuthStatus (unparseable CLI output):\nPASS   Before fix: SyntaxError on unparseable output\nPASS   After fix: graceful {} when captured line is not valid JSON\nPASS   After fix: valid JSON still parses correctly (no regression)\nPASS   After fix: no JSON-like lines returns empty object\n\n=== Results: 7 passed, 0 failed ===\n```\n\n### Regression tests (in existing CLI test files):\n- `src/cli/secrets-cli.test.ts`: corrupt plan file → friendly error with \"malformed JSON\" and file path (no SyntaxError)\n- `src/cli/capability-cli.test.ts`: unparseable model auth status output → `{}` (no crash)\n\n## Merge Risk\n\nLow — defensive try/catch wrappers. Valid JSON paths are unchanged. No new dependencies, no logic changes.",
+        "branch": "fix/harden-json-parse-cli",
+        "head_sha": "6f603e3f299bb4812a39d93bc47198e505dd4ad7",
+        "author": "krissding",
         "labels": [
+          "cli",
           "size: S",
-          "P2"
+          "P3",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
-            "additions": 1,
+            "path": "src/cli/capability-cli.test.ts",
+            "additions": 15,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/session-cost-usage.test.ts",
-            "additions": 39,
+            "path": "src/cli/capability-cli.ts",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/secrets-cli.test.ts",
+            "additions": 20,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/session-cost-usage.ts",
-            "additions": 3,
-            "deletions": 9,
+            "path": "src/cli/secrets-cli.ts",
+            "additions": 8,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 43,
-        "deletions": 9,
+        "changedFiles": 4,
+        "additions": 51,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99418",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99418.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100585",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100585.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -118,23 +129,36 @@
           "total": 99,
           "gatingTotal": 94,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 33,
-            "SUCCESS": 60,
-            "IN_PROGRESS": 3,
+            "SUCCESS": 55,
+            "SKIPPED": 32,
+            "IN_PROGRESS": 11,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
+            "build-artifacts:IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
           ],
           "pending": [
-            "Real behavior proof:CANCELLED",
+            "build-artifacts:IN_PROGRESS",
             "QA Smoke CI:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -148,19 +172,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2608,
+    "total_ms": 3515,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 436
+        "ms": 1701
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1841
+        "ms": 1618
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -176,7 +200,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 316
+        "ms": 180
       },
       {
         "name": "append_ledger",
