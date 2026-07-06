@@ -1,21 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T17:03:20.617Z",
+  "generated_at": "2026-07-06T17:03:40.890Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T14:03:18.509Z",
+  "since": "2026-07-06T14:03:40.389Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100998
+    89040
+  ],
+  "comment_ids": [
+    4895517445
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,180 +32,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100998:4895462668:2026-07-06T17:03:15Z:clawsweeper_auto_repair",
-      "comment_id": "4895462668",
-      "comment_version_key": "4895462668:2026-07-06T17:03:15Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100998#issuecomment-4895462668",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 100998,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T16:56:14Z",
-      "comment_updated_at": "2026-07-06T17:03:15Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=76914e999bcbbb387b162a87de2a00d423292be3)",
-      "review_summary": "The PR updates iMessage, Telegram webhook/probe/ingress-worker, and ClickClack gateway shutdown paths with regression tests for timers, abort handling, idempotent stop, and unhandled-rejection cleanup.\n\nPR surface: Source +36, Tests +295. Total +331 across 10 files.\n\nReproducibility: yes. Source inspection shows the current-main raw backoff timer and fire-and-forget Telegram shutdown/close calls, and CI reproduced the PR's new test type failures; I did not run a live channel shutdown lane in this read-only review.",
-      "review_followup": "- [P1] Not a safe automation candidate: the external PR needs contributor/maintainer real behavior proof and patch revisions before ClawSweeper should consider repair or merge automation.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "76914e999bcbbb387b162a87de2a00d423292be3",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(channels): fix five channel lifecycle/shutdown bugs",
-        "body": "## What Problem This Solves\nFive small channel reliability bugs where lifecycle/shutdown paths can leak timers, unhandled rejections, or ignore abort signals.\n\n1. **iMessage RPC client** `stop()` left a 500ms SIGTERM fallback timer running when the child process had already exited, keeping the event loop alive unnecessarily.\n2. **Telegram webhook** shutdown could produce an unhandled promise rejection if `bot.stop()` or transport close threw inside the abort listener.\n3. **Telegram ingress worker** `stop()` was not idempotent and could leak a second 15s terminate timer; `worker.terminate()` rejections were unhandled.\n4. **Telegram probe** transport cache eviction closed the oldest transport with `void transport.close()`, so a rejecting `close()` became an unhandled rejection.\n5. **ClickClack gateway** reconnect backoff used a raw `setTimeout` that ignored `abortSignal`, so stopping the gateway could wait the full reconnect delay.\n\n## Why This Change Was Made\n- iMessage: store the fallback timer, `unref` it, and clear it once the child-close race settles.\n- Telegram webhook: catch shutdown errors inside the abort paths and route them to `runtime.error`.\n- Telegram ingress worker: guard `stop()` with a `stopped` flag and catch `worker.terminate()` rejections.\n- Telegram probe: wrap the close result with `Promise.resolve(...).catch(...)` so both sync and async rejections are swallowed safely.\n- ClickClack gateway: attach an abort listener that clears the reconnect timeout and resolves the wait promise immediately.\n\n## User Impact\nCleaner shutdown for channel gateways and fewer uncaught/unhandled rejection crashes during abort, restart, or transport eviction.\n\n## Evidence\n\nAll fixes are accompanied by regression tests:\n\n```\nextensions/imessage/src/client.test.ts                     2 passed\nextensions/telegram/src/webhook.test.ts                   30 passed\nextensions/telegram/src/telegram-ingress-worker.test.ts    2 passed\nextensions/telegram/src/probe.test.ts                     14 passed\nextensions/clickclack/src/gateway.test.ts                  7 passed\n```\n\nRun locally with:\n\n```bash\npnpm test extensions/imessage/src/client.test.ts extensions/telegram/src/webhook.test.ts extensions/telegram/src/telegram-ingress-worker.test.ts extensions/telegram/src/probe.test.ts extensions/clickclack/src/gateway.test.ts -- --run\n```\n\n### iMessage RPC client\n- Test simulates a child that exits before the 500ms fallback fires and asserts the timer is cleared (`vi.getTimerCount() === 0`).\n- Second test verifies SIGTERM is still sent when the child does not exit in time.\n\n### Telegram webhook\n- Test starts a webhook, makes `bot.stop()` reject, aborts the controller, and asserts `runtime.error` receives a `\"webhook shutdown failed\"` message instead of an unhandled rejection.\n\n### Telegram ingress worker\n- Test calls `handle.stop()` twice and asserts only one `stop` message is posted to the worker.\n- Second test makes `worker.terminate()` reject and asserts no unhandled rejection.\n\n### Telegram probe\n- Test enables the probe transport cache in a test environment, fills it past `MAX_PROBE_TRANSPORT_CACHE_SIZE`, and sets the oldest transport's `close()` to reject. The test passes without unhandled rejections.\n\n### ClickClack gateway\n- Test sets `reconnectMs` to 60s, triggers a websocket error to enter the reconnect delay, then aborts. The gateway run promise resolves in under 5s instead of waiting 60s.\n",
-        "branch": "fix/channel-bugs-batch-2026-07-06",
-        "head_sha": "76914e999bcbbb387b162a87de2a00d423292be3",
-        "author": "pick-cat",
-        "labels": [
-          "channel: imessage",
-          "channel: telegram",
-          "size: M",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/clickclack/src/gateway.test.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/clickclack/src/gateway.ts",
-            "additions": 10,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/client.test.ts",
-            "additions": 90,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/imessage/src/client.ts",
-            "additions": 19,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/probe.test.ts",
-            "additions": 64,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/probe.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/telegram-ingress-worker.test.ts",
-            "additions": 91,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/telegram/src/telegram-ingress-worker.ts",
-            "additions": 14,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/webhook.test.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/webhook.ts",
-            "additions": 12,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 10,
-        "additions": 352,
-        "deletions": 21,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100998",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100998.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 100,
-          "gatingTotal": 95,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 34,
-            "SUCCESS": 62,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [
-            "check-test-types:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2335,
+    "total_ms": 691,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 252
+        "ms": 489
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1838
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -218,7 +64,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 217
+        "ms": 190
       },
       {
         "name": "append_ledger",
