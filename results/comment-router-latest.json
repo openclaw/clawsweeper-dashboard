@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-06T05:38:26.165Z",
+  "generated_at": "2026-07-06T05:38:37.519Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T02:38:23.886Z",
+  "since": "2026-07-06T02:38:35.304Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    98096
+    100521
   ],
-  "comment_ids": [
-    4889433403
-  ],
-  "status_comment_id": 4889433613,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 7,
+  "commands_seen": 3,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +31,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:98096:4889433403:2026-07-06T05:37:11Z:re_review",
-      "comment_id": "4889433403",
-      "comment_version_key": "4889433403:2026-07-06T05:37:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/98096#issuecomment-4889433403",
+      "idempotency_key": "comment-router:openclaw/openclaw:100521:4889300636:2026-07-06T05:09:35Z:re_review",
+      "comment_id": "4889300636",
+      "comment_version_key": "4889300636:2026-07-06T05:09:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100521#issuecomment-4889300636",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 98096,
-      "author": "MoerAI",
-      "author_id": 26067127,
+      "target_branch": null,
+      "issue_number": 100521,
+      "author": "cxbAsDev",
+      "author_id": 294098203,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T05:37:11Z",
-      "comment_updated_at": "2026-07-06T05:37:11Z",
-      "status_comment_id": 4889433613,
+      "comment_created_at": "2026-07-06T05:09:35Z",
+      "comment_updated_at": "2026-07-06T05:09:35Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,126 +66,211 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 98096,
-          "dispatch_key": "router-9ff48ad46b15f044",
-          "dispatched_at": "2026-07-06T05:38:26.770Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-06T05:38:27.633Z",
-          "response_comment_id": "4889433613",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(feishu): recover from invalid tenant_access_token by refreshing client and retrying once (#97287)",
-        "body": "Closes #97287\n\n## What Problem This Solves\n\nFixes an issue where Feishu users would see \"⚠️ Something went wrong\" on **every** message after the Feishu `tenant_access_token` became invalid (expiry, revocation, or clock drift). Once the token went bad, the `message` tool and card sends failed indefinitely (`99991663 Invalid access token`), and the only recovery was a manual `openclaw channels login` + `openclaw gateway restart`.\n\n## Why This Change Was Made\n\nFeishu returns invalid-token codes `99991663`/`99991664`, but the plugin treated them as fatal and the cached SDK client kept reusing the stale token, so the retry built into `requestFeishuApi` (which only covers rate-limit codes) never recovered. This change detects those two codes, drops the cached SDK client via `clearClientCache`, rebuilds a fresh client/token, and retries the send **exactly once** — for both text (`sendMessageFeishu`) and card (`sendCardFeishu`) paths. It mirrors the existing `FeishuBackoffError` / `isWithdrawnReplyError` classification patterns and adds **no new core or config surface**.\n\n> This follows the conservative direction in clawsweeper's review on #97287: *\"Add Feishu-plugin-local invalid-token recovery that invalidates or recreates the correct cached SDK client or streaming token and retries once, with tests proving only explicit token-invalid codes recover and no new core/config fallback is added.\"*\n\n## User Impact\n\nFeishu messages now auto-recover from an invalidated `tenant_access_token`: the first send after the token goes bad transparently refreshes the client and succeeds on retry, instead of erroring on every message until an operator manually restarts the gateway.\n\n## Evidence\n\n**Root cause**\n- `extensions/feishu/src/send-result.ts` `assertFeishuMessageApiSuccess` threw on any non-zero `response.code` but stringified the code into the message, so callers could not classify invalid-token failures.\n- `extensions/feishu/src/typing.ts` `FEISHU_BACKOFF_CODES` only retries `{99991400, 99991403, 429}`; `99991663`/`99991664` had no recovery path.\n- `extensions/feishu/src/client.ts` `createFeishuClient` caches the SDK client by `accountId`, so the stale token was reused on every attempt.\n- Path: `sendMessageFeishu -> resolveFeishuSendTarget (cached client) -> sendReplyOrFallbackDirect -> requestFeishuApi -> assertFeishuMessageApiSuccess` (throws, no recovery).\n\n**Reproduction (before fix)** — new regression test on current `main`:\n\n~~~text\nFAIL  extensions/feishu/src/send.test.ts > recovers from an invalid tenant_access_token (99991663) ...\nError: Feishu send failed: Invalid access token\n  at assertFeishuMessageApiSuccess (extensions/feishu/src/send-result.ts:62)\n  at sendFallbackDirect (extensions/feishu/src/send.ts:142)\nTests: 1 failed | 19 passed (20)\n~~~\n\n**Verification (after fix)**:\n\n~~~text\nPASS  extensions/feishu/src/send.test.ts > recovers from an invalid tenant_access_token (99991663) ...\nTests: 20 passed (20)\n~~~\n\n## Test\n\n- `pnpm test extensions/feishu/src/send.test.ts` — 20 passed (incl. the new regression)\n- `pnpm tsgo:extensions` — passed\n- `pnpm tsgo:extensions:test` — passed\n- oxlint on changed files — passed\n\nNote: the full Feishu shard shows 5 unrelated pre-existing failures in `dedup.test.ts` / `thread-bindings.test.ts` (SQLite native-binding, `statement.columns is not a function`); they reproduce identically on clean `main` and are not touched by this change.\n",
-        "branch": "fix/feishu-invalid-token-retry",
-        "head_sha": "ad99f38094a0c060a19d3c19927350edd02cf721",
-        "author": "moerai",
+        "title": "fix(secrets): suppress unhandled stdout/stderr stream errors in exec resolver",
+        "body": "Re-submission of #100419, which was closed automatically when the active PR queue was limited. The branch has been rebased onto the latest `main`.\n\n## What Problem This Solves\n\n`runExecResolver` attaches `data` listeners to `child.stdout` and `child.stderr`, but does not attach `error` listeners. If either stream emits an `error` event, the unhandled error can crash the OpenClaw process during secret resolution.\n\n## Why This Change Was Made\n\nAdd no-op `error` handlers to both stdout and stderr streams before the data handlers, mirroring the existing stdin error handling pattern. This prevents unhandled stream errors from propagating as uncaught exceptions.\n\n## User Impact\n\nMore robust exec-based secret resolution: transient stream read errors no longer crash the process.\n\n## Evidence\n\nRegression test:\n\n```bash\nnode scripts/run-vitest.mjs src/secrets/resolve.test.ts\n```\n\n```\nTest Files  1 passed (1)\n     Tests  26 passed (26)\n```\n\nReal behavior proof:\n\n```bash\nnode_modules/.bin/tsx scripts/proof/secrets-resolve-stream-errors.mts\n```\n\nThe proof configures a real exec secret provider, calls the production `resolveSecretRefString` path, and emits real `error` events on the exec child's stdout and stderr. With the fix the secret still resolves:\n\n```\nResolved secret value: super-secret-value\n\nPASS: stream errors were caught and secret resolution still succeeded.\n```\n",
+        "branch": "fix/secrets-resolve-stream-errors",
+        "head_sha": "50fa3e306b6ac0e0d0d553fbcca1a93ba74385c6",
+        "author": "cxbasdev",
         "labels": [
-          "channel: feishu",
+          "scripts",
           "size: S",
           "P2"
         ],
         "files": [
           {
-            "path": "extensions/feishu/src/bot-group-name.test.ts",
-            "additions": 6,
+            "path": "scripts/proof/secrets-resolve-stream-errors.mts",
+            "additions": 86,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/secrets/resolve.test.ts",
+            "additions": 80,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/send-result.ts",
-            "additions": 59,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send-target.ts",
+            "path": "src/secrets/resolve.ts",
             "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send.concurrent.test.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/send.ts",
-            "additions": 59,
-            "deletions": 25,
-            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 6,
-        "additions": 166,
-        "deletions": 28,
+        "changedFiles": 3,
+        "additions": 168,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-98096",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98096.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100521",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100521.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 87,
-          "gatingTotal": 82,
+          "total": 93,
+          "gatingTotal": 88,
           "counts": {
-            "SUCCESS": 59,
-            "SKIPPED": 27,
+            "SUCCESS": 47,
+            "SKIPPED": 26,
+            "IN_PROGRESS": 19,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-06T05:38:26.369Z"
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100521:4888838307:2026-07-06T03:29:19Z:re_review",
+      "comment_id": "4888838307",
+      "comment_version_key": "4888838307:2026-07-06T03:29:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100521#issuecomment-4888838307",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100521,
+      "author": "cxbAsDev",
+      "author_id": 294098203,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T03:29:19Z",
+      "comment_updated_at": "2026-07-06T03:29:19Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100521:4888480257:2026-07-06T01:57:57Z:re_review",
+      "comment_id": "4888480257",
+      "comment_version_key": "4888480257:2026-07-06T01:57:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100521#issuecomment-4888480257",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 100521,
+      "author": "cxbAsDev",
+      "author_id": 294098203,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T01:57:57Z",
+      "comment_updated_at": "2026-07-06T01:57:57Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4181,
+    "total_ms": 4969,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 498
+        "ms": 486
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1766
+        "ms": 1711
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -199,11 +282,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1892
+        "ms": 2755
       },
       {
         "name": "append_ledger",
