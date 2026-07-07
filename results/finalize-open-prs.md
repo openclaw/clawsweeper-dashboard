@@ -1,19 +1,19 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-07-07T10:34:56.181Z
+Generated: 2026-07-07T11:21:28.162Z
 
 ## Summary
 
 | Metric | Count |
 | --- | ---: |
-| open_prs | 1 |
+| open_prs | 2 |
 | ready_candidates | 0 |
 | security_hold | 0 |
 | needs_rebase | 0 |
 | mergeability_unknown | 0 |
-| needs_checks | 1 |
+| needs_checks | 2 |
 | needs_review | 0 |
-| needs_merge_preflight | 1 |
+| needs_merge_preflight | 2 |
 | needs_result_backfill | 0 |
 
 ## Dispatch
@@ -30,4 +30,5 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| [#101593](https://github.com/openclaw/openclaw/pull/101593) | fix(infra): handle detached respawn child errors | automerge-openclaw-openclaw-101489 | MERGEABLE | BEHIND | CANCELLED:8 SKIPPED:56 SUCCESS:65 IN_PROGRESS:4 NEUTRAL:1; blockers:8 | needs_merge_state:BEHIND, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#101209](https://github.com/openclaw/openclaw/pull/101209) | docs: document local text worker pattern | automerge-openclaw-openclaw-100983 | MERGEABLE | BEHIND | CANCELLED:1 SUCCESS:69 SKIPPED:15 NEUTRAL:1; blockers:1 | needs_merge_state:BEHIND, needs_checks:ClawSweeper Dispatch / dispatch:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |

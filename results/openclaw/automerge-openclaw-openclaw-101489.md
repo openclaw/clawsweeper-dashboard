@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-101489"
 mode: "autonomous"
-run_id: "28856453708"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28856453708"
+run_id: "28860413312"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28860413312"
 head_sha: "9b7281103ab54ecb97d8d66e5ddf4165ea8469fc"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-07T10:20:04.099Z"
+published_at: "2026-07-07T11:21:23.135Z"
 canonical: "#101489"
 canonical_issue: null
 canonical_pr: "#101489"
 actions_total: 1
 fix_executed: 0
-fix_failed: 0
+fix_failed: 1
 fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28856453708](https://github.com/openclaw/clawsweeper/actions/runs/28856453708)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28860413312](https://github.com/openclaw/clawsweeper/actions/runs/28860413312)
 
 Workflow conclusion: failure
 
@@ -43,10 +43,10 @@ Make PR #101489 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 | --- | ---: |
 | Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 0 |
+| Fix failed | 1 |
 | Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,13 +54,14 @@ Make PR #101489 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| repair_contributor_branch | failed |  |  | source PR #101489 is closed |
+| open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/101593 | clawsweeper/automerge-openclaw-openclaw-101489 |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #101593 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
