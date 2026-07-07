@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T12:22:10.948Z",
+  "generated_at": "2026-07-07T12:23:34.311Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T09:22:08.186Z",
+  "since": "2026-07-07T09:23:30.404Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    101648
+    101546
   ],
   "comment_ids": [
-    4903721128
+    4903734221
   ],
-  "status_comment_id": 4903721630,
+  "status_comment_id": 4903734613,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101648:4903721128:2026-07-07T12:20:35Z:re_review",
-      "comment_id": "4903721128",
-      "comment_version_key": "4903721128:2026-07-07T12:20:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101648#issuecomment-4903721128",
+      "idempotency_key": "comment-router:openclaw/openclaw:101546:4903734221:2026-07-07T12:22:04Z:re_review",
+      "comment_id": "4903734221",
+      "comment_version_key": "4903734221:2026-07-07T12:22:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101546#issuecomment-4903734221",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 101648,
-      "author": "zhangqueping",
-      "author_id": 3436352,
+      "issue_number": 101546,
+      "author": "welfo-beo",
+      "author_id": 187608477,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T12:20:35Z",
-      "comment_updated_at": "2026-07-07T12:20:35Z",
-      "status_comment_id": 4903721630,
+      "comment_created_at": "2026-07-07T12:22:04Z",
+      "comment_updated_at": "2026-07-07T12:22:04Z",
+      "status_comment_id": 4903734613,
       "trigger": "mention",
-      "command": "review",
+      "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -76,170 +76,103 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 101648,
-          "dispatch_key": "router-e85d8b0ccc516216",
-          "dispatched_at": "2026-07-07T12:22:12.118Z"
+          "item_number": 101546,
+          "dispatch_key": "router-a7b10959720b707a",
+          "dispatched_at": "2026-07-07T12:23:34.949Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-07T12:22:13.402Z",
-          "response_comment_id": "4903721630",
+          "commented_at": "2026-07-07T12:23:37.129Z",
+          "response_comment_id": "4903255759",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix: skip pushLoopFailure for MidTurnPrecheckSignal control-flow errors",
-        "body": "## Summary\n\n**Problem**: `MidTurnPrecheckSignal` — a control-flow signal thrown in `transformContext` to trigger tool-result truncation — is caught by the agent-core loop runner's generic error handler which pushes a synthetic failure into the event stream, causing users to see a premature \"Context overflow\" error even though the internal retry succeeds.\n\n**Solution**: Mark `MidTurnPrecheckSignal` with a `Symbol.for(\"openclaw.controlFlowSignal\")` sentinel so agent-core can recognize control-flow signals and skip error-forwarding. The existing attempt-runner recovery path (via `pendingMidTurnPrecheckRequest` callback) handles truncation and retry correctly.\n\n**What changed**:\n- `midturn-precheck.ts`: Added `Symbol.for()` sentinel to `MidTurnPrecheckSignal` class\n- `agent.ts`: `handleRunFailure()` now skips error events for control-flow signals\n- `agent-loop.ts`: EventStream `.catch()` handlers now skip `pushLoopFailure` for control-flow signals (defense-in-depth)\n- `agent-loop.test.ts`: Added 4 tests covering the three fix layers\n\n**What did NOT change**:\n- `attempt.ts` recovery logic (unchanged)\n- `run.ts` retry logic (unchanged)\n- `tool-result-context-guard.ts` signal throw (unchanged)\n\nFixes #101621\n\n## What Problem This Solves\n\nWhen a tool result makes the next prompt exceed the context budget during a tool loop, `transformContext` throws `MidTurnPrecheckSignal`. This signal is a **control-flow mechanism**, not a terminal error. The throw interrupts the tool loop before the next LLM call, and the attempt runner handles truncation + retry via a side-channel callback (`pendingMidTurnPrecheckRequest`).\n\nHowever, the agent-core loop runner (`Agent.handleRunFailure` / `agentLoop` `.catch` handler) was treating this signal as a real error and pushing a synthetic failure with `isError=true` and `\"Context overflow: prompt too large for the model (mid-turn precheck)\"` into the event stream. The user sees this error immediately, even though ~15 seconds later the retry succeeds silently.\n\n## Root Cause\n\nThe production call path is:\n\n```\ntransformContext() throws MidTurnPrecheckSignal\n  → streamAssistantResponse()\n  → runLoop() → runAgentLoop() (async version, not EventStream)\n  → Agent.runPromptMessages()\n  → Agent.runWithLifecycle() catch\n    → handleRunFailure(error)  ← pushes synthetic error to stream\n```\n\nThe `MidTurnPrecheckSignal` extends `Error` and is indistinguishable from real errors at the agent-core layer. The attempt-runner's `isMidTurnPrecheckSignal(err)` catch block is never reached in normal operation because the error is swallowed by `handleRunFailure` first.\n\n## Real behavior proof\n\n**Behavior addressed**: MidTurnPrecheckSignal should not produce an error event in the UI stream\n\n**Real environment tested**: Linux x86_64, Node 24\n\n**Exact steps or command run after this patch**:\n```terminal\npnpm test -- packages/agent-core/src/agent-loop.test.ts\n```\n\n**After-fix evidence**:\n```terminal_output\nTest Files  1 passed (1)\nTests      26 passed (26)\nDuration   3.13s\n```\n\nAll 26 tests pass, including 4 new control-flow signal tests:\n- `agentLoop` EventStream: control-flow signal → no `agent_end` error event\n- `agentLoopContinue` EventStream: control-flow signal → no `agent_end` error event\n- `Agent.prompt()`: control-flow signal → no error event dispatched\n- `Agent.prompt()`: real Error → error event still dispatched (regression guard)\n\nType check (`pnpm tsgo:core`): No errors.\n\n**Observed result after the fix**: Control-flow signals are silently skipped by `handleRunFailure` and the EventStream `.catch()` handlers. No premature error events leak into the UI stream. Real errors still produce error events normally.\n\n**What was not tested**: End-to-end Gateway+MCP server scenario requiring 350K+ character tool output. Verified through code-path analysis and unit tests covering the exact control flow.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk declaration — only affects errors with `Symbol.for(\"openclaw.controlFlowSignal\")` sentinel, currently only `MidTurnPrecheckSignal`\n- [x] Real errors (without sentinel) still trigger normal error handling — regression test included\n- [x] The `Agent` class (production path) and `agentLoop()` EventStream (public API) are both guarded\n- [x] No breaking API changes, no new dependencies\n- [x] Existing tests unchanged, 4 new tests added",
-        "branch": "fix/issue-101621-midturn-precheck-signal-leak",
-        "head_sha": "944e9606efff8ec7d4fd7f7399c7a5b5bbf0dbc1",
-        "author": "zhangqueping",
+        "title": "fix(cron): resolve run Open Chat sessions",
+        "body": "## What Problem This Solves\n\nCloses #88002.\n\nCron run history records the run-specific session key (`agent:...:cron:<job>:run:<runSessionId>`), but the session store only persisted the stable cron session key. The Control UI \"Open Chat\" button could deep-link to a run key that had no stored session entry, so the redirected chat was wrong or missing.\n\n## Why This Change Was Made\n\n`prepareCronRunContext` already computes both keys. The persistence helper now receives the run-specific key and writes the committed session projection under both the stable cron key and the run-specific alias once a real `sessionId` exists. The alias points at the same transcript-backed committed entry, so existing stable cron resume behavior stays unchanged.\n\n## User Impact\n\nOpening a historical cron run from Control UI now lands on that run's recorded transcript instead of an unrelated or unresolved session.\n\n## Evidence\n\n```text\n$ cd /root/openclaw-contrib/worktrees/cron-open-chat-session\n$ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=300000 OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.cron.config.ts src/cron/isolated-agent/run-session-state.test.ts --reporter verbose --maxWorkers 1\n ✓  cron  src/cron/isolated-agent/run-session-state.test.ts > createPersistCronSessionEntry > restores resumable cron fields once the transcript exists 1ms\n ✓  cron  src/cron/isolated-agent/run-session-state.test.ts > createPersistCronSessionEntry > persists explicit session-bound cron state under the requested session key 1ms\n ✓  cron  src/cron/isolated-agent/run-session-state.test.ts > createPersistCronSessionEntry > does not let an older concurrent run reclaim a persisted lifecycle revision 4ms\n ✓  cron  src/cron/isolated-agent/run-session-state.test.ts > createPersistCronSessionEntry > does not replace a lifecycle revision while its owner is admitted 3ms\n ✓  cron  src/cron/isolated-agent/run-session-state.test.ts > createPersistCronSessionEntry > claims an initial row after a concurrent pin and rename 2ms\n ✓  cron  src/cron/isolated-agent/run-session-state.test.ts > createPersistCronSessionEntry > preserves a concurrent 'pin and rename' during cron persistence 1ms\n ✓  cron  src/cron/isolated-agent/run-session-state.test.ts > createPersistCronSessionEntry > preserves a concurrent 'unpin and clear the label' during cron persistence 1ms\n ✓  cron  src/cron/isolated-agent/run-session-state.test.ts > createPersistCronSessionEntry > does not restore session policy cleared while a cron run is active 1ms\n ✓  cron  src/cron/isolated-agent/run-session-state.test.ts > createPersistCronSessionEntry > adopts rotated run transcript metadata before persisting session-bound cron state 1ms\n Test Files  1 passed (1)\n      Tests  11 passed (11)\n   Duration  12.11s (transform 11.32s, setup 7.42s, import 403ms, tests 1.73s, environment 0ms)\n\n$ git diff --check -- src/cron/isolated-agent/run-session-state.ts src/cron/isolated-agent/run.ts src/cron/isolated-agent/run-session-state.test.ts\n# exit 0\n```\n\n## Real behavior proof (redacted)\n\nPublished visible proof artifact: https://graceful-ponder-78cr.here.now/\n\nWhat the proof shows:\n\n- a cron run-history row carries `sessionKey = agent:main:cron:proof-job:run:proof-run-20260707`\n- Open Chat builds `/chat?session=agent%3Amain%3Acron%3Aproof-job%3Arun%3Aproof-run-20260707`, matching `ui/src/pages/cron/view.ts` (`searchForSession(entry.sessionKey)`)\n- the run-specific key resolves to the selected run transcript and shares the same transcript file as the stable cron key\n\n```json\n{\n  \"result\": \"PASS\",\n  \"proof\": \"run-history Open Chat uses runLog.sessionKey; the run-specific key resolves to the selected run transcript when persisted as an alias\",\n  \"openChatHref\": \"/chat?session=agent%3Amain%3Acron%3Aproof-job%3Arun%3Aproof-run-20260707\",\n  \"runLogSessionKey\": \"agent:main:cron:proof-job:run:proof-run-20260707\",\n  \"resolvedSessionId\": \"proof-session-id\",\n  \"stableAndRunKeysShareTranscript\": true,\n  \"transcriptContains\": \"cron proof selected run transcript\",\n  \"persistedKeys\": [\n    \"agent:main:cron:proof-job\",\n    \"agent:main:cron:proof-job:run:proof-run-20260707\"\n  ],\n  \"tempHome\": \"/tmp/openclaw-cron-open-chat-proof-hn98x_l_\"\n}\n```\n",
+        "branch": "fix/cron-open-chat-session-6192b037bbb5",
+        "head_sha": "461040284198e8cd120cb2f2b22360ec8ee0e67e",
+        "author": "welfo-beo",
         "labels": [
-          "agents",
-          "size: S"
+          "size: XS",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "packages/agent-core/src/agent-loop.test.ts",
-            "additions": 121,
+            "path": "src/cron/isolated-agent/run-session-state.test.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run-session-state.ts",
+            "additions": 16,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/agent-core/src/agent-loop.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/agent-core/src/agent.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/midturn-precheck.ts",
-            "additions": 11,
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 163,
-        "deletions": 0,
+        "changedFiles": 3,
+        "additions": 21,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101648",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101648.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101546",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101546.md",
         "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 103,
-          "gatingTotal": 98,
+          "total": 104,
+          "gatingTotal": 99,
           "counts": {
-            "SUCCESS": 36,
-            "SKIPPED": 33,
-            "IN_PROGRESS": 33,
+            "FAILURE": 1,
+            "SUCCESS": 67,
+            "SKIPPED": 35,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+            "Scan changed paths (precise):FAILURE"
           ],
-          "pending": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          "pending": [],
+          "terminalBlockers": [
+            "Scan changed paths (precise):FAILURE"
           ],
-          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-07T12:22:11.297Z"
+      "processed_at": "2026-07-07T12:23:34.525Z"
     }
   ],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 6004,
+    "total_ms": 7192,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 644
+        "ms": 1997
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2098
+        "ms": 1894
       },
       {
         "name": "classify_comment_commands",
@@ -259,7 +192,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3232
+        "ms": 3275
       },
       {
         "name": "append_ledger",
