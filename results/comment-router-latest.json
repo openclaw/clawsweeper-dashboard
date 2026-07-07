@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T01:56:09.414Z",
+  "generated_at": "2026-07-07T01:57:01.322Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T22:56:05.986Z",
+  "since": "2026-07-06T22:56:59.070Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    78459
+    101047
   ],
-  "comment_ids": [
-    4899361859
-  ],
-  "status_comment_id": 4899362088,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +31,130 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:78459:4899361859:2026-07-07T01:54:45Z:re_review",
-      "comment_id": "4899361859",
-      "comment_version_key": "4899361859:2026-07-07T01:54:45Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/78459#issuecomment-4899361859",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101047:4896127999:2026-07-07T01:56:55Z:clawsweeper_auto_repair",
+      "comment_id": "4896127999",
+      "comment_version_key": "4896127999:2026-07-07T01:56:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101047#issuecomment-4896127999",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 78459,
-      "author": "MoerAI",
-      "author_id": 26067127,
+      "target_branch": null,
+      "issue_number": 101047,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T01:54:45Z",
-      "comment_updated_at": "2026-07-07T01:54:45Z",
-      "status_comment_id": 4899362088,
+      "comment_created_at": "2026-07-06T18:10:43Z",
+      "comment_updated_at": "2026-07-07T01:56:55Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=b57cdded29234655c7a42d62277fa8e700f596d7)",
+      "review_summary": "The PR guards compaction token counting against non-finite usage, relaxes transcript compaction-entry validation around `tokensBefore`, and adds focused tests.\n\nPR surface: Source +13, Tests +138. Total +151 across 4 files.\n\nReproducibility: yes. Current main has a clear source path where noncanonical assistant usage can become non-finite `tokensBefore`, serialize as `null`, and then be rejected by transcript compaction-entry validation.",
+      "review_followup": "- [P1] This needs maintainer choice and contributor proof rather than an automated repair marker because two active PRs compete for the same session-state fix and this branch still lacks replay proof.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "b57cdded29234655c7a42d62277fa8e700f596d7",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: guard calculateContextTokens against NaN and relax isSessionEntry tokensBefore gate",
+        "body": "## Summary\n\n**Problem**: With `compaction.mode: \"safeguard\"` and `truncateAfterCompaction: true`, delivery-mirror entries carry degenerate usage that produces `NaN` in `tokensBefore`. NaN serializes to `null`, and `isSessionEntry` rejects records where `typeof tokensBefore !== \"number\"` — so compaction records are skipped, truncation never applies, and the session re-compacts on every turn (thrash).\n\n**Solution**: Two minimal fixes — (1) guard `calculateContextTokens` against NaN propagation from non-standard usage shapes; (2) relax `isSessionEntry` to not gate compaction validity on `tokensBefore`, which is telemetry and must not block truncation.\n\n**What changed**:\n- `calculateContextTokens()`: defensive `|| 0`, `Number.isFinite()`, and early return for valid `totalTokens` to prevent NaN reaching persisted state\n- `isSessionEntry()`: removed `typeof tokensBefore === \"number\"` from compaction validation — `firstKeptEntryId` and `summary` are the essential fields\n- New unit tests for NaN/zero/degenerate usage inputs and for `tokensBefore: null` / missing acceptance\n- Replaced global `NaN` literals in tests with `Number.NaN` to satisfy oxlint `check-lint`\n\n**What did NOT change**:\n- No agent-core awareness of delivery-mirror model identity (keeps provider-agnostic)\n- No change to the compaction summary reading path or the `CompactionEntry` type shape\n- No change to how `tokensBefore` is displayed in RPC responses or UI (0 will appear for degenerate usage, which is harmless telemetry)\n\nFixes #100982\n\n## What Problem This Solves\n\nLong-running channel sessions with `compaction.mode: \"safeguard\"` and `truncateAfterCompaction: true` compact repeatedly (thrash) but never shrink: each compaction writes a summary and rotates to a new transcript, yet the successor still contains the full raw history. Context is never reclaimed, so the safeguard fires on nearly every turn — the session continuously grows and re-compacts without ever truncating.\n\nRoot cause chain:\n1. delivery-mirror entries carry a degenerate usage shape (zeroed or OpenAI-ish after rebuild, lacking `cacheRead`/`cacheWrite`/`totalTokens`)\n2. `calculateContextTokens()` sums `undefined` fields via `input + output + cacheRead + cacheWrite` → `NaN`\n3. `JSON.stringify(NaN)` → `null` in persisted compaction records\n4. `isSessionEntry()` in transcript-file-state.ts requires `typeof tokensBefore === \"number\"` → `null` fails → record is rejected\n5. Rejected compaction records never set a keep-boundary → `truncateAfterCompaction` never applies → next turn re-compacts = thrash\n\n## Root Cause\n\nThe two defective lines of code:\n\n```ts\n// packages/agent-core/src/harness/compaction/compaction.ts:150\n// NaN propagates unchecked when cacheRead/cacheWrite/totalTokens are undefined\nreturn usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;\n\n// src/agents/embedded-agent-runner/transcript-file-state.ts:245\n// tokensBefore gates the entire compaction record; null (from serialized NaN) fails this check\ntypeof candidate.tokensBefore === \"number\"\n```\n\n## Real behavior proof\n\n**Behavior addressed**: Compaction records with `tokensBefore: null` (persisted NaN from delivery-mirror degenerate usage) are now accepted, allowing session truncation to proceed.\n\n**Real environment tested**: Linux x86_64, Node v24.1.0\n\n**Observed result after the fix**: Both defensive guards work correctly — calculateContextTokens no longer propagates NaN from degenerate usage shapes, and isSessionEntry accepts compaction entries with null/missing tokensBefore. Full L2 before/after evidence below and full test suite (63/63) passes.\n\n**Exact steps or command run after this patch**:\n\nRun the L2 evidence script that directly calls functions with delivery-mirror data patterns:\n\n```terminal\nnode openclaw/.worktrees/issue-100982/evidence/pr-101047/l2-evidence.mjs\n```\n\nRun the full test suite:\n\n```terminal\nnpx vitest run --reporter=verbose \\\n  packages/agent-core/src/harness/compaction/compaction.test.ts \\\n  src/agents/embedded-agent-runner/transcript-file-state.test.ts\n```\n\n**Evidence**: Before/after comparison with realistic data patterns (L2 — direct function call with real-world data):\n\nBefore — `calculateContextTokens` with delivery-mirror degraded usage (no cacheRead/cacheWrite):\n\n```terminal_output\nInput: {\"input\":150,\"output\":320}\n  BEFORE fix: total = NaN\n    → undefined + undefined = NaN in cacheRead + cacheWrite sum\n  AFTER  fix: total = 470\n    → 150 + 320, guarded by || 0 on each field\n```\n\nBefore — `isSessionEntry` with null tokensBefore (persisted NaN):\n\n```terminal_output\nInput: tokensBefore: null (from JSON.stringify(NaN))\n  BEFORE fix: isSessionEntry = false\n    → typeof null !== 'number' — entry REJECTED\n  AFTER  fix: isSessionEntry = true\n    → tokensBefore no longer gated — entry ACCEPTED\n```\n\nFull before/after script output for all scenarios:\n\n```terminal_output\n========================================================================\n  L2 Evidence — PR #101047\n========================================================================\n--- Scenario A: Delivery-mirror style usage (missing cacheRead/cacheWrite) ---\n  BEFORE fix: total = NaN\n  AFTER  fix: total = 470\n  ✅ Fix verified: NaN is no longer propagated from degenerate usage\n\n--- Scenario B: totalTokens is null (persisted NaN from JSON.stringify) ---\n  BEFORE fix: total = 330  (null is falsy, falls through — accidentally works)\n  AFTER  fix: total = 330  (explicit Number.isFinite guard)\n  ✅ Fix verified: null totalTokens handled explicitly\n\n--- Scenario C: All usage fields are zero ---\n  BEFORE fix: total = NaN  (0 || 0+0+0+0 = NaN, || short-circuits on falsy 0)\n  AFTER  fix: total = 0\n  ✅ Fix verified: zero usage returns 0 instead of NaN\n\n--- Scenario D: isSessionEntry with null tokensBefore (persisted NaN) ---\n  BEFORE fix: isSessionEntry = false — entry REJECTED\n  AFTER  fix: isSessionEntry = true — entry ACCEPTED\n  ✅ Fix verified: compaction entries with null tokensBefore accepted\n\n--- Scenario E: isSessionEntry with missing tokensBefore (undefined) ---\n  BEFORE fix: isSessionEntry = false — entry REJECTED\n  AFTER  fix: isSessionEntry = true — entry ACCEPTED\n  ✅ Fix verified: compaction entries with missing tokensBefore accepted\n========================================================================\n```\n\nFull test suite:\n\n```terminal_output\n✓ |unit| calculateContextTokens > falls back to sum when totalTokens is NaN or 0\n✓ |unit| calculateContextTokens > returns 0 when all usage fields are zero\n✓ |unit| calculateContextTokens > returns 0 when all usage fields are degenerate (NaN)\n✓ |agents-core| readTranscriptFileState > accepts compaction entries with null tokensBefore\n✓ |agents-core| readTranscriptFileState > accepts compaction entries with missing tokensBefore\n\nTest Files  3 passed (3)\n     Tests  63 passed (63)\n```\n\n**What was not tested**: Full end-to-end integration with a running Gateway and actual delivery-mirror-producing session. Both fixes are pure data transformations (calculateContextTokens and isSessionEntry) whose correctness is independently verifiable at the function level — no runtime state, timers, or external dependencies are involved. The L2 evidence above demonstrates both fixes with realistic data patterns derived from the actual issue reproduction.\n\n## Linked context\n\n- Issue: #100982 — full root cause analysis and reproduction steps\n- Related PR: #101033 — broader candidate covering additional mirror-sampling and append-time normalization paths\n- PR build: branch `fix/issue-100982-compaction-deliverymirror-usage-poisons-tokensbeforenull-ass`\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [ ] Low risk declaration — two focused defensive guards with zero behavioral change for well-formed inputs\n- [ ] All existing tests pass (63/63)\n- [ ] All changed surface is covered by new unit-level boundary tests\n- [ ] L2 evidence demonstrates before/after behavior with realistic data patterns\n- [ ] No config surface, protocol, or public API changes\n- [ ] No pnpm-lock.yaml changes",
+        "branch": "fix/issue-100982-compaction-deliverymirror-usage-poisons-tokensbeforenull-ass",
+        "head_sha": "b57cdded29234655c7a42d62277fa8e700f596d7",
+        "author": "leonidaslux",
+        "labels": [
+          "agents",
+          "size: S",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "packages/agent-core/src/harness/compaction/compaction.test.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/agent-core/src/harness/compaction/compaction.ts",
+            "additions": 15,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/transcript-file-state.test.ts",
+            "additions": 99,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/transcript-file-state.ts",
+            "additions": 4,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 157,
+        "deletions": 6,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101047",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101047.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101047:4899300275:2026-07-07T01:41:36Z:re_review",
+      "comment_id": "4899300275",
+      "comment_version_key": "4899300275:2026-07-07T01:41:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101047#issuecomment-4899300275",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101047,
+      "author": "LeonidasLux",
+      "author_id": 294038793,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-07T01:41:36Z",
+      "comment_updated_at": "2026-07-07T01:41:36Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,179 +177,99 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 78459,
-          "dispatch_key": "router-8435386a123517a1",
-          "dispatched_at": "2026-07-07T01:56:10.338Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-07T01:56:11.472Z",
-          "response_comment_id": "4899362088",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(commitments): stop hardcoding fastMode in extraction (#78451)",
-        "body": "## What Problem This Solves\nMiniMax Coding Plan users whose token plan includes `MiniMax-M2.7` but not `MiniMax-M2.7-highspeed` could not run commitment extraction because the hidden extraction path hardcoded `fastMode: true`, silently rewriting the selected model to the unsupported highspeed variant.\n\n## Evidence\nThe PR body documents the failing path: `src/commitments/runtime.ts` passed `fastMode: true` into `runEmbeddedPiAgent`, and `src/agents/pi-embedded-runner/minimax-stream-wrappers.ts` rewrote the model id to `-highspeed`. The fix removes the hardcoded fast mode for commitment extraction so the user's configured model stays unchanged.\n\n---\n\n## Summary\n\nMiniMax Coding Plan operators whose plan owns `MiniMax-M2.7` but not the `-highspeed` variant hit `HTTP 500: your current token plan not support model, MiniMax-M2.7-highspeed (2061)` on every commitment extraction pass, because the commitments extraction path passed `fastMode: true` unconditionally to `runEmbeddedPiAgent`, which caused the MiniMax stream wrapper's `createMinimaxFastModeWrapper` to rewrite the base model id to `MiniMax-M2.7-highspeed`.\n\n## Root Cause\n\n- `src/commitments/runtime.ts:242` (pre-fix): the call to `runEmbeddedPiAgent` for hidden commitment extraction hardcoded `fastMode: true`.\n- `src/agents/pi-embedded-runner/minimax-stream-wrappers.ts:24`: the MiniMax stream wrapper accepts a `fastMode` boolean and, when true, swaps the base model id to its `-highspeed` variant.\n- Result: every commitments extraction request silently flipped `MiniMax-M2.7` → `MiniMax-M2.7-highspeed`, which Coding Plan operators do not own. MiniMax responds with HTTP 500 / error code 2061. Reporter verified the Coding Plan owns the base model but not highspeed.\n- The reporter listed three valid fix shapes (drop the hardcode, add a config field, or inherit agent fastMode). This PR uses option 1: dropping the hardcode lets the existing `resolveFastModeState` helper continue to control fast-mode for the rest of the agent runtime, and commitments extraction inherits the same default-false behavior.\n\n## Changes\n\n- `src/commitments/runtime.ts`: remove `fastMode: true` from the `runEmbeddedPiAgent` payload built in the commitments extraction path. Add a comment explaining the reason so this does not regress.\n- `src/commitments/runtime.test.ts`: extend the existing `runEmbeddedPiAgentMock` assertion to assert `fastMode` is **not** in the payload, locking in the regression fix.\n- `CHANGELOG.md`: single-line entry under Unreleased / Fixes.\n\n## Real behavior proof\n\n- Behavior addressed: On every commitment extraction pass, MiniMax Coding Plan operators receive `HTTP 500: your current token plan not support model, MiniMax-M2.7-highspeed (2061)` from the MiniMax server because the agent runtime requested `MiniMax-M2.7-highspeed` even though their plan only owns `MiniMax-M2.7`. The reporter (`@advaitpaliwal`) verified `commitments.enabled: true, commitments.maxPerDay: 10` config, then ran a real Coding Plan session, observed extraction always selecting the highspeed variant, and traced the root cause to `dist/runtime-CXt7BFiH.js` line 386 (`fastMode: true` hardcoded). Issue: https://github.com/openclaw/openclaw/issues/78451\n- Real environment tested: Local OpenClaw checkout at `../openclaw-78451` on Windows 11 + Node 22.14. The smoke script reads the **patched production file `src/commitments/runtime.ts` directly from the worktree**, locates the entire `defaultExtractBatch` function (the path that builds the `runEmbeddedPiAgent` payload), prints its SHA-256 + verbatim bytes, then runs structural assertions over the captured payload literal to prove `fastMode: true` is gone, the `#78451` explanatory comment is in place, and every sibling field is preserved. No mocks, no test runner — the patched source bytes drive the smoke. PR head: `a3189f329687fa8c2c9da783afbc0d644ea94573`.\n- Exact steps or command run after this patch: `git checkout fix/commitments-no-fastmode-hardcode && node --experimental-strip-types ./smoke-pr78459.mts`, where `smoke-pr78459.mts` reads `src/commitments/runtime.ts`, slices the `async function defaultExtractBatch` body, hashes it, prints the verbatim payload object literal, and runs structural assertions against the live patched source.\n- Evidence after fix: Terminal output captured locally on PR head `a3189f3296` (Windows 11 + Node 22.14, the patched `src/commitments/runtime.ts` `defaultExtractBatch` function read from the worktree, 1660 bytes, SHA-256 `ae3690fc3189a7bc3e6d33e8693a3a28aa24ee3c7a82822618c5f1c762bcb379`).\n\n~~~text\n$ node --experimental-strip-types ./smoke-pr78459.mts\n=== Patched defaultExtractBatch function — bytes from src/commitments/runtime.ts ===\noffset: 7245 -> 8905 ( 1660 bytes)\nSHA-256: ae3690fc3189a7bc3e6d33e8693a3a28aa24ee3c7a82822618c5f1c762bcb379\n\nfunction body still contains literal 'fastMode: true': false\nexplanatory '#78451' comment present                : true\n  preserved field 'disableTools: true': true\n  preserved field 'thinkLevel: \"off\"': true\n  preserved field 'verboseLevel: \"off\"': true\n  preserved field 'reasoningLevel: \"off\"': true\n\n=== Payload object passed to runEmbeddedPiAgent (verbatim from patched code) ===\n{ cfg, agentId: first.agentId });\n  const result = await runEmbeddedPiAgent({\n    sessionId: runId,\n    sessionKey: `agent:${first.agentId}:commitments:${runId}`,\n    agentId: first.agentId,\n    trigger: \"manual\",\n    sessionFile: resolveExtractionSessionFile(first.agentId, runId),\n    workspaceDir: resolveAgentWorkspaceDir(cfg, first.agentId),\n    config: cfg,\n    provider: modelRef.provider,\n    model: modelRef.model,\n    prompt: buildCommitmentExtractionPrompt({ cfg, items: params.items }),\n    disableTools: true,\n    thinkLevel: \"off\",\n    verboseLevel: \"off\",\n    reasoningLevel: \"off\",\n    // Do not hardcode fastMode here: leaving the field undefined lets the\n    // commitments extraction inherit the configured fast-mode state (which\n    // defaults to false). Hardcoding true caused MiniMax Coding Plans without\n    // highspeed access to fail with HTTP 500 because the MiniMax stream wrapper\n    // would rewrite MiniMax-M2.7 -> MiniMax-M2.7-highspeed (#78451).\n    timeoutMs: resolved.extraction.timeoutSeconds * 1000,\n    runId,\n    bootstrapContextMode: \"lightweight\",\n    skillsSnapshot: { prompt: \"\", skills: [] },\n    suppressToolErrorWarnings: true,\n  }\n\n=== fastMode-related lines in the payload (BEFORE-vs-AFTER comparison) ===\n  // Do not hardcode fastMode here: leaving the field undefined lets the\n  // highspeed access to fail with HTTP 500 because the MiniMax stream wrapper\n  // would rewrite MiniMax-M2.7 -> MiniMax-M2.7-highspeed (#78451).\n~~~\n\n- Observed result after fix: The patched `defaultExtractBatch` function — pinned by a 1660-byte / SHA-256 `ae3690fc3189a7bc3e6d33e8693a3a28aa24ee3c7a82822618c5f1c762bcb379` integrity check — has zero `fastMode: true` literals (`function body still contains literal 'fastMode: true': false`). The explanatory `#78451` comment is in place (`explanatory '#78451' comment present: true`), and every sibling field (`disableTools: true`, `thinkLevel: \"off\"`, `verboseLevel: \"off\"`, `reasoningLevel: \"off\"`) is preserved verbatim. The captured payload literal shown verbatim above confirms `runEmbeddedPiAgent` is now called without a `fastMode` key — so the MiniMax stream wrapper at `src/agents/pi-embedded-runner/minimax-stream-wrappers.ts:24` no longer flips `MiniMax-M2.7` → `MiniMax-M2.7-highspeed`, and the operator's configured base model id flows through unchanged.\n- What was not tested: A live HTTP roundtrip against the real MiniMax server with a Coding Plan token is not available on the contributor machine, so this is source-level / structural proof against the patched payload-builder, not a live MiniMax 200 response. Maintainers may apply `proof: override` if a live MiniMax recording is required; the reporter's original issue already contains live HTTP 500 evidence from the real Coding Plan.\n\n## Test\n\n- `pnpm test src/commitments/runtime.test.ts` — 6 passed (including the new `expect(callArgs).not.toHaveProperty(\"fastMode\")` regression assertion).\n\n## Notes\n\n- Scope: smallest complete fix. No new config surface and no provider/wrapper edits — the existing fast-mode resolution chain already covers the right behavior; the hardcode was the only thing forcing `true`.\n- Compatibility: agents that need fast-mode for commitments can still set it via `agents.defaults.models.<id>.params.fastMode: true` (or per-agent `fastModeDefault: true`) — the `resolveFastModeState` chain is unchanged.\n\nCloses #78451\n",
-        "branch": "fix/commitments-no-fastmode-hardcode",
-        "head_sha": "8432b0cb6d6ce509a1e263c0eeb314ab5cd40584",
-        "author": "moerai",
+        "title": "fix: guard calculateContextTokens against NaN and relax isSessionEntry tokensBefore gate",
+        "body": "## Summary\n\n**Problem**: With `compaction.mode: \"safeguard\"` and `truncateAfterCompaction: true`, delivery-mirror entries carry degenerate usage that produces `NaN` in `tokensBefore`. NaN serializes to `null`, and `isSessionEntry` rejects records where `typeof tokensBefore !== \"number\"` — so compaction records are skipped, truncation never applies, and the session re-compacts on every turn (thrash).\n\n**Solution**: Two minimal fixes — (1) guard `calculateContextTokens` against NaN propagation from non-standard usage shapes; (2) relax `isSessionEntry` to not gate compaction validity on `tokensBefore`, which is telemetry and must not block truncation.\n\n**What changed**:\n- `calculateContextTokens()`: defensive `|| 0`, `Number.isFinite()`, and early return for valid `totalTokens` to prevent NaN reaching persisted state\n- `isSessionEntry()`: removed `typeof tokensBefore === \"number\"` from compaction validation — `firstKeptEntryId` and `summary` are the essential fields\n- New unit tests for NaN/zero/degenerate usage inputs and for `tokensBefore: null` / missing acceptance\n- Replaced global `NaN` literals in tests with `Number.NaN` to satisfy oxlint `check-lint`\n\n**What did NOT change**:\n- No agent-core awareness of delivery-mirror model identity (keeps provider-agnostic)\n- No change to the compaction summary reading path or the `CompactionEntry` type shape\n- No change to how `tokensBefore` is displayed in RPC responses or UI (0 will appear for degenerate usage, which is harmless telemetry)\n\nFixes #100982\n\n## What Problem This Solves\n\nLong-running channel sessions with `compaction.mode: \"safeguard\"` and `truncateAfterCompaction: true` compact repeatedly (thrash) but never shrink: each compaction writes a summary and rotates to a new transcript, yet the successor still contains the full raw history. Context is never reclaimed, so the safeguard fires on nearly every turn — the session continuously grows and re-compacts without ever truncating.\n\nRoot cause chain:\n1. delivery-mirror entries carry a degenerate usage shape (zeroed or OpenAI-ish after rebuild, lacking `cacheRead`/`cacheWrite`/`totalTokens`)\n2. `calculateContextTokens()` sums `undefined` fields via `input + output + cacheRead + cacheWrite` → `NaN`\n3. `JSON.stringify(NaN)` → `null` in persisted compaction records\n4. `isSessionEntry()` in transcript-file-state.ts requires `typeof tokensBefore === \"number\"` → `null` fails → record is rejected\n5. Rejected compaction records never set a keep-boundary → `truncateAfterCompaction` never applies → next turn re-compacts = thrash\n\n## Root Cause\n\nThe two defective lines of code:\n\n```ts\n// packages/agent-core/src/harness/compaction/compaction.ts:150\n// NaN propagates unchecked when cacheRead/cacheWrite/totalTokens are undefined\nreturn usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;\n\n// src/agents/embedded-agent-runner/transcript-file-state.ts:245\n// tokensBefore gates the entire compaction record; null (from serialized NaN) fails this check\ntypeof candidate.tokensBefore === \"number\"\n```\n\n## Real behavior proof\n\n**Behavior addressed**: Compaction records with `tokensBefore: null` (persisted NaN from delivery-mirror degenerate usage) are now accepted, allowing session truncation to proceed.\n\n**Real environment tested**: Linux x86_64, Node v24.1.0\n\n**Observed result after the fix**: Both defensive guards work correctly — calculateContextTokens no longer propagates NaN from degenerate usage shapes, and isSessionEntry accepts compaction entries with null/missing tokensBefore. Full L2 before/after evidence below and full test suite (63/63) passes.\n\n**Exact steps or command run after this patch**:\n\nRun the L2 evidence script that directly calls functions with delivery-mirror data patterns:\n\n```terminal\nnode openclaw/.worktrees/issue-100982/evidence/pr-101047/l2-evidence.mjs\n```\n\nRun the full test suite:\n\n```terminal\nnpx vitest run --reporter=verbose \\\n  packages/agent-core/src/harness/compaction/compaction.test.ts \\\n  src/agents/embedded-agent-runner/transcript-file-state.test.ts\n```\n\n**Evidence**: Before/after comparison with realistic data patterns (L2 — direct function call with real-world data):\n\nBefore — `calculateContextTokens` with delivery-mirror degraded usage (no cacheRead/cacheWrite):\n\n```terminal_output\nInput: {\"input\":150,\"output\":320}\n  BEFORE fix: total = NaN\n    → undefined + undefined = NaN in cacheRead + cacheWrite sum\n  AFTER  fix: total = 470\n    → 150 + 320, guarded by || 0 on each field\n```\n\nBefore — `isSessionEntry` with null tokensBefore (persisted NaN):\n\n```terminal_output\nInput: tokensBefore: null (from JSON.stringify(NaN))\n  BEFORE fix: isSessionEntry = false\n    → typeof null !== 'number' — entry REJECTED\n  AFTER  fix: isSessionEntry = true\n    → tokensBefore no longer gated — entry ACCEPTED\n```\n\nFull before/after script output for all scenarios:\n\n```terminal_output\n========================================================================\n  L2 Evidence — PR #101047\n========================================================================\n--- Scenario A: Delivery-mirror style usage (missing cacheRead/cacheWrite) ---\n  BEFORE fix: total = NaN\n  AFTER  fix: total = 470\n  ✅ Fix verified: NaN is no longer propagated from degenerate usage\n\n--- Scenario B: totalTokens is null (persisted NaN from JSON.stringify) ---\n  BEFORE fix: total = 330  (null is falsy, falls through — accidentally works)\n  AFTER  fix: total = 330  (explicit Number.isFinite guard)\n  ✅ Fix verified: null totalTokens handled explicitly\n\n--- Scenario C: All usage fields are zero ---\n  BEFORE fix: total = NaN  (0 || 0+0+0+0 = NaN, || short-circuits on falsy 0)\n  AFTER  fix: total = 0\n  ✅ Fix verified: zero usage returns 0 instead of NaN\n\n--- Scenario D: isSessionEntry with null tokensBefore (persisted NaN) ---\n  BEFORE fix: isSessionEntry = false — entry REJECTED\n  AFTER  fix: isSessionEntry = true — entry ACCEPTED\n  ✅ Fix verified: compaction entries with null tokensBefore accepted\n\n--- Scenario E: isSessionEntry with missing tokensBefore (undefined) ---\n  BEFORE fix: isSessionEntry = false — entry REJECTED\n  AFTER  fix: isSessionEntry = true — entry ACCEPTED\n  ✅ Fix verified: compaction entries with missing tokensBefore accepted\n========================================================================\n```\n\nFull test suite:\n\n```terminal_output\n✓ |unit| calculateContextTokens > falls back to sum when totalTokens is NaN or 0\n✓ |unit| calculateContextTokens > returns 0 when all usage fields are zero\n✓ |unit| calculateContextTokens > returns 0 when all usage fields are degenerate (NaN)\n✓ |agents-core| readTranscriptFileState > accepts compaction entries with null tokensBefore\n✓ |agents-core| readTranscriptFileState > accepts compaction entries with missing tokensBefore\n\nTest Files  3 passed (3)\n     Tests  63 passed (63)\n```\n\n**What was not tested**: Full end-to-end integration with a running Gateway and actual delivery-mirror-producing session. Both fixes are pure data transformations (calculateContextTokens and isSessionEntry) whose correctness is independently verifiable at the function level — no runtime state, timers, or external dependencies are involved. The L2 evidence above demonstrates both fixes with realistic data patterns derived from the actual issue reproduction.\n\n## Linked context\n\n- Issue: #100982 — full root cause analysis and reproduction steps\n- Related PR: #101033 — broader candidate covering additional mirror-sampling and append-time normalization paths\n- PR build: branch `fix/issue-100982-compaction-deliverymirror-usage-poisons-tokensbeforenull-ass`\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [ ] Low risk declaration — two focused defensive guards with zero behavioral change for well-formed inputs\n- [ ] All existing tests pass (63/63)\n- [ ] All changed surface is covered by new unit-level boundary tests\n- [ ] L2 evidence demonstrates before/after behavior with realistic data patterns\n- [ ] No config surface, protocol, or public API changes\n- [ ] No pnpm-lock.yaml changes",
+        "branch": "fix/issue-100982-compaction-deliverymirror-usage-poisons-tokensbeforenull-ass",
+        "head_sha": "b57cdded29234655c7a42d62277fa8e700f596d7",
+        "author": "leonidaslux",
         "labels": [
-          "size: XS",
-          "clawsweeper:human-review",
-          "clawsweeper:autofix",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
+          "agents",
+          "size: S",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/commitments/runtime.test.ts",
-            "additions": 5,
+            "path": "packages/agent-core/src/harness/compaction/compaction.test.ts",
+            "additions": 39,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/commitments/runtime.ts",
-            "additions": 5,
+            "path": "packages/agent-core/src/harness/compaction/compaction.ts",
+            "additions": 15,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/transcript-file-state.test.ts",
+            "additions": 99,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/transcript-file-state.ts",
+            "additions": 4,
+            "deletions": 5,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 10,
-        "deletions": 1,
+        "changedFiles": 4,
+        "additions": 157,
+        "deletions": 6,
         "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-78459",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-78459.md",
+        "cluster_id": null,
+        "job_path": null,
         "source_job_path": null,
-        "has_automerge_job": true,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-78459",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-78459.md",
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101047",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101047.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 99,
+          "gatingTotal": 94,
           "counts": {
-            "SUCCESS": 35,
-            "IN_PROGRESS": 34,
-            "SKIPPED": 27,
+            "SUCCESS": 72,
+            "SKIPPED": 26,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-07T01:56:09.705Z"
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_claimed": true,
+  "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6167,
+    "total_ms": 2565,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1844
+        "ms": 415
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1563
+        "ms": 1817
       },
       {
         "name": "classify_comment_commands",
-        "ms": 4
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -252,11 +281,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2728
+        "ms": 302
       },
       {
         "name": "append_ledger",
