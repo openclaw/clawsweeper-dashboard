@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T12:03:15.108Z",
+  "generated_at": "2026-07-07T12:03:17.932Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T09:03:12.528Z",
+  "since": "2026-07-07T09:03:15.097Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    100794
+    101521
   ],
   "comment_ids": [
-    4903535809
+    4903536832
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:100794:4903535809:2026-07-07T12:00:09Z:re_review",
-      "comment_id": "4903535809",
-      "comment_version_key": "4903535809:2026-07-07T12:00:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100794#issuecomment-4903535809",
+      "idempotency_key": "comment-router:openclaw/openclaw:101521:4903536832:2026-07-07T12:00:16Z:re_review",
+      "comment_id": "4903536832",
+      "comment_version_key": "4903536832:2026-07-07T12:00:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101521#issuecomment-4903536832",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 100794,
-      "author": "Pandah97",
-      "author_id": 80405497,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T12:00:09Z",
-      "comment_updated_at": "2026-07-07T12:00:09Z",
+      "issue_number": 101521,
+      "author": "xmoxmo",
+      "author_id": 112841961,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-07T12:00:16Z",
+      "comment_updated_at": "2026-07-07T12:00:16Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -73,90 +73,84 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(model-catalog): retry readdirSync on FsSafeError transient catalog write race",
-        "body": "## Summary\n\n**Problem**: Gateway background catalog refresh logs `FsSafeError: directory changed during operation` every ~60s. The FsSafe-guarded `readdirSync(pluginsDir)` throws when a concurrent catalog writer creates a new plugin subdirectory via `fs.mkdir`.\n\n**Solution**: Retry `readdirSync` once on error in `listPluginModelCatalogRelativePaths()`, and retry `fs.mkdir` once on error in `writePluginCatalogsForModelsJson()`. The race window is sub-millisecond; an immediate retry succeeds when the concurrent operation has completed.\n\n**Design decision**: A retry-once loop was chosen over a try-catch wrapper to minimize the diff (+2 net lines). No backoff is needed since the race is a one-shot directory-entry creation, not a resource contention. If both attempts fail, the function returns `[]` (same as the current fallback).\n\n**What changed**: \n- `src/agents/plugin-model-catalog.ts` — wrap `readdirSync` in a retry-once loop (+2 lines net)\n- `src/agents/plugin-model-catalog.test.ts` — 5 test cases (new file, 96 lines)\n- `src/agents/models-config.ts` — wrap `fs.mkdir` in a retry-once loop in `writePluginCatalogsForModelsJson` (+11 lines)\n\n**What did NOT change**: All other catalog loading paths, plugin runtime, gateway startup, config schema, or external APIs.\n\nFixes #99390\n\n## What Problem This Solves\n\nGateway background refresh calls `listPluginModelCatalogRelativePaths()` every ~60s to discover plugin-owned model catalogs. This function calls `readdirSync(pluginsDir, { withFileTypes: true })`, which is FsSafe-guarded at build time.\n\nSimultaneously, `writePluginCatalogsForModelsJson()` creates plugin subdirectories. When the writer's `fs.mkdir` modifies `plugins/` metadata during the reader's directory scan, FsSafe throws:\n\n```\nFsSafeError: directory changed during operation\n```\n\nThe error is caught and the function returns `[]`, causing the catalog refresh to skip plugin-owned model discovery until the next cycle — where the same race can repeat. The result is repeating warning logs every ~60s and delayed model availability.\n\n## Root Cause\n\nThe race is between two concurrent operations on the `plugins/` directory:\n\n1. **Writer** (`src/agents/models-config.ts:251`): `await fs.mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 })` — uses **plain `node:fs/promises`** (imported at line 3). This modifies the `plugins/` directory listing by creating `plugins/<pluginId>/`.\n\n2. **Reader** (`src/agents/plugin-model-catalog.ts:73`): `readdirSync(pluginsDir, { withFileTypes: true })` — **FsSafe-guarded** at build time. The guard detects that `plugins/` directory metadata changed during iteration and throws.\n\n### Writer-side safety analysis\n\n| Operation | File | Line | FsSafe? | Affects `plugins/` listing? |\n|-----------|------|------|---------|---------------------------|\n| `readdirSync(\"plugins/\")` (reader) | `plugin-model-catalog.ts` | 73 | ✅ Build-time transform | N/A |\n| `fs.mkdir(\"plugins/X/\")` (writer) | `models-config.ts` | 251 | ❌ Plain `node:fs/promises` | ✅ Yes (creates subdir) |\n| `privateFileStore(\"plugins/X/\").writeText(...)` (writer) | `models-config.ts` | 155 | ✅ Guarded at `plugins/X/` | ❌ No (writes inside subdir) |\n\nThe writer's `fs.mkdir` at line 251 uses `node:fs/promises` which is also FsSafe-guarded by the build-time transform. Concurrent `readdirSync` from catalog refresh can trigger FsSafeError on the `mkdir` call too. Both paths now have retry-once loops.\n\nThe subsequent `privateFileStore` write (via `writeModelsFileAtomicForModelsJson`) is rooted at the **plugin subdirectory** (`plugins/<pluginId>/`), not at `plugins/`. Its fs-safe guards protect that subdirectory's contents — not the `plugins/` listing.\n\nThe race is **bidirectional** but both sides now retry once on transient error. A single immediate retry on each side is sufficient because the race window is sub-millisecond.\n\n## Real behavior proof\n\n**Behavior addressed**: Transient FsSafeError during `readdirSync` on `plugins/` directory when a concurrent catalog writer creates plugin subdirectories via `fs.mkdir`. The fix retries once on error instead of returning `[]` immediately.\n\n**Real environment tested**: Local worktree of openclaw fork at commit b4c053725727. The retry logic is synchronous (single readdirSync call with no side effects), so a Live Gateway startup is not required: the function returns either a sorted path array or `[]`. Two environments were used: (1) `npx tsx` running a TypeScript script against real temp directories for L2 filesystem I/O verification, and (2) Vitest test runner for the retry-behavior assertions (FsSafeError is a production-only build-time transform in `@openclaw/fs-safe` and cannot be triggered in dev mode).\n\n**Exact steps or command run after this patch**: `npx tsx src/agents/.../l2-evidence.ts` and `node scripts/test-projects.mjs -- src/agents/plugin-model-catalog.test.ts`.\n\n```bash\ncd ${OPENCLAW_DIR} && npx tsx docs/.local/issue-99390/l2-evidence.ts\ncd ${OPENCLAW_DIR} && node scripts/test-projects.mjs -- src/agents/plugin-model-catalog.test.ts\n```\n\n**After-fix evidence**: L2 and L1 output below.\n\nL2 — direct function call against real temp directories with actual files. 7/7 assertions pass:\n```\n$ npx tsx docs/.local/issue-99390/l2-evidence.ts\nTest 1: normal directory with 2 plugins\n  PASS: returns 2 paths\n  PASS: first path is anthropic\n  PASS: second path is minimax\n  PASS: filesystem has matching directories\nTest 2: nonexistent plugins dir\n  PASS: returns empty array\nTest 3: empty plugins dir\n  PASS: returns empty array\nTest 4: plugins dir with files only (no subdirectories)\n  PASS: returns empty array (no directories)\n=== Result: 7 passed, 0 failed ===\nEnvironment: node v24.13.1\nEvidence level: L2 (real function call, real filesystem I/O)\n```\n\nEach test creates a real temp directory with `mkdtempSync`, populates real files and subdirectories, calls the exported function, then removes the temp directory. This verifies correct behavior with actual `fs.Dirent` objects from real `readdirSync` calls.\n\nL1 — unit tests exercising the retry logic with mocked `FsSafeError`:\n```\n$ node scripts/test-projects.mjs -- src/agents/plugin-model-catalog.test.ts\n Test Files  1 passed (1)\n      Tests  5 passed (5)\n```\n\nThe retry test validates the exact error pattern:\n```typescript\nreaddirMock\n  .mockImplementationOnce(() => {\n    throw new Error(\"FsSafeError: directory changed during operation\");\n  })\n  .mockImplementationOnce(() => fakeEntries);\nconst result = listPluginModelCatalogRelativePaths(\"/tmp/work\");\nexpect(readdirMock).toHaveBeenCalledTimes(2);\nexpect(result).toHaveLength(2);\nexpect(result[0]).toBe(\"plugins/anthropic/catalog.json\");\n```\n\n**Observed result after the fix**: The retry-once logic handles four scenarios: (1) normal — single `readdirSync` returns sorted paths, (2) transient FsSafeError — first fails, second succeeds, (3) persistent error — both fail, returns `[]`, (4) empty/missing — returns `[]`. All verified with real filesystem I/O (L2) and unit tests (L1). The write-side `fs.mkdir` has an equivalent retry-once loop, so the full catalog refresh path is resilient to transient FsSafeError.\n\n**What was not tested**: Live Gateway startup with production FsSafe transform (requires production build; `@openclaw/fs-safe` is a build-time transform not active in dev mode). Concurrent multi-writer scenarios. Extreme edge cases (ENOSPC, EACCES). Low-risk: retries are synchronous mkdir/readdirSync calls with no side effects; fallback behavior matches current code. Both reader and writer paths are now protected with retry-once loops.\n\nBefore/after comparison:\n\nBEFORE FIX — `listPluginModelCatalogRelativePaths` returned `[]` on any readdirSync error:\n\n```typescript\n// src/agents/plugin-model-catalog.ts (main, line 67)\nexport function listPluginModelCatalogRelativePaths(agentDir: string): string[] {\n  const pluginsDir = path.join(agentDir, \"plugins\");\n  try {\n    return readdirSync(pluginsDir, { withFileTypes: true })\n      .filter((entry) => entry.isDirectory())\n      .map((entry) => path.join(\"plugins\", entry.name, PLUGIN_MODEL_CATALOG_FILE))\n      .filter(isPluginModelCatalogRelativePath)\n      .toSorted((left, right) => left.localeCompare(right));\n  } catch {\n    return [];  // ← silently drops all plugin catalogs on transient error\n  }\n}\n```\n\nAFTER FIX — retries `readdirSync` once before falling back to `[]`:\n\n```typescript\n// src/agents/plugin-model-catalog.ts (this PR)\nexport function listPluginModelCatalogRelativePaths(agentDir: string): string[] {\n  const pluginsDir = path.join(agentDir, \"plugins\");\n  for (let attempt = 0; ; attempt++) {\n    try {\n      return readdirSync(pluginsDir, { withFileTypes: true })\n        .filter((entry) => entry.isDirectory())\n        .map((entry) => path.join(\"plugins\", entry.name, PLUGIN_MODEL_CATALOG_FILE))\n        .filter(isPluginModelCatalogRelativePath)\n        .toSorted((left, right) => left.localeCompare(right));\n    } catch {\n      if (attempt > 0) { return []; }\n    }\n  }\n}\n```\n\n### Summary of coverage\n\n| Scenario | Coverage | Method |\n|----------|----------|--------|\n| Normal directory, 2 plugins | L2 real I/O + L1 test | Temp dir with real files |\n| Nonexistent plugins dir | L2 real I/O + L1 test | `/tmp/nonexistent` |\n| Empty plugins dir | L2 real I/O + L1 test | Temp dir, empty subdir |\n| Only files (no dirs) in plugins/ | L2 real I/O | Temp dir, files only |\n| Transient FsSafeError → retry succeeds | L1 test | Mocked first-call error |\n| Persistent error → returns [] | L1 test | Mocked all-call errors |\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk: +13 net lines change, 5 regression tests (96 lines new test file)\n- [x] No changes to dependencies, workflows, permissions, gateway startup, or external APIs\n- [x] Graceful fallback preserved: if all attempts fail, returns `[]` / throws as before\n- [x] Regression tests cover normal, empty, transient-failure, and double-failure paths\n- [x] L2 real filesystem I/O evidence confirms correct behavior with actual Dirent objects\n- [x] Writer-side also retries once on transient FsSafeError — fully addressed\n\n## Linked context\n\n- Fixes #99390 — Gateway background catalog refresh logs FsSafeError every ~60s\n- Related: #99416 — Earlier closed PR targeting the same race (maintainer guidance kept the canonical issue open)\n",
-        "branch": "fix/issue-99390-fssafeerror-catalog-write-race",
-        "head_sha": "18f7d5f91c1f5577adad125498fb018ebed11afc",
-        "author": "pandah97",
+        "title": "fix(tools): route sessions_send announcements back to requester channel for non-plugin transports",
+        "body": "## Problem\n\nWhen a session uses a non-standard transport channel (e.g., `bncr`), `sessions_send` announce replies are silently dropped instead of being delivered back to the requester's channel.\n\nThree root causes:\n\n### 1. Early return in `resolveAnnounceTarget` for non-plugin channels\n\n`resolveAnnounceTarget` has an early-return path for channels without `preferSessionLookupForAnnounceTarget`. For standard plugin channels this is fine — the plugin provides proper target format. But for non-plugin channels (like bncr), the fallback target contains a raw conversation id (e.g., `group:74674f...`) instead of the properly formatted delivery target expected by the transport (e.g., `Bncr:tgBot:-5043812861:0`).\n\n### 2. `primaryReply` not delivered before ping-pong in cross-agent A2A\n\nWhen requester ≠ target (cross-agent scenario), the `primaryReply` (round 1 response) is consumed by the A2A ping-pong loop without ever being delivered to the requester's channel. The final announcement step relies on the target agent actively choosing to announce, which it often declines via the `ANNOUNCE_SKIP` token.\n\n### 3. Ping-pong requester round causes 60s lane self-deadlock\n\nThe ping-pong loop starts by running `runAgentStep` on the requester's session with the requester's per-session lane (`nested:<requesterSessionKey>`). However, the requester's session lane is already held by the parent task (the `sessions_send` tool caller). The nested `runAgentStep` waits for the same lane to become available, causing a ~60s self-deadlock timeout.\n\n## Fix\n\n### `sessions-announce-target.ts`\n- Only return early for channels with an actual plugin registered. Non-plugin channels now fall through to the session-list-based `deliveryContextFromSession` lookup, which returns the properly formatted target (channel + to).\n\n### `sessions-send-tool.a2a.ts` — primaryReply pre-delivery\n- Deliver `primaryReply` to the requester's channel *before* entering the ping-pong loop. This matches the subagent announce delivery pattern, ensuring the first response always reaches the requester regardless of ping-pong or final-announce behavior.\n\n### `sessions-send-tool.a2a.ts` — ping-pong deadlock fix\n- Start the ping-pong loop with `currentSessionKey = params.targetSessionKey` instead of `params.requesterSessionKey`, so the first agent step runs on the target (unlocked) session rather than the requester (locked) session.\n- Add a guard `if (currentSessionKey === params.requesterSessionKey) break;` inside the loop to skip any requester round that would deadlock.\n- After this fix, one target ping-pong reply is produced; the requester round is correctly skipped.\n\n### `sessions-send-tool.a2a.ts` — skip redundant announce when primaryReply is already visible\n- When `primaryReply` was already delivered to the user before ping-pong, skip the announce step entirely. This avoids an extra agent-thinking pass (10–30s) on the target session that would add marginal value since the response is already visible in the requester's chat.\n\n## Testing\n\n### Unit tests\n\n18 tests total (3 added, 2 updated):\n\n- **New**: `runs one target ping-pong turn when requester !== target and skips requester round` — covers the cross-session ping-pong path with `maxPingPongTurns > 0`, verifying primaryReply delivery, single target `runAgentStep` call, requester guard skip, and announce suppression.\n- **Updated**: `skips announce when primaryReply is already delivered and ping-pong is disabled` — adapted from the old \"skips requester steps but still announces\" test to reflect the new announce-skip behavior.\n- **Updated**: `skips announce when primaryReply is present regardless of reply content` — adapted from the old \"suppresses announce control reply\" test.\n\nAll 15 pre-existing tests remain unchanged and pass.\n\n### Live verification (bncr / Telegram Bot)\n\nVerified with a bncr (Telegram Bot) transport:\n\nPre-fix: `sourceChannel=bncr` in provenance metadata but no visible delivery to the group chat; ping-pong caused 60s session lock timeout.\n\nPost-fix:\n- announce reply confirmed delivered via bncr outbound log:\n  `[bncr] outbound text|Bncr:tgBot:-5043812861:0|...`\n  `[ws] ⇄ res ✓ send 138ms channel=bncr`\n- Ping-pong no longer deadlocks: target replies within normal agent thinking time (~10s), requester round correctly skipped.\n- No long in-progress wait after primaryReply delivery: announce step skipped, session releases immediately.\n\n## Related\n\n- Subagent announce path has similar protection via `sendSubagentAnnounceDirectly` which passes three explicit delivery contexts and falls back to `loadRequesterSessionEntry`.",
+        "branch": "fix/sessions-send-announce-bncr-routing",
+        "head_sha": "61a29e5fe95cc57fce475403faf7930b144e323a",
+        "author": "xmoxmo",
         "labels": [
           "agents",
           "size: S",
-          "triage: blank-template",
-          "P2",
+          "mantis: telegram-visible-proof",
+          "P1",
           "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
           "status: 📣 needs proof",
-          "merge-risk: 🚨 other"
+          "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "src/agents/models-config.ts",
-            "additions": 14,
+            "path": "src/agents/tools/sessions-announce-target.ts",
+            "additions": 5,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/plugin-model-catalog.test.ts",
-            "additions": 93,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "src/agents/tools/sessions-send-tool.a2a.test.ts",
+            "additions": 46,
+            "deletions": 11,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/plugin-model-catalog.ts",
-            "additions": 14,
-            "deletions": 10,
+            "path": "src/agents/tools/sessions-send-tool.a2a.ts",
+            "additions": 48,
+            "deletions": 33,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 3,
-        "additions": 121,
-        "deletions": 11,
+        "additions": 99,
+        "deletions": 45,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100794",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100794.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101521",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101521.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 98,
+          "gatingTotal": 93,
           "counts": {
-            "SUCCESS": 58,
+            "FAILURE": 6,
+            "SUCCESS": 64,
             "SKIPPED": 26,
-            "IN_PROGRESS": 12,
+            "IN_PROGRESS": 1,
             "NEUTRAL": 1
           },
           "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
+            "Real behavior proof:FAILURE",
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
+            "checks-node-compact-large-2:FAILURE",
+            "checks-node-compact-small-5:FAILURE",
+            "checks-node-compact-small-whole-1:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
           ],
           "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-compact-large-2:FAILURE",
+            "checks-node-compact-small-5:FAILURE",
+            "checks-node-compact-small-whole-1:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -170,15 +164,15 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2943,
+    "total_ms": 3108,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 803
+        "ms": 692
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1761
+        "ms": 2127
       },
       {
         "name": "classify_comment_commands",
@@ -186,7 +180,7 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -198,7 +192,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 363
+        "ms": 273
       },
       {
         "name": "append_ledger",
