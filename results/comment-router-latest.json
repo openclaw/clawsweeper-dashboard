@@ -1,20 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T04:07:13.721Z",
+  "generated_at": "2026-07-07T04:07:19.653Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T01:07:13.436Z",
+  "since": "2026-07-07T01:07:16.098Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    101320
+    89739
+  ],
+  "comment_ids": [
+    4899996220
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -28,23 +31,296 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89739:4899996220:2026-07-07T04:04:16Z:re_review",
+      "comment_id": "4899996220",
+      "comment_version_key": "4899996220:2026-07-07T04:04:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89739#issuecomment-4899996220",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 89739,
+      "author": "amknight",
+      "author_id": 15041791,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-07-07T04:04:16Z",
+      "comment_updated_at": "2026-07-07T04:04:16Z",
+      "status_comment_id": null,
+      "trigger": "slash",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(cron): configurable minimum interval guardrail for recurring jobs",
+        "body": "## What Problem This Solves\n\nNothing limits how often recurring cron jobs can fire. An agent (or CLI caller) can schedule a `30s` job that runs an LLM turn forever — on hosted/operator deployments that is unbounded spend with no operator control. Cron has a concurrency guardrail (`cron.maxConcurrentRuns`) but no cadence guardrail. Related: #76473 explores a warning-only variant; this PR is the enforceable operator limit.\n\n## Why This Change Was Made\n\nOne opt-in config value, `cron.minInterval`, enforced in two layers:\n\n1. **Creation/edit rejection (UX layer):** `create`, schedule-changing `update`, and declaration-keyed `add` converges of a recurring `every`/`cron` job below the floor fail with a clear error (`cron schedule fires every 30s, below the minimum interval of 5m`; gateway maps it to `INVALID_REQUEST`). The cron tool description tells agents to increase the interval instead of retrying. For `cron` expressions this samples upcoming fires — documented as best-effort, since bounded sampling cannot prove an expression's true minimum gap.\n2. **Fire-time floor (enforcement layer):** the scheduler paces every `nextRunAtMs` re-arm so consecutive fires of a recurring job stay at least `minInterval` apart (start-to-start, launchd `ThrottleInterval`-style). This is the contract the docs promise: it covers jobs created before the limit was configured, expressions whose tight gaps escape sampling, restarts/missed-slot catch-up, error-backoff retries, update re-arms, and maintenance recomputes. Deferred fires log a warning naming the job.\n\nScope decisions: one-shot `at` jobs are exempt; forced manual runs never shift the schedule and are not floored; transient-failure retries still follow `cron.retry` but recurring re-fires are lower-bounded by the floor; a 2s dispatch slack (clamped to half the floor) keeps schedules whose cadence exactly equals the floor on their natural slots — no drift, no warning spam.\n\n## User Impact\n\nNone by default: unset/`0` means no limit and preserves shipped behavior exactly. With the limit set:\n\n```json5\n{\n  cron: {\n    minInterval: \"5m\", // duration string (\"30s\", \"5m\", \"1h\") or milliseconds\n  },\n}\n```\n\nrecurring jobs neither validate nor fire more often than every 5 minutes. Config surface: `CronConfig.minInterval` + zod schema with duration validation, help text, label, and docs (`docs/automation/cron-jobs.md`, `docs/cli/cron.md`, configuration reference).\n\n## Evidence\n\nRebased onto current `main` as a single commit. The rebase re-ported validation and the floor onto main's refactored update path (`updateLoadedJob`/`finalizeUpdatedJob`), and extended creation-time validation to the declarative `add()` converge path — post-refactor, an `add` with a `declarationKey` could otherwise change an existing job's schedule without hitting the floor check.\n\n- Post-rebase, all green (4 Vitest shards): full cron subsystem (`src/cron`, 100+ test files), `src/gateway/server-methods/cron.validation.test.ts`, `src/config/cron-limits.test.ts`, `src/config/zod-schema.cron-min-interval.test.ts`, `src/config/schema.help.quality.test.ts`, `test/scripts/prompt-snapshots.test.ts`.\n- Behavior tests (`src/cron/service.min-interval-floor.test.ts`, `src/cron/service/jobs.min-interval.test.ts`, extended `timer.regression`): pre-existing every/cron jobs paced + warned; error-path pacing; no-floor regression guard; at-floor cadence stays on natural slots under dispatch jitter; force runs preserve the schedule; enable-toggle update keeps the floor; startup catch-up does not replay a missed slot inside the floor window.\n- `tsgo` core/test lanes clean for touched code; prompt snapshots regenerated via `pnpm prompt:snapshots:gen`.\n- Multi-agent adversarial review of the floor ran pre-push; every confirmed finding (force-run schedule shift, enable-toggle bypass, restart catch-up/backoff bypasses, at-floor jitter drift, maintenance repair undoing deferrals) is fixed and regression-tested above.\n",
+        "branch": "ak/cron-min-interval",
+        "head_sha": "0b98b56caabe5e1388429faea85a762f0c5a69e1",
+        "author": "amknight",
+        "labels": [
+          "docs",
+          "gateway",
+          "agents",
+          "maintainer",
+          "size: L",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "docs/automation/cron-jobs.md",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/cron.md",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/docs_map.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/configuration-reference.md",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/cron-tool.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/cron-limits.test.ts",
+            "additions": 43,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/config/cron-limits.ts",
+            "additions": 29,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.labels.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.cron.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.cron-min-interval.test.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/config/zod-schema.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service.min-interval-floor.test.ts",
+            "additions": 279,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/service/jobs.min-interval.test.ts",
+            "additions": 165,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/service/jobs.ts",
+            "additions": 132,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/ops.ts",
+            "additions": 40,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.regression.test.ts",
+            "additions": 72,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 48,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/cron-error-classification.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.discord-group.json",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.heartbeat-turn.json",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.telegram-direct.json",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 25,
+        "additions": 885,
+        "deletions": 30,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89739",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89739.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 98,
+          "gatingTotal": 93,
+          "counts": {
+            "SUCCESS": 60,
+            "SKIPPED": 23,
+            "IN_PROGRESS": 14,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (matrix):IN_PROGRESS",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (matrix):IN_PROGRESS",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 474,
+    "total_ms": 3894,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 274
+        "ms": 1858
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1683
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -60,7 +336,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 189
+        "ms": 339
       },
       {
         "name": "append_ledger",
