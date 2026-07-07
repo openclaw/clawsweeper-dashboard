@@ -1,20 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T17:48:13.856Z",
+  "generated_at": "2026-07-07T17:49:07.150Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T14:48:11.692Z",
+  "since": "2026-07-07T14:49:04.334Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    101830
+    98215
   ],
-  "comment_ids": [
-    4906852191
-  ],
-  "status_comment_id": 4906852587,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,34 +31,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101830:4906852191:2026-07-07T17:46:36Z:re_review",
-      "comment_id": "4906852191",
-      "comment_version_key": "4906852191:2026-07-07T17:46:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101830#issuecomment-4906852191",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:98215:4845741176:2026-07-07T17:49:01Z:clawsweeper_auto_repair",
+      "comment_id": "4845741176",
+      "comment_version_key": "4845741176:2026-07-07T17:49:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98215#issuecomment-4845741176",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 101830,
-      "author": "yetval",
-      "author_id": 102706514,
+      "target_branch": null,
+      "issue_number": 98215,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T17:46:36Z",
-      "comment_updated_at": "2026-07-07T17:46:36Z",
-      "status_comment_id": 4906852587,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "comment_created_at": "2026-06-30T16:28:34Z",
+      "comment_updated_at": "2026-07-07T17:49:01Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=c41e4d35d21204d1970d4ac49bf246766153ba51)",
+      "review_summary": "The PR adds a `nonPersistableCommand` parameter to the shared exec approval reply payload builder and tests distinct copy for non-persistable versus `ask=always` cases.\n\nPR surface: Source +12, Tests +31. Total +43 across 2 files.\n\nReproducibility: yes. Current main source shows one-shot persistence and `ask=always` both remove `allow-always`, while real renderers still receive only the collapsed allowed-decision list; I did not run a live gateway or Telegram repro in this read-only pass.",
+      "review_followup": "- [P1] Manual review should decide whether to repair this partial branch or let a broader sibling own the fix, and the contributor still needs real prompt proof.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "c41e4d35d21204d1970d4ac49bf246766153ba51",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,145 +68,92 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): defer bundle MCP runtime retirement until leases release",
-        "body": "## Summary\nFixes #76233.\n\nApproved exec follow-up turns for run-mode subagents can now keep an already materialized bundle MCP runtime alive until their active lease is released. Runtime retirement still starts immediately, blocks new leases, and global shutdown can still force disposal. A force disposal can also preempt an earlier normal disposal that is waiting on a lease.\n\n## Root cause\n`src/agents/agent-bundle-mcp-runtime.ts:1038` disposed a session runtime immediately even when `materializeBundleMcpToolsForRun` already held an active lease:\n\n```before\nasync dispose() {\n  if (disposed) {\n    return;\n  }\n  disposed = true;\n  catalog = null;\n  catalogInFlight = undefined;\n  const sessionsToClose = Array.from(sessions.values());\n  sessions.clear();\n  await Promise.allSettled(sessionsToClose.map((session) => disposeSession(session)));\n}\n```\n\nThat let subagent cleanup retire the bundle MCP runtime while a late approved follow-up turn was between runtime lookup and tool materialization, producing `bundle-mcp runtime disposed for session ...`.\n\n## Fix\n`src/agents/agent-bundle-mcp-runtime.ts:580` now tracks retirement start, waits for active leases before normal disposal, and rejects new leases once retirement begins:\n\n```after\nacquireLease() {\n  failIfDisposing();\n  activeLeases += 1;\n  let released = false;\n  return () => {\n    if (released) {\n      return;\n    }\n    released = true;\n    activeLeases = Math.max(0, activeLeases - 1);\n    resolveLeaseDrainers();\n  };\n}\n```\n\n`dispose({ force: true })` remains available for `disposeAll()` so process shutdown does not wait on live run leases, and a later force call wakes an existing normal disposal wait.\n\n## Why this is the right boundary\nThe race is at the session MCP runtime ownership boundary, not in the exec follow-up text path. Materialized bundle MCP tools already acquire and release runtime leases; this change makes runtime retirement honor that existing ownership contract. The idle sweeper already skips active leases, and global teardown keeps forceful behavior through the explicit force option.\n\n## Verification\n- `PATH=/opt/node/bin:$PATH node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-runtime.test.ts` passed 1 Vitest shard in 24.32s. `agent-bundle-mcp-runtime.test.ts`: 43 passed.\n- `PATH=/opt/node/bin:$PATH node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-tools.materialize.test.ts` passed 1 Vitest shard in 19.56s. `agent-bundle-mcp-tools.materialize.test.ts`: 13 passed.\n- `PATH=/opt/node/bin:$PATH node scripts/run-oxlint.mjs src/agents/agent-bundle-mcp-runtime.ts src/agents/agent-bundle-mcp-runtime.test.ts src/agents/agent-bundle-mcp-types.ts` passed.\n- `PATH=/opt/node/bin:$PATH ./node_modules/.bin/oxfmt --check src/agents/agent-bundle-mcp-runtime.ts src/agents/agent-bundle-mcp-runtime.test.ts src/agents/agent-bundle-mcp-types.ts` passed.\n- `PATH=/opt/node/bin:$PATH node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo` passed.\n- `PATH=/opt/node/bin:$PATH node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo` passed.\n- Before/after runtime proof used `PATH=/opt/node/bin:$PATH node --import tsx /tmp/openclaw-76233-runtime-proof.ts` against pristine main and this patch with identical input.\n\n## Real behavior proof\nBehavior addressed: A session bundle MCP runtime must not retire while an approved follow-up turn still holds an active materialization lease.\nReal environment tested: The real source runtime functions `getOrCreateSessionMcpRuntime`, `materializeBundleMcpToolsForRun`, and `retireSessionMcpRuntime` were driven on pristine main 53d0c4ca50500766b0c216acaf5355b2e9d5bd9a and on this patched tree ebdd3591648567b93d90d7e95306391308e7fd12; no external network service was involved.\nExact steps or command run after this patch: `PATH=/opt/node/bin:$PATH node --import tsx /tmp/openclaw-76233-runtime-proof.ts`\nEvidence after fix:\n```\n# BEFORE (pristine main 53d0c4ca50500766b0c216acaf5355b2e9d5bd9a)\n{\n  \"beforeRelease\": {\n    \"activeLeases\": 1,\n    \"retireSettled\": true,\n    \"extraLeaseResult\": \"accepted\"\n  },\n  \"afterRelease\": {\n    \"retireResult\": true,\n    \"retireSettled\": true,\n    \"cachedSessionIds\": [],\n    \"materializeAfterRetire\": \"rejected: bundle-mcp runtime disposed for session session-proof-76233\"\n  }\n}\n# AFTER (this patch ebdd3591648567b93d90d7e95306391308e7fd12, identical input)\n{\n  \"beforeRelease\": {\n    \"activeLeases\": 1,\n    \"retireSettled\": false,\n    \"extraLeaseResult\": \"rejected: bundle-mcp runtime disposed for session session-proof-76233\"\n  },\n  \"afterRelease\": {\n    \"retireResult\": true,\n    \"retireSettled\": true,\n    \"cachedSessionIds\": [],\n    \"materializeAfterRetire\": \"rejected: bundle-mcp runtime disposed for session session-proof-76233\"\n  }\n}\n```\nObserved result after fix: Retirement remains pending while one lease is active, new leases are refused during retirement, and final removal happens only after the held lease is released.\nWhat was not tested: No live provider request or real chat UI approval click; full production build was not run because this change is confined to the session bundle MCP runtime lifecycle.\n",
-        "branch": "fix/exec-approval-runtime-disposal",
-        "head_sha": "ebdd3591648567b93d90d7e95306391308e7fd12",
-        "author": "yetval",
+        "title": "fix(exec-approval): distinguish non-persistable command from ask=always policy in approval prompt",
+        "body": "## What Problem This Solves\n\nWhen `allowAlwaysPersistence.kind === \"one-shot\"` (for example, a command that uses shell redirection), `allow-always` is correctly excluded from the allowed decisions. The approval prompt still showed the same explanation used for an `ask=always` policy:\n\n> \"The effective approval policy requires approval every time, so Allow Always is unavailable.\"\n\nThat is misleading because the command can be approved; it just cannot be saved as a reusable approval pattern.\n\nCloses #97069.\n\n## Fix\n\nAdded an optional `nonPersistableCommand` flag to `ExecApprovalPendingReplyParams`. When the caller sets this to `true` because the command is not persistable, the prompt now shows a distinct message:\n\n> \"Allow Always is unavailable because this command cannot be saved as a reusable pattern (it uses shell redirection or another non-persistable feature).\"\n\nThe `ask=always` path keeps the original policy wording unchanged.\n\n## Evidence\n\nFocused tests were added in `exec-approval-reply.test.ts`:\n\n- `nonPersistableCommand: true` shows the non-persistable message and does not show the policy message.\n- `ask: \"always\"` shows the policy message and does not show the non-persistable message.\n\nValidation:\n\n```text\nTests  34 passed (34)\n```\n",
+        "branch": "fix/approval-nonpersistable-message",
+        "head_sha": "c41e4d35d21204d1970d4ac49bf246766153ba51",
+        "author": "ianalloway",
         "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "size: XS",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof",
+          "merge-risk: 🚨 other"
         ],
         "files": [
           {
-            "path": "src/agents/agent-bundle-mcp-runtime.test.ts",
-            "additions": 68,
+            "path": "src/infra/exec-approval-reply.test.ts",
+            "additions": 31,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/agent-bundle-mcp-runtime.ts",
-            "additions": 52,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-bundle-mcp-types.ts",
-            "additions": 1,
-            "deletions": 1,
+            "path": "src/infra/exec-approval-reply.ts",
+            "additions": 15,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 121,
-        "deletions": 9,
+        "changedFiles": 2,
+        "additions": 46,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101830",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101830.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98215",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98215.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 100,
+          "gatingTotal": 95,
           "counts": {
-            "SUCCESS": 48,
-            "SKIPPED": 27,
-            "IN_PROGRESS": 21,
+            "SUCCESS": 69,
+            "SKIPPED": 30,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2397,
+    "total_ms": 3077,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 566
+        "ms": 316
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1583
+        "ms": 2486
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 5549
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 8
+        "ms": 0
       },
       {
         "name": "claim_dispatch_commands",
@@ -216,11 +161,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 234
+        "ms": 249
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
