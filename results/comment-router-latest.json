@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T16:24:00.160Z",
+  "generated_at": "2026-07-07T16:24:11.860Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T13:23:58.192Z",
+  "since": "2026-07-07T13:24:11.434Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    97107
+    101587
   ],
-  "comment_ids": [
-    4905981046
-  ],
-  "status_comment_id": 4905981557,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,158 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:97107:4905981046:2026-07-07T16:22:22Z:re_review",
-      "comment_id": "4905981046",
-      "comment_version_key": "4905981046:2026-07-07T16:22:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97107#issuecomment-4905981046",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 97107,
-      "author": "lavkeshdwivedi",
-      "author_id": 9712103,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-07T16:22:22Z",
-      "comment_updated_at": "2026-07-07T16:22:22Z",
-      "status_comment_id": 4905981557,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 97107,
-          "dispatch_key": "router-cad203358873b4e8",
-          "dispatched_at": "2026-07-07T16:24:00.842Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-07T16:24:02.837Z",
-          "response_comment_id": "4813918045",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(exec): bypass fail-closed interpreter heuristic when security is full",
-        "body": "## Live Behavior Proof\n\n**Generated 2026-07-07 from the production `validateScriptFileForShellBleed` function on this branch** using `pnpm exec tsx proof-run.mts` (not a test runner — calls the exported production seam directly):\n\n```\n$ pnpm exec tsx proof-run.mts\n\n=== BEFORE: security unset (fail-closed heuristic active) ===\n  BLOCKED: cat bad.py | python\n    -> exec preflight: complex interpreter invocation detected; refusing to run\n       without script preflight validation. Use a direct `python <file>.py` or\n       `node <file>.js` command.\n  BLOCKED: bash -c \"python bad.py\"\n    -> exec preflight: complex interpreter invocation detected; refusing to run\n       without script preflight validation. Use a direct `python <file>.py` or\n       `node <file>.js` command.\n  PASS: python3 script.py | head -30\n    (target path `script.py` extractable → no heuristic, file check runs; passes\n     because the file does not exist on this machine)\n\n=== AFTER: security=\"full\" (heuristic bypassed) ===\n  ALLOWED: cat bad.py | python\n  ALLOWED: bash -c \"python bad.py\"\n  ALLOWED: python3 script.py | head -30\n```\n\nThe `validateScriptFileForShellBleed` seam is exported from the production module (`src/agents/bash-tools.exec.ts`). The proof script imports and calls it directly — no vitest, no mocking, no test infra. `BLOCKED` = the function throws; `ALLOWED` = the function returns `undefined`. Before/after behavior confirmed on the same machine in the same Node.js session.\n\n---\n\n## What Problem This Solves\n\nWhen `exec.security` is `\"full\"` and `exec.ask` is `\"on-miss\"` (a common production config), `shouldSkipExecScriptPreflight` returns `false` because it requires `ask === \"off\"`. This causes `validateScriptFileForShellBleed` to run the fail-closed interpreter heuristic even though the operator has explicitly declared full agent trust.\n\nThe heuristic blocks commands that contain an interpreter invocation + complex shell syntax (pipe, `&&`, etc.) when the script target path cannot be extracted — for example `cat bad.py | python`, `bash -c \"python script.py\"`, or `python <(cat bad.py)`. In lower-trust configurations this defensive fail-close is the right call. At `security=\"full\"` it produces false positives for patterns like `python3 script.py | head -30` where a pipeline prevents target extraction but the intent is unambiguous.\n\n**Root cause**: `ask` controls approval prompts; `security` controls trust level. These were conflated in the outer skip check, which required `ask === \"off\"` before any preflight could be bypassed at `security=\"full\"`.\n\n## Fix\n\nThread `security` into `validateScriptFileForShellBleed` and guard the fail-closed interpreter heuristic behind `security !== \"full\"`. File content validation (shell variable injection detection via `$VAR` patterns) is **unchanged** — it still runs for all security levels whenever a target path can be extracted from the command.\n\nChanges:\n- `validateScriptFileForShellBleed`: add optional `security?: ExecSecurity` param; wrap the interpreter heuristic in `if (params.security !== \"full\")`\n- Call site: pass `security` through\n- Tests: add `it.each(failClosedCases)` blocks verifying each previously-blocked command now resolves when `security: \"full\"` is passed, covering both `ask=on-miss` and `ask=always`\n- Docs: update `docs/tools/exec.md` to state `security=full` bypasses the heuristic regardless of ask mode\n\n## Test plan\n\n- [x] All existing `failClosedCases` still fail with default (no `security`) param — heuristic unchanged for non-full security\n- [x] All existing `passCases` still pass\n- [x] New tests verify each `failClosedCase` resolves when `security: \"full\"` is passed (covers ask=on-miss and ask=always)\n- [x] Existing `createPreflightTool()` tests still catch `$VAR` patterns — file content validation runs regardless of security level\n\nFixes #87371",
-        "branch": "fix/exec-preflight-respects-security-full",
-        "head_sha": "5c350b4b5aa6ac748fd22e637c3c562f4ae6592b",
-        "author": "lavkeshdwivedi",
-        "labels": [
-          "docs",
-          "agents",
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "docs/tools/exec.md",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-tools.exec.script-preflight.test.ts",
-            "additions": 31,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-tools.exec.ts",
-            "additions": 30,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 63,
-        "deletions": 23,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97107",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97107.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "FAILURE": 2,
-            "SUCCESS": 61,
-            "SKIPPED": 33,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-compact-large-whole-1:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-compact-large-whole-1:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-07T16:24:00.350Z"
-    }
-  ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5141,
+    "total_ms": 756,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 507
+        "ms": 414
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1442
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -194,15 +57,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3162
+        "ms": 330
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
