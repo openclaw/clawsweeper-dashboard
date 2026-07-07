@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-07-07T20:30:20.643Z
+Generated: 2026-07-07T22:20:06.694Z
 
 ## Summary
 
@@ -30,6 +30,6 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#101752](https://github.com/openclaw/openclaw/pull/101752) | fix(codex): before_prompt_build receives conversation messages | automerge-openclaw-openclaw-89004 | MERGEABLE | BEHIND | CANCELLED:1 SUCCESS:62 SKIPPED:31; blockers:1 | needs_merge_state:BEHIND, needs_checks:ClawSweeper Dispatch / dispatch:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#101752](https://github.com/openclaw/openclaw/pull/101752) | fix(codex): before_prompt_build receives conversation messages | automerge-openclaw-openclaw-89004 | MERGEABLE | BEHIND | CANCELLED:3 SKIPPED:46 SUCCESS:64; blockers:2 | needs_merge_state:BEHIND, needs_checks:ClawSweeper Dispatch / dispatch:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#101748](https://github.com/openclaw/openclaw/pull/101748) | docs: explain pull request automation workflow | automerge-openclaw-openclaw-101175 | MERGEABLE | BEHIND | CANCELLED:1 SUCCESS:17 SKIPPED:24; blockers:1 | needs_merge_state:BEHIND, needs_checks:ClawSweeper Dispatch / dispatch:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#101593](https://github.com/openclaw/openclaw/pull/101593) | fix(infra): handle detached respawn child errors | automerge-openclaw-openclaw-101489 | MERGEABLE | BEHIND | CANCELLED:1 SKIPPED:38 SUCCESS:70 FAILURE:1 NEUTRAL:1; blockers:2 | needs_merge_state:BEHIND, needs_checks:ClawSweeper Dispatch / dispatch:CANCELLED; CI / checks-node-compact-small-whole-2:FAILURE, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
