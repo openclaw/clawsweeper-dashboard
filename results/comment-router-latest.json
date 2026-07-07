@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T00:02:19.589Z",
+  "generated_at": "2026-07-07T00:02:24.001Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T21:02:19.210Z",
+  "since": "2026-07-06T21:02:21.524Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101082
+    101228
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,19 +29,124 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101228:4898668960:2026-07-07T00:02:16Z:clawsweeper_auto_repair",
+      "comment_id": "4898668960",
+      "comment_version_key": "4898668960:2026-07-07T00:02:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101228#issuecomment-4898668960",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101228,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T23:50:55Z",
+      "comment_updated_at": "2026-07-07T00:02:16Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=8b46030a4af62371ffe160db8ef1950a13da7842)",
+      "review_summary": "The PR changes npm global self-update target resolution so a known package root wins over `npm root -g`, rejects ephemeral per-Node probed roots, and adds resolver coverage.\n\nPR surface: Source +29, Tests +96. Total +125 across 2 files.\n\nReproducibility: yes. The unscoped mismatch is covered by the PR's mocked resolver cases, and source inspection shows the same probe-rejected path fails for scoped roots because the new fallback only recognizes immediate `node_modules` parents.",
+      "review_followup": "- [P1] Needs contributor code follow-up plus real behavior proof; ClawSweeper repair is not a fit while after-fix setup proof is missing.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "8b46030a4af62371ffe160db8ef1950a13da7842",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(update): keep self-updates on the running install's global root",
+        "body": "## Summary\n\n- `resolveGlobalInstallTarget` now prefers the global root that the resolved package root lives in for npm targets\n- the `npm root -g` probe only decides the target when no package root is known\n- a probe result under an ephemeral per-Node prefix (Homebrew Cellar, nvm/n/asdf/volta version dirs) is never adopted, reusing the classifier #93650 added for npm command selection\n\n## The bug\n\nPackage self-updates picked their install target from `npm root -g` even when the package root the process is running from was already known. If PATH's npm doesn't belong to the running install's Node tree, the probe points at a different global root. The update installs there, reports success, and the install that's actually running stays on the old version. Probably the same failure shape as #98618.\n\nConcrete case from my gateway's update handoff log (2026.5.28 updating to 2026.6.11): the launchd service PATH had Homebrew's bin first and nvm's second, so the managed `openclaw update --yes` ran nvm's npm shim under Homebrew's node. nvm's npm has no builtin prefix config, so it derived its default prefix from the realpathed execPath:\n\n```\n\"root\": \"/opt/homebrew/Cellar/node/26.3.1/lib/node_modules/openclaw\",\n\"before\": { \"version\": null },\n\"global update\": \".../.nvm/versions/node/v24.10.0/bin/npm i -g\n    --prefix /opt/homebrew/Cellar/node/26.3.1/lib/node_modules/.openclaw-update-stage-2EAbUE openclaw@latest\"\n```\n\n`\"before\": null` means the update created a brand-new tree inside the versioned Cellar directory (which the next `brew upgrade node` deletes) and ran doctor from it, while the running nvm install kept serving 2026.5.28. Doctor then flagged an entrypoint mismatch and re-staged the service plist, compounding the skew.\n\n#93650 already stops the per-Node npm *command* from being used, but the probed *target root* was never validated, and `honorPackageRoot` is only set on managed-service redirects, so the \"roots match, but the service environment's npm points elsewhere\" case fell through.\n\n## Fix\n\nIn `resolveGlobalInstallTarget`, for npm targets:\n\n1. if the package root is known, its own `node_modules` parent is the target (this is where the running install lives, so it's the only tree worth updating)\n2. the `npm root -g` probe is a fallback for when no package root is known\n3. a probe result whose prefix is an ephemeral per-Node path is rejected outright\n\nWhen the probe agrees with the running root (the normal case) nothing changes. pnpm and bun targets are untouched. No existing test needed modification.\n\n## Verification\n\n- `pnpm check` passes\n- `pnpm build` passes\n- `pnpm vitest run src/infra/update-global.test.ts src/infra/update-runner.test.ts src/cli/update-cli.test.ts` — 272 passed (3 new tests: Cellar probe rejected in favor of the running root, matching probe still adopted, probe failure falls back to the running root)\n- full `pnpm test`: 723/724, the one failure (`extensions/litellm/index.test.ts`) reproduces identically on a clean `origin/main` worktree, so it's pre-existing and unrelated\n",
+        "branch": "fix/self-update-honor-running-package-root",
+        "head_sha": "8b46030a4af62371ffe160db8ef1950a13da7842",
+        "author": "buddyh",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "src/infra/update-global.test.ts",
+            "additions": 96,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/update-global.ts",
+            "additions": 30,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 126,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101228",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101228.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 101,
+          "gatingTotal": 96,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 35,
+            "SUCCESS": 63,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 621,
+    "total_ms": 2840,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 366
+        "ms": 440
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2021
       },
       {
         "name": "classify_comment_commands",
@@ -61,11 +166,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 242
+        "ms": 351
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
