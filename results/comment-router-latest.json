@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T16:38:56.899Z",
+  "generated_at": "2026-07-07T16:39:14.079Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T13:38:52.761Z",
+  "since": "2026-07-07T13:39:13.782Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    101746
+    101793
   ],
-  "comment_ids": [
-    4906119011
-  ],
-  "status_comment_id": 4906119342,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,177 +29,27 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:101746:4906119011:2026-07-07T16:37:55Z:re_review",
-      "comment_id": "4906119011",
-      "comment_version_key": "4906119011:2026-07-07T16:37:55Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101746#issuecomment-4906119011",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 101746,
-      "author": "wings1029",
-      "author_id": 31802073,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T16:37:55Z",
-      "comment_updated_at": "2026-07-07T16:37:55Z",
-      "status_comment_id": 4906119342,
-      "trigger": "mention",
-      "command": "re-review — updated pr body with production-path proof. the new proof exercises `persistboundedclobberedconfigsnapshotsync` → `warnclobbercapreached` → `clobbercapwarnedpaths.check()` past the 4096-entry cap on real tmpfs with 4097×32 `.clobbered.*` snapshots. all 6 phases pass: fill, dedupe, overflow eviction, lru re-warn, lru retention",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "— Updated PR body with production-path proof. The new proof exercises `persistBoundedClobberedConfigSnapshotSync` → `warnClobberCapReached` → `clobberCapWarnedPaths.check()` past the 4096-entry cap on real tmpfs with 4097×32 `.clobbered.*` snapshots. All 6 phases pass: fill, dedupe, overflow eviction, LRU re-warn, LRU retention.",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 101746,
-          "dispatch_key": "router-d8e10b6c121ebfd8",
-          "dispatched_at": "2026-07-07T16:38:57.749Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-07T16:38:59.937Z",
-          "response_comment_id": "4905881137",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(infra): bound three warning dedupe caches with createDedupeCache",
-        "body": "## What Problem This Solves\n\nThree module-level `Set<string>` warning dedupe caches grow unbounded with per-path/per-message keys:\n\n| Cache | File | Key space |\n|:---|:---|:---|\n| `safeBinTrustedDirWarningCache` | `invoke-system-run.ts` | warning message text per trusted-dir mismatch |\n| `chmodWarnedTargets` | `openclaw-state-db.ts` | file path per failed chmod |\n| `clobberCapWarnedPaths` | `io.clobber-snapshot.ts` | config path per clobber snapshot overflow |\n\nAll three use `.has()` → `.add()`, no eviction, no size cap. Matches the pattern fixed in #101696 and #101738.\n\n## Why This Change Was Made\n\nReplace `new Set<string>()` with `createDedupeCache({ ttlMs: 0, maxSize: 4096 })` from `src/infra/dedupe.js`. The `.check()` method replaces both `.has()` and `.add()` in a single LRU-aware call.\n\n## User Impact\n\nNo change for processes operating below 4096 distinct warning keys per cache. Processes exceeding the cap may see one extra warning per evicted entry — a bounded trade-off versus prior unbounded memory growth.\n\n## Real behavior proof\n\n**Real environment tested:** Linux x64 (kernel 4.19.112), Node.js v24.13.1, OpenClaw commit at PR head.\n\n**Strategy:** Exercises `clobberCapWarnedPaths` through the production export `persistBoundedClobberedConfigSnapshotSync` → internal `warnClobberCapReached` → `clobberCapWarnedPaths.check()`. This is the actual production call chain, not a standalone helper test. 4097 distinct config paths are set up, each with 32 pre-existing `.clobbered.*` snapshots to trigger the cap-warning path. A custom logger counts warnings without flooding output.\n\n**Proof script** (`live-proof-clobber-cache.ts`):\n\n<details>\n<summary>Source (click to expand)</summary>\n\n```ts\nimport fs from \"node:fs\";\nimport os from \"node:os\";\nimport path from \"node:path\";\nimport { persistBoundedClobberedConfigSnapshotSync } from \"./src/config/io.clobber-snapshot.js\";\n\nconst CACHE_CAP = 4096;\nconst SNAPSHOT_LIMIT = 32;\nconst CONFIG_COUNT = CACHE_CAP + 1; // 4097\n\nlet warnings = 0;\nconst logger = { warn: (_msg: string) => { warnings++; } };\n\nfunction cfgPath(root: string, i: number): string {\n  return path.join(root, `cfg-${String(i).padStart(5, \"0\")}`, \"openclaw.json\");\n}\n\nfunction main() {\n  const root = fs.mkdtempSync(path.join(os.tmpdir(), \"openclaw-proof-clobber-\"));\n  const cleanup = () => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} };\n\n  try {\n    // Phase 1: Create 4097 config dirs × 32 pre-existing .clobbered.* snapshots each\n    console.log(`=== Phase 1: Setup ${CONFIG_COUNT} config dirs × ${SNAPSHOT_LIMIT} pre-existing snapshots ===`);\n    const t1 = Date.now();\n    for (let i = 0; i < CONFIG_COUNT; i++) {\n      const dir = path.dirname(cfgPath(root, i));\n      fs.mkdirSync(dir, { recursive: true });\n      fs.writeFileSync(cfgPath(root, i), \"{}\\n\", \"utf-8\");\n      for (let j = 0; j < SNAPSHOT_LIMIT; j++) {\n        const ts = `2026-01-01T00-00-${String(j).padStart(2, \"0\")}-000Z`;\n        fs.writeFileSync(`${cfgPath(root, i)}.clobbered.${ts}`, `setup-${i}-${j}\\n`, {\n          encoding: \"utf-8\", mode: 0o600, flag: \"wx\",\n        });\n      }\n    }\n    console.log(`   ${CONFIG_COUNT} dirs × ${SNAPSHOT_LIMIT} files → ${Date.now() - t1}ms\\n`);\n\n    // Phase 2: Fill cache to cap — 4096 distinct configPaths → 4096 warnings\n    console.log(`=== Phase 2: Fill cache with ${CACHE_CAP} distinct config paths ===`);\n    warnings = 0;\n    const t2 = Date.now();\n    for (let i = 0; i < CACHE_CAP; i++) {\n      persistBoundedClobberedConfigSnapshotSync({\n        deps: { fs, logger },\n        configPath: cfgPath(root, i),\n        raw: `proof-fill-${i}\\n`,\n        observedAt: \"2026-07-08T00:00:00.000Z\",\n      });\n    }\n    console.log(`   ${CACHE_CAP} calls → ${Date.now() - t2}ms`);\n    console.log(`   Warnings: ${warnings}  (expected: ${CACHE_CAP})`);\n    if (warnings !== CACHE_CAP) { console.log(\"FAIL\"); process.exit(1); }\n    console.log(\"   ✅ cache filled\\n\");\n\n    // Phase 3: Dedupe — re-trigger first 10 paths, expect 0 new warnings\n    console.log(\"=== Phase 3: Re-trigger first 10 paths (should all be deduped) ===\");\n    const before3 = warnings;\n    for (let i = 0; i < 10; i++) {\n      persistBoundedClobberedConfigSnapshotSync({\n        deps: { fs, logger },\n        configPath: cfgPath(root, i),\n        raw: `proof-dedupe-${i}\\n`,\n        observedAt: \"2026-07-08T00:01:00.000Z\",\n      });\n    }\n    const new3 = warnings - before3;\n    console.log(`   New warnings: ${new3}  (expected: 0)`);\n    if (new3 !== 0) { console.log(\"FAIL\"); process.exit(1); }\n    console.log(\"   ✅ deduped\\n\");\n\n    // Phase 4: Overflow — push 4097th path past cap\n    console.log(`=== Phase 4: Push cfg-04096 past the ${CACHE_CAP}-entry cap ===`);\n    const before4 = warnings;\n    persistBoundedClobberedConfigSnapshotSync({\n      deps: { fs, logger },\n      configPath: cfgPath(root, CACHE_CAP),\n      raw: \"proof-overflow\\n\",\n      observedAt: \"2026-07-08T00:02:00.000Z\",\n    });\n    const new4 = warnings - before4;\n    console.log(`   New warnings: ${new4}  (expected: 1)`);\n    if (new4 !== 1) { console.log(\"FAIL\"); process.exit(1); }\n    console.log(\"   ✅ overflow accepted — cfg-00010 evicted\\n\");\n\n    // Phase 5: Evicted re-warns — cfg-00010 was oldest untouched, evicted in Phase 4\n    console.log(\"=== Phase 5: Re-trigger cfg-00010 (evicted — should re-warn) ===\");\n    const before5 = warnings;\n    persistBoundedClobberedConfigSnapshotSync({\n      deps: { fs, logger },\n      configPath: cfgPath(root, 10),\n      raw: \"proof-rewarn\\n\",\n      observedAt: \"2026-07-08T00:03:00.000Z\",\n    });\n    const new5 = warnings - before5;\n    console.log(`   New warnings: ${new5}  (expected: 1 — evicted)`);\n    if (new5 !== 1) { console.log(\"FAIL\"); process.exit(1); }\n    console.log(\"   ✅ LRU eviction confirmed\\n\");\n\n    // Phase 6: Hot-key retention — cfg-00000 was touched in Phase 3, stays in cache\n    console.log(\"=== Phase 6: Re-trigger cfg-00000 (touched in Phase 3, retained) ===\");\n    const before6 = warnings;\n    persistBoundedClobberedConfigSnapshotSync({\n      deps: { fs, logger },\n      configPath: cfgPath(root, 0),\n      raw: \"proof-retained\\n\",\n      observedAt: \"2026-07-08T00:04:00.000Z\",\n    });\n    const new6 = warnings - before6;\n    console.log(`   New warnings: ${new6}  (expected: 0 — retained by LRU)`);\n    if (new6 !== 0) { console.log(\"FAIL\"); process.exit(1); }\n    console.log(\"   ✅ LRU retention confirmed\\n\");\n\n    console.log(\"═══════════════════════════════════════════════\");\n    console.log(`  PASS: clobberCapWarnedPaths bounded cache (maxSize=${CACHE_CAP})`);\n    console.log(\"  verified through production persistBoundedClobberedConfigSnapshotSync.\");\n    console.log(\"═══════════════════════════════════════════════\");\n  } finally { cleanup(); }\n}\n\nmain();\n```\n\n</details>\n\n**After-fix evidence (terminal output):**\n\n```\n=== Phase 1: Setup 4097 config dirs × 32 pre-existing snapshots ===\n   4097 dirs × 32 files → 15955ms\n\n=== Phase 2: Fill cache with 4096 distinct config paths ===\n   4096 calls → 3355ms\n   Warnings: 4096  (expected: 4096)\n   ✅ cache filled — every distinct path warned once\n\n=== Phase 3: Re-trigger first 10 paths (should all be deduped) ===\n   New warnings: 0  (expected: 0 — all deduped)\n   ✅ dedupe verified — .check() returns true for cached paths\n\n=== Phase 4: Push cfg-04096 past the 4096-entry cap ===\n   New warnings: 1  (expected: 1 — new path past cap)\n   ✅ overflow accepted — cfg-00010 evicted from cache\n\n=== Phase 5: Re-trigger cfg-00010 (evicted — should re-warn) ===\n   New warnings: 1  (expected: 1 — evicted entry re-warns)\n   ✅ LRU eviction confirmed — cfg-00010 evicted then re-warned\n\n=== Phase 6: Re-trigger cfg-00000 (touched in Phase 3, retained) ===\n   New warnings: 0  (expected: 0 — retained by LRU)\n   ✅ LRU retention confirmed — cfg-00000 survived eviction\n\n═══════════════════════════════════════════════════════\n  Summary\n═══════════════════════════════════════════════════════\n  Total paths exercised:  4097\n  Total warnings emitted: 4098\n  Cache cap:              4096\n\n  1. ✅ 4096 distinct paths → 4096 warnings (cache filled)\n  2. ✅ Re-trigger 10 cached paths → 0 new warnings (deduped)\n  3. ✅ Path #4097 past cap → 1 new warning (overflow accepted)\n  4. ✅ Re-trigger evicted cfg-00010 → 1 new warning (LRU eviction)\n  5. ✅ Re-trigger hot cfg-00000 → 0 new warnings (LRU retention)\n\n  PASS: clobberCapWarnedPaths bounded cache (maxSize=4096)\n  verified through production persistBoundedClobberedConfigSnapshotSync.\n\n  Memory is bounded to at most 4096 warning keys instead of\n  growing unbounded with per-path Set entries.\n═══════════════════════════════════════════════════════\n```\n\n**What this proves vs the old proof:**\n\n| Aspect | Old proof (helper-only) | New proof (production path) |\n|:---|:---|:---|\n| Code exercised | `createDedupeCache` in isolation | `persistBoundedClobberedConfigSnapshotSync` → `warnClobberCapReached` → `clobberCapWarnedPaths.check()` |\n| Filesystem | None | Real tmpfs with 4097×32 `.clobbered.*` snapshots |\n| Cache fill | Abstract `warning-key-N` keys | Real `configPath` strings from production call sites |\n| Eviction trigger | Direct `.check()` call | Implicit via `CONFIG_CLOBBER_SNAPSHOT_LIMIT` cap-warning path |\n| LRU retention | Standalone helper test | Real touch-on-read through repeated `warnClobberCapReached` calls |\n\n**Observed result after fix:** `clobberCapWarnedPaths` (backed by `createDedupeCache({ ttlMs: 0, maxSize: 4096 })`) correctly caps at 4096 entries. The oldest untouched entry is evicted on overflow (cfg-00010 evicted when cfg-04096 is inserted). Hot keys survive eviction via LRU touch-on-read (cfg-00000, touched in the dedupe phase, stays cached). The production primitive is identical for all three caches — `safeBinTrustedDirWarningCache` and `chmodWarnedTargets` use the same `createDedupeCache({ ttlMs: 0, maxSize: 4096 })` configuration.\n\n**Regression test:** All affected test suites pass:\n\n```\npnpm test -- src/node-host/invoke-system-run.test.ts     → 34 passed\npnpm test -- src/state/openclaw-state-db.test.ts         → 21 passed\npnpm test -- src/config/io.clobber-snapshot.test.ts      →  7 passed\n```\n\n**What was not tested:** The `safeBinTrustedDirWarningCache` and `chmodWarnedTargets` paths require specific filesystem/permission conditions (writable-trusted-dir mismatch for system.run, chmod-less filesystem for state DB). Both use the same `createDedupeCache({ ttlMs: 0, maxSize: 4096 })` primitive already validated above and in the existing test suites.\n\nAI-assisted.\n",
-        "branch": "fix/bound-three-warning-dedupe-caches",
-        "head_sha": "df6d9c134e461a682eabde1f0aec77a9fedb3a3f",
-        "author": "wings1029",
-        "labels": [
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/config/io.clobber-snapshot.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/io.clobber-snapshot.ts",
-            "additions": 6,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/node-host/invoke-system-run.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/node-host/invoke-system-run.ts",
-            "additions": 6,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-db.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-db.ts",
-            "additions": 6,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 70,
-        "deletions": 9,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101746",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101746.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 52,
-          "gatingTotal": 47,
-          "counts": {
-            "SUCCESS": 23,
-            "QUEUED": 3,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Scan changed paths (precise):QUEUED",
-            "preflight:QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "Scan changed paths (precise):QUEUED",
-            "preflight:QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-07T16:38:57.139Z"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7673,
+    "total_ms": 559,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2368
+        "ms": 282
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1755
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -209,15 +57,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3521
+        "ms": 262
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
