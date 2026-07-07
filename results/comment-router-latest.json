@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T03:17:11.015Z",
+  "generated_at": "2026-07-07T03:17:12.013Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T00:17:09.463Z",
+  "since": "2026-07-07T00:17:11.530Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101078
+    98624
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,141 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101078:4896514565:2026-07-07T03:17:05Z:clawsweeper_auto_repair",
-      "comment_id": "4896514565",
-      "comment_version_key": "4896514565:2026-07-07T03:17:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101078#issuecomment-4896514565",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101078,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T18:51:11Z",
-      "comment_updated_at": "2026-07-07T03:17:05Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=405c9c2038456c283cb3e7179af9e9ec7e4c84b5)",
-      "review_summary": "The PR adds a persisted cron run-kind marker, restores stored cron provider/model/thinking into async completion wakes, authorizes in-process model overrides, and adds focused tests.\n\nPR surface: Source +41, Tests +203. Total +244 across 4 files.\n\nReproducibility: yes. Source inspection shows media completions use the run-session requester key, while current cron session persistence writes the base cron session entry and existing tests assert the run key is not stored.",
-      "review_followup": "- [P1] Contributor changes are needed because the PR is draft, lacks real behavior proof, and the fix location still misses the real cron persistence path.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "405c9c2038456c283cb3e7179af9e9ec7e4c84b5",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): preserve cron context in session entry for async completion wakes",
-        "body": "## What Problem This Solves\n\nFixes #99919\n\nWhen a cron job uses an async media generation tool (`image_generate`, `video_generate`, `music_generate`), the cron run ends while the media task is still in progress. When the media task later completes and wakes the session, the resumed agent run **loses the original cron context**:\n\n- `provider` / `model` — falls back to account defaults instead of the cron's configured model\n- `thinkLevel` — not restored\n- `bootstrapContextRunKind` — missing; the resumed agent doesn't know it is a cron run\n\nThe agent wakes up, sees only \"image done\" with no memory of the original multi-step task (build → commit → deploy → notify), replies once, and ends. The remaining steps silently dead-end with `NO_REPLY`.\n\nAdditionally, the in-process gateway dispatch in `runAnnounceAgentCall` was not authorized to pass model overrides on the synthetic client. Even with the correct `provider`/`model` fields in the agent params, the gateway's `server-methods/agent` handler would reject them without `allowSyntheticModelOverride`.\n\n## Why This Change Was Made\n\nThe fix has three parts:\n\n**1. Persist** — When a cron agent run completes, write `bootstrapContextRunKind` onto the `SessionEntry` in the session store (`agent-command.ts`). This makes the cron origin discoverable by any later run on the same session key.\n\n**2. Restore** — In `sendSubagentAnnounceDirectly`, when building the `directAgentParams` for an async completion wake, read `requesterEntry.bootstrapContextRunKind` from the loaded session entry. If it equals `\"cron\"`, inject `provider`, `model`, `thinking`, and `bootstrapContextRunKind` into the wake params so the resumed agent continues with the same identity.\n\n**3. Authorize** — `runAnnounceAgentCall` now passes `allowSyntheticModelOverride: true` when the agent params carry a `provider` or `model` override. This authorizes the trusted in-process gateway dispatch so the synthetic client's model override is accepted by `server-methods/agent`, preventing the wake from being rejected before the agent resumes.\n\n**Safety**: Only cron session entries carry `bootstrapContextRunKind: \"cron\"`. Subagent session entries (`agent:<id>:subagent:<uuid>`) never have this field, so subagent-to-subagent completion paths are completely unaffected. Model override authorization is only enabled when the agent params actually contain provider/model overrides.\n\n## User Impact\n\n- **Before**: Cron jobs using async media generation silently lost context on wake. The resumed agent had the wrong model and no memory of the task, causing multi-step jobs to dead-end after the first async call. Even after restoring provider/model in the params, the gateway could reject them.\n- **After**: Async completion wakes restore the cron's provider, model, thinking level, and run kind from the persisted session entry. The in-process dispatch authorizes the model override on the synthetic client. The agent continues the original task instead of falling back to account defaults.\n\n## Evidence\n\n### Tests\n\n```bash\n# Targeted tests (115/115 passed, +3 tests for #99919)\nnode scripts/run-vitest.mjs src/agents/subagent-announce-delivery.test.ts\n# → 115 passed (includes 3 new tests: context injection, non-cron safety, override authorization)\n\nnode scripts/run-vitest.mjs src/cron/\n# → 1277/1277 passed (119 test files)\n\nnode scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.async-tasks.test.ts\n# → 8/8 passed\n\nnode scripts/run-vitest.mjs src/agents/subagent-announce.test.ts\n# → 14/14 passed\n```\n\n### Lint\n\n```bash\nnode_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.json --quiet \\\n  src/agents/subagent-announce-delivery.ts \\\n  src/agents/subagent-announce-delivery.test.ts\n# → clean (exit 0)\n```\n\n### Review\n\nClawSweeper review (#101078) identified that `runAnnounceAgentCall` dispatches through `dispatchGatewayMethodInProcess` without `allowSyntheticModelOverride`, causing the gateway's `server-methods/agent` to reject provider/model overrides on the synthetic client. **Fixed in 405c9c2**.\n\n### Revision (405c9c2)\n\n- `runAnnounceAgentCall` now passes `allowSyntheticModelOverride: true` when the agent params include `provider` or `model` overrides, authorizing the trusted in-process dispatch path.\n- New regression test (`authorizes model override on in-process dispatch when cron context includes provider/model`) uses the direct `dispatchGatewayMethodInProcess` mock (not the `callGateway` adaptation) to verify `allowSyntheticModelOverride` reaches the in-process dispatch options.\n- No other callers of `runAnnounceAgentCall` pass provider/model overrides, so the authorization is only active for the cron context restoration path.\n\n### What was tested live\n\n- All 115 subagent-announce-delivery tests pass, including 3 new tests:\n  - ✅ Cron session wake injects provider, model, thinkLevel, bootstrapContextRunKind\n  - ✅ Non-cron session wake does NOT inject these fields (subagent safety)\n  - ✅ `allowSyntheticModelOverride: true` is passed to `dispatchGatewayMethodInProcess` when cron context includes provider/model\n- All 1277 cron tests pass unchanged\n- Full lint (oxlint) pass on all changed files\n\n### What was not tested live\n\n- A real cron + async image_generate round-trip requires a Codex app-server environment with a live provider and is deferred to Testbox/Crabbox proof. The code-level integration tests cover the exact dispatch path (session entry → `sendSubagentAnnounceDirectly` → `directAgentParams` → `runAnnounceAgentCall` → `dispatchGatewayMethodInProcess` with `allowSyntheticModelOverride`) with mocked session store and in-process gateway dispatch.\n",
-        "branch": "fix/cron-async-media-wake-loses-context",
-        "head_sha": "405c9c2038456c283cb3e7179af9e9ec7e4c84b5",
-        "author": "xialonglee",
-        "labels": [
-          "agents",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 41,
-            "deletions": 26,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-announce-delivery.test.ts",
-            "additions": 203,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-announce-delivery.ts",
-            "additions": 27,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 273,
-        "deletions": 29,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101078",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101078.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 52,
-          "gatingTotal": 47,
-          "counts": {
-            "SKIPPED": 42,
-            "SUCCESS": 9,
-            "FAILURE": 1
-          },
-          "blockers": [
-            "actionlint:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "actionlint:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1757,
+    "total_ms": 808,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 319
+        "ms": 469
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1218
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -179,7 +61,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 194
+        "ms": 325
       },
       {
         "name": "append_ledger",
