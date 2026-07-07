@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T06:12:58.048Z",
+  "generated_at": "2026-07-07T06:13:01.696Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T03:12:56.233Z",
+  "since": "2026-07-07T03:12:59.488Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    93100
+    101392
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4900719044
+  ],
+  "status_comment_id": 4900719394,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,212 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93100:4703666159:2026-07-07T06:12:53Z:clawsweeper_needs_human",
-      "comment_id": "4703666159",
-      "comment_version_key": "4703666159:2026-07-07T06:12:53Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93100#issuecomment-4703666159",
+      "idempotency_key": "comment-router:openclaw/openclaw:101392:4900719044:2026-07-07T06:11:41Z:re_review",
+      "comment_id": "4900719044",
+      "comment_version_key": "4900719044:2026-07-07T06:11:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101392#issuecomment-4900719044",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93100,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": "main",
+      "issue_number": 101392,
+      "author": "ZengWen-DT",
+      "author_id": 290981215,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-15T00:53:08Z",
-      "comment_updated_at": "2026-07-07T06:12:53Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] No repair lane is needed; the remaining action is maintainer/API-owner acceptance of the public no-op hook semantics and payload shape before merge.; Cleared: The diff changes hook payloads, validation message formatting, and tests without adding dependencies, workflows, secret handling, permissions, or new code execution paths. (sha=9c3f1257259836373072f0608ac4336848ec1edc)",
-      "review_summary": "The PR makes successful no-op compactions emit `after_compaction`, adds an optional hook `reason`, and formats gateway/plugin validation property names with JSON-safe quoting.\n\nPR surface: Source +46, Tests +228. Total +274 across 17 files.\n\nReproducibility: yes. Current main still has successful `compacted:false` paths, after-hook gates requiring `compacted:true`, and single-quoted validation wording; I did not replay the full live voice/model loop in this read-only review.",
-      "review_followup": "- [P2] No repair lane is needed; the remaining action is maintainer/API-owner acceptance of the public no-op hook semantics and payload shape before merge.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "9c3f1257259836373072f0608ac4336848ec1edc",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(compaction): emit after_compaction on no-op and use JSON-safe validator delimiters (#81925)",
-        "body": "## Summary\n\nOpenClaw issue #81925 documents two coupled defects that surface as HTTP 500s on voice channels when the context engine runs under memory pressure, especially for open-weight tool-calling models:\n\n1. `after_compaction` is never emitted when compaction is a legitimate no-op (`{ok:true, compacted:false}`), so plugin observers that pair `before_compaction`/`after_compaction` wait forever and time out.\n2. Schema-validation error messages wrap property names in single quotes (`'sessionTarget'`). Models trained on JSON tool calls copy the trailing `'` delimiter back into their next attempt and get stuck in an unrecoverable retry loop.\n\nThis change fixes both, on every surface where they occur.\n\n## Root cause\n\n### Bug 1: after_compaction not emitted on no-op compaction\n\n`before_compaction` fires unconditionally once the engine owns compaction, but `after_compaction` was gated on `result.compacted === true` on **three** independent compaction surfaces:\n\n- `compact.queued.ts` (engine-owned queued path): the after-hook block required `result.ok && result.compacted`.\n- `compact.ts` `compactEmbeddedAgentSessionDirect` (native direct path): the `!containsRealConversationMessages(...)` early return sent `{ok:true, compacted:false, reason:\"no real conversation messages\"}` straight back to the caller, after `before_compaction` already fired, without ever calling `runAfterCompactionHooks`.\n- `run.ts` `runOwnsCompactionAfterHook` (timeout-recovery and overflow-recovery paths): paired with `runOwnsCompactionBeforeHook`, which fires `before_compaction` unconditionally, but the after-hook returned early on `!compactResult.compacted`.\n\nSo a paired observer sees `before` with no matching `after`. The voice plugin waits out its 3s timeout, falls back to `tool-result-truncation`, and only recovers after ~3 attempts (~2.5 min), long after the client has already 500'd.\n\n### Bug 2: validator delimiters trip tool callers\n\nValidation error formatting wrapped property names in single quotes in two places:\n\n- `packages/gateway-protocol/src/index.ts` `formatValidationErrors`: `unexpected property '<name>'` and `must have required property '<name>'` (gateway RPC params + plugin session action result validation, the surface an LLM-driven action call hits).\n- `src/plugins/schema-validator.ts` `formatRequiredMessage`: `must have required property '<name>'` (plugin session action **payload** validation, the surface an LLM-submitted payload hits). Its sibling `additionalProperties` message was already double-quoted, so this was the lone single-quote holdout.\n\nA model that parses the error and copies the property token captures `<name>'` (with the stray quote), re-emits the same malformed key, and re-triggers the identical error.\n\n## Fix\n\n- **Bug 1, all three surfaces:** emit `after_compaction` whenever compaction completes (`result.ok`), with `compactedCount: 0` and a `reason` discriminator on the no-op path. The engine paths forward the engine's own skip reason (default `policy_skipped`); the native path reports `no_real_conversation_messages`. Added an optional `reason?: string` to the `after_compaction` hook contract (`PluginHookAfterCompactionEvent`, `CompactionHookRunner`, `runAfterCompactionHooks`), additive and backward compatible, so existing subscribers are unaffected while observers can now distinguish a real compaction from a skip without fabricating synthetic `N->N` events. The `!compactResult.ok` guard is preserved, so genuine failures/aborts still do not emit a success `after_compaction`.\n- **Bug 2, all four property-name branches:** format every property name through `JSON.stringify(name)` rather than interpolating it into hand-written double quotes. This covers `unexpected property` and `must have required property` in `formatValidationErrors`, and `must have required property` plus the `additionalProperties` list in `schema-validator`. `JSON.stringify` emits a real JSON string token, so the delimiter matches JSON tool-call syntax **and** a name that itself contains a `\"`, `\\`, or control character is properly escaped instead of producing text that is not a valid JSON string token. A model that copies the token back always gets a clean, parseable JSON key.\n\n## Why this covers the whole issue (not one surface)\n\n- The no-op `after_compaction` gap existed on **three** independent compaction code paths (engine-owned queued, native direct, and timeout/overflow recovery in the run loop). Fixing only one would still hang on the others. All three are fixed and all three have regression coverage.\n- The delimiter/escaping issue existed across **four** property-name branches on **two** independent validator paths (gateway-protocol result validation and plugins payload validation). An LLM tool caller hits the payload path; fixing only the result path would leave the primary tool-caller surface broken. All four branches now route through `JSON.stringify`, so both the delimiter and the embedded-quote/backslash escape case are handled everywhere the same way.\n- The downstream symptoms the issue describes (synthetic `N->N` events, `tool-result-truncation` fallback after ~3 attempts, client 500s) all stem from the missing real event; emitting it removes the need for the synthetic-event workaround at the root.\n\n## Verification\n\n- `node scripts/run-vitest.mjs run src/agents/embedded-agent-runner/compact.hooks.test.ts src/agents/embedded-agent-runner/run.timeout-triggered-compaction.test.ts src/agents/embedded-agent-runner/run.overflow-compaction.test.ts` -> 136 passed (adds 5 regression tests: engine-skip no-op, engine default reason, native-skip paired-observer, timeout-recovery no-op, overflow-recovery no-op).\n- `node scripts/run-vitest.mjs run packages/gateway-protocol/src/index.test.ts src/plugins/contracts/session-actions.contract.test.ts src/plugins/config-schema.test.ts src/channels/plugins/config-schema.test.ts src/plugins/schema-validator.test.ts src/gateway/server.auth.default-token.test.ts src/gateway/client.test.ts` -> all passed (adds JSON-token validator assertions plus quote/backslash escape regression coverage on both the gateway-protocol and plugin schema-validator branches).\n- `tsgo:test` type-check clean over the changed files; `oxlint --type-aware` 0 findings; `oxfmt --check` clean.\n\n## Real behavior proof\n\nBehavior or issue addressed: a no-op compaction now emits `after_compaction` (so a paired voice observer is not left waiting), and both validators now format property names through `JSON.stringify` (so a tool-calling model always copies back a valid, parseable JSON key even when the property name contains a `\"` or `\\`).\n\nReal environment tested: the actual built-from-source OpenClaw runtime functions in this branch, driven directly through `node` (via the `tsx` ESM loader) outside any harness. Bug 1 drives the real `containsRealConversationMessages`, `runBeforeCompactionHooks`, and `runAfterCompactionHooks` from `src/agents/embedded-agent-runner/`, with a real `registerInternalHook` voice-style observer that increments on `before_compaction` and decrements on `after_compaction`. Bug 2 drives the real `formatValidationErrors` from `packages/gateway-protocol/` and the real `validateJsonSchemaValue` from `src/plugins/schema-validator.ts`.\n\nExact steps or command run after this patch: register a paired `session:compact:before` / `session:compact:after` observer, feed a heartbeat-only transcript (so `containsRealConversationMessages` returns false, the real no-op trigger), then run the real before/after emission the patched no-op branch performs; separately, feed a hostile property name containing an embedded quote and backslash into the real gateway-protocol formatter and the real plugin schema-validator, read back each formatted message, and attempt to parse the token a JSON model would copy back.\n\nEvidence after fix (live console output from `node` driving the real runtime functions):\n\n```\n$ node --import tsx proof-bug1.mts   # drives real compaction hook emission\ncontainsRealConversationMessages(heartbeat) = false\n\n# BEFORE the fix (no-op fires before_compaction only):\n  observer pending balance = 1 <- stuck, after_compaction never arrives (hang)\n  observer received after  = null\n\n# AFTER the fix (no-op also fires after_compaction):\n  observer pending balance = 0 <- balanced\n  observer received after  = {\"compactedCount\":0,\"reason\":\"no_real_conversation_messages\"}\n\n$ node --import tsx proof-validator-escape.mts   # drives real validators\nproperty name a hostile schema/model supplies: \"evil\\\"key\\\\path\"\n\n# BEFORE (raw interpolation into hand-written double quotes):\n  message = \"at root: unexpected property \\\"evil\\\"key\\\\path\\\"\"\n  token a model copies = \"\\\"evil\\\"key\\\\path\\\"\"\n  copies as a clean JSON key? = false\n\n# AFTER (real gateway-protocol formatValidationErrors):\n  message = \"at root: unexpected property \\\"evil\\\\\\\"key\\\\\\\\path\\\"\"\n  copies as a clean JSON key? = true\n\n# AFTER (real plugin schema-validator required-property miss):\n  message = \"must have required property \\\"evil\\\\\\\"key\\\\\\\\path\\\"\"\n  contains a valid JSON string token? = true\n```\n\nObserved result after fix: the real no-op path now delivers `after_compaction` with `{compactedCount:0, reason:\"no_real_conversation_messages\"}` to the paired observer, returning its pending balance to 0 instead of hanging at 1; and for a property name carrying an embedded quote and backslash, both the real gateway-protocol formatter and the real plugin schema-validator now emit a `JSON.stringify`-escaped token that round-trips through `JSON.parse` back to the original name, where the previous raw-interpolation form did not parse as a valid JSON key.\n\nWhat was not tested: a live end-to-end voice-channel session against a real 7B-14B llama-server under memory pressure. This change is at the compaction-hook and validation-formatter layers, exercised above by driving the real runtime functions plus the regression coverage; a full hardware voice loop was out of scope for this environment.\n\nFixes #81925\n\n",
-        "branch": "fix/compaction-noop-after-hook-and-validator-delimiters",
-        "head_sha": "9c3f1257259836373072f0608ac4336848ec1edc",
-        "author": "yetval",
-        "labels": [
-          "app: web-ui",
-          "gateway",
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "packages/gateway-protocol/src/index.test.ts",
-            "additions": 39,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/index.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.hooks.test.ts",
-            "additions": 95,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.queued.ts",
-            "additions": 23,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compaction-hooks.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.timeout-triggered-compaction.test.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 23,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/config-schema.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/client.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.auth.default-token.suite.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/config-schema.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/contracts/session-actions.contract.test.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/hook-types.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/schema-validator.test.ts",
-            "additions": 35,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/schema-validator.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 17,
-        "additions": 310,
-        "deletions": 36,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93100",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93100.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 105,
-          "gatingTotal": 100,
-          "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:93100:4899322029:2026-07-07T01:46:04Z:re_review",
-      "comment_id": "4899322029",
-      "comment_version_key": "4899322029:2026-07-07T01:46:04Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93100#issuecomment-4899322029",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93100,
-      "author": "yetval",
-      "author_id": 102706514,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T01:46:04Z",
-      "comment_updated_at": "2026-07-07T01:46:04Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-07T06:11:41Z",
+      "comment_updated_at": "2026-07-07T06:11:41Z",
+      "status_comment_id": 4900719394,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -259,152 +68,86 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 101392,
+          "dispatch_key": "router-34a1b13d296e81d8",
+          "dispatched_at": "2026-07-07T06:13:02.389Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-07T06:13:03.331Z",
+          "response_comment_id": "4900719394",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(compaction): emit after_compaction on no-op and use JSON-safe validator delimiters (#81925)",
-        "body": "## Summary\n\nOpenClaw issue #81925 documents two coupled defects that surface as HTTP 500s on voice channels when the context engine runs under memory pressure, especially for open-weight tool-calling models:\n\n1. `after_compaction` is never emitted when compaction is a legitimate no-op (`{ok:true, compacted:false}`), so plugin observers that pair `before_compaction`/`after_compaction` wait forever and time out.\n2. Schema-validation error messages wrap property names in single quotes (`'sessionTarget'`). Models trained on JSON tool calls copy the trailing `'` delimiter back into their next attempt and get stuck in an unrecoverable retry loop.\n\nThis change fixes both, on every surface where they occur.\n\n## Root cause\n\n### Bug 1: after_compaction not emitted on no-op compaction\n\n`before_compaction` fires unconditionally once the engine owns compaction, but `after_compaction` was gated on `result.compacted === true` on **three** independent compaction surfaces:\n\n- `compact.queued.ts` (engine-owned queued path): the after-hook block required `result.ok && result.compacted`.\n- `compact.ts` `compactEmbeddedAgentSessionDirect` (native direct path): the `!containsRealConversationMessages(...)` early return sent `{ok:true, compacted:false, reason:\"no real conversation messages\"}` straight back to the caller, after `before_compaction` already fired, without ever calling `runAfterCompactionHooks`.\n- `run.ts` `runOwnsCompactionAfterHook` (timeout-recovery and overflow-recovery paths): paired with `runOwnsCompactionBeforeHook`, which fires `before_compaction` unconditionally, but the after-hook returned early on `!compactResult.compacted`.\n\nSo a paired observer sees `before` with no matching `after`. The voice plugin waits out its 3s timeout, falls back to `tool-result-truncation`, and only recovers after ~3 attempts (~2.5 min), long after the client has already 500'd.\n\n### Bug 2: validator delimiters trip tool callers\n\nValidation error formatting wrapped property names in single quotes in two places:\n\n- `packages/gateway-protocol/src/index.ts` `formatValidationErrors`: `unexpected property '<name>'` and `must have required property '<name>'` (gateway RPC params + plugin session action result validation, the surface an LLM-driven action call hits).\n- `src/plugins/schema-validator.ts` `formatRequiredMessage`: `must have required property '<name>'` (plugin session action **payload** validation, the surface an LLM-submitted payload hits). Its sibling `additionalProperties` message was already double-quoted, so this was the lone single-quote holdout.\n\nA model that parses the error and copies the property token captures `<name>'` (with the stray quote), re-emits the same malformed key, and re-triggers the identical error.\n\n## Fix\n\n- **Bug 1, all three surfaces:** emit `after_compaction` whenever compaction completes (`result.ok`), with `compactedCount: 0` and a `reason` discriminator on the no-op path. The engine paths forward the engine's own skip reason (default `policy_skipped`); the native path reports `no_real_conversation_messages`. Added an optional `reason?: string` to the `after_compaction` hook contract (`PluginHookAfterCompactionEvent`, `CompactionHookRunner`, `runAfterCompactionHooks`), additive and backward compatible, so existing subscribers are unaffected while observers can now distinguish a real compaction from a skip without fabricating synthetic `N->N` events. The `!compactResult.ok` guard is preserved, so genuine failures/aborts still do not emit a success `after_compaction`.\n- **Bug 2, all four property-name branches:** format every property name through `JSON.stringify(name)` rather than interpolating it into hand-written double quotes. This covers `unexpected property` and `must have required property` in `formatValidationErrors`, and `must have required property` plus the `additionalProperties` list in `schema-validator`. `JSON.stringify` emits a real JSON string token, so the delimiter matches JSON tool-call syntax **and** a name that itself contains a `\"`, `\\`, or control character is properly escaped instead of producing text that is not a valid JSON string token. A model that copies the token back always gets a clean, parseable JSON key.\n\n## Why this covers the whole issue (not one surface)\n\n- The no-op `after_compaction` gap existed on **three** independent compaction code paths (engine-owned queued, native direct, and timeout/overflow recovery in the run loop). Fixing only one would still hang on the others. All three are fixed and all three have regression coverage.\n- The delimiter/escaping issue existed across **four** property-name branches on **two** independent validator paths (gateway-protocol result validation and plugins payload validation). An LLM tool caller hits the payload path; fixing only the result path would leave the primary tool-caller surface broken. All four branches now route through `JSON.stringify`, so both the delimiter and the embedded-quote/backslash escape case are handled everywhere the same way.\n- The downstream symptoms the issue describes (synthetic `N->N` events, `tool-result-truncation` fallback after ~3 attempts, client 500s) all stem from the missing real event; emitting it removes the need for the synthetic-event workaround at the root.\n\n## Verification\n\n- `node scripts/run-vitest.mjs run src/agents/embedded-agent-runner/compact.hooks.test.ts src/agents/embedded-agent-runner/run.timeout-triggered-compaction.test.ts src/agents/embedded-agent-runner/run.overflow-compaction.test.ts` -> 136 passed (adds 5 regression tests: engine-skip no-op, engine default reason, native-skip paired-observer, timeout-recovery no-op, overflow-recovery no-op).\n- `node scripts/run-vitest.mjs run packages/gateway-protocol/src/index.test.ts src/plugins/contracts/session-actions.contract.test.ts src/plugins/config-schema.test.ts src/channels/plugins/config-schema.test.ts src/plugins/schema-validator.test.ts src/gateway/server.auth.default-token.test.ts src/gateway/client.test.ts` -> all passed (adds JSON-token validator assertions plus quote/backslash escape regression coverage on both the gateway-protocol and plugin schema-validator branches).\n- `tsgo:test` type-check clean over the changed files; `oxlint --type-aware` 0 findings; `oxfmt --check` clean.\n\n## Real behavior proof\n\nBehavior or issue addressed: a no-op compaction now emits `after_compaction` (so a paired voice observer is not left waiting), and both validators now format property names through `JSON.stringify` (so a tool-calling model always copies back a valid, parseable JSON key even when the property name contains a `\"` or `\\`).\n\nReal environment tested: the actual built-from-source OpenClaw runtime functions in this branch, driven directly through `node` (via the `tsx` ESM loader) outside any harness. Bug 1 drives the real `containsRealConversationMessages`, `runBeforeCompactionHooks`, and `runAfterCompactionHooks` from `src/agents/embedded-agent-runner/`, with a real `registerInternalHook` voice-style observer that increments on `before_compaction` and decrements on `after_compaction`. Bug 2 drives the real `formatValidationErrors` from `packages/gateway-protocol/` and the real `validateJsonSchemaValue` from `src/plugins/schema-validator.ts`.\n\nExact steps or command run after this patch: register a paired `session:compact:before` / `session:compact:after` observer, feed a heartbeat-only transcript (so `containsRealConversationMessages` returns false, the real no-op trigger), then run the real before/after emission the patched no-op branch performs; separately, feed a hostile property name containing an embedded quote and backslash into the real gateway-protocol formatter and the real plugin schema-validator, read back each formatted message, and attempt to parse the token a JSON model would copy back.\n\nEvidence after fix (live console output from `node` driving the real runtime functions):\n\n```\n$ node --import tsx proof-bug1.mts   # drives real compaction hook emission\ncontainsRealConversationMessages(heartbeat) = false\n\n# BEFORE the fix (no-op fires before_compaction only):\n  observer pending balance = 1 <- stuck, after_compaction never arrives (hang)\n  observer received after  = null\n\n# AFTER the fix (no-op also fires after_compaction):\n  observer pending balance = 0 <- balanced\n  observer received after  = {\"compactedCount\":0,\"reason\":\"no_real_conversation_messages\"}\n\n$ node --import tsx proof-validator-escape.mts   # drives real validators\nproperty name a hostile schema/model supplies: \"evil\\\"key\\\\path\"\n\n# BEFORE (raw interpolation into hand-written double quotes):\n  message = \"at root: unexpected property \\\"evil\\\"key\\\\path\\\"\"\n  token a model copies = \"\\\"evil\\\"key\\\\path\\\"\"\n  copies as a clean JSON key? = false\n\n# AFTER (real gateway-protocol formatValidationErrors):\n  message = \"at root: unexpected property \\\"evil\\\\\\\"key\\\\\\\\path\\\"\"\n  copies as a clean JSON key? = true\n\n# AFTER (real plugin schema-validator required-property miss):\n  message = \"must have required property \\\"evil\\\\\\\"key\\\\\\\\path\\\"\"\n  contains a valid JSON string token? = true\n```\n\nObserved result after fix: the real no-op path now delivers `after_compaction` with `{compactedCount:0, reason:\"no_real_conversation_messages\"}` to the paired observer, returning its pending balance to 0 instead of hanging at 1; and for a property name carrying an embedded quote and backslash, both the real gateway-protocol formatter and the real plugin schema-validator now emit a `JSON.stringify`-escaped token that round-trips through `JSON.parse` back to the original name, where the previous raw-interpolation form did not parse as a valid JSON key.\n\nWhat was not tested: a live end-to-end voice-channel session against a real 7B-14B llama-server under memory pressure. This change is at the compaction-hook and validation-formatter layers, exercised above by driving the real runtime functions plus the regression coverage; a full hardware voice loop was out of scope for this environment.\n\nFixes #81925\n\n",
-        "branch": "fix/compaction-noop-after-hook-and-validator-delimiters",
-        "head_sha": "9c3f1257259836373072f0608ac4336848ec1edc",
-        "author": "yetval",
+        "title": "fix(process): fall back when Windows taskkill cannot spawn",
+        "body": "Closes #101381\n\n## What Problem This Solves\n\nFixes an issue where Windows timeout cleanup could fail to terminate a timed-out command when `taskkill.exe` failed after `spawn()` returned. Node reports failed child-process spawns through the child process `error` event, so the old `try/catch` fallback could miss the failure and leave the original command process running.\n\n## Why This Change Was Made\n\nThe Windows cleanup path now attaches an async spawn-error fallback to each `taskkill.exe` child and routes both synchronous and asynchronous failures through the same direct `child.kill(\"SIGKILL\")` fallback. The change keeps the trusted System32 `taskkill.exe` resolution in `src/process/exec.ts`; the shared process-tree helper also now observes async `taskkill` errors so its existing best-effort ignore contract covers both failure modes.\n\nThis is the canonical candidate for #101381 after #101389 was closed as the weaker duplicate; #101392 keeps the timer cleanup, shared helper guard, and focused Windows regression coverage.\n\n## User Impact\n\nWindows users should no longer accumulate leaked direct child processes when command timeout cleanup cannot start `taskkill.exe`. Normal `taskkill.exe` cleanup behavior is unchanged when it starts successfully.\n\n## Evidence\n\nNode contract premise:\n- Official Node child_process docs: `ChildProcess` emits `error` when a process could not be spawned, and `close` follows `exit` or `error`: https://nodejs.org/api/child_process.html#event-error\n- Local Node 24 premise check:\n\n```text\n$ node -e \"const {spawn}=require('node:child_process'); let caught=false; try { const child=spawn('/definitely/missing/openclaw-taskkill.exe'); child.on('error', err => console.log(JSON.stringify({caught, event:'error', code:err.code}))); } catch (err) { caught=true; console.log(JSON.stringify({caught, code:err.code})); } setTimeout(()=>{},20);\"\n{\"caught\":false,\"event\":\"error\",\"code\":\"ENOENT\"}\n```\n\nBefore/after behavior harness:\n\n```text\n$ node --input-type=module - <<'EOF'\nimport { EventEmitter } from 'node:events';\nconst taskkillChild = new EventEmitter();\nlet fallbackCalled = false;\ntry {\n  taskkillChild.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));\n} catch (err) {\n  console.log(JSON.stringify({ before: 'no-listener-throws', code: err.code ?? null, fallbackCalled }));\n}\nconst taskkillChildAfter = new EventEmitter();\ntaskkillChildAfter.once('error', () => { fallbackCalled = true; });\ntaskkillChildAfter.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));\nconsole.log(JSON.stringify({ after: 'listener-routes-fallback', fallbackCalled }));\nEOF\n{\"before\":\"no-listener-throws\",\"code\":\"ENOENT\",\"fallbackCalled\":false}\n{\"after\":\"listener-routes-fallback\",\"fallbackCalled\":true}\n```\n\nFocused local tests:\n\n```text\n$ node scripts/run-vitest.mjs src/process/exec.test.ts src/process/exec.windows.test.ts src/process/kill-tree.test.ts\n[test] starting test/vitest/vitest.process.config.ts\n\n RUN  v4.1.9 /srv/projects/openclaw/contrib/.radar/worktrees/issue-101381\n\n Test Files  3 passed (3)\n      Tests  52 passed (52)\n[test] passed 1 Vitest shard in 4.61s\n```\n\nWindows runner proof from this PR:\n- GitHub Actions run: https://github.com/openclaw/openclaw/actions/runs/28844539463/job/85545399409\n- Runner: Blacksmith Windows 2025, machine `WIN-FE737MTRSOT`.\n- Command executed by CI: `pnpm test:windows:ci`.\n- The Windows job included `src/process/exec.windows.test.ts`, which contains the new forced and graceful taskkill child `error` fallback tests. The job log shows:\n\n```text\n$ node scripts/test-projects.mjs src/shared/runtime-import.test.ts src/process/exec.windows.test.ts src/process/windows-command.test.ts src/infra/windows-install-roots.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/daemon/schtasks.startup-fallback.test.ts extensions/lobster/src/lobster-runner.test.ts test/scripts/format-generated-module.test.ts test/scripts/npm-runner.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts\n✓ process src/process/exec.windows.test.ts (21 tests) 281ms\nTest Files 1 passed (1)\nTests 21 passed (21)\n[test] passed 8 Vitest shards in 25.31s\n```\n\nOther local checks:\n\n```text\n$ git diff --check\n# passed\n\n$ .agents/skills/autoreview/scripts/autoreview --mode local\nautoreview clean: no accepted/actionable findings reported\noverall: patch is correct (0.82)\n```\n\nNot run locally: full `pnpm check` / `pnpm test`; this linked checkout is using focused local proof and GitHub CI for broad gates. Live Windows terminal proof from my local environment was not available because `powershell.exe`, `pwsh`, and `cmd.exe` were not present; the Windows behavior is covered by the Node child_process contract check, focused OpenClaw regression tests, and the Windows CI runner log above.\n\nAI-assisted: AI-assisted; proof run manually.\n",
+        "branch": "fix/101381-taskkill-spawn-error-fallback",
+        "head_sha": "1553c4f68f8a51f0e0064c05030aa3ce85c0caae",
+        "author": "zengwen-dt",
         "labels": [
-          "app: web-ui",
-          "gateway",
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
+          "size: S",
           "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "packages/gateway-protocol/src/index.test.ts",
-            "additions": 39,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/index.ts",
+            "path": "packages/agent-core/src/harness/env/kill-tree.ts",
             "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.hooks.test.ts",
-            "additions": 95,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.queued.ts",
-            "additions": 23,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compaction-hooks.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.timeout-triggered-compaction.test.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 23,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/config-schema.test.ts",
-            "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/client.test.ts",
-            "additions": 1,
-            "deletions": 1,
+            "path": "src/process/exec.ts",
+            "additions": 42,
+            "deletions": 31,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server.auth.default-token.suite.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/config-schema.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/contracts/session-actions.contract.test.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/hook-types.ts",
-            "additions": 1,
+            "path": "src/process/exec.windows.test.ts",
+            "additions": 59,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/schema-validator.test.ts",
-            "additions": 35,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/schema-validator.ts",
-            "additions": 2,
-            "deletions": 2,
+            "path": "src/process/kill-tree.test.ts",
+            "additions": 13,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 17,
-        "additions": 310,
-        "deletions": 36,
+        "changedFiles": 4,
+        "additions": 116,
+        "deletions": 32,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93100",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93100.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101392",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101392.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 105,
-          "gatingTotal": 100,
+          "total": 106,
+          "gatingTotal": 101,
           "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 30,
+            "SUCCESS": 72,
+            "SKIPPED": 33,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -415,21 +158,21 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "processed_at": "2026-07-07T06:13:01.874Z"
     }
   ],
-  "ledger_claimed": false,
+  "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2059,
+    "total_ms": 4296,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 229
+        "ms": 495
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1569
+        "ms": 1697
       },
       {
         "name": "classify_comment_commands",
@@ -445,11 +188,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 185
+        "ms": 2073
       },
       {
         "name": "append_ledger",
