@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T07:13:38.022Z",
+  "generated_at": "2026-07-07T07:14:00.504Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T04:13:36.048Z",
+  "since": "2026-07-07T04:14:00.173Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    100870
+    101443
   ],
-  "comment_ids": [
-    4901124629
-  ],
-  "status_comment_id": 4901125025,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 2,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,276 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:100870:4901124629:2026-07-07T07:12:18Z:re_review",
-      "comment_id": "4901124629",
-      "comment_version_key": "4901124629:2026-07-07T07:12:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100870#issuecomment-4901124629",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 100870,
-      "author": "ditingdapeng",
-      "author_id": 44561116,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-07T07:12:18Z",
-      "comment_updated_at": "2026-07-07T07:12:18Z",
-      "status_comment_id": 4901125025,
-      "trigger": "mention",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 100870,
-          "dispatch_key": "router-7538ec0a06ad2ee9",
-          "dispatched_at": "2026-07-07T07:13:38.658Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-07T07:13:39.559Z",
-          "response_comment_id": "4901125025",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): add lock release timeout on attempt teardown",
-        "body": "## What Problem This Solves\r\n\r\nWhen an agent run fails abnormally during tool execution (e.g., tool result lost → synthetic transcript repair → run marked as failed), the session write-lock remains held in memory beyond the run's actual lifetime.\r\n\r\nThe `disposeHeldLockAfterRetainedIdle()` path calls `waitForRetainedLockIdle()`, which blocks indefinitely when `retainedLockUseCount > 0` (a tool execution that will never complete). The `finally` block in `attempt.ts` hangs at `releaseRetainedSessionLock()`, so the lock is never released. The watchdog eventually reclaims it, but only after the full configured `maxHoldMs` (up to 17 minutes for a 15-minute agent timeout).\r\n\r\nDuring this entire window, **all subsequent requests to the same session fail** with `SessionWriteLockTimeoutError` (60s acquire timeout), even though the owning run is no longer active.\r\n\r\n### Observed behavior\r\n\r\n```\r\nsession file locked (timeout 60000ms): pid=96661 alive=true ageMs=72859\r\n```\r\n\r\nThe session remained completely unresponsive for 7+ minutes until the lock file was manually deleted. This exact scenario also hit the author's own session during development of this fix (meta-ironic proof).\r\n\r\n## Why This Change Was Made\r\n\r\nA single targeted fix: **add a 30-second timeout to the lock release path in the attempt finally block**.\r\n\r\nIf `releaseRetainedSessionLock()` (specifically, `waitForRetainedLockIdle()`) does not settle within 30 seconds, the finally block completes and execution continues. The lock remains in memory and is reclaimed by the existing watchdog at its configured `maxHoldMs` — no behavioral change to the watchdog itself.\r\n\r\nKey design decisions:\r\n- **No watchdog policy changes**: The watchdog continues to honor the configured `maxHoldMs` derived from agent timeout + grace. Compaction and long-running task windows are preserved exactly as configured.\r\n- **Timer hygiene**: The timeout is extracted into a focused helper (`attempt.release-lock-timeout.ts`) that uses `.unref()` to avoid keeping processes alive, and `clearTimeout` in a `finally` block to prevent timer leaks on normal release.\r\n- **Minimal blast radius**: Only the attempt teardown path is affected. Normal runs that release promptly never see the timeout.\r\n\r\n## User Impact\r\n\r\nSessions recover from abnormal run failures within **30 seconds + next watchdog cycle (60s)** instead of waiting the full `maxHoldMs` (up to 17 minutes). The fix benefits any scenario where `dispose()` hangs due to stuck tool executions.\r\n\r\n## Evidence\r\n\r\n**Root cause trace (from real production incident):**\r\n1. Agent run executing `exec` tool → command not found → tool result lost\r\n2. Synthetic error result injected for transcript repair\r\n3. Run terminates but `finally` block hangs at `releaseRetainedSessionLock()`\r\n4. Lock still in `SESSION_LOCKS.heldEntries()` → `heldByThisProcess = true` → orphan-self-pid skipped\r\n5. Watchdog threshold = 17 minutes → session blocked for entire duration\r\n\r\n**Real behavior proof:**\r\nThis exact bug hit the author's own session during development of this fix. The session (`1fe741b0-c346-413e-b494-93cb26f5df22`) was locked by pid 96661 (same process, alive) for 15+ minutes across multiple attempts to interact:\r\n```\r\n⚠️ Agent failed before reply: session file locked (timeout 60000ms): pid=96661 alive=true ageMs=435021\r\n⚠️ Agent failed before reply: session file locked (timeout 60000ms): pid=96661 alive=true ageMs=679231\r\n⚠️ Agent failed before reply: session file locked (timeout 60000ms): pid=96661 alive=true ageMs=753583\r\n⚠️ Agent failed before reply: session file locked (timeout 60000ms): pid=96661 alive=true ageMs=942030\r\n```\r\nThe lock persisted from ~435s (7 min) through ~942s (15+ min) — consistent with a maxHoldMs of 1,020,000ms (17 min) before watchdog reclaim. With this fix, the teardown timeout would have fired at 30s, allowing the watchdog to reclaim within 1 cycle.\r\n\r\n**Test results:**\r\n- `attempt.release-lock-timeout.test.ts`: 4 tests passed ✅ (timer cleanup on normal release + timeout behavior)\r\n- `session-write-lock.test.ts`: 106 tests passed ✅ (no regression to watchdog logic)\r\n- oxlint: 0 warnings, 0 errors ✅\r\n\r\nFixes #100872\r\n",
-        "branch": "fix/session-lock-watchdog-run-awareness",
-        "head_sha": "4ac24d61ad95948d92834df5b29c16dc9ef58033",
-        "author": "ditingdapeng",
-        "labels": [
-          "agents",
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.release-lock-timeout.test.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.release-lock-timeout.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 13,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/azure-openai-responses.test.ts",
-            "additions": 35,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/azure-openai-responses.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/google.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/mistral.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/mistral.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/openai-chatgpt-responses.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/openai-chatgpt-responses.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/openai-completions.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/openai-completions.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/openai-responses.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/utils/event-stream.ts",
-            "additions": 30,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/index.ts",
-            "additions": 0,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 76,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100870",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100870.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SUCCESS": 45,
-            "SKIPPED": 26,
-            "IN_PROGRESS": 24,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "security-fast:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:FAILURE",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "security-fast:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "checks-node-compact-large-whole-1:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-07T07:13:38.220Z"
-    }
-  ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3984,
+    "total_ms": 546,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 486
+        "ms": 319
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1473
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -312,11 +57,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2000
+        "ms": 215
       },
       {
         "name": "append_ledger",
