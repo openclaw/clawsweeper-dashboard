@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T23:33:32.763Z",
+  "generated_at": "2026-07-07T23:34:22.655Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T20:33:30.829Z",
+  "since": "2026-07-07T20:34:22.160Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101906
+    101907
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,121 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101906:4909896171:2026-07-07T23:33:26Z:clawsweeper_needs_human",
-      "comment_id": "4909896171",
-      "comment_version_key": "4909896171:2026-07-07T23:33:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101906#issuecomment-4909896171",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101906,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T23:19:39Z",
-      "comment_updated_at": "2026-07-07T23:33:26Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] No repair job is needed because review found no discrete code defect; the next action is contributor-owned real behavior proof plus normal maintainer review.; Cleared: The diff narrows a plugin approval trust boundary and does not add dependency, workflow, secret, package, or code-execution surface. (sha=5364e1a5e49192e91e299196c63a4d3a364512bc)",
-      "review_summary": "The PR changes plugin conversation-binding allow-always approvals to persist to SQLite before publishing the grant to the in-memory cache, with regression coverage for failed writes and concurrent approvals.\n\nPR surface: Source +5, Tests +44. Total +49 across 2 files.\n\nReproducibility: yes. at source level: current main publishes an allow-always grant into approvalsCache before the SQLite write can fail, and later same-scope binds trust that cache. I did not run a live repro in this read-only review.",
-      "review_followup": "- [P1] No repair job is needed because review found no discrete code defect; the next action is contributor-owned real behavior proof plus normal maintainer review.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "5364e1a5e49192e91e299196c63a4d3a364512bc",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(plugins): persist binding approval before trusting it in memory",
-        "body": "## What Problem This Solves\n\nWhen a user picks **Allow always** on a plugin conversation-binding prompt, `addPersistentApproval` (`src/plugins/conversation-binding.ts`) published the grant into the in-memory approvals cache **before** the SQLite write that persists it. If that write throws — `SQLITE_BUSY` under concurrent writers, a full disk, a read-only or permission-denied state directory — the cache already held the grant while nothing was durably recorded, and there is no rollback.\n\nThe consequence is a silent, session-scoped over-approval: `hasPersistentApproval()` reads that cache and **auto-approves later binds for the same plugin/channel/account without prompting the user**, even though the triggering approval actually rejected (no binding was created, no \"approved\" event fired) and the grant is gone on the next restart. The user never durably granted a standing approval, yet the running gateway behaves as if they did until it restarts.\n\nThis is a default-path surface: plugin conversation-binding approvals are reached through the bundled Telegram, Slack, and Discord interaction handlers.\n\n## Why This Change Was Made\n\nRuntime state must not end up more permissive than the durable store when a write fails. `addPersistentApproval` now **persists first** and only publishes the grant into the cache after the write succeeds, then recomputes the merged set from the current cache so a concurrently-approved grant is not dropped:\n\n- On a write failure the cache is left untouched, so `hasPersistentApproval` stays `false` and the user is re-prompted — fail-safe, instead of a silent standing approval that was never saved.\n- Publishing after the `await` recomputes from `getApprovals()` (not a stale pre-await snapshot), so two concurrent `Allow always` approvals both stay live in the cache. The `onConflict` upsert keeps the write idempotent.\n\nThe mutate-before-persist ordering pre-dated the JSON→SQLite move and the save-chain serialization change; neither added rollback. Scope is limited to `addPersistentApproval`; the save-chain serialization semantics and the separate before-tool-call plugin-permission approvals are unchanged.\n\n## User Impact\n\nA failed approvals write no longer leaves the gateway silently auto-approving plugin conversation binds that were never persisted. \"Allow always\" either persists and takes effect, or fails leaving no standing grant, so a later same-scope bind prompts again — the in-memory state matches disk in both cases. Successful and concurrent approvals are unchanged.\n\n## Evidence\n\n- Focused regression test (`src/plugins/conversation-binding.test.ts`): injects a write failure during an `Allow always` approval and asserts the approval rejects, nothing is persisted, and the next same-scope request stays `pending` (no auto-approval leak). Negative control: with the fix reverted the test fails with `bound != pending`.\n- The existing concurrent \"persists overlapping always-allow approvals\" test was extended to assert both grants stay live in the in-memory cache (follow-up binds return `bound`). Negative control: a stale-snapshot variant fails this test.\n- Local run against the real Vitest runner: `conversation-binding.test.ts` 19/19 pass with the fix; the two negative controls fail as expected with the fix reverted.\n- `check:changed` / typecheck / lint delegated to hosted CI for this commit.\n",
-        "branch": "fix/conversation-binding-approval-persist-rollback",
-        "head_sha": "5364e1a5e49192e91e299196c63a4d3a364512bc",
-        "author": "masatohoshino",
-        "labels": [
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/plugins/conversation-binding.test.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/conversation-binding.ts",
-            "additions": 8,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 52,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101906",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101906.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 105,
-          "gatingTotal": 100,
-          "counts": {
-            "SUCCESS": 69,
-            "SKIPPED": 35,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2132,
+    "total_ms": 771,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 295
+        "ms": 480
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1625
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -159,11 +61,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 188
+        "ms": 277
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
