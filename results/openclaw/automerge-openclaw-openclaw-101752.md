@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-101752"
 mode: "autonomous"
-run_id: "28886821653"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28886821653"
+run_id: "28888036161"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28888036161"
 head_sha: "9b7281103ab54ecb97d8d66e5ddf4165ea8469fc"
-workflow_conclusion: "success"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-07T18:06:51.296Z"
+published_at: "2026-07-07T18:31:47.252Z"
 canonical: "#101752"
 canonical_issue: null
 canonical_pr: "#101752"
 actions_total: 1
 fix_executed: 0
-fix_failed: 0
-fix_blocked: 0
+fix_failed: 1
+fix_blocked: 1
 apply_executed: 0
-apply_blocked: 1
+apply_blocked: 0
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28886821653](https://github.com/openclaw/clawsweeper/actions/runs/28886821653)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28888036161](https://github.com/openclaw/clawsweeper/actions/runs/28888036161)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
@@ -43,10 +43,10 @@ Make PR #101752 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 | --- | ---: |
 | Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix failed | 1 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
-| Apply blocked | 1 |
+| Apply blocked | 0 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,13 +54,15 @@ Make PR #101752 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/101752 |  |  |
+| repair_contributor_branch | failed |  |  | Codex fix worker timed out after 1200000ms |
+| execute_fix | blocked |  |  | Codex fix worker timed out after 1200000ms |
+| automerge_repair_outcome_comment | updated | #101752 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #101752 | merge_canonical | blocked | fix_pr | job does not allow merge |
+| _None_ |  |  |  |  |
 
 ## Worker Action Matrix
 
