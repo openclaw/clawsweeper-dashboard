@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T03:37:08.349Z",
+  "generated_at": "2026-07-07T03:37:28.323Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T00:37:08.098Z",
+  "since": "2026-07-07T00:37:24.800Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    101290
+    101270
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4899866514
+  ],
+  "status_comment_id": 4899866772,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,23 +31,237 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101270:4899866514:2026-07-07T03:36:09Z:re_review",
+      "comment_id": "4899866514",
+      "comment_version_key": "4899866514:2026-07-07T03:36:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101270#issuecomment-4899866514",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 101270,
+      "author": "Pandah97",
+      "author_id": 80405497,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-07T03:36:09Z",
+      "comment_updated_at": "2026-07-07T03:36:09Z",
+      "status_comment_id": 4899866772,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 101270,
+          "dispatch_key": "router-0b9d3d2ff00498b0",
+          "dispatched_at": "2026-07-07T03:37:28.941Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-07T03:37:29.768Z",
+          "response_comment_id": "4899866772",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(infra): bound response body read in readResponseBodySnippet non-streaming fallback",
+        "body": "## Summary\n\n**Problem:** `readResponseBodySnippet()` non-streaming fallback (`!body.getReader`) calls `response.text()` without any size bound, buffering the entire response before the `maxBytes` check runs.\n\n**Solution:** Replace `response.text()` with `readResponsePrefix(response, maxBytes)` which caps the read at `maxBytes` bytes regardless of path. The non-streaming fallback in `readResponsePrefix` itself is hardened with a **fail-closed** guard: when the response has no `ReadableStream` reader, it returns empty immediately — never calling `arrayBuffer()` or `text()` which would materialize the full body.\n\n**What changed:** `readResponsePrefix` exported from `http-body.ts` (was private). Non-streaming fallback in `http-error-body.ts` uses it instead of `response.text()`. The no-reader branch of `readResponsePrefix` now fails closed (returns empty + truncated) instead of falling back to whole-body `arrayBuffer()`. Regression tests assert that `arrayBuffer()` is never invoked for no-reader or null-body responses.\n\n**What did NOT change:** Streaming path behavior (already bounded). Return type/API surface of `readResponseBodySnippet`. Any caller behavior — all callers pass the same limits.\n\nFixes #101269\n\n## Root Cause\n\n`readResponseBodySnippet()` at `src/infra/http-error-body.ts:8-9` calls `response.text()` when no streaming reader is available (`!body.getReader`). Unlike the streaming path which reads chunk-by-chunk up to `maxBytes`, `response.text()` buffers the entire HTTP response body before any size check. The initial fix routed this through `readResponsePrefix()`, but that helper's own no-reader fallback called `response.arrayBuffer()` — the same unbounded-read pattern.\n\n## What Problem This Solves\n\n`readResponseBodySnippet()` is called from Gateway error-handling paths to produce a diagnostic snippet of error response bodies. When `response.body` is a `ReadableStream` (always true in Node.js undici fetch), the streaming path correctly bounds reads. But for synthetic Response objects or edge-case HTTP responses without a readable stream, the fallback path could materialize a multi-megabyte body before truncation. This fix ensures that responses without a streaming reader are handled without any whole-body allocation, matching the fail-closed pattern already used by adjacent web helpers.\n\n## Real behavior proof\n\n**Behavior addressed:** No-reader Response objects (synthetic or edge-case) now return empty without calling `arrayBuffer()` or `text()`.\n\n**Real environment tested:** Linux x64 (kernel 4.19.112), Node.js v24.13.1, OpenClaw commit a78538dc2a16 (PR base)\n\n**Exact steps or command run after this patch:**\n\n```bash\nnpx tsx -e \"\nimport { readResponseBodySnippet } from './src/infra/http-error-body.ts';\n\nasync function main() {\n  // Test 1: No-reader Response — must NOT call arrayBuffer()\n  let ab = false;\n  const r1 = await readResponseBodySnippet({\n    body: {} as ReadableStream,\n    arrayBuffer: async () => { ab = true; return new ArrayBuffer(100000); },\n  } as unknown as Response, { maxBytes: 50, maxChars: 100 });\n  console.log('Test 1 (no-reader, arrayBuffer called?):', ab, 'result:', JSON.stringify(r1));\n\n  // Test 2: null body\n  let ab2 = false;\n  const r2 = await readResponseBodySnippet({\n    body: null,\n    arrayBuffer: async () => { ab2 = true; return new ArrayBuffer(0); },\n  } as unknown as Response, { maxBytes: 1024, maxChars: 100 });\n  console.log('Test 2 (null body, arrayBuffer called?):', ab2, 'result:', JSON.stringify(r2));\n\n  // Test 3: Large streaming response bounded by maxBytes\n  const large = new Uint8Array(1024 * 100).fill(65);\n  const r3 = await readResponseBodySnippet(new Response(new Blob([large]).stream()), { maxBytes: 100, maxChars: 200 });\n  console.log('Test 3 (100KB stream, maxBytes=100):', r3.length, 'chars');\n\n  // Test 4: Streaming with maxBytes strict\n  const r4 = await readResponseBodySnippet(new Response(new Blob([new Uint8Array(500).fill(97)]).stream()), { maxBytes: 30, maxChars: 500 });\n  console.log('Test 4 (maxBytes=30, 500 bytes):', new TextEncoder().encode(r4).length, 'bytes');\n\n  // Test 5: Empty streaming response\n  const r5 = await readResponseBodySnippet(new Response(new Blob([new Uint8Array(0)]).stream()), { maxBytes: 1024, maxChars: 50 });\n  console.log('Test 5 (empty stream):', JSON.stringify(r5));\n}\nmain();\n\"\n```\n\n**After-fix evidence:**\n\n```\nTest 1 (no-reader, arrayBuffer called?): false result: \"\"\nTest 2 (null body, arrayBuffer called?): false result: \"\"\nTest 3 (100KB stream, maxBytes=100): 100 chars\nTest 4 (maxBytes=30, 500 bytes): 30 bytes\nTest 5 (empty stream): \"\"\n```\n\n**Observed result after the fix:** All 5 real-world test cases confirm fail-closed behavior — no-reader and null-body Response objects never trigger `arrayBuffer()`. The streaming path correctly caps reads at `maxBytes`. All 11 unit tests pass with 2 regression tests asserting `arrayBuffer()` is not called for no-reader or null-body responses.\n\n```\n ✓ readResponseBodySnippet > returns full text when under both limits\n ✓ readResponseBodySnippet > truncates by maxChars when under maxBytes\n ✓ readResponseBodySnippet > truncates by maxBytes before maxChars\n ✓ readResponseBodySnippet > enforces maxBytes before maxChars\n ✓ readResponseBodySnippet > does not split multi-byte UTF-8 characters at the byte boundary\n ✓ readResponseBodySnippet > stream path enforces maxBytes\n ✓ readResponseBodySnippet > stream path enforces maxChars\n ✓ readResponseBodySnippet > returns empty string when maxBytes is 0\n ✓ readResponseBodySnippet > returns empty string for empty response body\n ✓ readResponseBodySnippet > fails closed when body has no getReader (avoids arrayBuffer)\n ✓ readResponseBodySnippet > returns empty immediately when body is null\n Test Files  1 passed (1)\n      Tests  11 passed (11)\n```\n\n**What was not tested:** Full end-to-end Gateway error handling — only the `readResponseBodySnippet()` function was verified via direct import call. The no-reader path is inherently a synthetic/edge-case scenario in Node.js undici fetch, where all HTTP responses provide a `ReadableStream` body.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/infra/http-body.ts:189` | Export `readResponsePrefix` (was private function) |\n| `src/infra/http-body.ts:199-208` | Fail closed in no-reader branch: return empty immediately instead of calling `arrayBuffer()` |\n| `src/infra/http-error-body.ts:1,10` | Import `readResponsePrefix`, replace unbounded `response.text()` with bounded `readResponsePrefix` |\n| `src/infra/http-error-body.test.ts` | Replace synthetic mock with streaming `Response`; add regression tests for fail-closed no-reader and null-body paths |\n\n## Risk checklist\n\n- **merge-risk: Low** — streaming path unchanged (covers all production HTTP responses); fail-closed only affects synthetic/edge-case no-reader paths\n- **Risk mitigation:** No-reader path can never materialize a large response body — it returns empty immediately, matching the fail-closed pattern used by adjacent web helpers\n- **User-visible behavior change?** No — same limits, same truncation behavior for all production paths\n- **Config/env/migration change?** No\n- **Security/auth/network change?** No\n\n## Linked context\n\n- Closes #101269",
+        "branch": "fix/issue-101269-bound-error-body-read",
+        "head_sha": "f928ff3277748b3eefd0ae9e962528c1290aea85",
+        "author": "pandah97",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/infra/http-body.ts",
+            "additions": 7,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/http-error-body.test.ts",
+            "additions": 53,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/http-error-body.ts",
+            "additions": 6,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 66,
+        "deletions": 40,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101270",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101270.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "IN_PROGRESS": 44,
+            "SUCCESS": 26,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI (matrix):IN_PROGRESS",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI (matrix):IN_PROGRESS",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-07T03:37:28.516Z"
+    }
+  ],
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 441,
+    "total_ms": 5430,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 237
+        "ms": 2005
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1503
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -57,15 +273,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 190
+        "ms": 1891
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
