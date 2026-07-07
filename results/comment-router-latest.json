@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T01:00:34.584Z",
+  "generated_at": "2026-07-07T01:00:34.351Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T22:00:34.290Z",
+  "since": "2026-07-06T22:00:31.922Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    101243
+    101004
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4899031096
+  ],
+  "status_comment_id": 4899031329,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,23 +31,148 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101004:4899031096:2026-07-07T00:59:13Z:re_review",
+      "comment_id": "4899031096",
+      "comment_version_key": "4899031096:2026-07-07T00:59:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101004#issuecomment-4899031096",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 101004,
+      "author": "zw-xysk",
+      "author_id": 294457748,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-07T00:59:13Z",
+      "comment_updated_at": "2026-07-07T00:59:13Z",
+      "status_comment_id": 4899031329,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 101004,
+          "dispatch_key": "router-bd5053a21f1ab64f",
+          "dispatched_at": "2026-07-07T01:00:35.106Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-07T01:00:37.148Z",
+          "response_comment_id": "4898316257",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(signal): retry debounce flush on reply session initialization conflict",
+        "body": "## What Problem This Solves\n\nOn the Signal channel, a DM sent shortly after a previous turn's reply completes hits `reply session initialization conflicted` and the debounce flush handler only logs the error and drops the message — with no retry and no user-visible feedback.\n\nSlack received bounded retry-with-backoff for this exact error in #99647, and Telegram has equivalent handling (#96550). Signal's debounce handler (`extensions/signal/src/monitor/event-handler.ts:653`) had not received the equivalent treatment — it only logged and dropped on this error.\n\nFixes #100944 (also related: #98234, #98416).\n\n## Changes\n\n### Production code — `extensions/signal/src/monitor/event-handler.ts` (+35 lines)\n\n| Change | Detail |\n|--------|--------|\n| Import | `collectErrorGraphCandidates`, `formatErrorMessage` from `openclaw/plugin-sdk/error-runtime` |\n| Const | `SIGNAL_RETRY_FLUSH_MAX_ATTEMPTS = 3` |\n| Const | `SIGNAL_RETRY_FLUSH_RETRY_DELAY_MS = 1_000` |\n| Const | `REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE` (regex matching the error message) |\n| Function | `isRetryableSignalInboundError()` — walks `error.cause` chain, returns `true` when the conflict message is found anywhere in the graph |\n| Function | `flushWithRetry()` — wraps `handleSignalInboundMessage`; on retryable error waits 1s and recurses (max 3 retries), otherwise throws immediately |\n| Change | `onFlush` calls `flushWithRetry` instead of bare `handleSignalInboundMessage` |\n\n### Tests — `event-handler.debounce-retry.test.ts` (3 tests, fake timers)\n\nUnit tests that verify retry behavior deterministically with `vi.useFakeTimers()`:\n\n1. **Retryable error to bounded backoff**: dispatchInboundMessage called 4x (1 initial + 3 retries), runtime.error logged after exhaustion\n2. **Non-retryable error to no retry**: dispatchInboundMessage called 1x, error goes straight to runtime.error\n3. **Transient conflict to succeeds on retry**: 2 failures then success, runtime.error NOT called\n\n### Real-environment tests — `event-handler.debounce-retry.real.test.ts` (3 tests, real timers)\n\nThese tests run through the **FULL production pipeline** — the only mock is `dispatchInboundMessage` (necessary to inject the session conflict error, which is a timing race that cannot be triggered naturally in CI). Everything else is real:\n\n- Real `createChannelInboundDebouncer` (not mocked)\n- Real `onFlush` with real `flushWithRetry`\n- Real `handleSignalInboundMessage` (context building, routing, reply pipeline)\n- Real `delay(1000)` via wall-clock `setTimeout`\n\nWall-clock measurements from actual run:\n\n```\n$ pnpm test extensions/signal/src/monitor/event-handler.debounce-retry.real.test.ts\n\n Test Files  1 passed (1)\n      Tests  3 passed (3)\n   Start at  06:43:20\n   Duration  20.98s (tests 5.10s)\n\n ✓ retries with real 1s backoff through the full pipeline 3067ms\n ✓ does NOT retry non-retryable errors in the full pipeline 7ms\n ✓ succeeds on retry when conflict resolves 2016ms\n```\n\n## Evidence\n\n**Unit tests + Real-environment tests (66/66 passed):**\n\n```\n Test Files  5 passed (5)\n      Tests  66 passed (66)\n   Start at  00:14:58\n   Duration  23.81s\n```\n\n**Lint (oxlint) — clean:**\n\n```\n$ npx oxlint --config .oxlintrc.json ...event-handler*.test.ts\n  (no output — all clear)\n```\n\n**Type check:**\n\n```\n$ npx tsc --noEmit\n  exit 0\n```\n\n**Real production-code execution — wall-clock retry proof:**\n\nThis test exercises the **ACTUAL production code path**. The only mock is\ndispatchInboundMessage (necessary to inject the reply-session conflict\nerror, a timing race that cannot be triggered in CI).\n\n| Component | Status | Detail |\n|-----------|--------|--------|\n| `createChannelInboundDebouncer` | **Real** | Not mocked — real key-based buffering |\n| `flushWithRetry` | **Real** | Production retry with real `setTimeout` |\n| `handleSignalInboundMessage` | **Real** | Full context build, routing, reply pipeline |\n| `delay(1000)` | **Real** | Wall-clock setTimeout — **3067ms actual delay** |\n| `dispatchInboundMessage` | Mock only | Injects conflict error (can't race in CI) |\n\nAfter 3 retries exhausted: `onError` fires (`runtime.error` called with\n`\"signal debounce flush failed: ...\"` — visible telemetry). The message is\nno longer silently dropped as it was before the fix.\n\n## Review\n\n- Manually reviewed and verified\n- AI-assisted: Yes\n",
+        "branch": "fix/issue-100944-signal-debounce-retry",
+        "head_sha": "3d865ce570abf03fd64bc2c36501c4e95ae9b31e",
+        "author": "zw-xysk",
+        "labels": [
+          "channel: signal",
+          "size: L",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/signal/src/monitor/event-handler.debounce-retry.real.test.ts",
+            "additions": 258,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/signal/src/monitor/event-handler.debounce-retry.test.ts",
+            "additions": 381,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/signal/src/monitor/event-handler.ts",
+            "additions": 43,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 682,
+        "deletions": 10,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101004",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101004.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 98,
+          "gatingTotal": 93,
+          "counts": {
+            "SUCCESS": 64,
+            "SKIPPED": 33,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-07T01:00:34.595Z"
+    }
+  ],
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 489,
+    "total_ms": 5762,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 284
+        "ms": 615
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1797
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -57,11 +184,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 195
+        "ms": 3321
       },
       {
         "name": "append_ledger",
