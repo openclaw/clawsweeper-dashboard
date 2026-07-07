@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T12:10:13.858Z",
+  "generated_at": "2026-07-07T12:10:30.465Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T09:10:13.479Z",
+  "since": "2026-07-07T09:10:27.201Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    101626
+    100794
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4903622300
+  ],
+  "status_comment_id": 4903622739,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,23 +31,149 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:100794:4903622300:2026-07-07T12:08:59Z:re_review",
+      "comment_id": "4903622300",
+      "comment_version_key": "4903622300:2026-07-07T12:08:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100794#issuecomment-4903622300",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 100794,
+      "author": "Pandah97",
+      "author_id": 80405497,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-07T12:08:59Z",
+      "comment_updated_at": "2026-07-07T12:08:59Z",
+      "status_comment_id": 4903622739,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 100794,
+          "dispatch_key": "router-7dc1a6d7116b5272",
+          "dispatched_at": "2026-07-07T12:10:31.537Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-07T12:10:34.209Z",
+          "response_comment_id": "4903536301",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(model-catalog): retry readdirSync on FsSafeError transient catalog write race",
+        "body": "## Summary\n\n**Problem**: Gateway background catalog refresh logs `FsSafeError: directory changed during operation` every ~60s. The FsSafe-guarded `readdirSync(pluginsDir)` throws when a concurrent catalog writer creates a new plugin subdirectory via `fs.mkdir`.\n\n**Solution**: Retry `readdirSync` once on error in `listPluginModelCatalogRelativePaths()`, and retry `fs.mkdir` once on error in `writePluginCatalogsForModelsJson()`. The race window is sub-millisecond; an immediate retry succeeds when the concurrent operation has completed.\n\n**Design decision**: A retry-once loop was chosen over a try-catch wrapper to minimize the diff (+2 net lines). No backoff is needed since the race is a one-shot directory-entry creation, not a resource contention. If both attempts fail, the function returns `[]` (same as the current fallback).\n\n**What changed**: \n- `src/agents/plugin-model-catalog.ts` — wrap `readdirSync` in a retry-once loop (+2 lines net)\n- `src/agents/plugin-model-catalog.test.ts` — 5 test cases (new file, 96 lines)\n- `src/agents/models-config.ts` — wrap `fs.mkdir` in a retry-once loop in `writePluginCatalogsForModelsJson` (+11 lines)\n\n**What did NOT change**: All other catalog loading paths, plugin runtime, gateway startup, config schema, or external APIs.\n\nFixes #99390\n\n## What Problem This Solves\n\nGateway background refresh calls `listPluginModelCatalogRelativePaths()` every ~60s to discover plugin-owned model catalogs. This function calls `readdirSync(pluginsDir, { withFileTypes: true })`, which is FsSafe-guarded at build time.\n\nSimultaneously, `writePluginCatalogsForModelsJson()` creates plugin subdirectories. When the writer's `fs.mkdir` modifies `plugins/` metadata during the reader's directory scan, FsSafe throws:\n\n```\nFsSafeError: directory changed during operation\n```\n\nThe error is caught and the function returns `[]`, causing the catalog refresh to skip plugin-owned model discovery until the next cycle — where the same race can repeat. The result is repeating warning logs every ~60s and delayed model availability.\n\n## Root Cause\n\nThe race is between two concurrent operations on the `plugins/` directory:\n\n1. **Writer** (`src/agents/models-config.ts:251`): `await fs.mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 })` — uses **plain `node:fs/promises`** (imported at line 3). This modifies the `plugins/` directory listing by creating `plugins/<pluginId>/`.\n\n2. **Reader** (`src/agents/plugin-model-catalog.ts:73`): `readdirSync(pluginsDir, { withFileTypes: true })` — **FsSafe-guarded** at build time. The guard detects that `plugins/` directory metadata changed during iteration and throws.\n\n### Writer-side safety analysis\n\n| Operation | File | Line | FsSafe? | Affects `plugins/` listing? |\n|-----------|------|------|---------|---------------------------|\n| `readdirSync(\"plugins/\")` (reader) | `plugin-model-catalog.ts` | 73 | ✅ Build-time transform | N/A |\n| `fs.mkdir(\"plugins/X/\")` (writer) | `models-config.ts` | 251 | ❌ Plain `node:fs/promises` | ✅ Yes (creates subdir) |\n| `privateFileStore(\"plugins/X/\").writeText(...)` (writer) | `models-config.ts` | 155 | ✅ Guarded at `plugins/X/` | ❌ No (writes inside subdir) |\n\nThe writer's `fs.mkdir` at line 251 uses `node:fs/promises` which is also FsSafe-guarded by the build-time transform. Concurrent `readdirSync` from catalog refresh can trigger FsSafeError on the `mkdir` call too. Both paths now have retry-once loops.\n\nThe subsequent `privateFileStore` write (via `writeModelsFileAtomicForModelsJson`) is rooted at the **plugin subdirectory** (`plugins/<pluginId>/`), not at `plugins/`. Its fs-safe guards protect that subdirectory's contents — not the `plugins/` listing.\n\nThe race is **bidirectional** but both sides now retry once on transient error. A single immediate retry on each side is sufficient because the race window is sub-millisecond.\n\n## Real behavior proof\n\n**Behavior addressed**: Both sides of the race: (1) **Reader** — retry readdirSync once on FsSafeError, (2) **Writer** — retry fs.mkdir once on FsSafeError in `writePluginCatalogsForModelsJson()`. Both paths now have retry-once loops for transient directory-change errors.\n\n**Real environment tested**: Linux x64 (kernel 4.19.112), Node.js v24.13.1, OpenClaw worktree at commit 18f7d5f91c.\n\n**Exact steps or command run after this patch**: L2 evidence scripts for reader and writer paths.\n\n```bash\ncd ${OPENCLAW_DIR} && npx tsx docs/.local/issue-99390/l2-evidence.ts\n```\n\n**After-fix evidence**: L2 + L1 output below.\n\n**Reader-side (L2)** — direct `listPluginModelCatalogRelativePaths()` call against real temp directories. 7/7 assertions:\n```\n$ npx tsx docs/.local/issue-99390/l2-evidence.ts\nTest 1: normal directory with 2 plugins\n  PASS: returns 2 paths\n  PASS: first path is anthropic\n  PASS: second path is minimax\n  PASS: filesystem has matching directories\nTest 2: nonexistent plugins dir\n  PASS: returns empty array\nTest 3: empty plugins dir\n  PASS: returns empty array\nTest 4: plugins dir with files only (no subdirectories)\n  PASS: returns empty array (no directories)\n=== Result: 7 passed, 0 failed ===\nEnvironment: node v24.13.1\nEvidence level: L2 (real function call, real filesystem I/O)\n```\n\nEach test creates a real temp directory with `mkdtempSync`, populates real files and subdirectories, calls the exported function, then removes the temp directory. This verifies correct behavior with actual `fs.Dirent` objects from real `readdirSync` calls.\n\n**Writer-side (L2+)** — mkdir retry-once pattern against real filesystem I/O:\n```\n  PASS: mkdir succeeds normally\n  PASS: target dir exists\n  PASS: retry pattern works (first attempt may throw, second succeeds)\n  PASS: after mkdir, plugin dirs are visible to readdirSync\n=== Result: 4 passed, 0 failed ===\nEnvironment: node v24.13.1\n```\n\nThis verifies that the `fs.mkdir` retry-once pattern (identical to the code in `writePluginCatalogsForModelsJson()`) correctly handles transient directory-creation failures with the expected fallback behavior.\n\nL1 — unit tests exercising the retry logic with mocked `FsSafeError`:\n```\n$ node scripts/test-projects.mjs -- src/agents/plugin-model-catalog.test.ts\n Test Files  1 passed (1)\n      Tests  5 passed (5)\n```\n\nThe retry test validates the exact error pattern:\n```typescript\nreaddirMock\n  .mockImplementationOnce(() => {\n    throw new Error(\"FsSafeError: directory changed during operation\");\n  })\n  .mockImplementationOnce(() => fakeEntries);\nconst result = listPluginModelCatalogRelativePaths(\"/tmp/work\");\nexpect(readdirMock).toHaveBeenCalledTimes(2);\nexpect(result).toHaveLength(2);\nexpect(result[0]).toBe(\"plugins/anthropic/catalog.json\");\n```\n\n**Observed result after the fix**: The retry-once logic handles four scenarios: (1) normal — single `readdirSync` returns sorted paths, (2) transient FsSafeError — first fails, second succeeds, (3) persistent error — both fail, returns `[]`, (4) empty/missing — returns `[]`. All verified with real filesystem I/O (L2) and unit tests (L1). The write-side `fs.mkdir` has an equivalent retry-once loop, so the full catalog refresh path is resilient to transient FsSafeError.\n\n**What was not tested**: Live Gateway startup with production FsSafe transform (requires production build; `@openclaw/fs-safe` is a build-time transform not active in dev mode). Concurrent multi-writer scenarios. Extreme edge cases (ENOSPC, EACCES). Low-risk: retries are synchronous mkdir/readdirSync calls with no side effects; fallback behavior matches current code. Both reader and writer paths are now protected with retry-once loops.\n\nBefore/after comparison:\n\nBEFORE FIX — `listPluginModelCatalogRelativePaths` returned `[]` on any readdirSync error:\n\n```typescript\n// src/agents/plugin-model-catalog.ts (main, line 67)\nexport function listPluginModelCatalogRelativePaths(agentDir: string): string[] {\n  const pluginsDir = path.join(agentDir, \"plugins\");\n  try {\n    return readdirSync(pluginsDir, { withFileTypes: true })\n      .filter((entry) => entry.isDirectory())\n      .map((entry) => path.join(\"plugins\", entry.name, PLUGIN_MODEL_CATALOG_FILE))\n      .filter(isPluginModelCatalogRelativePath)\n      .toSorted((left, right) => left.localeCompare(right));\n  } catch {\n    return [];  // ← silently drops all plugin catalogs on transient error\n  }\n}\n```\n\nAFTER FIX — retries `readdirSync` once before falling back to `[]`:\n\n```typescript\n// src/agents/plugin-model-catalog.ts (this PR)\nexport function listPluginModelCatalogRelativePaths(agentDir: string): string[] {\n  const pluginsDir = path.join(agentDir, \"plugins\");\n  for (let attempt = 0; ; attempt++) {\n    try {\n      return readdirSync(pluginsDir, { withFileTypes: true })\n        .filter((entry) => entry.isDirectory())\n        .map((entry) => path.join(\"plugins\", entry.name, PLUGIN_MODEL_CATALOG_FILE))\n        .filter(isPluginModelCatalogRelativePath)\n        .toSorted((left, right) => left.localeCompare(right));\n    } catch {\n      if (attempt > 0) { return []; }\n    }\n  }\n}\n```\n\n### Summary of coverage\n\n| Scenario | Coverage | Method |\n|----------|----------|--------|\n| Normal directory, 2 plugins | L2 real I/O + L1 test | Temp dir with real files |\n| Nonexistent plugins dir | L2 real I/O + L1 test | `/tmp/nonexistent` |\n| Empty plugins dir | L2 real I/O + L1 test | Temp dir, empty subdir |\n| Only files (no dirs) in plugins/ | L2 real I/O | Temp dir, files only |\n| Transient FsSafeError → retry succeeds | L1 test | Mocked first-call error |\n| Persistent error → returns [] | L1 test | Mocked all-call errors |\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk: +13 net lines change, 5 regression tests (96 lines new test file)\n- [x] No changes to dependencies, workflows, permissions, gateway startup, or external APIs\n- [x] Graceful fallback preserved: if all attempts fail, returns `[]` / throws as before\n- [x] Regression tests cover normal, empty, transient-failure, and double-failure paths\n- [x] L2 real filesystem I/O evidence confirms correct behavior with actual Dirent objects\n- [x] Writer-side also retries once on transient FsSafeError — fully addressed\n\n## Linked context\n\n- Fixes #99390 — Gateway background catalog refresh logs FsSafeError every ~60s\n- Related: #99416 — Earlier closed PR targeting the same race (maintainer guidance kept the canonical issue open)",
+        "branch": "fix/issue-99390-fssafeerror-catalog-write-race",
+        "head_sha": "18f7d5f91c1f5577adad125498fb018ebed11afc",
+        "author": "pandah97",
+        "labels": [
+          "agents",
+          "size: S",
+          "triage: blank-template",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof",
+          "merge-risk: 🚨 other"
+        ],
+        "files": [
+          {
+            "path": "src/agents/models-config.ts",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/plugin-model-catalog.test.ts",
+            "additions": 93,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/plugin-model-catalog.ts",
+            "additions": 14,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 121,
+        "deletions": 11,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100794",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100794.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 71,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-07T12:10:30.786Z"
+    }
+  ],
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 708,
+    "total_ms": 7740,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 369
+        "ms": 600
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2646
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,7 +189,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 329
+        "ms": 4467
       },
       {
         "name": "append_ledger",
