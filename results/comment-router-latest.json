@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T16:08:29.662Z",
+  "generated_at": "2026-07-07T16:08:42.195Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T13:08:27.982Z",
+  "since": "2026-07-07T13:08:40.065Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101773
+    101746
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4905826810
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101773:4905797738:2026-07-07T16:08:24Z:clawsweeper_needs_human",
-      "comment_id": "4905797738",
-      "comment_version_key": "4905797738:2026-07-07T16:08:24Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101773#issuecomment-4905797738",
+      "idempotency_key": "comment-router:openclaw/openclaw:101746:4905826810:2026-07-07T16:05:49Z:re_review",
+      "comment_id": "4905826810",
+      "comment_version_key": "4905826810:2026-07-07T16:05:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101746#issuecomment-4905826810",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 101773,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 101746,
+      "author": "wings1029",
+      "author_id": 31802073,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T16:02:30Z",
-      "comment_updated_at": "2026-07-07T16:08:24Z",
+      "comment_created_at": "2026-07-07T16:05:49Z",
+      "comment_updated_at": "2026-07-07T16:05:49Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -68,65 +70,87 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(security): bound plugin manifest reads in audit deep scan",
-        "body": "## What Problem This Solves\n\n`readPluginManifestExtensions` in `src/security/audit-extra.async.ts` read each installed plugin's `package.json` with an unbounded `fs.readFile`. A malicious or broken plugin could place an arbitrarily large manifest in the plugin directory and exhaust memory or slow the security audit.\n\n## Why This Change Was Made\n\nThe audit deep scan now enforces a hard 1 MiB size limit on plugin `package.json` reads, using the existing `statRegularFile` / `readRegularFile` helpers from `src/infra/regular-file.js`, which also reject symlinks and non-file targets. Oversized manifests throw a clear error that surfaces as a `plugins.code_safety.manifest_parse_error` finding, matching the existing malformed-JSON behavior so the issue is visible instead of silently skipped.\n\n## User Impact\n\nUsers will receive a clear security audit warning if any installed plugin manifest exceeds 1 MiB, and the audit will no longer attempt to load unbounded file content during deep scan.\n\n## Evidence\n\n- Added a regression test in `src/security/audit-extra.async.test.ts` that creates a `package.json` of `1 MiB + 1` bytes and asserts a `manifest_parse_error` finding is emitted for the oversized plugin.\n- Local focused run: `node scripts/run-vitest.mjs src/security/audit-extra.async.test.ts --run` passes (7/7 tests).\n- `oxlint` clean on changed files.\n\n## Real behavior proof\n\n```text\n$ node scripts/run-vitest.mjs src/security/audit-extra.async.test.ts --run\n[test] starting test/vitest/vitest.unit-fast.config.ts\n RUN  v4.1.9\n ✓ |unit-fast| src/security/audit-extra.async.test.ts (7 tests) 126ms\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n[test] passed 1 Vitest shard in 71.62s\n```\n",
-        "branch": "fix/bound-audit-plugin-manifest-read",
-        "head_sha": "1260d8d23695260bb1da0aab0fa70227d43b1362",
-        "author": "cxbasdev",
+        "title": "fix(infra): bound three warning dedupe caches with createDedupeCache",
+        "body": "## What Problem This Solves\n\nThree module-level `Set<string>` warning dedupe caches grow unbounded with per-path/per-message keys:\n\n| Cache | File | Key space |\n|:---|:---|:---|\n| `safeBinTrustedDirWarningCache` | `invoke-system-run.ts` | warning message text per trusted-dir mismatch |\n| `chmodWarnedTargets` | `openclaw-state-db.ts` | file path per failed chmod |\n| `clobberCapWarnedPaths` | `io.clobber-snapshot.ts` | config path per clobber snapshot overflow |\n\nAll three use `.has()` → `.add()`, no eviction, no size cap. Matches the pattern fixed in #101696 and #101738.\n\n## Why This Change Was Made\n\nReplace `new Set<string>()` with `createDedupeCache({ ttlMs: 0, maxSize: 4096 })` from `src/infra/dedupe.js`. The `.check()` method replaces both `.has()` and `.add()` in a single LRU-aware call.\n\n## User Impact\n\nNo change for processes operating below 4096 distinct warning keys per cache. Processes exceeding the cap may see one extra warning per evicted entry — a bounded trade-off versus prior unbounded memory growth.\n\n## Real behavior proof\n\n**Real environment tested:** Linux x64 (kernel 4.19.112), Node.js v24.13.1, OpenClaw commit at PR head.\n\n**Exact steps or command run after this patch:**\n\n```bash\nnpx tsx live-proof.ts\n```\n\n**`live-proof.ts` source:**\n\n```ts\nimport { createDedupeCache } from \"./src/infra/dedupe.js\";\n\nconst CACHE_CAP = 4096;\n\n// Proof 1: Eviction past the 4096-entry cap\nconsole.log(\"=== Proof 1: Eviction past the 4096-entry cap ===\\n\");\n\nconst cache = createDedupeCache({ ttlMs: 0, maxSize: CACHE_CAP });\nfor (let i = 1; i <= CACHE_CAP; i++) {\n  const isDuplicate = cache.check(`warning-key-${i}`);\n  if (isDuplicate) {\n    console.log(`UNEXPECTED duplicate at key-${i} during fill`);\n    process.exit(1);\n  }\n}\nconsole.log(\"→ Filled cache with\", cache.size(), \"distinct keys.\");\nconsole.log(\"→ No duplicates during fill (expected).\");\n\nconst pushed = cache.check(`warning-key-${CACHE_CAP + 1}`);\nconsole.log(\"→ key-\", CACHE_CAP + 1, \" pushed past cap: duplicate=\", pushed, \" (expected: false)\");\nconsole.log(\"→ Cache size after overflow:\", cache.size());\n\nconst recheck = cache.check(\"warning-key-1\");\nconsole.log(\"→ Re-check warning-key-1 after eviction: duplicate=\", recheck, \" (expected: false — evicted)\");\n\nif (recheck) {\n  console.log(\"FAIL: oldest key was not evicted past the 4096 cap\");\n  process.exit(1);\n}\n\n// Proof 2: Hot-key LRU retention (touch-on-read)\nconsole.log(\"\\n=== Proof 2: Hot-key LRU retention (touch-on-read) ===\\n\");\n\nconst hotCache = createDedupeCache({ ttlMs: 0, maxSize: 16 });\nfor (let i = 1; i <= 15; i++) hotCache.check(`entry-${i}`);\nfor (let i = 0; i < 42; i++) hotCache.check(\"hot-entry\");\nconsole.log(\"→ Touched \\\"hot-entry\\\" 42 times. Cache size:\", hotCache.size());\n\nhotCache.check(\"extra-1\");\nhotCache.check(\"extra-2\");\nconsole.log(\"→ Pushed 2 extra entries past cap. Cache size:\", hotCache.size());\n\nconsole.log(\"→ Re-check \\\"hot-entry\\\": duplicate=\", hotCache.check(\"hot-entry\"), \" (expected: true — retained by LRU)\");\nconsole.log(\"→ Re-check \\\"entry-1\\\" (oldest): duplicate=\", hotCache.check(\"entry-1\"), \" (expected: false — evicted)\");\n\nconst survived = hotCache.check(\"hot-entry\");\nif (!survived) {\n  console.log(\"FAIL: hot key was evicted despite frequent touch-on-read\");\n  process.exit(1);\n}\n\nconsole.log(\"\\n=== Summary ===\");\nconsole.log(\"createDedupeCache (ttlMs=0, maxSize=4096) — the production primitive used by all 3 caches:\");\nconsole.log(\"  1. Cache stays at 4096 entries maximum.\");\nconsole.log(\"  2. Oldest untouched entries are evicted on overflow.\");\nconsole.log(\"  3. Frequently accessed entries survive via LRU touch-on-read.\");\nconsole.log(\"  4. safeBinTrustedDirWarningCache, chmodWarnedTargets, and\");\nconsole.log(\"     clobberCapWarnedPaths all use this same bounded primitive\");\nconsole.log(\"     — only the key space differs per cache.\");\nconsole.log(\"\\nPASS: bounded cache behavior verified.\\n\");\n```\n\n**After-fix evidence:**\n\n```\n=== Proof 1: Eviction past the 4096-entry cap ===\n\n→ Filled cache with 4096 distinct keys.\n→ No duplicates during fill (expected).\n→ key- 4097  pushed past cap: duplicate= false  (expected: false)\n→ Cache size after overflow: 4096\n→ Re-check warning-key-1 after eviction: duplicate= false  (expected: false — evicted)\n\n=== Proof 2: Hot-key LRU retention (touch-on-read) ===\n\n→ Touched \"hot-entry\" 42 times. Cache size: 16\n→ Pushed 2 extra entries past cap. Cache size: 16\n→ Re-check \"hot-entry\": duplicate= true  (expected: true — retained by LRU)\n→ Re-check \"entry-1\" (oldest): duplicate= false  (expected: false — evicted)\n\n=== Summary ===\ncreateDedupeCache (ttlMs=0, maxSize=4096) — the production primitive used by all 3 caches:\n  1. Cache stays at 4096 entries maximum.\n  2. Oldest untouched entries are evicted on overflow.\n  3. Frequently accessed entries survive via LRU touch-on-read.\n  4. safeBinTrustedDirWarningCache, chmodWarnedTargets, and\n     clobberCapWarnedPaths all use this same bounded primitive\n     — only the key space differs per cache.\n\nPASS: bounded cache behavior verified.\n```\n\n**Observed result after fix:** The production primitive (`createDedupeCache`) correctly caps at 4096 entries and evicts the oldest untouched entry on overflow. Hot keys survive eviction via LRU touch-on-read. All three caches in this PR (`safeBinTrustedDirWarningCache`, `chmodWarnedTargets`, `clobberCapWarnedPaths`) are backed by this same primitive — the fix replaces `new Set<string>()` with `createDedupeCache({ ttlMs: 0, maxSize: 4096 })`, which is the exact code path exercised above.\n\n**Regression test:** All affected test suites pass:\n\n```\npnpm test -- src/node-host/invoke-system-run.test.ts     → 34 passed\npnpm test -- src/state/openclaw-state-db.test.ts         → 21 passed\npnpm test -- src/config/io.clobber-snapshot.test.ts      →  7 passed\n```\n\n**What was not tested:** End-to-end 4096-entry eviction through `ensureOpenClawStatePermissions` or `warnWritableTrustedDirOnce` (both require filesystem/environment conditions not reproducible in CI — the bounded-cache primitive already has full coverage).\n\nAI-assisted.",
+        "branch": "fix/bound-three-warning-dedupe-caches",
+        "head_sha": "0bfc5ee3ea47177ea47e7bb9c2a97bf66d17d617",
+        "author": "wings1029",
         "labels": [
-          "size: XS",
+          "size: S",
           "P2",
-          "rating: 🦪 silver shellfish",
+          "rating: 🧂 unranked krab",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/security/audit-extra.async.test.ts",
-            "additions": 19,
+            "path": "src/config/io.clobber-snapshot.test.ts",
+            "additions": 8,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/security/audit-extra.async.ts",
-            "additions": 18,
-            "deletions": 2,
+            "path": "src/config/io.clobber-snapshot.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/node-host/invoke-system-run.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/node-host/invoke-system-run.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.ts",
+            "additions": 6,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 37,
-        "deletions": 2,
+        "changedFiles": 6,
+        "additions": 44,
+        "deletions": 9,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101773",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101773.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101746",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101746.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 52,
-          "gatingTotal": 47,
+          "total": 46,
+          "gatingTotal": 41,
           "counts": {
-            "CANCELLED": 2,
             "QUEUED": 3,
-            "SKIPPED": 26,
-            "SUCCESS": 20,
+            "SUCCESS": 23,
+            "SKIPPED": 19,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
             "Scan changed paths (precise):QUEUED",
             "preflight:QUEUED",
             "security-fast:QUEUED"
           ],
           "pending": [
-            "Real behavior proof:CANCELLED",
             "Scan changed paths (precise):QUEUED",
             "preflight:QUEUED",
             "security-fast:QUEUED"
@@ -136,22 +160,22 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1893,
+    "total_ms": 2330,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 330
+        "ms": 566
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1333
+        "ms": 1550
       },
       {
         "name": "classify_comment_commands",
@@ -171,11 +195,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 202
+        "ms": 200
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
