@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T11:24:16.759Z",
+  "generated_at": "2026-07-07T11:24:44.306Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T08:24:15.342Z",
+  "since": "2026-07-07T08:24:42.072Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101078
+    93940
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101078:4896514565:2026-07-07T11:24:10Z:clawsweeper_auto_repair",
-      "comment_id": "4896514565",
-      "comment_version_key": "4896514565:2026-07-07T11:24:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101078#issuecomment-4896514565",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:93940:4754589955:2026-07-07T11:24:38Z:clawsweeper_auto_repair",
+      "comment_id": "4754589955",
+      "comment_version_key": "4754589955:2026-07-07T11:24:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93940#issuecomment-4754589955",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 101078,
+      "issue_number": 93940,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T18:51:11Z",
-      "comment_updated_at": "2026-07-07T11:24:10Z",
+      "comment_created_at": "2026-06-19T20:41:41Z",
+      "comment_updated_at": "2026-07-07T11:24:38Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=24ec50d1c7ee8dd182f443e7f15c16cdc47e66f5)",
-      "review_summary": "The PR stores a cron run-kind marker, falls back from cron run-session keys to the base cron session entry, restores provider/model/thinking on async completion wakes, and authorizes the trusted in-process model override.\n\nPR surface: Source +61, Tests +203. Total +264 across 5 files.\n\nReproducibility: yes. Source inspection shows generated-media completion wakes still invoke the agent with the run-session key and completion event, while the actual agent session resolver reads the exact run-session key and creates a fresh session when that row is absent.",
-      "review_followup": "- [P1] Contributor and maintainer follow-up is needed because the external draft lacks real behavior proof and still misses the full cron context restoration path.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=1d652588642698b6bdbb89ac97dffc87e4dfd06d)",
+      "review_summary": "The branch updates the Feishu plugin to prefer inbound post content_v2 Markdown, inline-replace content_v2 images, and route outbound Markdown through post tag:md while removing table conversion and auto card upgrades.\n\nPR surface: Source +120, Tests +213. Total +333 across 15 files.\n\nReproducibility: yes. at source level: current main and v2026.6.11 convert Feishu tables and auto-route code/table Markdown to cards, while PR head removes those paths. I did not run a live Feishu tenant reproduction in this read-only review.",
+      "review_followup": "- [P1] Needs maintainer judgment on Feishu outbound rendering defaults and stronger carrier proof; this is not a narrow safe automation repair.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "24ec50d1c7ee8dd182f443e7f15c16cdc47e66f5",
+      "expected_head_sha": "1d652588642698b6bdbb89ac97dffc87e4dfd06d",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,102 +70,354 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): preserve cron context in session entry for async completion wakes",
-        "body": "## What Problem This Solves\n\nFixes #99919\n\nWhen a cron job uses an async media generation tool (`image_generate`, `video_generate`, `music_generate`), the cron run ends while the media task is still in progress. When the media task later completes and wakes the session, the resumed agent run **loses the original cron context**:\n\n- `provider` / `model` — falls back to account defaults instead of the cron's configured model\n- `thinkLevel` — not restored\n- `bootstrapContextRunKind` — missing; the resumed agent doesn't know it is a cron run\n\nThe agent wakes up, sees only \"image done\" with no memory of the original multi-step task (build → commit → deploy → notify), replies once, and ends. The remaining steps silently dead-end with `NO_REPLY`.\n\nAdditionally, the in-process gateway dispatch in `runAnnounceAgentCall` was not authorized to pass model overrides on the synthetic client. Even with the correct `provider`/`model` fields in the agent params, the gateway's `server-methods/agent` handler would reject them without `allowSyntheticModelOverride`.\n\n## Why This Change Was Made\n\nThe fix has three parts:\n\n**1. Persist** — When a cron agent run completes, write `bootstrapContextRunKind` onto the `SessionEntry` in the session store (`agent-command.ts`). This makes the cron origin discoverable by any later run on the same session key.\n\n**2. Restore** — In `sendSubagentAnnounceDirectly`, when building the `directAgentParams` for an async completion wake, read `requesterEntry.bootstrapContextRunKind` from the loaded session entry. If it equals `\"cron\"`, inject `provider`, `model`, `thinking`, and `bootstrapContextRunKind` into the wake params so the resumed agent continues with the same identity.\n\n**3. Authorize** — `runAnnounceAgentCall` now passes `allowSyntheticModelOverride: true` when the agent params carry a `provider` or `model` override. This authorizes the trusted in-process gateway dispatch so the synthetic client's model override is accepted by `server-methods/agent`, preventing the wake from being rejected before the agent resumes.\n\n**Safety**: Only cron session entries carry `bootstrapContextRunKind: \"cron\"`. Subagent session entries (`agent:<id>:subagent:<uuid>`) never have this field, so subagent-to-subagent completion paths are completely unaffected. Model override authorization is only enabled when the agent params actually contain provider/model overrides.\n\n## User Impact\n\n- **Before**: Cron jobs using async media generation silently lost context on wake. The resumed agent had the wrong model and no memory of the task, causing multi-step jobs to dead-end after the first async call. Even after restoring provider/model in the params, the gateway could reject them.\n- **After**: Async completion wakes restore the cron's provider, model, thinking level, and run kind from the persisted session entry. The in-process dispatch authorizes the model override on the synthetic client. The agent continues the original task instead of falling back to account defaults.\n\n## Evidence\n\n### Tests\n\n```bash\n# Targeted tests (115/115 passed, +3 tests for #99919)\nnode scripts/run-vitest.mjs src/agents/subagent-announce-delivery.test.ts\n# → 115 passed (includes 3 new tests: context injection, non-cron safety, override authorization)\n\nnode scripts/run-vitest.mjs src/cron/\n# → 1277/1277 passed (119 test files)\n\nnode scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.async-tasks.test.ts\n# → 8/8 passed\n\nnode scripts/run-vitest.mjs src/agents/subagent-announce.test.ts\n# → 14/14 passed\n```\n\n### Lint\n\n```bash\nnode_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.json --quiet \\\n  src/agents/subagent-announce-delivery.ts \\\n  src/agents/subagent-announce-delivery.test.ts\n# → clean (exit 0)\n```\n\n### Review\n\nClawSweeper review (#101078) identified that `runAnnounceAgentCall` dispatches through `dispatchGatewayMethodInProcess` without `allowSyntheticModelOverride`, causing the gateway's `server-methods/agent` to reject provider/model overrides on the synthetic client. **Fixed in 405c9c2**.\n\n### Revision (405c9c2)\n\n- `runAnnounceAgentCall` now passes `allowSyntheticModelOverride: true` when the agent params include `provider` or `model` overrides, authorizing the trusted in-process dispatch path.\n- New regression test (`authorizes model override on in-process dispatch when cron context includes provider/model`) uses the direct `dispatchGatewayMethodInProcess` mock (not the `callGateway` adaptation) to verify `allowSyntheticModelOverride` reaches the in-process dispatch options.\n- No other callers of `runAnnounceAgentCall` pass provider/model overrides, so the authorization is only active for the cron context restoration path.\n\n### What was tested live\n\n- All 115 subagent-announce-delivery tests pass, including 3 new tests:\n  - ✅ Cron session wake injects provider, model, thinkLevel, bootstrapContextRunKind\n  - ✅ Non-cron session wake does NOT inject these fields (subagent safety)\n  - ✅ `allowSyntheticModelOverride: true` is passed to `dispatchGatewayMethodInProcess` when cron context includes provider/model\n- All 1277 cron tests pass unchanged\n- Full lint (oxlint) pass on all changed files\n\n### What was not tested live\n\n- A real cron + async image_generate round-trip requires a Codex app-server environment with a live provider and is deferred to Testbox/Crabbox proof. The code-level integration tests cover the exact dispatch path (session entry → `sendSubagentAnnounceDirectly` → `directAgentParams` → `runAnnounceAgentCall` → `dispatchGatewayMethodInProcess` with `allowSyntheticModelOverride`) with mocked session store and in-process gateway dispatch.\n",
-        "branch": "fix/cron-async-media-wake-loses-context",
-        "head_sha": "24ec50d1c7ee8dd182f443e7f15c16cdc47e66f5",
-        "author": "xialonglee",
+        "title": "feat(feishu): native Markdown for inbound content_v2 & outbound tag:md",
+        "body": "## Summary\r\n\r\nAlign Feishu inbound and outbound on **native Markdown**, backward-compatible and reversible.\r\n\r\n- **M1 — inbound `content_v2`**: post messages prefer the `content`-parallel `content_v2` array (native Markdown) when feeding the Agent; on missing / empty / non-array / parse-error — and also when a non-empty `content_v2` renders **no usable text/media** — it **structurally falls back** to `content`. **No new config switch.** Non-code-block images `![alt](image_key)` in `content_v2` are downloaded and **inline-replaced with the local path** (code-block occurrences kept literal; each file downloaded once).\r\n- **M2 — outbound `tag:md`**: text/markdown replies render natively via the post `tag:md` carrier (incl. code blocks and tables). Two legacy work-arounds are removed: ① auto-mode code-block/table replies auto-upgrading to an interactive card, and ② markdown table downgrade (`convertMarkdownTables`). Explicit cards (`renderMode=card`), presentation buttons, streaming cards, structured cards, and the media pipeline are **left untouched**; the `markdown.tableMode` field is kept (zero compat cost, no doctor migration).\r\n\r\nThe two modules touch disjoint files with no runtime dependency.\r\n\r\n## Changes\r\n\r\n- `post.ts` / `post-image-inline.ts`: content_v2 data-source switch + non-code-block image extract/inline-replace (single source for the code-block boundary, dedupe, offset-based URL splice that avoids touching alt text or corrupting `$` in paths).\r\n- `post.ts`: render content_v2 first, then structurally fall back to `content` when the rendered body has no text, images, or media — so the Agent is never fed an empty post body.\r\n- `bot-content.ts` / `bot.ts` / `types.ts`: download pipeline backfills `sourceKey`; merge point inline-replaces by key→path.\r\n- `outbound.ts` / `reply-dispatcher.ts`: drop the `auto && shouldUseCard` card-upgrade and delete both dead `shouldUseCard` copies.\r\n- `send.ts` / `reply-dispatcher.ts`: remove Feishu-side table-downgrade calls (core helper untouched — still used by Telegram etc.).\r\n\r\n## Verification\r\n\r\n- `pnpm test extensions/feishu`: **979 passing** (73 files), incl. M1/M2 cases, review-hardening cases, and the content_v2 empty-render fallback case.\r\n- Pre-MR review fixes: inlineReplace mis-replacing `(key)` inside alt text, `$` in path corrupted by `String.replace` semantics, duplicate keys not deduped, and `MARKDOWN_IMAGE_RE`/`maskCodeSpans` duplicated across two files (consolidated to a single source).\r\n- Automated review follow-up addressed: content_v2 now falls back to `content` when v2 rendering yields no usable text/media (was: empty body fed to the Agent).\r\n- Rebased onto the latest `main`; M2 deletions (`shouldUseCard`, table downgrade) still apply against current upstream Feishu code.\r\n- Suggested manual check: headings / tables / code blocks / bold / lists / quotes / links rendered via tag:md post on desktop + mobile (code/table no longer upgrade to a card).\r\n\r\n\r\n\r\n## Refs\r\n\r\n- Meego: M-7335431104\r\n\r\n## Real behavior proof\r\n\r\n- **Behavior addressed**: inbound `post` consumes `content_v2` native Markdown (fed to the Agent), and outbound text/markdown replies render via the post `tag:md` carrier (code blocks / tables no longer upgraded to a card; tables no longer downgraded).\r\n- **Real environment tested**: Yes — via the Feishu channel, conversing with the Agent and sending Markdown messages (inbound), observing the Agent's Markdown replies (outbound).\r\n- **Exact steps or command run after this patch**: deploy this branch; in Feishu, start a conversation with the bot Agent and send Markdown messages; observe how inbound rich-text is parsed and how the Agent's Markdown replies render.\r\n- **Evidence after fix**: Real-environment Feishu chat proof (redacted) showing inbound `content_v2` parsing and outbound `tag:md` rendering after this patch:\r\n\r\n<img width=\"1656\" height=\"918\" alt=\"image\" src=\"https://github.com/user-attachments/assets/d02655a4-12e4-4d12-9755-9753cfac182b\" />\r\n<img width=\"4468\" height=\"758\" alt=\"image\" src=\"https://github.com/user-attachments/assets/b10c650d-9902-4c13-a033-3ff345648f43\" />\r\n\r\n<img width=\"2534\" height=\"774\" alt=\"image\" src=\"https://github.com/user-attachments/assets/cef6f505-e68f-44ce-a2f0-d890a1e0f5a2\" />\r\n<img width=\"1114\" height=\"2366\" alt=\"image\" src=\"https://github.com/user-attachments/assets/44045aff-3940-4235-b4f7-7432626ecc4f\" />\r\n<img width=\"4772\" height=\"2352\" alt=\"image\" src=\"https://github.com/user-attachments/assets/60c38de0-7fdf-46a0-88d4-edb1fdd0714b\" />\r\n\r\n  Supplemental: `pnpm test extensions/feishu` → 979 passing (73 files).\r\n- **Observed result after fix**: Markdown messages are handled natively — inbound rich text is consumed from `content_v2`, outbound Markdown (incl. code/table) renders via `tag:md` without card upgrade or table downgrade.\r\n- **What was not tested**: automated integration/e2e (skipped in this setup); content_v2 `@`-mention inline form pending a real sample (defaults to structured `tag:at`).",
+        "branch": "feature/feishu-post-md-support",
+        "head_sha": "1d652588642698b6bdbb89ac97dffc87e4dfd06d",
+        "author": "fanghc95",
         "labels": [
-          "agents",
-          "size: M",
-          "P1",
+          "channel: feishu",
+          "size: L",
+          "triage: mock-only-proof",
+          "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "status: 📣 needs proof",
+          "proof: 📸 screenshot"
         ],
         "files": [
           {
-            "path": "src/agents/agent-command.ts",
-            "additions": 41,
-            "deletions": 26,
+            "path": "extensions/feishu/src/bot-content.ts",
+            "additions": 9,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/subagent-announce-delivery.test.ts",
-            "additions": 203,
+            "path": "extensions/feishu/src/bot.test.ts",
+            "additions": 38,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/subagent-announce-delivery.ts",
-            "additions": 43,
-            "deletions": 4,
+            "path": "extensions/feishu/src/bot.ts",
+            "additions": 20,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/config/sessions/types.ts",
+            "path": "extensions/feishu/src/config-schema.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/outbound.test.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/outbound.ts",
             "additions": 2,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/post-image-inline.test.ts",
+            "additions": 49,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/feishu/src/post-image-inline.ts",
+            "additions": 65,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/feishu/src/post.test.ts",
+            "additions": 96,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/isolated-agent/run.ts",
-            "additions": 5,
+            "path": "extensions/feishu/src/post.ts",
+            "additions": 86,
+            "deletions": 25,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/reply-dispatcher.test.ts",
+            "additions": 17,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/reply-dispatcher.ts",
+            "additions": 3,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/send.test.ts",
+            "additions": 34,
+            "deletions": 40,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/send.ts",
+            "additions": 3,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/types.ts",
+            "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 294,
-        "deletions": 30,
+        "changedFiles": 15,
+        "additions": 460,
+        "deletions": 127,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101078",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101078.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93940",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93940.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 13,
-          "gatingTotal": 8,
+          "total": 92,
+          "gatingTotal": 87,
           "counts": {
-            "SKIPPED": 7,
-            "SUCCESS": 5,
+            "FAILURE": 1,
+            "SUCCESS": 63,
+            "SKIPPED": 27,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "Scan changed paths (precise):FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "Scan changed paths (precise):FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:93940:4789261021:2026-06-24T12:25:51Z:re_review",
+      "comment_id": "4789261021",
+      "comment_version_key": "4789261021:2026-06-24T12:25:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/93940#issuecomment-4789261021",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 93940,
+      "author": "Fanghc95",
+      "author_id": 43239555,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-24T12:25:51Z",
+      "comment_updated_at": "2026-06-24T12:25:51Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review — real-environment feishu chat proof (inbound content_v2 + outbound tag:md screenshots) has been added to the **real behavior proof → evidence after fix** section",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "— real-environment Feishu chat proof (inbound content_v2 + outbound tag:md screenshots) has been added to the **Real behavior proof → Evidence after fix** section.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(feishu): native Markdown for inbound content_v2 & outbound tag:md",
+        "body": "## Summary\r\n\r\nAlign Feishu inbound and outbound on **native Markdown**, backward-compatible and reversible.\r\n\r\n- **M1 — inbound `content_v2`**: post messages prefer the `content`-parallel `content_v2` array (native Markdown) when feeding the Agent; on missing / empty / non-array / parse-error — and also when a non-empty `content_v2` renders **no usable text/media** — it **structurally falls back** to `content`. **No new config switch.** Non-code-block images `![alt](image_key)` in `content_v2` are downloaded and **inline-replaced with the local path** (code-block occurrences kept literal; each file downloaded once).\r\n- **M2 — outbound `tag:md`**: text/markdown replies render natively via the post `tag:md` carrier (incl. code blocks and tables). Two legacy work-arounds are removed: ① auto-mode code-block/table replies auto-upgrading to an interactive card, and ② markdown table downgrade (`convertMarkdownTables`). Explicit cards (`renderMode=card`), presentation buttons, streaming cards, structured cards, and the media pipeline are **left untouched**; the `markdown.tableMode` field is kept (zero compat cost, no doctor migration).\r\n\r\nThe two modules touch disjoint files with no runtime dependency.\r\n\r\n## Changes\r\n\r\n- `post.ts` / `post-image-inline.ts`: content_v2 data-source switch + non-code-block image extract/inline-replace (single source for the code-block boundary, dedupe, offset-based URL splice that avoids touching alt text or corrupting `$` in paths).\r\n- `post.ts`: render content_v2 first, then structurally fall back to `content` when the rendered body has no text, images, or media — so the Agent is never fed an empty post body.\r\n- `bot-content.ts` / `bot.ts` / `types.ts`: download pipeline backfills `sourceKey`; merge point inline-replaces by key→path.\r\n- `outbound.ts` / `reply-dispatcher.ts`: drop the `auto && shouldUseCard` card-upgrade and delete both dead `shouldUseCard` copies.\r\n- `send.ts` / `reply-dispatcher.ts`: remove Feishu-side table-downgrade calls (core helper untouched — still used by Telegram etc.).\r\n\r\n## Verification\r\n\r\n- `pnpm test extensions/feishu`: **979 passing** (73 files), incl. M1/M2 cases, review-hardening cases, and the content_v2 empty-render fallback case.\r\n- Pre-MR review fixes: inlineReplace mis-replacing `(key)` inside alt text, `$` in path corrupted by `String.replace` semantics, duplicate keys not deduped, and `MARKDOWN_IMAGE_RE`/`maskCodeSpans` duplicated across two files (consolidated to a single source).\r\n- Automated review follow-up addressed: content_v2 now falls back to `content` when v2 rendering yields no usable text/media (was: empty body fed to the Agent).\r\n- Rebased onto the latest `main`; M2 deletions (`shouldUseCard`, table downgrade) still apply against current upstream Feishu code.\r\n- Suggested manual check: headings / tables / code blocks / bold / lists / quotes / links rendered via tag:md post on desktop + mobile (code/table no longer upgrade to a card).\r\n\r\n\r\n\r\n## Refs\r\n\r\n- Meego: M-7335431104\r\n\r\n## Real behavior proof\r\n\r\n- **Behavior addressed**: inbound `post` consumes `content_v2` native Markdown (fed to the Agent), and outbound text/markdown replies render via the post `tag:md` carrier (code blocks / tables no longer upgraded to a card; tables no longer downgraded).\r\n- **Real environment tested**: Yes — via the Feishu channel, conversing with the Agent and sending Markdown messages (inbound), observing the Agent's Markdown replies (outbound).\r\n- **Exact steps or command run after this patch**: deploy this branch; in Feishu, start a conversation with the bot Agent and send Markdown messages; observe how inbound rich-text is parsed and how the Agent's Markdown replies render.\r\n- **Evidence after fix**: Real-environment Feishu chat proof (redacted) showing inbound `content_v2` parsing and outbound `tag:md` rendering after this patch:\r\n\r\n<img width=\"1656\" height=\"918\" alt=\"image\" src=\"https://github.com/user-attachments/assets/d02655a4-12e4-4d12-9755-9753cfac182b\" />\r\n<img width=\"4468\" height=\"758\" alt=\"image\" src=\"https://github.com/user-attachments/assets/b10c650d-9902-4c13-a033-3ff345648f43\" />\r\n\r\n<img width=\"2534\" height=\"774\" alt=\"image\" src=\"https://github.com/user-attachments/assets/cef6f505-e68f-44ce-a2f0-d890a1e0f5a2\" />\r\n<img width=\"1114\" height=\"2366\" alt=\"image\" src=\"https://github.com/user-attachments/assets/44045aff-3940-4235-b4f7-7432626ecc4f\" />\r\n<img width=\"4772\" height=\"2352\" alt=\"image\" src=\"https://github.com/user-attachments/assets/60c38de0-7fdf-46a0-88d4-edb1fdd0714b\" />\r\n\r\n  Supplemental: `pnpm test extensions/feishu` → 979 passing (73 files).\r\n- **Observed result after fix**: Markdown messages are handled natively — inbound rich text is consumed from `content_v2`, outbound Markdown (incl. code/table) renders via `tag:md` without card upgrade or table downgrade.\r\n- **What was not tested**: automated integration/e2e (skipped in this setup); content_v2 `@`-mention inline form pending a real sample (defaults to structured `tag:at`).",
+        "branch": "feature/feishu-post-md-support",
+        "head_sha": "1d652588642698b6bdbb89ac97dffc87e4dfd06d",
+        "author": "fanghc95",
+        "labels": [
+          "channel: feishu",
+          "size: L",
+          "triage: mock-only-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof",
+          "proof: 📸 screenshot"
+        ],
+        "files": [
+          {
+            "path": "extensions/feishu/src/bot-content.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/bot.test.ts",
+            "additions": 38,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/bot.ts",
+            "additions": 20,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/config-schema.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/outbound.test.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/outbound.ts",
+            "additions": 2,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/post-image-inline.test.ts",
+            "additions": 49,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/feishu/src/post-image-inline.ts",
+            "additions": 65,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/feishu/src/post.test.ts",
+            "additions": 96,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/post.ts",
+            "additions": 86,
+            "deletions": 25,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/reply-dispatcher.test.ts",
+            "additions": 17,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/reply-dispatcher.ts",
+            "additions": 3,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/send.test.ts",
+            "additions": 34,
+            "deletions": 40,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/send.ts",
+            "additions": 3,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 15,
+        "additions": 460,
+        "deletions": 127,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-93940",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93940.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 92,
+          "gatingTotal": 87,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 63,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Scan changed paths (precise):FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Scan changed paths (precise):FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1737,
+    "total_ms": 2618,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 451
+        "ms": 487
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 951
+        "ms": 1729
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 4
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -181,11 +433,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 310
+        "ms": 370
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
