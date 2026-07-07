@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T06:43:09.075Z",
+  "generated_at": "2026-07-07T06:43:47.076Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T03:43:08.544Z",
+  "since": "2026-07-07T03:43:45.194Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    99180
+    101415
   ],
-  "comment_ids": [
-    4900900249
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,34 +31,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:99180:4900900249:2026-07-07T06:40:14Z:re_review",
-      "comment_id": "4900900249",
-      "comment_version_key": "4900900249:2026-07-07T06:40:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99180#issuecomment-4900900249",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101415:4900868806:2026-07-07T06:43:42Z:clawsweeper_auto_repair",
+      "comment_id": "4900868806",
+      "comment_version_key": "4900868806:2026-07-07T06:43:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101415#issuecomment-4900868806",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99180,
-      "author": "VectorPeak",
-      "author_id": 73048950,
+      "issue_number": 101415,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T06:40:14Z",
-      "comment_updated_at": "2026-07-07T06:40:14Z",
+      "comment_created_at": "2026-07-07T06:35:17Z",
+      "comment_updated_at": "2026-07-07T06:43:42Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=aa1a4d84064b5c149f2769ef6adfc7c9a4ad7fc8)",
+      "review_summary": "The PR resolves sub-1024 legacy Anthropic thinking budgets as disabled in the direct provider and agent transport option-resolution paths, swaps legacy payload fallbacks from `||` to `??`, and adds regression tests for both builders.\n\nPR surface: Source +6, Tests +98. Total +104 across 4 files.\n\nReproducibility: yes. Source inspection on current main shows legacy Anthropic budget resolution can collapse below 1024, and the Anthropic SDK contract rejects enabled budgets below that minimum; I did not run a live Anthropic call in this read-only review.",
+      "review_followup": "- [P1] Manual review is needed because the PR has a blocking raw-entry correctness finding and contributor-side real behavior proof is still required before merge.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "aa1a4d84064b5c149f2769ef6adfc7c9a4ad7fc8",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,21 +68,98 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(anthropic): resolve thinking as disabled when legacy budget is below 1024",
+        "body": "## What Problem This Solves\n\nWhen `adjustMaxTokensForThinking` collapses the legacy thinking budget below the Anthropic minimum (1024 tokens) — either to zero or a sub-minimum positive value — the option resolution layer unconditionally sets `thinkingEnabled: true`. This creates two bugs:\n\n1. **`||` overrides explicit zero to 1024**: `options?.thinkingBudgetTokens || 1024` treats zero as falsy, silently substituting 1024 tokens the caller never requested.\n2. **Sub-minimum budgets reach the API**: A computed budget of e.g. 476 tokens is emitted as `{ type: \"enabled\", budget_tokens: 476 }`, which the Anthropic API rejects (contract: `budget_tokens >= 1024`).\n\nBoth bugs happen in the direct provider and the agent transport stream — the two builders share the same pattern.\n\n## Why This Change Was Made\n\nThe fix normalises state at **option resolution** — the layer where `thinkingEnabled` and `thinkingBudgetTokens` are decided — rather than patching at payload construction. When `adjusted.thinkingBudget < 1024`, the resolution sets `thinkingEnabled: false` so **every downstream consumer** sees the same closed state:\n\n- **Payload builder** → emits `{ type: \"disabled\" }` (explicit, API-valid)\n- **Temperature** → `!thinkingEnabled` passes through custom temperature values\n- **Replay** → `replayThinkingEnabled` stays `false`, no stale content filtering\n- **Tool-choice** → `normalizeAnthropicToolChoice` receives the correct flag\n\nThe `||` → `??` change in both builders is defensive hygiene; the resolution layer already prevents invalid budgets from reaching the builder through the normal code path.\n\nThis directly addresses the feedback on [closed PR #101283](https://github.com/openclaw/openclaw/pull/101283), where the same bug was fixed at the payload layer instead — silently omitting the `thinking` block while `thinkingEnabled` remained `true`, leaving replay, temperature, and tool-choice internally inconsistent.\n\n## User Impact\n\nCallers whose model context window is too small to fit the selected reasoning level no longer get:\n- A silently inflated 1024-token thinking budget (the `||` override)\n- An API-rejected request with a sub-minimum `budget_tokens` value\n\nInstead thinking is explicitly disabled with `{ type: \"disabled\" }`, matching the API contract and keeping all internal state consistent.\n\n## Evidence\n\n**After fix — 65 + 102 tests pass:**\n\n```\nnode scripts/run-vitest.mjs packages/ai/src/providers/anthropic.test.ts --run\nTests  65 passed (65)\n\nnode scripts/run-vitest.mjs src/agents/anthropic-transport-stream.test.ts --run\nTests  102 passed (102)\n```\n\n**Negative control — same tests against `origin/main` (4 new tests fail):**\n\n```\nProvider:\n  FAIL  resolves thinking as disabled when the legacy budget collapses below 1024\n        Expected: { type: \"disabled\" }\n        Received: { type: \"enabled\", budget_tokens: 1024 }   ← || overrode 0\n\n  FAIL  resolves thinking as disabled when the legacy budget is positive but sub-minimum\n        Expected: { type: \"disabled\" }\n        Received: { type: \"enabled\", budget_tokens: 476 }    ← API would reject\n\nTransport:\n  FAIL  resolves thinking as disabled when the legacy budget collapses to zero\n        Expected: { type: \"disabled\" }\n        Received: { type: \"enabled\", budget_tokens: 1024 }   ← same bug\n\n  FAIL  resolves thinking as disabled when the legacy budget is positive but sub-minimum\n        Expected: { type: \"disabled\" }\n        Received: { type: \"enabled\", budget_tokens: 476 }    ← same bug\n```\n\n**Test coverage (4 new tests across both builders):**\n\n| Scenario | Provider | Transport |\n|----------|----------|-----------|\n| Budget zero (1024-token model, minimal reasoning) | `thinking: { type: \"disabled\" }` | `thinking: { type: \"disabled\" }` |\n| Budget sub-minimum (1500-token model, low reasoning → 476) | `thinking: { type: \"disabled\" }` | `thinking: { type: \"disabled\" }` |\n| Normal budget (existing tests unchanged) | `thinking: { type: \"enabled\", budget_tokens: N }` | same |\n\n**Format:** `oxfmt` clean on all 4 changed files.",
+        "branch": "fix/thinking-budget-resolution",
+        "head_sha": "aa1a4d84064b5c149f2769ef6adfc7c9a4ad7fc8",
+        "author": "pick-cat",
+        "labels": [
+          "agents",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "packages/ai/src/providers/anthropic.test.ts",
+            "additions": 50,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/anthropic.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/anthropic-transport-stream.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/anthropic-transport-stream.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 110,
+        "deletions": 6,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101415",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101415.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 105,
+          "gatingTotal": 100,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 34,
+            "SUCCESS": 68,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1831,
+    "total_ms": 2078,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 518
+        "ms": 220
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1647
       },
       {
         "name": "classify_comment_commands",
@@ -104,11 +179,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1301
+        "ms": 186
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
