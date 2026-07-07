@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T11:42:57.702Z",
+  "generated_at": "2026-07-07T11:43:12.456Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T08:42:54.532Z",
+  "since": "2026-07-07T08:43:10.422Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    101584
+    101473
   ],
   "comment_ids": [
-    4903363141
+    4903363785
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101584:4903363141:2026-07-07T11:39:55Z:re_review",
-      "comment_id": "4903363141",
-      "comment_version_key": "4903363141:2026-07-07T11:39:55Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101584#issuecomment-4903363141",
+      "idempotency_key": "comment-router:openclaw/openclaw:101473:4903363785:2026-07-07T11:39:59Z:re_review",
+      "comment_id": "4903363785",
+      "comment_version_key": "4903363785:2026-07-07T11:39:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101473#issuecomment-4903363785",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 101584,
-      "author": "ZOOWH",
-      "author_id": 265460861,
+      "issue_number": 101473,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T11:39:55Z",
-      "comment_updated_at": "2026-07-07T11:39:55Z",
+      "comment_created_at": "2026-07-07T11:39:59Z",
+      "comment_updated_at": "2026-07-07T11:39:59Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -73,92 +73,64 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(heartbeat): allow cron-triggered wakes regardless of per-agent heartbeat config",
-        "body": "## What Problem This Solves\n\nCron jobs targeting `sessionTarget: \"main\"` with `payload.kind: \"systemEvent\"` were recorded as `status=skipped` / `error=\"disabled\"` on every run. The main session was never woken.\n\nFixes #101537.\n\n## Root Cause / Fix\n\n**Two layers of \"disabled\" gates block cron-triggered wakes to main when the agent has no explicit heartbeat config:**\n\n1. `runHeartbeatOnce` checks `isHeartbeatEnabledForAgent` — returns false for agents without heartbeat in an explicit list\n2. Scheduler `run` checks `state.agents.get(agentId)` — agents not in the heartbeat scheduler never receive queued `requestHeartbeat` wakes\n\n**Fix**: Skip both gates for `source: \"cron\"`:\n- `runHeartbeatOnce`: per-agent heartbeat gates only apply to non-cron sources\n- Scheduler: cron-targeted wakes route directly to `runOnce` when the agent is absent from `state.agents`\n\nThe global `areHeartbeatsEnabled()` gate still applies in both paths.\n\n## Evidence\n\n### Before/after\n\n**Before** (issue reporter, 2026.7.1-beta.2):\n\n```json\n[\n  { \"status\": \"skipped\", \"error\": \"disabled\", \"deliveryStatus\": \"not-requested\", \"durationMs\": 19 },\n  { \"status\": \"skipped\", \"error\": \"disabled\", \"deliveryStatus\": \"not-requested\", \"durationMs\": 22 }\n]\n```\n\n**After** — end-to-end production function proof:\n\n```text\n$ node --import tsx -e '\nimport { startHeartbeatRunner } from \"./src/infra/heartbeat-runner.js\";\nimport { requestHeartbeat, setHeartbeatsEnabled } from \"./src/infra/heartbeat-wake.js\";\nimport { setRuntimeConfigSnapshot } from \"./src/config/config.js\";\n\n// worker has heartbeat, main does not — same scenario as issue reporter\nconst cfg = { agents: { defaults: { heartbeat: { every: \"30m\" } },\n  list: [{ id: \"worker\", heartbeat: { every: \"5m\" } }, { id: \"main\" }] } };\nsetRuntimeConfigSnapshot(cfg);\nsetHeartbeatsEnabled(true);\n\nconst runner = startHeartbeatRunner({ cfg, runOnce: async (opts) => {\n  console.log(JSON.stringify({ agentId: opts.agentId, source: opts.source, status: \"ran\" }));\n  return { status: \"ran\", durationMs: 1 };\n}, stableSchedulerSeed: \"proof-101537\" });\n\nrequestHeartbeat({ source: \"cron\", intent: \"event\", reason: \"cron:proof\",\n  agentId: \"main\", sessionKey: \"agent:main:cron:proof:run:1\",\n  heartbeat: { target: \"last\" }, coalesceMs: 0 });\nawait new Promise(r => setTimeout(r, 500));\nrunner.stop();\n'\n\n{\"agentId\":\"main\",\"source\":\"cron\",\"status\":\"ran\"}  ← cron wake succeeded\n```\n\n### Gate proof — isHeartbeatEnabledForAgent\n\n```text\n$ node --import tsx -e '\nimport { isHeartbeatEnabledForAgent } from \"./src/infra/heartbeat-summary.js\";\nconsole.log(isHeartbeatEnabledForAgent({agents:{list:[\n  {id:\"worker\", heartbeat:{every:\"5m\"}}, {id:\"main\"}\n]}}, \"main\"));\n'\n\nfalse  ← gate rejects main; both fix layers now bypass this for cron\n```\n\n### Regression tests\n\n**Integration** — `src/cron/service.main-job-passes-heartbeat-target-last.test.ts`:\n```text\n ✓ does not skip with \"disabled\" when the agent has no explicit heartbeat config\n Test Files  1 passed (1)  Tests  4 passed (4)\n```\n\n**Unit** — `src/infra/heartbeat-runner.returns-default-unset.test.ts`:\n```text\n ✓ does not return disabled for cron source even when the agent is not in the heartbeat list\n```\n\n**Scheduler** — `src/infra/heartbeat-runner.scheduler.test.ts`:\n```text\n ✓ routes cron targeted wakes to agents without explicit heartbeat config\n Test Files  1 passed (1)  Tests  26 passed (26)\n```\n\n### Autoreview\n\n```text\nautoreview --mode branch --engine claude --model claude-sonnet-5\noverall: patch is correct (0.9)\n```\n\n### oxfmt / oxlint / whitespace\n\n- `oxfmt --check` — ✅\n- `oxlint` — ✅\n- `git diff --check` — ✅\n\n## Change Type / Scope / Security Impact\n\n- **Type**: fix\n- **Scope**: `src/infra/heartbeat-runner.ts`\n- **Files**: 2 source + 3 test (+30 source, +82 test)\n- **Security**: No security impact\n- **Backward compatibility**: Non-cron sources unchanged",
-        "branch": "fix/101537-cron-main-disabled",
-        "head_sha": "ae9d13f80d3e657a492d25d7be8e7625f58b41fa",
-        "author": "zoowh",
+        "title": "fix(auto-reply): add AbortSignal and ConnectTimeout to scpFile",
+        "body": "## Summary\n\nAdd `AbortSignal` support and `ConnectTimeout` to `scpFile()` in stage-sandbox-media to prevent child process leaks when SCP connects to an unreachable host.\n\n## What Problem This Solves\n\nWhen `scpFile()` spawns SCP to an unreachable host, the child process has no timeout mechanism and no way to be cancelled. If the caller abandons the operation (e.g., via `Promise.race` with a timeout), the SCP child process continues running and leaks system resources until the OS-level TCP timeout (~127 seconds on Linux).\n\n**Code evidence**: In `src/auto-reply/reply/stage-sandbox-media.ts:362-418`, the `scpFile` function wraps `spawn(\"scp\")` in a Promise but:\n- Does not pass `ConnectTimeout` to SCP args (SSH-level timeout)\n- Does not accept or pass an `AbortSignal` to the spawn options\n- Has no way for external code to cancel the spawned child process\n\n## Root Cause\n\nThe function introduced in commit `7c47904bb4` (`Stage managed inbound media for runner access`) wraps `spawn(\"scp\")` in a Promise but only handles `error` and `close` events — it never provides a cancellation path. The spawned SCP command has no `ConnectTimeout` flag, so SSH relies entirely on OS TCP timeout.\n\n## Why This Fix\n\nThree minimal changes:\n\n1. **Add optional `AbortSignal` parameter** — allows callers to cancel the operation\n2. **Pass `signal` to `spawn()` options** — Node.js automatically sends `SIGKILL` to the child process when the signal is aborted\n3. **Add `-o ConnectTimeout=10`** — gives SCP its own 10-second transport timeout as defense-in-depth\n\n## Evidence\n\n- **Before**: SCP to unroutable IP (192.0.2.99) leaks child process after caller abandons at 8s — child still running\n- **After**: SCP with `ConnectTimeout=10` and `AbortSignal` — child process cleanly killed on abort\n\n## Real Behavior Proof\n\n### Before (on main)\n\n```bash\n$ node proof.mjs\n=== BEFORE — no timeout/AbortSignal ===\nSPAWN scp → 192.0.2.99\nCaller abandoned after 8s\nFAIL: SCP child process leaked! Process still running:\n1471947       00:09 scp\n```\n\n### After (with fix)\n\n```bash\n$ node proof.mjs\n=== AFTER — ConnectTimeout=10 + AbortSignal ===\nSPAWN scp → 192.0.2.99\nAbortController.abort() triggered\nChild result: {\"type\":\"error\",\"message\":\"The operation was aborted\"}\nPASS: No SCP child process remaining — AbortSignal cleaned up correctly\n```\n\n## Tests and Validation\n\n- Added 2 regression tests to `stage-sandbox-media.scp.test.ts`:\n  - `passes AbortSignal to spawn options when provided`\n  - `calls scpFile without signal for backward compatibility`\n- `pnpm check` passed (pre-existing npm shrinkwrap guard failure unrelated)\n- Manual verification on Linux: spawn scp → unreachable IP → abort → no orphan process\n",
+        "branch": "fix/scp-file-abort-signal-v2",
+        "head_sha": "d3dff32b4234caa2406bfc30857258358e7e6ea7",
+        "author": "zenglingbiao",
         "labels": [
           "size: S",
           "P2",
-          "rating: 🧂 unranked krab",
+          "rating: 🦪 silver shellfish",
           "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/cron/service.main-job-passes-heartbeat-target-last.test.ts",
-            "additions": 42,
+            "path": "src/auto-reply/reply/stage-sandbox-media.scp.test.ts",
+            "additions": 51,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/heartbeat-runner.returns-default-unset.test.ts",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.scheduler.test.ts",
+            "path": "src/auto-reply/reply/stage-sandbox-media.ts",
             "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.ts",
-            "additions": 31,
             "deletions": 5,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 118,
+        "changedFiles": 2,
+        "additions": 76,
         "deletions": 5,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101584",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101584.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101473",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101473.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 95,
-          "gatingTotal": 90,
+          "total": 105,
+          "gatingTotal": 100,
           "counts": {
-            "SUCCESS": 58,
-            "SKIPPED": 26,
-            "IN_PROGRESS": 10,
+            "SUCCESS": 67,
+            "SKIPPED": 35,
+            "FAILURE": 2,
             "NEUTRAL": 1
           },
           "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-lint:FAILURE"
           ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-lint:FAILURE"
           ],
-          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -170,19 +142,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3496,
+    "total_ms": 2238,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 693
+        "ms": 561
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2459
+        "ms": 1458
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -202,7 +174,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 326
+        "ms": 204
       },
       {
         "name": "append_ledger",
