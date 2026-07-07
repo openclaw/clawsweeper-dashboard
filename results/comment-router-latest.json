@@ -1,21 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T14:25:22.203Z",
+  "generated_at": "2026-07-07T14:25:22.461Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T11:25:18.234Z",
+  "since": "2026-07-07T11:25:14.492Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101668
+    101475
   ],
   "comment_ids": [
-    4904846050
-  ],
-  "comment_ids": [
-    4904843038
+    4904843481
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -37,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101668:4904846050:2026-07-07T14:22:10Z:re_review",
-      "comment_id": "4904846050",
-      "comment_version_key": "4904846050:2026-07-07T14:22:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101668#issuecomment-4904846050",
+      "idempotency_key": "comment-router:openclaw/openclaw:101475:4904843481:2026-07-07T14:21:54Z:re_review",
+      "comment_id": "4904843481",
+      "comment_version_key": "4904843481:2026-07-07T14:21:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101475#issuecomment-4904843481",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 101668,
-      "author": "LeonidasLux",
-      "author_id": 294038793,
+      "issue_number": 101475,
+      "author": "cxbAsDev",
+      "author_id": 294098203,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T14:22:10Z",
-      "comment_updated_at": "2026-07-07T14:22:10Z",
+      "comment_created_at": "2026-07-07T14:21:54Z",
+      "comment_updated_at": "2026-07-07T14:21:54Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -77,43 +74,39 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): keep system event queued when main-session heartbeat is disabled",
-        "body": "## Summary\n\n**Problem**: When a cron job fires `sessionTarget: \"main\"` with `payload.kind: \"systemEvent\"` and default `wakeMode: \"now\"`, if the main-session heartbeat returns a non-retryable skip (e.g. `\"disabled\"`), the already-enqueued system event was removed and the job returned `status: \"skipped\"`. The event was silently lost — never delivered to the user.\n\n**Solution**: Keep the system event in the queue and call `requestHeartbeat()` to schedule deferred delivery. The event will be picked up on the next heartbeat cycle or when the user next interacts with the session. The cron run retains its `\"skipped\"` (or `\"error\"`) status so one-shot retry/backoff and job visibility are preserved.\n\n**What changed**: In `executeMainSessionCronJob()` (`src/cron/service/timer.ts:2061`), the two branches that called `removeQueuedSystemEventHandle()` on heartbeat skip/error are replaced with a single branch that: (1) keeps the already-enqueued system event in the queue (was removed on skip/error); (2) calls `requestHeartbeat()` to schedule deferred delivery; (3) returns the original heartbeat status (`\"skipped\"` or `\"error\"`) — not `\"ok\"` — so one-shot retry/backoff and job visibility are preserved. Returning `\"ok\"` would cause one-shot jobs with `deleteAfterRun=true` to be immediately deleted, bypassing the bounded disabled-heartbeat retry mechanism.\n\n**What did NOT change**: The heartbeat-`\"ran\"` path (the common happy path) is untouched. No new dependencies, no config changes, no API surface changes.\n\nFixes #101537\n\n---\n\n## What Problem This Solves\n\nSystem events like reminders, scheduled messages, and periodic notifications were silently lost when the main session heartbeat was disabled — a common state when the user hasn't interacted recently. The design flaw was coupling event delivery to immediate wake success. Keeping the event queued and deferring delivery is safer than discarding it.\n\n---\n\n## Root Cause\n\nThe system event was enqueued before the heartbeat attempt (line 1990). When heartbeat failed, the cleanup code removed the event (old line 2065) — discarding work already done. The fix inverts the logic: once enqueued, the event stays; only the delivery timing changes.\n\n---\n\n## Real behavior proof\n\n**Behavior addressed**: Keep system event queued when main-session heartbeat returns skipped/error; request background heartbeat instead of removing event. Preserve skipped/error status so one-shot retry behavior and job visibility are maintained.\n\n**Real environment tested**: Linux x86_64 / Node.js v24.1.0 / OpenClaw `fix/issue-101537-cron-main-systemevent-skip-disabled`\n\n**Exact steps or command run after this patch**: `npx tsx evidence/pr-101668/run-evidence.mjs` — direct exercise of `applyJobResult()` with real system event queue (SQLite-backed) and real CronJob objects. Only the heartbeat function is injected via the proper dependency injection seam.\n\n**After-fix evidence**:\n\nL2 evidence (real function calls + real objects):\n```\n=== L2 Evidence ===\n1. System event enqueued, events in queue before: 1\n2. applyJobResult called with status=\"skipped\", error=\"disabled\"\n   shouldDelete: false (delete only on \"ok\")\n   job.state.lastStatus: skipped, lastError: disabled\n   Job in store: YES\n3. Events in queue after: 1 (preserved)\n```\n\nUnit test evidence (all 14 tests pass):\n```\n$ pnpm test -- --run src/cron/service.runs-one-shot-main-job-disables-it.test.ts\n Test Files  1 passed (1)\n      Tests  14 passed (14)\n```\n\n**Observed result after the fix**: System events are preserved through disabled-heartbeat scenarios. The event stays in the queue (was removed before). The job retains skipped status (was returning \"ok\" which triggered deleteAfterRun). Background heartbeat is requested for deferred delivery.\n\n**What was not tested**: Real Gateway + cron daemon integration is not tested here. The fix is exercised through unit tests with injected `runHeartbeatOnce` and `requestHeartbeat` dependencies, which accurately model the behavior because `executeMainSessionCronJob()` is a pure function of its injected deps. The multi-hop delivery path (skipped heartbeat → later background heartbeat delivers event) is covered by existing queued-heartbeat tests.\n\n---\n\n## Tests and validation\n\n### Unit tests\n\nTest coverage:\n- ✓ keeps system event queued when disabled-heartbeat one-shot cannot wake\n- ✓ disables one-shot when disabled-heartbeat retry is exhausted\n\nFull cron test suite also passes (1248 tests pass, 6 pre-existing failures unrelated to telegram API credentials).\n\n### CI\n\nCI has a pre-existing failure in `checks-node-compact-small-whole-2` unrelated to this change. All 71 other CI checks pass.\n\n---\n\n## Risk checklist\n\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [ ] I have updated relevant documentation\n\n**Merge risk**: Low. The behavioral change is scoped to the heartbeat-skip/error path in `executeMainSessionCronJob()`. Returning the original heartbeat status (`\"skipped\"`/`\"error\"`) instead of `\"ok\"` preserves existing one-shot retry and job visibility behavior. The event-preservation aspect (not calling `removeQueuedSystemEventHandle`) is the core fix. No new deps, no config or API changes. Rollback is a revert of this branch's commits.\n\n**ClawSweeper P1 addressed**:\n1. ✅ \"Keep disabled cron wakes visible\" — returning non-ok status keeps the job in the store with skipped/error state\n2. ✅ \"For deleteAfterRun one-shots, returning ok removes job immediately\" — now returns \"skipped\", preserving retry behavior\n3. ✅ \"Add real behavior proof\" — L2 evidence with real function calls showing event preservation and job visibility\n\n## Current review state\n\n- [x] Self-review completed\n- [ ] At least one maintainer review\n- [ ] All CI checks passed\n\n## AI-assisted\n\nThis PR was created with AI assistance for code understanding, root cause analysis, test restructuring, and PR body generation. Human review was applied to all AI-generated code and tests.",
-        "branch": "fix/issue-101537-cron-main-systemevent-skip-disabled",
-        "head_sha": "870a843c75b9de2505014352d342f14a6c02d963",
-        "author": "leonidaslux",
+        "title": "fix(session-memory): bound session transcript reads to prevent OOM",
+        "body": "## What Problem This Solves\n\n`getRecentSessionContent` in `src/hooks/bundled/session-memory/transcript.ts` reads session transcript JSONL files with an unbounded `fs.promises.readFile` call. A runaway or corrupted session file could force the session-memory extraction path to buffer the entire file into memory, leading to OOM.\n\n## Why This Change Was Made\n\nSession transcripts are line-oriented JSONL files. A 16 MiB cap is generous headroom for long sessions while preventing the memory-extraction path from being used as a memory exhaustion vector. For transcripts that exceed the cap, the helper reads only the trailing 16 MiB and drops the first partial JSONL line so parsing starts at a complete record. This preserves recent session context instead of discarding the whole transcript.\n\n## User Impact\n\nSession-memory extraction now safely bounds oversized transcripts while still keeping the most recent messages available for context.\n\n## Evidence\n\n- Added a regression test that writes a transcript exceeding the 16 MiB cap with recent trailing messages and asserts those recent messages are preserved.\n- Local focused run: `node scripts/run-vitest.mjs src/hooks/bundled/session-memory/transcript.test.ts --run` passes (4/4 tests).\n\n## Real behavior proof (standalone)\n\nI ran a standalone Node script outside Vitest that imports the actual changed helper from source (`src/hooks/bundled/session-memory/transcript.ts`) and exercises a transcript larger than the 16 MiB cap where the trailing lines contain recent messages.\n\nScript: `/tmp/proof-101475.mjs` (not committed).\n\n```text\n$ node --import tsx /tmp/proof-101475.mjs\n=== Oversized transcript ===\nFile size: 17826089 bytes (cap is 16777216 bytes)\nResult contains recent user message: true\nResult contains recent assistant message: true\nResult does NOT contain the huge early message: true\n```\n\nThe helper reads only the trailing 16 MiB of the oversized file, skips the partial first line, and returns the recent messages without buffering the entire transcript into memory.\n",
+        "branch": "fix/bound-session-memory-transcript-read",
+        "head_sha": "6a30826f56f2f760cca27c1a3256e208a51f874e",
+        "author": "cxbasdev",
         "labels": [
           "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "P2"
         ],
         "files": [
           {
-            "path": "src/cron/service.runs-one-shot-main-job-disables-it.test.ts",
-            "additions": 82,
-            "deletions": 54,
+            "path": "src/hooks/bundled/session-memory/transcript.test.ts",
+            "additions": 16,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service/timer.ts",
-            "additions": 15,
-            "deletions": 11,
+            "path": "src/hooks/bundled/session-memory/transcript.ts",
+            "additions": 49,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 97,
-        "deletions": 65,
+        "additions": 65,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101668",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101668.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101475",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101475.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BLOCKED",
@@ -122,9 +115,9 @@
           "total": 97,
           "gatingTotal": 92,
           "counts": {
-            "SUCCESS": 64,
-            "SKIPPED": 26,
-            "IN_PROGRESS": 6,
+            "SUCCESS": 45,
+            "SKIPPED": 28,
+            "IN_PROGRESS": 23,
             "NEUTRAL": 1
           },
           "blockers": [
@@ -132,16 +125,50 @@
             "QA Smoke CI (matrix):IN_PROGRESS",
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
             "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
           ],
           "pending": [
             "build-artifacts:IN_PROGRESS",
             "QA Smoke CI (matrix):IN_PROGRESS",
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
             "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -155,15 +182,15 @@
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4149,
+    "total_ms": 8288,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1959
+        "ms": 5590
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1992
+        "ms": 2358
       },
       {
         "name": "classify_comment_commands",
@@ -175,7 +202,7 @@
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "claim_dispatch_commands",
@@ -183,7 +210,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 181
+        "ms": 320
       },
       {
         "name": "append_ledger",
