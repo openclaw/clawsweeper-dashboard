@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T21:57:03.694Z",
+  "generated_at": "2026-07-07T21:57:29.366Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T18:57:03.206Z",
+  "since": "2026-07-07T18:57:27.217Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    89040
+    101888
   ],
-  "comment_ids": [
-    4909399522
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,23 +29,154 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101888:4909363288:2026-07-07T21:57:22Z:clawsweeper_auto_repair",
+      "comment_id": "4909363288",
+      "comment_version_key": "4909363288:2026-07-07T21:57:22Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101888#issuecomment-4909363288",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101888,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-07T21:49:49Z",
+      "comment_updated_at": "2026-07-07T21:57:22Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=936f1855c4b0b7eb8f2cbc3850757ef0017f63e5)",
+      "review_summary": "The PR parallelizes parts of Slack inbound message preparation, removes the Slack write WebClient concurrency cap, and bounds initial thread-history pagination with focused tests.\n\nPR surface: Source +25, Tests +42. Total +67 across 6 files.\n\nReproducibility: yes. source-level reproduction is high confidence: current main still has the serial prepare awaits, write cap, and unbounded thread-history pagination described by the linked issue. I did not run a live Slack workspace in this read-only review.",
+      "review_followup": "- [P1] Manual review is needed because the blocker is a compatibility and ordering decision around a shipped Slack write safeguard, not a safe cleanup-close or purely mechanical repair lane.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "936f1855c4b0b7eb8f2cbc3850757ef0017f63e5",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "perf(slack): remove structural channel-side latency (serial prepare, global write cap, unbounded thread pagination)",
+        "body": "## What Problem This Solves\n\nFixes #101690.\n\nSlack replies carry a constant ~1.5–2.5s of channel-side overhead compared to Telegram/Discord on the identical agent loop. The openclaw-rtt release canaries show Slack at ~3.1–3.5s p50 on every release since the Slack canary began (vs Telegram ~1.0s, Discord ~1.8s, same `mock-openai` provider), and a production gateway on 2026.6.11 with stock socket-mode config showed a 5.1s gap between `Inbound app_mention` receipt and agent dispatch.\n\nThree structural causes in `extensions/slack`:\n\n1. **Serial inbound prepare chain** — `prepareSlackMessage` awaited independent Slack Web API lookups strictly sequentially (assistant-thread metadata restore, sender-name resolution for allow-name matching, thread-starter lookup), stacking cold-cache round trips before the agent is dispatched.\n2. **Process-wide write serialization** — the write client pinned `maxRequestConcurrency = 1`, so every `chat.postMessage`, `chat.update` (preview/draft edits), reaction, and file-upload call on a token ran single-file across the whole process, making unrelated channels queue behind each other.\n3. **Unbounded thread-history pagination** — `resolveSlackThreadHistory` walked every 200-message page of a thread oldest→newest just to keep the last N, so the first message seeding a long thread paid one serial round trip per 200 thread messages.\n\n## Why This Change Was Made\n\n- `perf(slack): parallelize independent inbound prepare lookups` — starts the assistant-thread restore, sender-name lookup, and thread-starter lookup at the earliest point where their inputs and gating conditions are known, and awaits them where consumed. Drop/skip/authorization semantics are unchanged: every promise starts only after the gates that could drop the message, so dropped paths gain no new API traffic, and in-flight promises settle to result objects so an early throw cannot leave an unobserved rejection. Two further overlaps were deliberately **not** taken after code inspection: `authorizeSlackInboundMessage` does not unconditionally call `users.info` (channel/app_mention and open-DM paths can skip it, so an eager entry-time lookup would add API calls those paths avoid today), and `resolveSlackMessageContent` consumes the thread starter for inherited parent-file filtering (genuinely sequential).\n- `perf(slack): drop process-wide write client concurrency cap` — removes `maxRequestConcurrency ??= 1` from `resolveSlackWriteClientOptions`. Provenance: the cap came from `107d2b7a096` (\"preserve rapid send ordering\"); that ordering contract is now owned by the per-target `KeyedAsyncQueue` in `send.ts` (keyed `accountId:tokenHash:recipient:threadTs`), which serializes sends per conversation without serializing the whole process. Slack's ~1 msg/sec limit is per channel, not per token. `@slack/web-api` (`dist/WebClient.js`) defaults `maxRequestConcurrency` to 100 via `p-queue` and pauses/resumes the queue on 429 `Retry-After` unless `rejectRateLimitedCalls` is set, so burst safety is retained at the SDK layer. Explicit caller overrides still pass through.\n- `perf(slack): bound thread history pagination` — caps `conversations.replies` history fetches at 3 pages (600 messages). Threads that fit the window keep exact last-N behavior. Slack paginates replies oldest→newest with no reverse cursor, so for longer threads the fetch returns no history (logged) instead of silently attributing stale early-thread context — deterministic, documented degradation on a pathological path.\n\n## User Impact\n\nSlack replies dispatch to the agent sooner (fewer serial cold-cache round trips before the turn starts) and multi-part deliveries (preview edits, reactions, chunked posts, uploads) no longer queue behind unrelated channels' writes. Long-thread cold seeding can no longer stall dispatch behind an unbounded pagination walk.\n\n## RTT measurement (openclaw-rtt `slack-canary`, mock-openai, 20 samples/side)\n\nBoth refs measured with the same harness, credentials, runner class, and sample count (dispatched via the openclaw-rtt channel-RTT workflow with an `openclaw_ref` input):\n\n| Ref | Samples | RTT p50 | RTT p95 | Min | Max |\n|---|---|---:|---:|---:|---:|\n| baseline `e591dcfa821` | 20/20 pass | 3,440ms | 4,802ms | 3,051ms | 4,812ms |\n| fix `936f1855c4b` | 20/20 pass | 4,272ms | 4,928ms | 2,862ms | 5,527ms |\n\n**Read this as a no-regression gate, not an improvement claim.** Both distributions are the same bimodal mixture (~3.3s and ~4.7s modes); the p50 difference is which mode samples landed in (8/20 vs 11/20 slow; Fisher p≈0.5) and within-mode medians differ by <60ms. Two harness properties cap what this scenario can resolve:\n\n- The driver observes replies by polling (`1s sleep + conversations.history + conversations.replies` per cycle, ~1.4s effective cadence), which quantizes RTT into poll buckets — the source of the bimodality.\n- The canary is a cold single-message channel mention: it never enters the thread-history, DM-history, allow-name-matching, or multi-part-delivery paths this PR changes.\n\n### Where the canary's time actually goes (instrumented runs, 10 samples/side, per-sample SUT gateway logs + Slack server timestamps)\n\n| Phase (p50) | baseline | fix |\n|---|---:|---:|\n| Slack event propagation to Socket Mode (server receipt → event arrival, zero OpenClaw code) | ~2,132ms | ~2,356ms |\n| dispatch queue | 52ms | 50ms |\n| agent turn (mock model) | 260ms | 249ms |\n| outbound reply post | 240ms | 246ms |\n| driver poll observation | ~820ms | ~890ms |\n\nThe dominant cost of Slack's RTT gap vs Telegram/Discord on this scenario is **Slack's own event delivery latency (~1.5–3.2s observed)**, which no gateway-side change can move. Total OpenClaw-controlled time (event arrival → reply posted) is under ~1s on both refs.\n\n## Evidence\n\n- Extension suite on Blacksmith Testbox: `node scripts/run-vitest.mjs extensions/slack` — 106 files, 1476 tests, exit 0; `pnpm tsgo` exit 0.\n- Repo-wide symbol sweep found no references to the removed cap outside `extensions/slack`.\n- Autoreview: clean (one accepted finding during development — stale long-thread context — fixed by the no-history degradation above).\n- Obsolete test asserting the removed default cap deleted; explicit-override test retained; capped-pagination path covered in `monitor/media.test.ts`.\n\nValidation runs:\n\n- `pnpm check:changed` lanes (remote-child) on Blacksmith Testbox: green (one initial `check:test-types` failure in the new capped-pagination test was a missing `as unknown` step in a mock cast; fixed to match the file's sibling pattern and re-verified green).\n- 20-sample RTT A/B: openclaw-rtt workflow runs `28896305615` (baseline) and `28897212331` (fix); instrumented decomposition runs `28899719563` / `28899724145`.\n- Branch-mode autoreview over `origin/main..HEAD`: clean, no actionable findings.\n\nFollow-ups intentionally out of scope: the openclaw-rtt sampler's per-sample status probe still reads the pre-evidence-summary schema on its `main` (fixed on the measurement branch; separate PR to openclaw-rtt), and the canary driver's ~1.4s poll cadence limits RTT resolution.\n",
+        "branch": "codex/slack-latency",
+        "head_sha": "936f1855c4b0b7eb8f2cbc3850757ef0017f63e5",
+        "author": "obviyus",
+        "labels": [
+          "channel: slack",
+          "maintainer",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/slack/src/client-options.ts",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/client.test.ts",
+            "additions": 0,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/media.test.ts",
+            "additions": 49,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/message-handler/prepare.thread-session-key.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/message-handler/prepare.ts",
+            "additions": 62,
+            "deletions": 49,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/thread.ts",
+            "additions": 16,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 128,
+        "deletions": 61,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101888",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101888.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 35,
+            "SUCCESS": 61,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 664,
+    "total_ms": 2409,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 478
+        "ms": 420
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1713
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -59,15 +188,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 177
+        "ms": 248
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
