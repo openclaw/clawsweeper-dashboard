@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T07:00:07.095Z",
+  "generated_at": "2026-07-07T07:00:18.013Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T04:00:06.578Z",
+  "since": "2026-07-07T04:00:15.257Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101265
+    101415
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4901012863
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,19 +31,150 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101415:4901012863:2026-07-07T06:56:51Z:re_review",
+      "comment_id": "4901012863",
+      "comment_version_key": "4901012863:2026-07-07T06:56:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101415#issuecomment-4901012863",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101415,
+      "author": "Pick-cat",
+      "author_id": 266665499,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-07T06:56:51Z",
+      "comment_updated_at": "2026-07-07T06:56:51Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(anthropic): resolve thinking as disabled when legacy budget is below 1024",
+        "body": "## What Problem This Solves\n\nWhen `adjustMaxTokensForThinking` collapses the legacy thinking budget below the Anthropic minimum (1024 tokens), the option resolution layer unconditionally sets `thinkingEnabled: true`. Two bugs result:\n\n1. **`||` overrides explicit zero to 1024**: `options?.thinkingBudgetTokens || 1024` treats zero as falsy, silently substituting 1024 tokens.\n2. **Sub-minimum budgets reach the API**: A computed budget of e.g. 476 tokens is emitted as `{ type: \"enabled\", budget_tokens: 476 }`, which the Anthropic API rejects.\n\nBoth the direct provider (`packages/ai`) and the agent transport stream share the same pattern. A third path — raw `streamAnthropic` and bundled-plugin callers (e.g. Mantle) — bypasses option resolution entirely.\n\n## Why This Change Was Made\n\nThe fix normalises state at **option resolution** for simple/transport paths AND adds **builder-level guards** for the raw/bundled-plugin path — every entry point gets the same disabled-state rule:\n\n**Option resolution** (`streamSimpleAnthropic`, `resolveAnthropicTransportOptions`):\n- When `adjusted.thinkingBudget < 1024`, sets `thinkingEnabled: false`\n- All downstream consumers (payload, replay, temperature, tool-choice) see the same closed state\n\n**Builder guards** (`buildParams` in both providers):\n- Budget-based path now checks `budgetTokens >= 1024` before emitting `{ type: \"enabled\" }`\n- Protects direct `streamAnthropic` callers and bundled plugins (Mantle) that bypass resolution\n\n**`??` fallback** (defensive hygiene):\n- `??` preserves explicit zero where `||` would override it\n\n## User Impact\n\nCallers whose model context window is too small to fit the selected reasoning level no longer get:\n- A silently inflated 1024-token budget (the `||` override)\n- An API-rejected request with sub-minimum `budget_tokens`\n- Thinking is explicitly `{ type: \"disabled\" }` or omitted, matching the API contract\n\n## Evidence\n\n**Real behavior proof (`proof-anthropic-thinking-budget.mts`):**\n\nDrives real `streamAnthropic` and `streamSimpleAnthropic` production functions, captures payload via `onPayload` before network. 7 cases covering option-resolution and raw-builder paths.\n\nAfter fix — 7/7 pass:\n```\n[case] simple: budget collapses to 0 (1024-token model, minimal reasoning)\n  thinking: {\"type\":\"disabled\"}\n  expected: disabled, actual: disabled → PASS\n\n[case] simple: budget is sub-minimum (1500-token model, low reasoning → 476)\n  thinking: {\"type\":\"disabled\"}\n  expected: disabled, actual: disabled → PASS\n\n[case] simple: valid budget (8192-token model, medium reasoning)\n  thinking: {\"type\":\"enabled\",\"budget_tokens\":7168,\"display\":\"summarized\"}\n  expected: enabled, actual: enabled → PASS\n\n[case] raw: explicit zero budget with thinkingEnabled:true\n  thinking: undefined\n  expected: omitted, actual: omitted → PASS\n\n[case] raw: sub-minimum budget (512) with thinkingEnabled:true\n  thinking: undefined\n  expected: omitted, actual: omitted → PASS\n\n[case] raw: valid budget (2048) with thinkingEnabled:true\n  thinking: {\"type\":\"enabled\",\"budget_tokens\":2048,\"display\":\"summarized\"}\n  expected: enabled, actual: enabled → PASS\n\n[case] raw: thinkingEnabled:false with zero budget\n  thinking: {\"type\":\"disabled\"}\n  expected: disabled, actual: disabled → PASS\n\n=== Proof Summary ===\nALL PROOF ASSERTIONS: 7 passed, 0 failed\n```\n\n**Negative control — same script against `origin/main` (4 FAIL):**\n```\n[case] simple: budget collapses to 0 → thinking: budget_tokens=1024 → FAIL  (|| override)\n[case] simple: budget 476 → thinking: budget_tokens=476 → FAIL  (API-rejected)\n[case] raw: explicit zero → thinking: budget_tokens=1024 → FAIL  (|| override)\n[case] raw: budget 512 → thinking: budget_tokens=512 → FAIL  (API-rejected)\n=== Proof Summary ===\nALL PROOF ASSERTIONS: 3 passed, 4 failed, EXIT=1\n```\n\n**Focused tests (65 + 102 = 167 pass, 4 new):**\n```\nTests  65 passed (65)    # packages/ai/src/providers/anthropic.test.ts\nTests  102 passed (102)  # src/agents/anthropic-transport-stream.test.ts\n```\n\n**Format:** `oxfmt` clean on all 5 changed files.",
+        "branch": "fix/thinking-budget-resolution",
+        "head_sha": "8c7fe0a3ce692d3eb901676128e2099a7219fca4",
+        "author": "pick-cat",
+        "labels": [
+          "agents",
+          "size: M",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "packages/ai/src/providers/anthropic.test.ts",
+            "additions": 50,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/anthropic.ts",
+            "additions": 19,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "proof-anthropic-thinking-budget.mts",
+            "additions": 163,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/anthropic-transport-stream.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/anthropic-transport-stream.ts",
+            "additions": 17,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 297,
+        "deletions": 14,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101415",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101415.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "gatingTotal": 98,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 31,
+            "IN_PROGRESS": 4,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 867,
+    "total_ms": 3067,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 504
+        "ms": 612
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 2128
       },
       {
         "name": "classify_comment_commands",
@@ -61,7 +194,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 350
+        "ms": 311
       },
       {
         "name": "append_ledger",
