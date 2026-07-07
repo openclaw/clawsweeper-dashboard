@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T03:30:11.719Z",
+  "generated_at": "2026-07-07T03:30:15.014Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T00:30:09.164Z",
+  "since": "2026-07-07T00:30:12.641Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    101270
+    101284
   ],
   "comment_ids": [
-    4899833607
+    4899834050
   ],
-  "status_comment_id": 4899833806,
+  "status_comment_id": 4899834272,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101270:4899833607:2026-07-07T03:28:45Z:re_review",
-      "comment_id": "4899833607",
-      "comment_version_key": "4899833607:2026-07-07T03:28:45Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101270#issuecomment-4899833607",
+      "idempotency_key": "comment-router:openclaw/openclaw:101284:4899834050:2026-07-07T03:28:50Z:re_review",
+      "comment_id": "4899834050",
+      "comment_version_key": "4899834050:2026-07-07T03:28:50Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101284#issuecomment-4899834050",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 101270,
-      "author": "Pandah97",
-      "author_id": 80405497,
+      "issue_number": 101284,
+      "author": "ZengWen-DT",
+      "author_id": 290981215,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T03:28:45Z",
-      "comment_updated_at": "2026-07-07T03:28:45Z",
-      "status_comment_id": 4899833806,
+      "comment_created_at": "2026-07-07T03:28:50Z",
+      "comment_updated_at": "2026-07-07T03:28:50Z",
+      "status_comment_id": 4899834272,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -76,72 +76,67 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 101270,
-          "dispatch_key": "router-8656a1357b15eb49",
-          "dispatched_at": "2026-07-07T03:30:12.796Z"
+          "item_number": 101284,
+          "dispatch_key": "router-aa41f0fcb69456c5",
+          "dispatched_at": "2026-07-07T03:30:16.132Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-07T03:30:15.174Z",
-          "response_comment_id": "4899705643",
+          "commented_at": "2026-07-07T03:30:17.407Z",
+          "response_comment_id": "4899834272",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(infra): bound response body read in readResponseBodySnippet non-streaming fallback",
-        "body": "## Summary\n\n**Problem:** `readResponseBodySnippet()` non-streaming fallback (`!body.getReader`) calls `response.text()` without any size bound, buffering the entire response before the `maxBytes` check runs.\n\n**Solution:** Replace `response.text()` with `readResponsePrefix(response, maxBytes)` which caps the read at `maxBytes` bytes regardless of path. The non-streaming fallback in `readResponsePrefix` itself is hardened with two guards: (1) null body returns empty immediately without calling `arrayBuffer()`, (2) `Content-Length` header is checked before calling `arrayBuffer()` — if it exceeds `maxBytes`, the read is skipped entirely and the result is marked truncated.\n\n**What changed:** `readResponsePrefix` exported from `http-body.ts` (was private). Non-streaming fallback in `http-error-body.ts` uses it instead of `response.text()`. Two safety guards added to `readResponsePrefix`'s no-reader path. Regression tests added for Content-Length gate and null-body short-circuit.\n\n**What did NOT change:** Streaming path behavior (already bounded). Return type/API surface of `readResponseBodySnippet`. Any caller behavior — all callers pass the same limits.\n\nFixes #101269\n\n## Root Cause\n\n`readResponseBodySnippet()` at `src/infra/http-error-body.ts:8-9` calls `response.text()` when no streaming reader is available (`!body.getReader`). Unlike the streaming path which reads chunk-by-chunk up to `maxBytes`, `response.text()` buffers the entire HTTP response body before any size check. The initial fix routed this through `readResponsePrefix()`, but that helper's own non-streaming fallback at `src/infra/http-body.ts:200` called `response.arrayBuffer()` — the same unbounded-read pattern, just using a different whole-body method.\n\n## What Problem This Solves\n\n`readResponseBodySnippet()` is called from Gateway error-handling paths to produce a diagnostic snippet of the error response body. The streaming path (when `response.body.getReader` is available) correctly bounds reads at `maxBytes`. But when no streaming reader is available (e.g., synthetic Response objects, or edge-case HTTP responses without a body stream), the original code called `response.text()` which materializes the entire body before any truncation. Even after switching to `readResponsePrefix`, that helper's own no-reader fallback called `response.arrayBuffer()` before slicing — so the bounded-read claim was not enforced for non-streaming responses. A large upstream error page (e.g., a 10 MB nginx error page) could cause a Gateway OOM even though the function's API claims to truncate at `maxBytes`.\n\n## Real behavior proof\n\n**Behavior addressed:** Non-streaming fallback now reads at most `maxBytes` bytes instead of the entire response body. When Content-Length exceeds maxBytes, no body bytes are read at all.\n\n**Real environment tested:** Linux x64 (kernel 4.19.112), Node.js v24.13.1, OpenClaw commit b2cecd8ece47 (PR base)\n\n**Exact steps or command run after this patch:**\n\n```bash\nnpx tsx -e \"\nimport { readResponseBodySnippet } from './src/infra/http-error-body.ts';\n\nasync function main() {\n  // Test 1: Large streaming response — bounded read\n  const largeData = new Uint8Array(1024 * 100).fill(65); // 100KB of 'A's\n  const r1 = await readResponseBodySnippet(new Response(new Blob([largeData]).stream()), { maxBytes: 100, maxChars: 200 });\n  console.log('Test 1 (100KB stream, maxBytes=100):', r1.length, 'chars');\n\n  // Test 2: null body — no arrayBuffer() needed\n  const r2 = await readResponseBodySnippet({ body: null } as unknown as Response, { maxBytes: 1024, maxChars: 100 });\n  console.log('Test 2 (null body):', JSON.stringify(r2));\n\n  // Test 3: Content-Length exceeds maxBytes — guard before arrayBuffer()\n  let arrayBufferCalled = false;\n  const clResponse = {\n    body: {} as ReadableStream,\n    headers: { get: (n) => n === 'content-length' ? '50000' : null },\n    arrayBuffer: async () => { arrayBufferCalled = true; return new ArrayBuffer(50000); },\n  } as unknown as Response;\n  const r3 = await readResponseBodySnippet(clResponse, { maxBytes: 100, maxChars: 200 });\n  console.log('Test 3 (Content-Length=50000, maxBytes=100, arrayBuffer called?):', arrayBufferCalled, 'result:', JSON.stringify(r3));\n\n  // Test 4: maxBytes=0\n  const r4 = await readResponseBodySnippet(new Response(new Blob([new Uint8Array([65,66,67])]).stream()), { maxBytes: 0, maxChars: 100 });\n  console.log('Test 4 (maxBytes=0):', JSON.stringify(r4));\n\n  // Test 5: Multi-byte UTF-8 boundary\n  const mb = new Uint8Array([0x61, 0x62, 0xF0, 0x9F, 0x98, 0x80, 0x63, 0x64]);\n  const r5 = await readResponseBodySnippet(new Response(new Blob([mb]).stream()), { maxBytes: 3, maxChars: 100 });\n  console.log('Test 5 (multi-byte boundary):', JSON.stringify(r5));\n\n  // Test 6: maxBytes cap\n  const r6 = await readResponseBodySnippet(new Response(new Blob([new Uint8Array(500).fill(97)]).stream()), { maxBytes: 30, maxChars: 500 });\n  console.log('Test 6 (maxBytes=30, 500 bytes):', new TextEncoder().encode(r6).length, 'bytes');\n\n  // Test 7: maxChars cap\n  const r7 = await readResponseBodySnippet(new Response(new Blob([new Uint8Array(500).fill(97)]).stream()), { maxBytes: 200, maxChars: 10 });\n  console.log('Test 7 (maxChars=10, 500 bytes):', r7.length, 'chars');\n}\nmain();\n\"\n```\n\n**After-fix evidence:**\n\n```\nTest 1 (100KB stream, maxBytes=100): 100 chars\nTest 2 (null body): \"\"\nTest 3 (Content-Length=50000, maxBytes=100, arrayBuffer called?): false result: \"\"\nTest 4 (maxBytes=0): \"\"\nTest 5 (multi-byte boundary): \"ab�\"\nTest 6 (maxBytes=30, 500 bytes): 30 bytes\nTest 7 (maxChars=10, 500 bytes): 10 chars\n```\n\n**Observed result after the fix:** All 7 real-world test cases behave correctly — streaming and null-body paths both cap reads at `maxBytes`. The critical validation (Test 3) proves that when Content-Length exceeds maxBytes, `arrayBuffer()` is never called at all. All 11 unit tests pass including 2 new regression tests:\n\n```\n ✓ readResponseBodySnippet > returns full text when under both limits (body-less path)\n ✓ readResponseBodySnippet > truncates by maxChars when under maxBytes (body-less path)\n ✓ readResponseBodySnippet > truncates by maxBytes in the body-less path\n ✓ readResponseBodySnippet > enforces maxBytes before maxChars in the body-less path\n ✓ readResponseBodySnippet > does not split multi-byte UTF-8 characters at the byte boundary\n ✓ readResponseBodySnippet > stream path still enforces maxBytes\n ✓ readResponseBodySnippet > stream path still enforces maxChars\n ✓ readResponseBodySnippet > returns empty string when maxBytes is 0 (body-less path)\n ✓ readResponseBodySnippet > returns empty string for empty response body\n ✓ readResponseBodySnippet > avoids arrayBuffer() when Content-Length exceeds maxBytes (body-less path)\n ✓ readResponseBodySnippet > returns empty immediately when body is null\n Test Files  1 passed (1)\n      Tests  11 passed (11)\n```\n\n**What was not tested:** Full end-to-end Gateway error handling — only the `readResponseBodySnippet()` function was verified via direct import call. The non-streaming fallback path (no `getReader`) is inherently a synthetic/edge-case scenario in Node.js undici fetch, where all HTTP responses provide a ReadableStream body.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/infra/http-body.ts:189` | Export `readResponsePrefix` (was private function) |\n| `src/infra/http-body.ts:199-209` | Add null-body early return and Content-Length guard in no-reader fallback |\n| `src/infra/http-error-body.ts:1,10` | Import `readResponsePrefix`, replace unbounded `response.text()` with bounded `readResponsePrefix` |\n| `src/infra/http-error-body.test.ts` | Change mock from `body: null` to `body: {}` (avoid null-body short-circuit); add 2 regression tests for Content-Length gate and null-body immediate return |\n\n## Risk checklist\n\n- **merge-risk: Low** — bounded read is strictly safer; streaming path unchanged; Content-Length guard is additive to existing behavior\n- **Risk mitigation:** Non-streaming fallback now checks Content-Length before reading, so oversized responses are rejected without materializing the body\n- **User-visible behavior change?** No — same limits, same truncation behavior\n- **Config/env/migration change?** No\n- **Security/auth/network change?** No\n\n## Linked context\n\n- Closes #101269",
-        "branch": "fix/issue-101269-bound-error-body-read",
-        "head_sha": "bf5bec6b5ab2f29f691497179058e75cb60bc45a",
-        "author": "pandah97",
+        "title": "fix(feishu): keep log-value text truncation UTF-16 safe",
+        "body": "## What Problem This Solves\n\nFixes an issue where Feishu debug logs containing emoji or supplementary-plane Unicode characters (e.g. 🚨, 😀, 🎉) could produce garbled text with lone surrogates when a log message exceeds 500 code units and the truncation boundary falls in the middle of a UTF-16 surrogate pair.\n\nThis affects two log-value truncation helpers in the feishu extension:\n\n- `sanitizeLogValue` (`card-action.ts`) — truncates chat-type resolution error messages at 500 code units\n- `formatFeishuWsErrorForLog` (`monitor.transport.ts`) — truncates WebSocket error messages at `FEISHU_WS_LOG_ERROR_MAX_LENGTH` (500 code units)\n\nThese two helpers were missed in the earlier sweep (c16bb8725a) that already covered `bot.ts` and `monitor.comment.ts` in the same extension — both using the identical `truncateUtf16Safe` import from `openclaw/plugin-sdk/text-utility-runtime`.\n\n## Why This Change Was Made\n\nReplace raw `.slice(0, N)` with the existing `truncateUtf16Safe` helper. `.slice()` operates on UTF-16 code units and can split a surrogate pair (e.g. 🚨 = `🚨`) in half, producing a lone high surrogate (`\\uD83D`) that renders as �. `truncateUtf16Safe` rounds down to the nearest safe code-point boundary.\n\nThis is the same mechanical fix that was already applied to `bot.ts` (lines 1007, 1074) and `monitor.comment.ts` in the feishu extension by the prior sweep c16bb8725a. No new dependencies or behavioral changes — the import path is identical.\n\nRisk note: log-only helpers, no user-visible message delivery surface affected. Operator-facing debug logs will see clean truncation instead of potential garbled characters.\n\n## User Impact\n\nNo direct end-user impact — these are operator-facing log helpers. Feishu operators reading debug logs will see correctly truncated error messages instead of potentially garbled characters when emoji appear at the 500-code-unit truncation boundary.\n\n## Evidence\n\n**Premise — `.slice(0, 500)` cuts surrogate pairs at the boundary used by both helpers:**\n\nConstructed a realistic log message with an emoji (🚨) positioned so its UTF-16 surrogate pair straddles the 500-code-unit boundary (first surrogate at index 499, second at index 500). `.slice(0, 500)` includes only the high surrogate, producing a lone surrogate. `truncateUtf16Safe` correctly rounds down to 499 code units.\n\n```\n$ node -e \"\nfunction hasLoneSurrogate(s) {\n  for (let i = 0; i < s.length; i++) {\n    const code = s.charCodeAt(i);\n    if (code >= 0xD800 && code <= 0xDBFF) {\n      if (i + 1 >= s.length || s.charCodeAt(i + 1) < 0xDC00 || s.charCodeAt(i + 1) > 0xDFFF) return true;\n      i++;\n    } else if (code >= 0xDC00 && code <= 0xDFFF) return true;\n  }\n  return false;\n}\n\nconst MAX = 500;\nconst msg = 'x'.repeat(499) + '🚨' + ' connection timeout';\n\nconsole.log('BEFORE .slice(0,' + MAX + '): len=' + msg.slice(0, MAX).length + ' lone=' + hasLoneSurrogate(msg.slice(0, MAX)));\n// Output: BEFORE .slice(0,500): len=500 lone=true ❌\n\"\n```\n\n**Negative control — old code produces garbled output, fix eliminates it:**\n\n```\n$ node --import tsx -e \"\nimport { truncateUtf16Safe } from './src/plugin-sdk/text-utility-runtime.ts';\n\nconst MAX = 500;\nconst msg = 'x'.repeat(499) + '🚨' + ' rest of error details';\nconst old = msg.slice(0, MAX);         // OLD PATTERN (missed by prior sweep)\nconst fix = truncateUtf16Safe(msg, MAX); // NEW PATTERN (this PR)\n\nfunction hasLone(str) { /* ... same as above ... */ }\n\nconsole.log('OLD .slice(0,500) tail:', JSON.stringify(old.slice(-6)));\n// → 'xxxxx\\\\ud83d'  ❌ LONE HIGH SURROGATE (garbled)\n\nconsole.log('NEW truncateUtf16Safe:', fix.length);\n// → 499  ✅ rounded down below surrogate pair\n\"\n```\n\n**Actual output demonstrating the fix in context:**\n\n| Method | Length | Lone Surrogate | Tail | Correct? |\n|---|---|---|---|---|\n| `.slice(0, 500)` (old) | 500 | true ❌ | `\"xxxxx\\ud83d\"` | No — renders as � |\n| `truncateUtf16Safe(x, 500)` (new) | 499 | false ✅ | `\"xxxxxx\"` | Yes — clean truncation |\n\n**Changed files (diff):**\n\n- `extensions/feishu/src/card-action.ts` — `sanitizeLogValue`: `.slice(0, 500)` → `truncateUtf16Safe(x, 500)`, +1 import\n- `extensions/feishu/src/monitor.transport.ts` — `formatFeishuWsErrorForLog`: `.slice(0, N)` → `truncateUtf16Safe(x, N)`, +1 import\n\n**Test run:** `node scripts/run-vitest.mjs run extensions/feishu/` — passed (exit 0).\n\n**What was not tested:** Live Feishu WebSocket error logs with emoji content across the boundary. No live Feishu credentials available in this checkout. The code change is identical to the already-shipped fix in `bot.ts` (c16bb8725a), using the same import path and helper function.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/feishu-utf16-truncate",
+        "head_sha": "9a11a671c8c3ac2945d100d783ddf7ed134d1260",
+        "author": "zengwen-dt",
         "labels": [
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
+          "channel: feishu",
+          "size: XS",
+          "P3",
+          "rating: 🦪 silver shellfish",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/infra/http-body.ts",
-            "additions": 14,
+            "path": "extensions/feishu/src/card-action.ts",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/monitor.transport.ts",
+            "additions": 2,
             "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/http-error-body.test.ts",
-            "additions": 39,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/http-error-body.ts",
-            "additions": 6,
-            "deletions": 9,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 59,
-        "deletions": 13,
+        "changedFiles": 2,
+        "additions": 6,
+        "deletions": 5,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101270",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101270.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101284",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101284.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 58,
-          "gatingTotal": 53,
+          "total": 98,
+          "gatingTotal": 93,
           "counts": {
-            "SUCCESS": 71,
-            "SKIPPED": 27,
+            "SUCCESS": 64,
+            "SKIPPED": 33,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -152,21 +147,21 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-07T03:30:12.050Z"
+      "processed_at": "2026-07-07T03:30:15.350Z"
     }
   ],
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6831,
+    "total_ms": 5484,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 755
+        "ms": 680
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1784
+        "ms": 1673
       },
       {
         "name": "classify_comment_commands",
@@ -186,7 +181,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 4264
+        "ms": 3099
       },
       {
         "name": "append_ledger",
