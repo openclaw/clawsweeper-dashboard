@@ -1,18 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T02:59:17.465Z",
+  "generated_at": "2026-07-07T02:59:22.307Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-06T23:59:17.021Z",
+  "since": "2026-07-06T23:59:19.175Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101276
+    101270
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4899679104
+  ],
+  "status_comment_id": 4899679347,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 0,
@@ -29,23 +31,163 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101270:4899679104:2026-07-07T02:58:03Z:re_review",
+      "comment_id": "4899679104",
+      "comment_version_key": "4899679104:2026-07-07T02:58:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101270#issuecomment-4899679104",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 101270,
+      "author": "Pandah97",
+      "author_id": 80405497,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-07T02:58:03Z",
+      "comment_updated_at": "2026-07-07T02:58:03Z",
+      "status_comment_id": 4899679347,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 101270,
+          "dispatch_key": "router-1ac1b12cc6c7bf46",
+          "dispatched_at": "2026-07-07T02:59:23.186Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-07T02:59:25.228Z",
+          "response_comment_id": "4899651123",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(infra): bound response body read in readResponseBodySnippet non-streaming fallback",
+        "body": "## Summary\n\n**Problem:** `readResponseBodySnippet()` non-streaming fallback (`!body.getReader`) calls `response.text()` without any size bound, buffering the entire response before the `maxBytes` check runs.\n\n**Solution:** Replace `response.text()` with `readResponsePrefix(response, maxBytes)` which caps the read at `maxBytes` bytes regardless of path. The non-streaming fallback in `readResponsePrefix` itself is hardened with two guards: (1) null body returns empty immediately without calling `arrayBuffer()`, (2) `Content-Length` header is checked before calling `arrayBuffer()` — if it exceeds `maxBytes`, the read is skipped entirely and the result is marked truncated.\n\n**What changed:** `readResponsePrefix` exported from `http-body.ts` (was private). Non-streaming fallback in `http-error-body.ts` uses it instead of `response.text()`. Two safety guards added to `readResponsePrefix`'s no-reader path. Regression tests added for Content-Length gate and null-body short-circuit.\n\n**What did NOT change:** Streaming path behavior (already bounded). Return type/API surface of `readResponseBodySnippet`. Any caller behavior — all callers pass the same limits.\n\nFixes #101269\n\n## Root Cause\n\n`readResponseBodySnippet()` at `src/infra/http-error-body.ts:8-9` calls `response.text()` when no streaming reader is available (`!body.getReader`). Unlike the streaming path which reads chunk-by-chunk up to `maxBytes`, `response.text()` buffers the entire HTTP response body before any size check. The initial fix routed this through `readResponsePrefix()`, but that helper's own non-streaming fallback at `src/infra/http-body.ts:200` called `response.arrayBuffer()` — the same unbounded-read pattern, just using a different whole-body method.\n\n## What Problem This Solves\n\n`readResponseBodySnippet()` is called from Gateway error-handling paths to produce a diagnostic snippet of the error response body. The streaming path (when `response.body.getReader` is available) correctly bounds reads at `maxBytes`. But when no streaming reader is available (e.g., synthetic Response objects, or edge-case HTTP responses without a body stream), the original code called `response.text()` which materializes the entire body before any truncation. Even after switching to `readResponsePrefix`, that helper's own no-reader fallback called `response.arrayBuffer()` before slicing — so the bounded-read claim was not enforced for non-streaming responses. A large upstream error page (e.g., a 10 MB nginx error page) could cause a Gateway OOM even though the function's API claims to truncate at `maxBytes`.\n\n## Real behavior proof\n\n**Behavior addressed:** Non-streaming fallback now reads at most `maxBytes` bytes instead of the entire response body. When Content-Length exceeds maxBytes, no body bytes are read at all.\n\n**Real environment tested:** Linux x64 (kernel 4.19.112), Node.js v24.13.1, OpenClaw commit b2cecd8ece47 (PR base)\n\n**Exact steps or command run after this patch:**\n\n```bash\nnpx tsx -e \"\nimport { readResponseBodySnippet } from './src/infra/http-error-body.ts';\n\nasync function main() {\n  // Test 1: Large streaming response — bounded read\n  const largeData = new Uint8Array(1024 * 100).fill(65); // 100KB of 'A's\n  const r1 = await readResponseBodySnippet(new Response(new Blob([largeData]).stream()), { maxBytes: 100, maxChars: 200 });\n  console.log('Test 1 (100KB stream, maxBytes=100):', r1.length, 'chars');\n\n  // Test 2: null body — no arrayBuffer() needed\n  const r2 = await readResponseBodySnippet({ body: null } as unknown as Response, { maxBytes: 1024, maxChars: 100 });\n  console.log('Test 2 (null body):', JSON.stringify(r2));\n\n  // Test 3: Content-Length exceeds maxBytes — guard before arrayBuffer()\n  let arrayBufferCalled = false;\n  const clResponse = {\n    body: {} as ReadableStream,\n    headers: { get: (n) => n === 'content-length' ? '50000' : null },\n    arrayBuffer: async () => { arrayBufferCalled = true; return new ArrayBuffer(50000); },\n  } as unknown as Response;\n  const r3 = await readResponseBodySnippet(clResponse, { maxBytes: 100, maxChars: 200 });\n  console.log('Test 3 (Content-Length=50000, maxBytes=100, arrayBuffer called?):', arrayBufferCalled, 'result:', JSON.stringify(r3));\n\n  // Test 4: maxBytes=0\n  const r4 = await readResponseBodySnippet(new Response(new Blob([new Uint8Array([65,66,67])]).stream()), { maxBytes: 0, maxChars: 100 });\n  console.log('Test 4 (maxBytes=0):', JSON.stringify(r4));\n\n  // Test 5: Multi-byte UTF-8 boundary\n  const mb = new Uint8Array([0x61, 0x62, 0xF0, 0x9F, 0x98, 0x80, 0x63, 0x64]);\n  const r5 = await readResponseBodySnippet(new Response(new Blob([mb]).stream()), { maxBytes: 3, maxChars: 100 });\n  console.log('Test 5 (multi-byte boundary):', JSON.stringify(r5));\n\n  // Test 6: maxBytes cap\n  const r6 = await readResponseBodySnippet(new Response(new Blob([new Uint8Array(500).fill(97)]).stream()), { maxBytes: 30, maxChars: 500 });\n  console.log('Test 6 (maxBytes=30, 500 bytes):', new TextEncoder().encode(r6).length, 'bytes');\n\n  // Test 7: maxChars cap\n  const r7 = await readResponseBodySnippet(new Response(new Blob([new Uint8Array(500).fill(97)]).stream()), { maxBytes: 200, maxChars: 10 });\n  console.log('Test 7 (maxChars=10, 500 bytes):', r7.length, 'chars');\n}\nmain();\n\"\n```\n\n**After-fix evidence:**\n\n```\nTest 1 (100KB stream, maxBytes=100): 100 chars\nTest 2 (null body): \"\"\nTest 3 (Content-Length=50000, maxBytes=100, arrayBuffer called?): false result: \"\"\nTest 4 (maxBytes=0): \"\"\nTest 5 (multi-byte boundary): \"ab�\"\nTest 6 (maxBytes=30, 500 bytes): 30 bytes\nTest 7 (maxChars=10, 500 bytes): 10 chars\n```\n\n**Observed result after the fix:** All 7 real-world test cases behave correctly — streaming and null-body paths both cap reads at `maxBytes`. The critical validation (Test 3) proves that when Content-Length exceeds maxBytes, `arrayBuffer()` is never called at all. All 11 unit tests pass including 2 new regression tests:\n\n```\n ✓ readResponseBodySnippet > returns full text when under both limits (body-less path)\n ✓ readResponseBodySnippet > truncates by maxChars when under maxBytes (body-less path)\n ✓ readResponseBodySnippet > truncates by maxBytes in the body-less path\n ✓ readResponseBodySnippet > enforces maxBytes before maxChars in the body-less path\n ✓ readResponseBodySnippet > does not split multi-byte UTF-8 characters at the byte boundary\n ✓ readResponseBodySnippet > stream path still enforces maxBytes\n ✓ readResponseBodySnippet > stream path still enforces maxChars\n ✓ readResponseBodySnippet > returns empty string when maxBytes is 0 (body-less path)\n ✓ readResponseBodySnippet > returns empty string for empty response body\n ✓ readResponseBodySnippet > avoids arrayBuffer() when Content-Length exceeds maxBytes (body-less path)\n ✓ readResponseBodySnippet > returns empty immediately when body is null\n Test Files  1 passed (1)\n      Tests  11 passed (11)\n```\n\n**What was not tested:** Full end-to-end Gateway error handling — only the `readResponseBodySnippet()` function was verified via direct import call. The non-streaming fallback path (no `getReader`) is inherently a synthetic/edge-case scenario in Node.js undici fetch, where all HTTP responses provide a ReadableStream body.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/infra/http-body.ts:189` | Export `readResponsePrefix` (was private function) |\n| `src/infra/http-body.ts:199-209` | Add null-body early return and Content-Length guard in no-reader fallback |\n| `src/infra/http-error-body.ts:1,10` | Import `readResponsePrefix`, replace unbounded `response.text()` with bounded `readResponsePrefix` |\n| `src/infra/http-error-body.test.ts` | Change mock from `body: null` to `body: {}` (avoid null-body short-circuit); add 2 regression tests for Content-Length gate and null-body immediate return |\n\n## Risk checklist\n\n- **merge-risk: Low** — bounded read is strictly safer; streaming path unchanged; Content-Length guard is additive to existing behavior\n- **Risk mitigation:** Non-streaming fallback now checks Content-Length before reading, so oversized responses are rejected without materializing the body\n- **User-visible behavior change?** No — same limits, same truncation behavior\n- **Config/env/migration change?** No\n- **Security/auth/network change?** No\n\n## Linked context\n\n- Closes #101269",
+        "branch": "fix/issue-101269-bound-error-body-read",
+        "head_sha": "0002d4a25b2bd5691829c5105329e12506fde653",
+        "author": "pandah97",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/infra/http-body.ts",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/http-error-body.test.ts",
+            "additions": 39,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/http-error-body.ts",
+            "additions": 6,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 59,
+        "deletions": 13,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101270",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101270.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "gatingTotal": 98,
+          "counts": {
+            "SUCCESS": 64,
+            "SKIPPED": 32,
+            "FAILURE": 3,
+            "IN_PROGRESS": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-large-whole-1:FAILURE",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-lint:FAILURE"
+          ],
+          "pending": [
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-compact-large-whole-1:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-07T02:59:22.572Z"
+    }
+  ],
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 749,
+    "total_ms": 6624,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 432
+        "ms": 1858
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1257
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +203,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 305
+        "ms": 3480
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
