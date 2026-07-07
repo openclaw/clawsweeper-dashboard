@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T08:18:30.311Z",
+  "generated_at": "2026-07-07T08:19:11.939Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T05:18:28.064Z",
+  "since": "2026-07-07T05:19:11.593Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    101414
+    101449
   ],
-  "comment_ids": [
-    4901605057
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,168 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:101414:4901605057:2026-07-07T08:15:22Z:re_review",
-      "comment_id": "4901605057",
-      "comment_version_key": "4901605057:2026-07-07T08:15:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101414#issuecomment-4901605057",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101414,
-      "author": "lzyyzznl",
-      "author_id": 41978486,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T08:15:22Z",
-      "comment_updated_at": "2026-07-07T08:15:22Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): classify Anthropic invalid_request_error as format for failover",
-        "body": "## Summary\n\n**Problem**: Anthropic-style HTTP 400 error responses arrive as raw JSON bodies with no leading HTTP status prefix. The failover classifier cannot infer the HTTP status via `extractLeadingHttpStatus` and returns `null`, so the configured model fallback chain is never consulted — users see a terminal error despite healthy fallback models being available.\n\n**Solution**: Added a check in `classifyFailoverClassificationFromMessage` that detects `invalid_request_error` from the structured API error type via the existing `parseApiErrorInfo` helper and classifies it as `\"format\"`, which triggers the model fallback chain. The check is placed after auth/billing/rate-limit/context-overflow classifiers so more specific reasons take precedence.\n\nAlso fixed `isSchemaErrorMessage()` to exclude structured `invalid_request_error` payloads. Without this exclusion, `isSchemaErrorMessage` would match via `classifyFailoverReason(raw) === \"format\"` and `classifyProviderRuntimeFailureKind` would incorrectly return `\"schema\"` instead of `\"format\"`, defeating the primary fix's effect in the runtime-failure path.\n\n**What changed**: 7 files, ~+180/-1 lines — one classifier rule in `errors.ts` (line 1124-1131), one early-exit guard in `isSchemaErrorMessage()` (line 599) to prevent schema/format collision, one whitelist entry in `result-fallback-classifier.ts` (belt-and-suspenders), a `runWithModelFallback` integration test in `model-fallback.test.ts` to exercise the actual fallback machinery, a `result-fallback-classifier.test.ts` regression, a `failover-error.test.ts` cover, and a formatter-sync test in `formatassistanterrortext.test.ts`. Total: 8 new test cases across 5 test files.\n\n**What NOT changed**: No provider connections, no credentials, no configuration schema, no public API signatures, no lockfile or changelog.\n\nFixes #99174\n\n---\n\n## Real behavior proof\n\n**Behavior addressed**: classifyFailoverReason returns \"format\" (instead of null) for Anthropic invalid_request_error JSON bodies.\n**Real environment tested**: Linux x86_64, Node v25.9.0, OpenClaw main @ ae397906aa\n**Exact steps or command run after this patch**: `npx tsx docs/.local/issue-99174-evidence.ts` against actual exported classifiers with realistic Anthropic error payloads\n**After-fix evidence**: classifyFailoverReason returns \"format\" for invalid_request_error (with and without HTTP 400 prefix). Result-level classifier returns {reason: \"format\"}. `runWithModelFallback` integration test confirms fallback chain advances: primary `anthropic/primary-model` with `invalid_request_error` payload → `format` reason → fallback to `openai/gpt-5.5` succeeds. Formatter sync verified: internal keeps provider detail, user-facing collapses to generic schema copy. **5 test files, 356 tests — all passed.**\n**Observed result after the fix**: classifyFailoverReason returns \"format\" for invalid_request_error bodies, correctly triggering the FailoverError machinery and advancing the model fallback chain in the integrated `runWithModelFallback` path.\n**What was not tested**: no live provider E2E test (requires API keys); validated through L2 direct function-level testing and L3 `runWithModelFallback` integration testing\n\n### Terminal transcript — L2 evidence run\n\nInput payload (realistic Anthropic invalid_request_error):\n```\n{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"anthropic: messages: request validation failed: 'model' field must not be an empty string\"}}\n```\n\nOutput:\n```\n═══════════════════════════════════════════════════════════════\n  L2 Evidence: Anthropic invalid_request_error → 'format' fallback\n═══════════════════════════════════════════════════════════════\n\n── Test 1: classifyFailoverReason ──────────────────────────────\n  ✅ invalid_request_error (no prefix) → 'format': got: format\n  ✅ invalid_request_error (with 400 prefix) → 'format': got: format\n  ✅ authentication_error → NOT 'format': got: auth\n  ✅ plain text error → NOT 'format': got: null\n\n── Test 2: isFailoverErrorMessage ─────────────────────────────\n  ✅ invalid_request_error → isFailoverErrorMessage: true\n  ✅ authentication_error → isFailoverErrorMessage: true\n\n── Test 3: result-level classifier ─────────────────────────────\n  ✅ classifyEmbeddedAgentRunResultForModelFallback returns {reason: \"format\"}\n\n═══════════════════════════════════════════════════════════════\n  Result: ✅ ALL PASSED (7/7)\n═══════════════════════════════════════════════════════════════\n```\n\n## Root Cause\n\n5 Whys traced the issue to `classifyFailoverClassificationFromMessage` in `src/agents/embedded-agent-helpers/errors.ts` (line 1029). The function extracts HTTP status via `extractLeadingHttpStatus` but Anthropic JSON bodies have no leading prefix. No existing message matcher catches `invalid_request_error` from `parseApiErrorInfo`, so the function falls through to return `null` at line 1132.\n\n## Linked context\n\n- **Issue**: #99174\n- **Related**: #92201 (thinking-signature root cause), #99184 (competing PR)\n- **In scope**: Failover classification of `invalid_request_error` JSON bodies\n- **Out of scope**: Fixing the provider-side root cause that produces these errors\n\nAll tests pass with zero regressions:\n\n```\n ✓  35 passed (failover-matches.test.ts)\n ✓  21 passed (result-fallback-classifier.test.ts)\n ✓  90 passed (formatassistanterrortext.test.ts)\n ✓  94 passed (failover-error.test.ts)\n ✓ 116 passed (model-fallback.test.ts)\n ─────────────────────\n ✓ 356 total — all passed\n```\n\n### Integration test: runWithModelFallback\n\nNew test `\"continues fallback after embedded structured invalid_request_error payloads (#99174)\"`:\n- Config: `anthropic/primary-model → fallbacks: [openai/gpt-5.5]`\n- Primary run returns `invalid_request_error` JSON body (no HTTP prefix) as error payload\n- `classifyEmbeddedAgentRunResultForModelFallback` returns `{ reason: \"format\" }`\n- `runWithModelFallback` advances to fallback `openai/gpt-5.5`\n- Final result: `{ text: \"fallback ok\" }`\n- Assertions: `run` called 2 times, fallback model used, `format` reason recorded in attempts\n\n### Formatter sync test\n\nNew test `\"keeps internal detail and user-facing redaction in sync for #99174 fallback bodies\"`:\n- `formatAssistantErrorText` (internal) keeps provider detail: contains \"messages.27.content.1\"\n- `formatUserFacingAssistantErrorText` (user-facing) returns: \"LLM request failed: provider rejected the request schema or tool payload.\"\n\n## Risk checklist\n\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [ ] I have updated relevant documentation\n- [ ] Breaking changes (if any) are documented in Summary\n\n- Auth-provider risk: Low — only classification logic changed, no provider connections touched.\n- Merge-risk: 🚨 other — narrow classification addition; verified by 35 existing + 4 new tests.\n\n## Current review state\n\n- [x] Self-review completed\n- [ ] At least one maintainer review\n- [ ] All CI checks passed\n\n<!-- AI-assisted: This PR was created with AI assistance via the pr-killer pipeline. -->",
-        "branch": "fix/issue-99174-anthropic-400-classification",
-        "head_sha": "7e821702a715880526e3605f5470e6efcfe6ff20",
-        "author": "lzyyzznl",
-        "labels": [
-          "agents",
-          "size: S",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-helpers.formatassistanterrortext.test.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers/errors.ts",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers/failover-matches.test.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/result-fallback-classifier.test.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/result-fallback-classifier.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.test.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.test.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 7,
-        "additions": 180,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101414",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101414.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 26,
-            "IN_PROGRESS": 5,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "pending": [
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2430,
+    "total_ms": 603,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 492
+        "ms": 335
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1740
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -208,7 +61,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 183
+        "ms": 257
       },
       {
         "name": "append_ledger",
