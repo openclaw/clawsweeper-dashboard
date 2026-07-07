@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T23:40:31.855Z",
+  "generated_at": "2026-07-07T23:40:33.115Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T20:40:29.711Z",
+  "since": "2026-07-07T20:40:31.197Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101668
+    101777
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4909990780
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 5,
@@ -31,22 +33,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101668:4904137969:2026-07-07T23:40:25Z:clawsweeper_auto_repair",
-      "comment_id": "4904137969",
-      "comment_version_key": "4904137969:2026-07-07T23:40:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101668#issuecomment-4904137969",
+      "idempotency_key": "comment-router:openclaw/openclaw:101777:4909990780:2026-07-07T23:37:53Z:re_review",
+      "comment_id": "4909990780",
+      "comment_version_key": "4909990780:2026-07-07T23:37:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101777#issuecomment-4909990780",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 101668,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 101777,
+      "author": "sunlit-deng",
+      "author_id": 253064511,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T13:08:00Z",
-      "comment_updated_at": "2026-07-07T23:40:25Z",
+      "comment_created_at": "2026-07-07T23:37:53Z",
+      "comment_updated_at": "2026-07-07T23:37:53Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -68,207 +70,52 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): keep system event queued when main-session heartbeat is disabled",
-        "body": "## Summary\n\n**Problem**: When a cron job fires `sessionTarget: \"main\"` with `payload.kind: \"systemEvent\"` and default `wakeMode: \"now\"`, if the main-session heartbeat returns a non-retryable skip (e.g. `\"disabled\"`), the already-enqueued system event was removed and the job returned `status: \"skipped\"`. The event was silently lost — never delivered to the user.\n\n**Solution**: Two-layer fix — (1) Timer layer: keep system event queued and request deferred heartbeat; (2) Heartbeat layer: bypass per-agent heartbeat config gates for cron-sourced wakes.\n\n**What changed**:\n\n- `src/cron/service/timer.ts`: In `executeMainSessionCronJob()`, the two branches that called `removeQueuedSystemEventHandle()` on heartbeat skip/error are replaced with a single branch that keeps the event queued, schedules a background heartbeat, and returns the original heartbeat status. Returning `\"ok\"` would cause one-shot jobs with `deleteAfterRun=true` to be immediately deleted, bypassing the bounded disabled-heartbeat retry mechanism.\n\n- `src/infra/heartbeat-runner.ts`:\n  - `runHeartbeatOnce()`: Wraps the `isHeartbeatEnabledForAgent()` and `resolveHeartbeatIntervalMs()` checks in `if (opts.source !== \"cron\")` — only non-cron sources are gated by per-agent config.\n  - Scheduler `run()`: When a cron-targeted wake targets an agent not present in the heartbeat scheduler's agent list, calls `runOnce()` directly instead of returning `{status: \"skipped\", reason: \"disabled\"}`.\n\n**What did NOT change**: The heartbeat-`\"ran\"` path (the common happy path) is untouched. No new dependencies, no config changes, no API surface changes.\n\nFixes #101537\n\n---\n\n## What Problem This Solves\n\nSystem events like reminders, scheduled messages, and periodic notifications were silently lost when the main session heartbeat was disabled — a common state when the user hasn't interacted recently. The design flaw was coupling event delivery to immediate wake success.\n\nTwo layers contributed:\n1. The timer layer was too eager to discard already-enqueued events when heartbeat failed\n2. The heartbeat layer's per-agent config gates treated cron-sourced wakes the same as regular heartbeats, even though cron manages its own retry and scheduling policy\n\n---\n\n## Root Cause\n\n**Layer 1 — Timer layer**: The system event was enqueued before the heartbeat attempt (line ~1990). When heartbeat failed, the cleanup code removed the event — discarding work already done.\n\n**Layer 2 — Heartbeat layer**: `runHeartbeatOnce()` checked `isHeartbeatEnabledForAgent()` and `resolveHeartbeatIntervalMs()` unconditionally. Agents without explicit heartbeat config (e.g., `{id: \"main\"}` without `heartbeat: {every: ...}`) would always return `skipped/disabled` — even when the wake was triggered by cron. Additionally, the scheduler's `run()` returned `skipped/disabled` when the target agent was not in `state.agents` (agents without explicit heartbeat config are not tracked by the scheduler).\n\nTogether these two layers caused cron→main system event deliveries to fail silently on every attempt.\n\n---\n\n## Real behavior proof\n\n**Behavior addressed**: Keep system event queued when main-session heartbeat returns skipped/error; request background heartbeat instead of removing event. Bypass per-agent heartbeat config gates for cron-sourced wakes. Preserve skipped/error status so one-shot retry behavior and job visibility are maintained.\n\n**Real environment tested**: Linux x86_64 / Node.js v24.1.0 / OpenClaw `fix/issue-101537-cron-main-systemevent-skip-disabled`\n\n**Exact steps or command run after this patch**: `npx vitest run` targeted test commands as shown below, each exercising real production functions at L2 level (real `runHeartbeatOnce`, real system event queue, real CronJob objects).\n\n**After-fix evidence**:\n\nL2+ evidence (real function calls, real objects, real system event queue):\n```\n$ npx vitest run src/infra/heartbeat-runner.returns-default-unset.test.ts -t \"does not return disabled for cron\"\n Test Files  1 passed (1)\n      Tests  1 passed | 43 skipped (44)\n\n$ npx vitest run src/infra/heartbeat-runner.scheduler.test.ts -t \"routes cron targeted wakes\"\n Test Files  1 passed (1)\n      Tests  1 passed | 25 skipped (26)\n\n$ npx vitest run src/cron/service.main-job-passes-heartbeat-target-last.test.ts -t \"does not skip with\"\n Test Files  1 passed (1)\n      Tests  1 passed | 3 skipped (4)\n\n$ node --import tsx -e 'import { isHeartbeatEnabledForAgent } from \"./src/infra/heartbeat-summary.js\"; console.log(isHeartbeatEnabledForAgent({agents:{list:[{id:\"worker\", heartbeat:{every:\"5m\"}}, {id:\"main\"}]}}, \"main\"));'\nfalse  ← gate rejects main; both fix layers now bypass this for cron\n\n$ npx tsx evidence/pr-101668/run-evidence.mjs\n=== L2 Evidence ===\n1. System event enqueued, events in queue before: 1\n2. applyJobResult called with status=\"skipped\", error=\"disabled\"\n   shouldDelete: false (delete only on \"ok\")\n   job.state.lastStatus: skipped, lastError: disabled\n   Job in store: YES\n3. Events in queue after: 1 (preserved)\n```\n\nFull regression suites:\n```\n$ npx vitest run src/infra/heartbeat-runner.returns-default-unset.test.ts\n Test Files  1 passed (1)  Tests  44 passed (44)\n\n$ npx vitest run src/infra/heartbeat-runner.scheduler.test.ts\n Test Files  1 passed (1)  Tests  26 passed (26)\n\n$ npx vitest run src/cron/service.runs-one-shot-main-job-disables-it.test.ts\n Test Files  1 passed (1)  Tests  15 passed (15)\n\n$ npx vitest run src/cron/service.main-job-passes-heartbeat-target-last.test.ts\n Test Files  1 passed (1)  Tests  4 passed (4)\n```\n\n**Observed result after the fix**: Cron-sourced `runHeartbeatOnce` no longer returns `disabled` for agents without explicit heartbeat config; heartbeat scheduler routes cron-targeted wakes directly to `runOnce()`; system events are preserved through disabled-heartbeat scenarios; the job retains skipped status; background heartbeat is requested for deferred delivery.\n\n**What was not tested**: Real Gateway + cron daemon integration is not tested here. The fix is exercised through unit tests with real production functions (Vitest test framework) for the heartbeat runner, and injected dependencies for the cron timer. The complete multi-hop delivery path (heartbeat gate bypass → queue preservation → deferred delivery) is covered by the combined test suites.\n\n---\n\n## Tests and validation\n\n### Unit tests\n\nTest coverage:\n- ✓ keeps system event queued when disabled-heartbeat one-shot cannot wake\n- ✓ disables one-shot when disabled-heartbeat retry is exhausted\n- ✓ does not return disabled for cron source when agent has no explicit heartbeat config\n- ✓ routes cron targeted wakes to agents without explicit heartbeat config in scheduler\n- ✓ cron main job does not skip with 'disabled' when agent has no heartbeat config\n\n### CI\n\nCI has a pre-existing failure in `checks-node-compact-small-whole-2` unrelated to this change. All 71 other CI checks pass.\n\n---\n\n## Risk checklist\n\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [ ] I have updated relevant documentation\n\n**Merge risk**: Low. The behavioral changes are scoped to:\n1. The heartbeat-skip/error path in `executeMainSessionCronJob()` — non-ok heartbeats for cron jobs no longer discard the enqueued event\n2. Cron-sourced `runHeartbeatOnce` calls — bypass per-agent config gates, preserving the global disable gate\n3. Cron-targeted scheduler wakes — agents not in the scheduler's state are run directly instead of returning disabled\n\nGlobal gate `areHeartbeatsEnabled()` is preserved for all sources. No new deps, no config or API changes. Rollback is a revert of this branch's commits.\n\n**ClawSweeper P1 addressed**:\n1. ✅ \"Keep disabled cron wakes visible\" — returning non-ok status keeps the job in the store with skipped/error state\n2. ✅ \"For deleteAfterRun one-shots, returning ok removes job immediately\" — now returns \"skipped\", preserving retry behavior\n3. ✅ \"Add real behavior proof\" — L2 evidence with real function calls showing event preservation, heartbeat gate bypass, and scheduler routing for cron sources\n4. ✅ \"Fix stale per-run queue and disabled heartbeat gate behavior\" — by bypassing `isHeartbeatEnabledForAgent()` and `resolveHeartbeatIntervalMs()` for cron sources, plus direct `runOnce()` routing in the scheduler\n\n## Current review state\n\n- [x] Self-review completed\n- [ ] At least one maintainer review\n- [ ] All CI checks passed\n\n## AI-assisted\n\nThis PR was created with AI assistance for code understanding, root cause analysis, test restructuring, and PR body generation. Human review was applied to all AI-generated code and tests.",
-        "branch": "fix/issue-101537-cron-main-systemevent-skip-disabled",
-        "head_sha": "7fa413fd0dbeb3d32149e94e1ca0672c7f20fd34",
-        "author": "leonidaslux",
-        "labels": [
-          "scripts",
-          "size: M",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "scripts/check-duplicates.mjs",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.main-job-passes-heartbeat-target-last.test.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.runs-one-shot-main-job-disables-it.test.ts",
-            "additions": 82,
-            "deletions": 54,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 15,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.returns-default-unset.test.ts",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.scheduler.test.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.ts",
-            "additions": 31,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 7,
-        "additions": 216,
-        "deletions": 71,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101668",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101668.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 105,
-          "gatingTotal": 100,
-          "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:101668:4904846050:2026-07-07T14:22:10Z:re_review",
-      "comment_id": "4904846050",
-      "comment_version_key": "4904846050:2026-07-07T14:22:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101668#issuecomment-4904846050",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101668,
-      "author": "LeonidasLux",
-      "author_id": 294038793,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T14:22:10Z",
-      "comment_updated_at": "2026-07-07T14:22:10Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): keep system event queued when main-session heartbeat is disabled",
-        "body": "## Summary\n\n**Problem**: When a cron job fires `sessionTarget: \"main\"` with `payload.kind: \"systemEvent\"` and default `wakeMode: \"now\"`, if the main-session heartbeat returns a non-retryable skip (e.g. `\"disabled\"`), the already-enqueued system event was removed and the job returned `status: \"skipped\"`. The event was silently lost — never delivered to the user.\n\n**Solution**: Two-layer fix — (1) Timer layer: keep system event queued and request deferred heartbeat; (2) Heartbeat layer: bypass per-agent heartbeat config gates for cron-sourced wakes.\n\n**What changed**:\n\n- `src/cron/service/timer.ts`: In `executeMainSessionCronJob()`, the two branches that called `removeQueuedSystemEventHandle()` on heartbeat skip/error are replaced with a single branch that keeps the event queued, schedules a background heartbeat, and returns the original heartbeat status. Returning `\"ok\"` would cause one-shot jobs with `deleteAfterRun=true` to be immediately deleted, bypassing the bounded disabled-heartbeat retry mechanism.\n\n- `src/infra/heartbeat-runner.ts`:\n  - `runHeartbeatOnce()`: Wraps the `isHeartbeatEnabledForAgent()` and `resolveHeartbeatIntervalMs()` checks in `if (opts.source !== \"cron\")` — only non-cron sources are gated by per-agent config.\n  - Scheduler `run()`: When a cron-targeted wake targets an agent not present in the heartbeat scheduler's agent list, calls `runOnce()` directly instead of returning `{status: \"skipped\", reason: \"disabled\"}`.\n\n**What did NOT change**: The heartbeat-`\"ran\"` path (the common happy path) is untouched. No new dependencies, no config changes, no API surface changes.\n\nFixes #101537\n\n---\n\n## What Problem This Solves\n\nSystem events like reminders, scheduled messages, and periodic notifications were silently lost when the main session heartbeat was disabled — a common state when the user hasn't interacted recently. The design flaw was coupling event delivery to immediate wake success.\n\nTwo layers contributed:\n1. The timer layer was too eager to discard already-enqueued events when heartbeat failed\n2. The heartbeat layer's per-agent config gates treated cron-sourced wakes the same as regular heartbeats, even though cron manages its own retry and scheduling policy\n\n---\n\n## Root Cause\n\n**Layer 1 — Timer layer**: The system event was enqueued before the heartbeat attempt (line ~1990). When heartbeat failed, the cleanup code removed the event — discarding work already done.\n\n**Layer 2 — Heartbeat layer**: `runHeartbeatOnce()` checked `isHeartbeatEnabledForAgent()` and `resolveHeartbeatIntervalMs()` unconditionally. Agents without explicit heartbeat config (e.g., `{id: \"main\"}` without `heartbeat: {every: ...}`) would always return `skipped/disabled` — even when the wake was triggered by cron. Additionally, the scheduler's `run()` returned `skipped/disabled` when the target agent was not in `state.agents` (agents without explicit heartbeat config are not tracked by the scheduler).\n\nTogether these two layers caused cron→main system event deliveries to fail silently on every attempt.\n\n---\n\n## Real behavior proof\n\n**Behavior addressed**: Keep system event queued when main-session heartbeat returns skipped/error; request background heartbeat instead of removing event. Bypass per-agent heartbeat config gates for cron-sourced wakes. Preserve skipped/error status so one-shot retry behavior and job visibility are maintained.\n\n**Real environment tested**: Linux x86_64 / Node.js v24.1.0 / OpenClaw `fix/issue-101537-cron-main-systemevent-skip-disabled`\n\n**Exact steps or command run after this patch**: `npx vitest run` targeted test commands as shown below, each exercising real production functions at L2 level (real `runHeartbeatOnce`, real system event queue, real CronJob objects).\n\n**After-fix evidence**:\n\nL2+ evidence (real function calls, real objects, real system event queue):\n```\n$ npx vitest run src/infra/heartbeat-runner.returns-default-unset.test.ts -t \"does not return disabled for cron\"\n Test Files  1 passed (1)\n      Tests  1 passed | 43 skipped (44)\n\n$ npx vitest run src/infra/heartbeat-runner.scheduler.test.ts -t \"routes cron targeted wakes\"\n Test Files  1 passed (1)\n      Tests  1 passed | 25 skipped (26)\n\n$ npx vitest run src/cron/service.main-job-passes-heartbeat-target-last.test.ts -t \"does not skip with\"\n Test Files  1 passed (1)\n      Tests  1 passed | 3 skipped (4)\n\n$ node --import tsx -e 'import { isHeartbeatEnabledForAgent } from \"./src/infra/heartbeat-summary.js\"; console.log(isHeartbeatEnabledForAgent({agents:{list:[{id:\"worker\", heartbeat:{every:\"5m\"}}, {id:\"main\"}]}}, \"main\"));'\nfalse  ← gate rejects main; both fix layers now bypass this for cron\n\n$ npx tsx evidence/pr-101668/run-evidence.mjs\n=== L2 Evidence ===\n1. System event enqueued, events in queue before: 1\n2. applyJobResult called with status=\"skipped\", error=\"disabled\"\n   shouldDelete: false (delete only on \"ok\")\n   job.state.lastStatus: skipped, lastError: disabled\n   Job in store: YES\n3. Events in queue after: 1 (preserved)\n```\n\nFull regression suites:\n```\n$ npx vitest run src/infra/heartbeat-runner.returns-default-unset.test.ts\n Test Files  1 passed (1)  Tests  44 passed (44)\n\n$ npx vitest run src/infra/heartbeat-runner.scheduler.test.ts\n Test Files  1 passed (1)  Tests  26 passed (26)\n\n$ npx vitest run src/cron/service.runs-one-shot-main-job-disables-it.test.ts\n Test Files  1 passed (1)  Tests  15 passed (15)\n\n$ npx vitest run src/cron/service.main-job-passes-heartbeat-target-last.test.ts\n Test Files  1 passed (1)  Tests  4 passed (4)\n```\n\n**Observed result after the fix**: Cron-sourced `runHeartbeatOnce` no longer returns `disabled` for agents without explicit heartbeat config; heartbeat scheduler routes cron-targeted wakes directly to `runOnce()`; system events are preserved through disabled-heartbeat scenarios; the job retains skipped status; background heartbeat is requested for deferred delivery.\n\n**What was not tested**: Real Gateway + cron daemon integration is not tested here. The fix is exercised through unit tests with real production functions (Vitest test framework) for the heartbeat runner, and injected dependencies for the cron timer. The complete multi-hop delivery path (heartbeat gate bypass → queue preservation → deferred delivery) is covered by the combined test suites.\n\n---\n\n## Tests and validation\n\n### Unit tests\n\nTest coverage:\n- ✓ keeps system event queued when disabled-heartbeat one-shot cannot wake\n- ✓ disables one-shot when disabled-heartbeat retry is exhausted\n- ✓ does not return disabled for cron source when agent has no explicit heartbeat config\n- ✓ routes cron targeted wakes to agents without explicit heartbeat config in scheduler\n- ✓ cron main job does not skip with 'disabled' when agent has no heartbeat config\n\n### CI\n\nCI has a pre-existing failure in `checks-node-compact-small-whole-2` unrelated to this change. All 71 other CI checks pass.\n\n---\n\n## Risk checklist\n\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [ ] I have updated relevant documentation\n\n**Merge risk**: Low. The behavioral changes are scoped to:\n1. The heartbeat-skip/error path in `executeMainSessionCronJob()` — non-ok heartbeats for cron jobs no longer discard the enqueued event\n2. Cron-sourced `runHeartbeatOnce` calls — bypass per-agent config gates, preserving the global disable gate\n3. Cron-targeted scheduler wakes — agents not in the scheduler's state are run directly instead of returning disabled\n\nGlobal gate `areHeartbeatsEnabled()` is preserved for all sources. No new deps, no config or API changes. Rollback is a revert of this branch's commits.\n\n**ClawSweeper P1 addressed**:\n1. ✅ \"Keep disabled cron wakes visible\" — returning non-ok status keeps the job in the store with skipped/error state\n2. ✅ \"For deleteAfterRun one-shots, returning ok removes job immediately\" — now returns \"skipped\", preserving retry behavior\n3. ✅ \"Add real behavior proof\" — L2 evidence with real function calls showing event preservation, heartbeat gate bypass, and scheduler routing for cron sources\n4. ✅ \"Fix stale per-run queue and disabled heartbeat gate behavior\" — by bypassing `isHeartbeatEnabledForAgent()` and `resolveHeartbeatIntervalMs()` for cron sources, plus direct `runOnce()` routing in the scheduler\n\n## Current review state\n\n- [x] Self-review completed\n- [ ] At least one maintainer review\n- [ ] All CI checks passed\n\n## AI-assisted\n\nThis PR was created with AI assistance for code understanding, root cause analysis, test restructuring, and PR body generation. Human review was applied to all AI-generated code and tests.",
-        "branch": "fix/issue-101537-cron-main-systemevent-skip-disabled",
-        "head_sha": "7fa413fd0dbeb3d32149e94e1ca0672c7f20fd34",
-        "author": "leonidaslux",
+        "title": "fix(codex): suppress stdout/stderr stream errors in sandbox subprocesses",
+        "body": "## What Problem This Solves\n\nFixes an issue where stdout/stderr pipe errors from Codex sandbox subprocesses (both process RPC and streaming HTTP helper) could surface as unhandled Node stream errors, crashing the exec-server WebSocket bridge.\n\n## Why This Change Was Made\n\nWhen a Codex sandbox process exits or its pipes are broken, the Node stream layer emits `error` events on stdout/stderr Readable streams. Without a listener, these bubble into an unhandled rejection that terminates the exec-server bridge. The sibling `http.ts` streaming helper path had the same gap.\n\nThe fix mirrors the same pattern used in `src/agents/sessions/exec.ts:177-178`: attach a no-op error listener to suppress the events while letting the process `close` handler remain authoritative.\n\n## User Impact\n\nCodex sandbox exec-server no longer crashes when a subprocess pipe breaks in either the process RPC or streaming HTTP path. Output collection and close signalling continue to work normally.\n\n## Evidence\n\n**processes.ts**: Before the fix, no stdout/stderr stream error listeners at the sandbox subprocess spawn point.\n\n```diff\n const child = spawn(command, args, { env: execSpec.env, stdio: [\"pipe\", \"pipe\", \"pipe\"] });\n managed.child = child;\n+// Output pipes may fail independently while the process is running.\n+const ignoreOutputStreamError = () => {};\n+child.stdout.on(\"error\", ignoreOutputStreamError);\n+child.stderr.on(\"error\", ignoreOutputStreamError);\n```\n\n**http.ts**: Same gap in the streaming HTTP subprocess spawn path.\n\n```diff\n const child = spawn(command, args, { env: execSpec.env, stdio: [\"pipe\", \"pipe\", \"pipe\"] });\n+\n+const ignoreOutputStreamError = () => {};\n+child.stdout.on(\"error\", ignoreOutputStreamError);\n+child.stderr.on(\"error\", ignoreOutputStreamError);\n```\n\n**Runtime proof — real sandbox exec-server run**:\n\nBoth paths exercised through a live sandbox exec-server WebSocket JSON-RPC bridge\n(`ensureCodexSandboxExecServerEnvironment` + real shell backend). A child process\nwriting 200 lines to stdout/stderr is terminated mid-output; the bridge survives and\na second process confirms full functionality. The streaming HTTP subprocess also\nsurvives WebSocket closure mid-stream.\n\n```text\n$ node --import tsx sandbox-exec-server-proof.mjs\n\n[23:19:07] === OpenClaw Sandbox Exec-Server Pipe Survival Proof ===\n[23:19:07] Starting sandbox exec-server with real shell backend...\n[agent/embedded] codex sandbox exec-server started\n[23:19:07] Sandbox exec-server started\n[23:19:07] WebSocket URL: ws://127.0.0.1:54218/openclaw-7a143c2f-...\n\n[23:19:07] --- Test 1: Process RPC bridge pipe survival ---\n[23:19:07] WebSocket connected, listening for JSON-RPC notifications\n[23:19:07] Spawning sandbox process \"pipe-proof-1\" (200-line output loop)\n[23:19:07] Process started: {\"processId\":\"pipe-proof-1\"}\n[23:19:07] Killing process \"pipe-proof-1\" mid-output via process/terminate RPC\n[23:19:07] Terminate result: {\"running\":true}\n[23:19:08] Process closed: exitCode=1, outputChunks=13\n[23:19:08] ✓ Bridge survived — WebSocket state is OPEN\n[23:19:08] Starting second process \"pipe-proof-2\" ...\n[23:19:08] Second process output: \"sandbox-bridge-survived\"\n\n[23:19:08] --- Test 2: HTTP streaming bridge pipe survival ---\n[23:19:08] Sending streaming HTTP request to local echo server\n[23:19:09] Closing WebSocket mid-stream to trigger pipe errors\n[23:19:09] Connecting new WebSocket to verify bridge is still alive\n[23:19:09] New connection established — bridge survived HTTP stream interruption\n[23:19:09] HTTP bridge verification output: \"sandbox-bridge-survived\"\n\n[23:19:09] === PROOF COMPLETE ===\n[23:19:09] Both process RPC and HTTP streaming bridges survived pipe errors.\n```\n\nThe same no-op error listener pattern already exists in `src/agents/sessions/exec.ts:177-178`,\nconfirming this is the repo-standard approach.\n\nAI-assisted: built with Codex\n",
+        "branch": "sunlit/fix/codex-processes-stream-errors-v2",
+        "head_sha": "e5324cafab9627a508c0596646cfb10bfb2ebcd7",
+        "author": "sunlit-deng",
         "labels": [
-          "scripts",
-          "size: M",
+          "size: S",
+          "extensions: codex",
+          "proof: sufficient",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "scripts/check-duplicates.mjs",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.main-job-passes-heartbeat-target-last.test.ts",
-            "additions": 42,
+            "path": "extensions/codex/src/app-server/sandbox-exec-server.pipe-survival.test.ts",
+            "additions": 179,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service.runs-one-shot-main-job-disables-it.test.ts",
-            "additions": 82,
-            "deletions": 54,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 15,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.returns-default-unset.test.ts",
-            "additions": 20,
+            "path": "extensions/codex/src/app-server/sandbox-exec-server/http.ts",
+            "additions": 5,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/heartbeat-runner.scheduler.test.ts",
-            "additions": 25,
+            "path": "extensions/codex/src/app-server/sandbox-exec-server/processes.ts",
+            "additions": 4,
             "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.ts",
-            "additions": 31,
-            "deletions": 5,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 7,
-        "additions": 216,
-        "deletions": 71,
+        "changedFiles": 3,
+        "additions": 188,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101668",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101668.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101777",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101777.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
@@ -277,73 +124,74 @@
           "total": 105,
           "gatingTotal": 100,
           "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 34,
+            "IN_PROGRESS": 17,
+            "SUCCESS": 51,
+            "SKIPPED": 27,
+            "FAILURE": 1,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
+          "blockers": [
+            "Select Critical Quality shards:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (matrix):IN_PROGRESS",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-test-types:FAILURE",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "pending": [
+            "Select Critical Quality shards:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (matrix):IN_PROGRESS",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "check-test-types:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
       "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:101668:4904316271:2026-07-07T13:26:50Z:re_review",
-      "comment_id": "4904316271",
-      "comment_version_key": "4904316271:2026-07-07T13:26:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101668#issuecomment-4904316271",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101668,
-      "author": "LeonidasLux",
-      "author_id": 294038793,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T13:26:50Z",
-      "comment_updated_at": "2026-07-07T13:26:50Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
     }
   ],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2718,
+    "total_ms": 2197,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 361
+        "ms": 605
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1765
+        "ms": 1297
       },
       {
         "name": "classify_comment_commands",
@@ -363,11 +211,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 564
+        "ms": 279
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
