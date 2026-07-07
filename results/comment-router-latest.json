@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T06:30:20.778Z",
+  "generated_at": "2026-07-07T06:30:20.697Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T03:30:20.404Z",
+  "since": "2026-07-07T03:30:18.600Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100769
+    101405
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,23 +29,120 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101405:4900800013:2026-07-07T06:30:13Z:clawsweeper_needs_human",
+      "comment_id": "4900800013",
+      "comment_version_key": "4900800013:2026-07-07T06:30:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101405#issuecomment-4900800013",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101405,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-07T06:24:37Z",
+      "comment_updated_at": "2026-07-07T06:30:13Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=abc0725d3d00d91c8e57d33df7c3aa5b23660ac3)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "abc0725d3d00d91c8e57d33df7c3aa5b23660ac3",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(plugins): bound non-streaming response text read in readHostedCatalogResponseText",
+        "body": "## Summary\n\n**Problem:** `readHostedCatalogResponseText()` non-streaming fallback (`!hasStreamingResponseBody`) calls `response.text()` without any size bound, buffering the entire response before the `maxBytes` check runs.\n\n**Solution:** Replace `response.text()` + post-hoc size check with `readResponseWithLimit()` which caps the read at `maxBytes` bytes regardless of path.\n\n**What changed:** Non-streaming fallback in `src/plugins/official-external-plugin-catalog.ts` now uses `readResponseWithLimit` (already exported from `http-body.ts`) instead of `response.text()`. The streaming path is unchanged.\n\n**What did NOT change:** Streaming path behavior (already bounded). Function signature/return type. Any caller behavior — all callers pass the same limits and receive the same throw-on-overflow semantics.\n\n## What Problem This Solves\n\n`readHostedCatalogResponseText()` is called when loading the hosted official external plugin catalog feed. When `response.body` is a `ReadableStream` (always true in Node.js undici fetch), the streaming path correctly bounds reads with per-chunk limits. But for synthetic Response objects or edge-case HTTP responses without a readable stream, the fallback path could materialize a multi-megabyte body before truncation.\n\nThis is the same unbounded-read pattern already fixed in `readResponseBodySnippet` (PR #101270).\n\n## Root Cause\n\n`readHostedCatalogResponseText()` at `src/plugins/official-external-plugin-catalog.ts:562` calls `response.text()` when no streaming reader is available (`!hasStreamingResponseBody`). Unlike the streaming path which checks `totalBytes > maxBytes` per chunk, `response.text()` buffers the entire HTTP response body before any size check.\n\n## Real behavior proof\n\n**Behavior addressed:** Non-streaming fallback now reads up to `maxBytes` and throws on overflow, instead of materializing the entire body first.\n\n**Real environment tested:** Linux x64 (kernel 4.19.112), Node.js v24.13.1, OpenClaw commit 09977a9328\n\n**Exact steps or command run after this patch:**\n\n```bash\nnpx tsx -e \"\nimport { readResponseWithLimit } from './src/infra/http-body.ts';\n\nasync function main() {\n  const buf1 = await readResponseWithLimit(new Response('hello world'), 1024);\n  console.log('OK:', new TextDecoder().decode(buf1));\n  try {\n    await readResponseWithLimit(new Response('a'.repeat(200)), 100);\n  } catch (e: any) {\n    console.log('exceeds limit:', e.message);\n  }\n  const buf3 = await readResponseWithLimit(new Response(''), 1024);\n  console.log('empty:', JSON.stringify(new TextDecoder().decode(buf3)));\n}\nmain();\n\"\n```\n\n**Observed result after the fix:** `readResponseWithLimit` correctly bounds reads at `maxBytes` and throws on overflow without buffering the full body.\n\n**After-fix evidence:**\n```\nOK: hello world\nexceeds limit: Content too large: 200 bytes (limit: 100 bytes)\nempty: \"\"\n```\n\n**Test Files 1 passed (1), Tests 53 passed (53)**\n\n**What was not tested:** Full end-to-end hosted catalog download through a running Gateway — only the `readHostedCatalogResponseText()` function was verified via the shared `readResponseWithLimit` helper. The non-streaming fallback is inherently a synthetic/edge-case scenario in Node.js undici fetch, where all HTTP responses provide a `ReadableStream` body.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/plugins/official-external-plugin-catalog.ts:10` | Import `readResponseWithLimit` from `http-body.js` |\n| `src/plugins/official-external-plugin-catalog.ts:561-566` | Replace `response.text()` + post-hoc TextEncoder check with bounded `readResponseWithLimit` |\n\n## Risk checklist\n\n- **merge-risk:** Low — streaming path unchanged (covers all production HTTP responses); non-streaming path uses the same bounded-read helper already used elsewhere in the codebase\n- **Risk mitigation:** `readResponseWithLimit` is already used by other code paths in production; its bounded-read contract is well-tested\n- **User-visible behavior change?** No — same limits, same truncation semantics\n- **Config/env/migration change?** No\n- **Security/auth/network change?** No",
+        "branch": "fix/hosted-catalog-bound-read",
+        "head_sha": "abc0725d3d00d91c8e57d33df7c3aa5b23660ac3",
+        "author": "pandah97",
+        "labels": [
+          "size: XS",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/plugins/official-external-plugin-catalog.ts",
+            "additions": 6,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 6,
+        "deletions": 5,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101405",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101405.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 105,
+          "gatingTotal": 100,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 35,
+            "SUCCESS": 67,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 627,
+    "total_ms": 2294,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 360
+        "ms": 341
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1738
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,7 +158,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 253
+        "ms": 188
       },
       {
         "name": "append_ledger",
