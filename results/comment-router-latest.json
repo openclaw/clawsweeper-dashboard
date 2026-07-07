@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-07T17:53:04.565Z",
+  "generated_at": "2026-07-07T17:53:32.772Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T14:53:04.052Z",
+  "since": "2026-07-07T14:53:30.209Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101589
+    101830
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 5,
-  "commands_seen": 2,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101589:4903200010:2026-07-07T17:28:20Z:clawsweeper_needs_human",
-      "comment_id": "4903200010",
-      "comment_version_key": "4903200010:2026-07-07T17:28:20Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101589#issuecomment-4903200010",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101830:4906511299:2026-07-07T17:53:26Z:clawsweeper_needs_human",
+      "comment_id": "4906511299",
+      "comment_version_key": "4906511299:2026-07-07T17:53:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101830#issuecomment-4906511299",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 101589,
+      "issue_number": 101830,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T11:21:05Z",
-      "comment_updated_at": "2026-07-07T17:28:20Z",
+      "comment_created_at": "2026-07-07T17:21:43Z",
+      "comment_updated_at": "2026-07-07T17:53:26Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- No ClawSweeper repair job is needed; the branch already contains the narrow fix and needs ordinary maintainer review plus exact-head checks.; Cleared: The diff only changes gateway usage concurrency and a focused test; it does not add dependencies, workflows, credentials, downloads, package metadata, or other supply-chain surface. (sha=062a5ef7ef9f11b5c89d27fb640686bbfcb00116)",
-      "review_summary": "The PR replaces unbounded all-agent `usage.cost` cache loads with the existing bounded concurrency runner and adds a regression test for the cap.\n\nPR surface: Source +7, Tests +57. Total +64 across 2 files.\n\nReproducibility: yes. at source level rather than a live outage replay. Origin/main and v2026.6.11 call `loadCostUsageSummaryFromCache` once per configured agent inside raw `Promise.all`, and the PR adds a deterministic test for the bounded peak concurrency behavior.",
-      "review_followup": "- No ClawSweeper repair job is needed; the branch already contains the narrow fix and needs ordinary maintainer review plus exact-head checks.",
+      "repair_reason": "- [P2] Maintainer review should accept or adjust the availability-sensitive wait-on-lease cleanup invariant before merge; there is no narrow automated repair required from the current diff.; Cleared: The diff only changes in-process agent runtime lifecycle code and focused tests; no concrete security or supply-chain regression was found. (sha=ebdd3591648567b93d90d7e95306391308e7fd12)",
+      "review_summary": "The PR changes session bundle-MCP runtime disposal to reject new leases once retirement starts, drain active materialization leases before normal disposal, keep force disposal for global shutdown, and add regression coverage.\n\nPR surface: Source +44, Tests +68. Total +112 across 3 files.\n\nReproducibility: yes. source-level. Current main acquires bundle-MCP materialization leases but disposes session runtimes without draining them, and the PR body includes before/after terminal output exercising getOrCreateSessionMcpRuntime, materializeBundleMcpToolsForRun, and retireSessionMcpRuntime.",
+      "review_followup": "- [P2] Maintainer review should accept or adjust the availability-sensitive wait-on-lease cleanup invariant before merge; there is no narrow automated repair required from the current diff.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "062a5ef7ef9f11b5c89d27fb640686bbfcb00116",
+      "expected_head_sha": "ebdd3591648567b93d90d7e95306391308e7fd12",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -68,21 +68,97 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): defer bundle MCP runtime retirement until leases release",
+        "body": "## Summary\nFixes #76233.\n\nApproved exec follow-up turns for run-mode subagents can now keep an already materialized bundle MCP runtime alive until their active lease is released. Runtime retirement still starts immediately, blocks new leases, and global shutdown can still force disposal. A force disposal can also preempt an earlier normal disposal that is waiting on a lease.\n\n## Root cause\n`src/agents/agent-bundle-mcp-runtime.ts:1038` disposed a session runtime immediately even when `materializeBundleMcpToolsForRun` already held an active lease:\n\n```before\nasync dispose() {\n  if (disposed) {\n    return;\n  }\n  disposed = true;\n  catalog = null;\n  catalogInFlight = undefined;\n  const sessionsToClose = Array.from(sessions.values());\n  sessions.clear();\n  await Promise.allSettled(sessionsToClose.map((session) => disposeSession(session)));\n}\n```\n\nThat let subagent cleanup retire the bundle MCP runtime while a late approved follow-up turn was between runtime lookup and tool materialization, producing `bundle-mcp runtime disposed for session ...`.\n\n## Fix\n`src/agents/agent-bundle-mcp-runtime.ts:580` now tracks retirement start, waits for active leases before normal disposal, and rejects new leases once retirement begins:\n\n```after\nacquireLease() {\n  failIfDisposing();\n  activeLeases += 1;\n  let released = false;\n  return () => {\n    if (released) {\n      return;\n    }\n    released = true;\n    activeLeases = Math.max(0, activeLeases - 1);\n    resolveLeaseDrainers();\n  };\n}\n```\n\n`dispose({ force: true })` remains available for `disposeAll()` so process shutdown does not wait on live run leases, and a later force call wakes an existing normal disposal wait.\n\n## Why this is the right boundary\nThe race is at the session MCP runtime ownership boundary, not in the exec follow-up text path. Materialized bundle MCP tools already acquire and release runtime leases; this change makes runtime retirement honor that existing ownership contract. The idle sweeper already skips active leases, and global teardown keeps forceful behavior through the explicit force option.\n\n## Verification\n- `PATH=/opt/node/bin:$PATH node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-runtime.test.ts` passed 1 Vitest shard in 24.32s. `agent-bundle-mcp-runtime.test.ts`: 43 passed.\n- `PATH=/opt/node/bin:$PATH node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-tools.materialize.test.ts` passed 1 Vitest shard in 19.56s. `agent-bundle-mcp-tools.materialize.test.ts`: 13 passed.\n- `PATH=/opt/node/bin:$PATH node scripts/run-oxlint.mjs src/agents/agent-bundle-mcp-runtime.ts src/agents/agent-bundle-mcp-runtime.test.ts src/agents/agent-bundle-mcp-types.ts` passed.\n- `PATH=/opt/node/bin:$PATH ./node_modules/.bin/oxfmt --check src/agents/agent-bundle-mcp-runtime.ts src/agents/agent-bundle-mcp-runtime.test.ts src/agents/agent-bundle-mcp-types.ts` passed.\n- `PATH=/opt/node/bin:$PATH node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo` passed.\n- `PATH=/opt/node/bin:$PATH node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo` passed.\n- Before/after runtime proof used `PATH=/opt/node/bin:$PATH node --import tsx /tmp/openclaw-76233-runtime-proof.ts` against pristine main and this patch with identical input.\n\n## Real behavior proof\nBehavior addressed: A session bundle MCP runtime must not retire while an approved follow-up turn still holds an active materialization lease.\nReal environment tested: The real source runtime functions `getOrCreateSessionMcpRuntime`, `materializeBundleMcpToolsForRun`, and `retireSessionMcpRuntime` were driven on pristine main 53d0c4ca50500766b0c216acaf5355b2e9d5bd9a and on this patched tree ebdd3591648567b93d90d7e95306391308e7fd12; no external network service was involved.\nExact steps or command run after this patch: `PATH=/opt/node/bin:$PATH node --import tsx /tmp/openclaw-76233-runtime-proof.ts`\nEvidence after fix:\n```\n# BEFORE (pristine main 53d0c4ca50500766b0c216acaf5355b2e9d5bd9a)\n{\n  \"beforeRelease\": {\n    \"activeLeases\": 1,\n    \"retireSettled\": true,\n    \"extraLeaseResult\": \"accepted\"\n  },\n  \"afterRelease\": {\n    \"retireResult\": true,\n    \"retireSettled\": true,\n    \"cachedSessionIds\": [],\n    \"materializeAfterRetire\": \"rejected: bundle-mcp runtime disposed for session session-proof-76233\"\n  }\n}\n# AFTER (this patch ebdd3591648567b93d90d7e95306391308e7fd12, identical input)\n{\n  \"beforeRelease\": {\n    \"activeLeases\": 1,\n    \"retireSettled\": false,\n    \"extraLeaseResult\": \"rejected: bundle-mcp runtime disposed for session session-proof-76233\"\n  },\n  \"afterRelease\": {\n    \"retireResult\": true,\n    \"retireSettled\": true,\n    \"cachedSessionIds\": [],\n    \"materializeAfterRetire\": \"rejected: bundle-mcp runtime disposed for session session-proof-76233\"\n  }\n}\n```\nObserved result after fix: Retirement remains pending while one lease is active, new leases are refused during retirement, and final removal happens only after the held lease is released.\nWhat was not tested: No live provider request or real chat UI approval click; full production build was not run because this change is confined to the session bundle MCP runtime lifecycle.\n",
+        "branch": "fix/exec-approval-runtime-disposal",
+        "head_sha": "ebdd3591648567b93d90d7e95306391308e7fd12",
+        "author": "yetval",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/agent-bundle-mcp-runtime.test.ts",
+            "additions": 68,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-bundle-mcp-runtime.ts",
+            "additions": 52,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-bundle-mcp-types.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 121,
+        "deletions": 9,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101830",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101830.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 104,
+          "gatingTotal": 99,
+          "counts": {
+            "SUCCESS": 65,
+            "SKIPPED": 35,
+            "CANCELLED": 1,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     },
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101589:4903144096:2026-07-07T11:13:50Z:re_review",
-      "comment_id": "4903144096",
-      "comment_version_key": "4903144096:2026-07-07T11:13:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101589#issuecomment-4903144096",
+      "idempotency_key": "comment-router:openclaw/openclaw:101830:4906852191:2026-07-07T17:46:36Z:re_review",
+      "comment_id": "4906852191",
+      "comment_version_key": "4906852191:2026-07-07T17:46:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101830#issuecomment-4906852191",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 101589,
-      "author": "zw-xysk",
-      "author_id": 294457748,
+      "issue_number": 101830,
+      "author": "yetval",
+      "author_id": 102706514,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T11:13:50Z",
-      "comment_updated_at": "2026-07-07T11:13:50Z",
+      "comment_created_at": "2026-07-07T17:46:36Z",
+      "comment_updated_at": "2026-07-07T17:46:36Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -108,25 +184,142 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): defer bundle MCP runtime retirement until leases release",
+        "body": "## Summary\nFixes #76233.\n\nApproved exec follow-up turns for run-mode subagents can now keep an already materialized bundle MCP runtime alive until their active lease is released. Runtime retirement still starts immediately, blocks new leases, and global shutdown can still force disposal. A force disposal can also preempt an earlier normal disposal that is waiting on a lease.\n\n## Root cause\n`src/agents/agent-bundle-mcp-runtime.ts:1038` disposed a session runtime immediately even when `materializeBundleMcpToolsForRun` already held an active lease:\n\n```before\nasync dispose() {\n  if (disposed) {\n    return;\n  }\n  disposed = true;\n  catalog = null;\n  catalogInFlight = undefined;\n  const sessionsToClose = Array.from(sessions.values());\n  sessions.clear();\n  await Promise.allSettled(sessionsToClose.map((session) => disposeSession(session)));\n}\n```\n\nThat let subagent cleanup retire the bundle MCP runtime while a late approved follow-up turn was between runtime lookup and tool materialization, producing `bundle-mcp runtime disposed for session ...`.\n\n## Fix\n`src/agents/agent-bundle-mcp-runtime.ts:580` now tracks retirement start, waits for active leases before normal disposal, and rejects new leases once retirement begins:\n\n```after\nacquireLease() {\n  failIfDisposing();\n  activeLeases += 1;\n  let released = false;\n  return () => {\n    if (released) {\n      return;\n    }\n    released = true;\n    activeLeases = Math.max(0, activeLeases - 1);\n    resolveLeaseDrainers();\n  };\n}\n```\n\n`dispose({ force: true })` remains available for `disposeAll()` so process shutdown does not wait on live run leases, and a later force call wakes an existing normal disposal wait.\n\n## Why this is the right boundary\nThe race is at the session MCP runtime ownership boundary, not in the exec follow-up text path. Materialized bundle MCP tools already acquire and release runtime leases; this change makes runtime retirement honor that existing ownership contract. The idle sweeper already skips active leases, and global teardown keeps forceful behavior through the explicit force option.\n\n## Verification\n- `PATH=/opt/node/bin:$PATH node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-runtime.test.ts` passed 1 Vitest shard in 24.32s. `agent-bundle-mcp-runtime.test.ts`: 43 passed.\n- `PATH=/opt/node/bin:$PATH node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-tools.materialize.test.ts` passed 1 Vitest shard in 19.56s. `agent-bundle-mcp-tools.materialize.test.ts`: 13 passed.\n- `PATH=/opt/node/bin:$PATH node scripts/run-oxlint.mjs src/agents/agent-bundle-mcp-runtime.ts src/agents/agent-bundle-mcp-runtime.test.ts src/agents/agent-bundle-mcp-types.ts` passed.\n- `PATH=/opt/node/bin:$PATH ./node_modules/.bin/oxfmt --check src/agents/agent-bundle-mcp-runtime.ts src/agents/agent-bundle-mcp-runtime.test.ts src/agents/agent-bundle-mcp-types.ts` passed.\n- `PATH=/opt/node/bin:$PATH node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo` passed.\n- `PATH=/opt/node/bin:$PATH node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo` passed.\n- Before/after runtime proof used `PATH=/opt/node/bin:$PATH node --import tsx /tmp/openclaw-76233-runtime-proof.ts` against pristine main and this patch with identical input.\n\n## Real behavior proof\nBehavior addressed: A session bundle MCP runtime must not retire while an approved follow-up turn still holds an active materialization lease.\nReal environment tested: The real source runtime functions `getOrCreateSessionMcpRuntime`, `materializeBundleMcpToolsForRun`, and `retireSessionMcpRuntime` were driven on pristine main 53d0c4ca50500766b0c216acaf5355b2e9d5bd9a and on this patched tree ebdd3591648567b93d90d7e95306391308e7fd12; no external network service was involved.\nExact steps or command run after this patch: `PATH=/opt/node/bin:$PATH node --import tsx /tmp/openclaw-76233-runtime-proof.ts`\nEvidence after fix:\n```\n# BEFORE (pristine main 53d0c4ca50500766b0c216acaf5355b2e9d5bd9a)\n{\n  \"beforeRelease\": {\n    \"activeLeases\": 1,\n    \"retireSettled\": true,\n    \"extraLeaseResult\": \"accepted\"\n  },\n  \"afterRelease\": {\n    \"retireResult\": true,\n    \"retireSettled\": true,\n    \"cachedSessionIds\": [],\n    \"materializeAfterRetire\": \"rejected: bundle-mcp runtime disposed for session session-proof-76233\"\n  }\n}\n# AFTER (this patch ebdd3591648567b93d90d7e95306391308e7fd12, identical input)\n{\n  \"beforeRelease\": {\n    \"activeLeases\": 1,\n    \"retireSettled\": false,\n    \"extraLeaseResult\": \"rejected: bundle-mcp runtime disposed for session session-proof-76233\"\n  },\n  \"afterRelease\": {\n    \"retireResult\": true,\n    \"retireSettled\": true,\n    \"cachedSessionIds\": [],\n    \"materializeAfterRetire\": \"rejected: bundle-mcp runtime disposed for session session-proof-76233\"\n  }\n}\n```\nObserved result after fix: Retirement remains pending while one lease is active, new leases are refused during retirement, and final removal happens only after the held lease is released.\nWhat was not tested: No live provider request or real chat UI approval click; full production build was not run because this change is confined to the session bundle MCP runtime lifecycle.\n",
+        "branch": "fix/exec-approval-runtime-disposal",
+        "head_sha": "ebdd3591648567b93d90d7e95306391308e7fd12",
+        "author": "yetval",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/agent-bundle-mcp-runtime.test.ts",
+            "additions": 68,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-bundle-mcp-runtime.ts",
+            "additions": 52,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-bundle-mcp-types.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 121,
+        "deletions": 9,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101830",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101830.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 104,
+          "gatingTotal": 99,
+          "counts": {
+            "SUCCESS": 65,
+            "SKIPPED": 35,
+            "CANCELLED": 1,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101830:4906779936:2026-07-07T17:40:12Z:re_review",
+      "comment_id": "4906779936",
+      "comment_version_key": "4906779936:2026-07-07T17:40:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101830#issuecomment-4906779936",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101830,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-07T17:40:12Z",
+      "comment_updated_at": "2026-07-07T17:40:12Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2120,
+    "total_ms": 3154,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 488
+        "ms": 458
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2087
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -138,15 +331,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1608
+        "ms": 579
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
