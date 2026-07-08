@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T16:24:50.922Z",
+  "generated_at": "2026-07-08T16:24:53.137Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T13:24:48.603Z",
+  "since": "2026-07-08T13:24:50.951Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    102240
+    102232
   ],
   "comment_ids": [
-    4916909136
+    4916908739
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:102240:4916909136:2026-07-08T16:21:46Z:re_review",
-      "comment_id": "4916909136",
-      "comment_version_key": "4916909136:2026-07-08T16:21:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102240#issuecomment-4916909136",
+      "idempotency_key": "comment-router:openclaw/openclaw:102232:4916908739:2026-07-08T16:21:43Z:re_review",
+      "comment_id": "4916908739",
+      "comment_version_key": "4916908739:2026-07-08T16:21:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102232#issuecomment-4916908739",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 102240,
-      "author": "qingminglong",
-      "author_id": 34085845,
+      "issue_number": 102232,
+      "author": "solavrc",
+      "author_id": 145330217,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T16:21:46Z",
-      "comment_updated_at": "2026-07-08T16:21:46Z",
+      "comment_created_at": "2026-07-08T16:21:43Z",
+      "comment_updated_at": "2026-07-08T16:21:43Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -73,62 +73,113 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(tool-call-repair): preserve visible suffix when XML tool text is incomplete",
-        "body": "## What Problem This Solves\n\nFixes an issue where users could lose visible assistant text when a streamed response began with an oversized incomplete bracketed XML parameter block such as `[read]` and then continued with a normal visible answer.\n\n## Why This Change Was Made\n\nThe repair grammar now keeps optional missing `</function>` handling scoped to legacy `[tool:name]` XML blocks, while the stream normalizer recovers the visible suffix after incomplete plain `[name]` XML parameter text without leaking XML closing markers.\n\n## User Impact\n\nUsers now see the assistant's visible answer instead of receiving an empty completion when this malformed stream shape appears.\n\n## Evidence\n\n- Claim proved: an oversized incomplete `[read]` XML parameter prefix followed by visible text streams and finishes with only the visible suffix preserved.\n- Runtime proof at `1c9b82504a814992df8db26011f42648b13f7206`: `node --import tsx --input-type=module` ran a redacted provider-returned stream through the real xAI provider wrapper path, importing `wrapXaiProviderStream` from `extensions/xai/stream.ts` and `createAssistantMessageEventStream` from `src/llm/utils/event-stream.ts`.\n\n```json\n{\n  \"proof\": \"xai provider wrapper real path with local redacted provider stream\",\n  \"eventTypes\": [\"text_delta\", \"done\"],\n  \"textDelta\": \"Visible answer after an incomplete bracketed XML parameter block.\",\n  \"finalContent\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"Visible answer after an incomplete bracketed XML parameter block.\"\n    }\n  ],\n  \"containsVisibleSuffix\": true,\n  \"containsXmlParameterClose\": false,\n  \"containsPlainToolPrefix\": false\n}\n```\n\n- Focused regression at `1c9b82504a814992df8db26011f42648b13f7206`: `node scripts/run-vitest.mjs src/plugin-sdk/provider-stream-shared.test.ts` passed with 67 tests passing.\n- Committed diff hygiene: `git diff --check HEAD~1..HEAD` passed.\n- Review proof: `python .agents\\skills\\autoreview\\scripts\\autoreview --mode local` passed with no accepted/actionable findings.\n- Observed result: both the runtime proof and focused regression emit a `text_delta` and `done` containing `Visible answer after an incomplete bracketed XML parameter block.` and do not include `</parameter>` or `[read]`.",
-        "branch": "codex/fix-tool-call-visible-suffix-stream",
-        "head_sha": "1c9b82504a814992df8db26011f42648b13f7206",
-        "author": "qingminglong",
+        "title": "fix(codex): heartbeat notifications to other channels are silently denied by cross-context policy",
+        "body": "Closes #102206\n\n> **AI-assisted PR.** Authored with Claude (Opus 4.8). I have reviewed the change and understand what it does.\n\n## What Problem This Solves\n\nFixes an issue where an agent running on the embedded Codex backend would have its autonomous notifications to other channels **silently denied**. Since v2026.6.9, heartbeat and cron polls, plus `sessions_send`-injected inter-session handoffs, cannot send a message to a different provider (e.g. a heartbeat notification to Discord) — the send is dropped by the cross-context messaging guard with no user-visible error. In the reporting environment this silently lost **71 real notifications over ~2.5 weeks**.\n\nThe affected surface is autonomous/background delivery from a Codex-backed agent (heartbeat, cron, inter-session handoff) to any channel other than the one the agent's main session is nominally on. Interactive WebChat UI conversations are not the trigger and their behavior is unchanged.\n\n## Why This Change Was Made\n\n**Mechanism.** Since v2026.6.9 the Codex app-server dynamic-tool bridge passes `currentChannelProvider: resolveCodexMessageToolProvider(params)` into the hook context. The resolver returned `messageChannel ?? messageProvider`. For internal turns delivered into an agent's main session — heartbeat/cron polls and `sessions_send`-injected inter-session handoffs — the embedded backend passes both fields as the internal `webchat` channel (`INTERNAL_MESSAGE_CHANNEL`); see `src/tui/embedded-backend.ts:740-741`. `enforceCrossContextPolicy` then treats the run as *bound to a real `webchat` conversation* and denies an autonomous cross-provider send:\n\n```\nCross-context messaging denied: action=send target provider \"discord\" while bound to \"webchat\".\n```\n\nv2026.6.8 passed **no** binding on the Codex path, so the guard no-op'd (`if (!currentTarget) return`). v2026.6.9 introduced the binding and thus the regression (bisected 6.8-OK → 6.9-DENIED in the same session).\n\n**Fix.** `resolveCodexMessageToolProvider` now returns `undefined` when **both** hold: (a) the resolved provider is the internal message channel (`isInternalMessageChannel`), and (b) the turn is an internal turn — `trigger === \"heartbeat\" | \"cron\"`, or `inputProvenance.kind === \"inter_session\"` (new exported helper `isInternalCodexMessageTurn`). This restores the pre-v2026.6.9 \"no binding\" behavior for exactly the turns that regressed.\n\n**Why the turn-kind discriminator is the narrowest correct scope.** Dropping the binding *only* for internal turns on the internal channel leaves every real conversation bound:\n- Real WebChat UI conversations carry a `user`/`manual` trigger and no inter-session provenance, so they **stay bound** — cross-provider containment for the genuine user-facing surface is unchanged.\n- Internal turns delivered on a real deliverable channel (e.g. `telegram`) are not on the internal `webchat` channel, so they also **stay bound**.\n- Only the spurious binding to the non-deliverable internal channel — which never represented a real conversation to contain against — is removed. `toolPolicyMessageProvider` still carries the raw channel, so channel-level tool policy resolution is unaffected.\n\nThis aligns the Codex path with the non-Codex core path, which never binds internal turns to the internal channel in the first place. The same resolver feeds both `run-attempt.ts` and `side-question.ts`, so both Codex code paths are covered by the single change.\n\n## User Impact\n\nOperators running agents on the embedded Codex backend get their autonomous notifications delivered again: heartbeat and cron runs, and inter-session (`sessions_send`) handoffs, can once more send to channels other than the agent's nominal channel (Discord, Telegram, etc.) instead of being silently suppressed. No configuration change is required, and no new denial or prompt-injection surface is opened — interactive WebChat UI conversations keep the exact same cross-provider containment they have today.\n\n## Relationship to #102216 / #102217\n\nTwo PRs are already open on #102206. Both are worthwhile attempts at the same regression; this one differs in what it fixes and what it preserves.\n\n- **#102216** (@lin-hongkuan) returns `messageProvider` when `messageChannel === \"webchat\" && messageProvider !== \"webchat\"`. This does not fix the reported bug: embedded-backend internal runs pass **both** fields as `INTERNAL_MESSAGE_CHANNEL` (`src/tui/embedded-backend.ts:740-741`), so `messageProvider` is also `\"webchat\"` and the guard condition never triggers for a real heartbeat/cron/inter-session turn — the resolver still returns `\"webchat\"` and the send is still denied. Its added test uses `{ messageChannel: \"webchat\", messageProvider: \"discord\" }`, a combination internal runs do not produce.\n- **#102217** (@xydigit-zt, [AI]) strips `\"webchat\"` from the resolver **unconditionally**. That does fix the denial, but it also removes the binding for genuine WebChat UI user conversations, loosening cross-provider containment for a real user-facing surface (the PR carries `merge-risk: 🚨 compatibility`). This PR scopes the drop to internal turns only (`isInternalCodexMessageTurn`), so real WebChat UI turns keep their binding and containment is unchanged.\n\nIn short: this change fixes the exact turns that regressed (which #102216 misses) without loosening the guard for real user conversations (which #102217 does).\n\n## Evidence\n\n**1. Production occurrence.** See the live logs in #102206: 71 lost notifications over ~2.5 weeks, the exact denial string above, and the bisection showing the same session going 6.8-OK → 6.9-DENIED.\n\n**2. Real-runtime differential** (compiled `dist`, default-deny config, no `crossContext` overrides). `enforceCrossContextPolicy` is byte-identical across the two builds — only the resolver changed. A harness drove the real pipeline `resolveCodexMessageToolProvider → enforceCrossContextPolicy({ action: \"send\", channel: \"discord\", ... })`:\n\n| Turn | BEFORE (installed OpenClaw 2026.6.11, `e085fa1`) | AFTER (this branch, `b279803`) |\n| --- | --- | --- |\n| Heartbeat → `discord` | resolver → `\"webchat\"`; gate **throws** `Cross-context messaging denied: action=send target provider \"discord\" while bound to \"webchat\".` | resolver → `undefined`; gate no-ops; **send passes** |\n| Inter-session (`sessions_send`) → `discord` | resolver → `\"webchat\"`; gate **throws** (same denial) | resolver → `undefined`; **send passes** |\n| **Control:** genuine WebChat *user* turn → `discord` | resolver → `\"webchat\"`; gate **DENIED** | resolver → `\"webchat\"`; gate **DENIED** (containment for the real UI surface unchanged) |\n\n(Real Discord channel ids redacted as `channel:<redacted>`.)\n\nNote: full-gateway E2E was not run because the embedded Codex credential is keychain-backed OAuth and is not isolatable without touching the production keychain. The changed logic is fully exercised at the provider layer, where the regression lives.\n\n**3. Tests.** 6 new regression tests:\n\n`extensions/codex/src/app-server/dynamic-tool-build.test.ts`\n- `keeps the internal channel bound for real webchat user turns`\n- `drops the internal channel binding for heartbeat and cron turns`\n- `drops the internal channel binding for sessions_send inter-session turns`\n- `keeps a real delivery channel bound even for internal triggers`\n- `classifies internal-turn kinds for cross-context binding`\n\n`extensions/codex/src/app-server/run-attempt.test.ts`\n- `does not bind the message tool to the internal channel for internal turns`\n\nFocused vitest green: `dynamic-tool-build` 56/56, `run-attempt` 118/118, `outbound-policy` 25/25. `pnpm build` green.\n\n---\n\n**AI-assisted checklist**\n- [x] Mark as AI-assisted in the PR title or description\n- [x] Include a concise **Evidence** section with the most useful validation\n- [x] Confirm you understand what the code does\n- [ ] If you have access to Codex, run `codex review --base origin/main` locally and address the findings before asking for review — attempted, but blocked by a Codex usage limit (resets Jul 10); will re-run and address findings then\n- [x] Resolve or reply to bot review conversations after you address them\n\n",
+        "branch": "fix/codex-internal-turn-cross-context",
+        "head_sha": "5bb7787a44f807a1f7bb5d160fc95f50a478669d",
+        "author": "solavrc",
         "labels": [
           "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
+          "extensions: codex",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 message-delivery",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "packages/tool-call-repair/src/grammar.ts",
-            "additions": 5,
-            "deletions": 1,
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
+            "additions": 83,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/tool-call-repair/src/stream-normalizer.ts",
-            "additions": 85,
-            "deletions": 3,
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.ts",
+            "additions": 40,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugin-sdk/provider-stream-shared.test.ts",
-            "additions": 44,
+            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
+            "additions": 50,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 3,
-        "additions": 134,
-        "deletions": 4,
+        "additions": 173,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102240",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102240.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102232",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102232.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 106,
-          "gatingTotal": 101,
+          "total": 89,
+          "gatingTotal": 84,
           "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 32,
-            "NEUTRAL": 1
+            "SUCCESS": 39,
+            "SKIPPED": 27,
+            "IN_PROGRESS": 23
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (matrix):IN_PROGRESS",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (matrix):IN_PROGRESS",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -141,15 +192,15 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2559,
+    "total_ms": 2446,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 585
+        "ms": 494
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1717
+        "ms": 1674
       },
       {
         "name": "classify_comment_commands",
@@ -169,7 +220,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 241
+        "ms": 261
       },
       {
         "name": "append_ledger",
