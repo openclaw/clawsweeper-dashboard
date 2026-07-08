@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T02:31:43.523Z",
+  "generated_at": "2026-07-08T02:31:49.330Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T23:31:41.732Z",
+  "since": "2026-07-07T23:31:47.157Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101910
+    101932
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101910:4909970110:2026-07-08T02:31:38Z:clawsweeper_auto_repair",
-      "comment_id": "4909970110",
-      "comment_version_key": "4909970110:2026-07-08T02:31:38Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101910#issuecomment-4909970110",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101932:4910380821:2026-07-08T02:31:41Z:clawsweeper_needs_human",
+      "comment_id": "4910380821",
+      "comment_version_key": "4910380821:2026-07-08T02:31:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101932#issuecomment-4910380821",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 101910,
+      "issue_number": 101932,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T23:33:57Z",
-      "comment_updated_at": "2026-07-08T02:31:38Z",
+      "comment_created_at": "2026-07-08T00:50:50Z",
+      "comment_updated_at": "2026-07-08T02:31:41Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=4d4df31f087b8d2e5fc9d9e6eb6364ec5b375d81)",
-      "review_summary": "The PR adds reply-operation activity timestamps, a 60s terminal-settle forced release, visible-turn stale takeover after 10 minutes of no activity, removes dispatch-side stale recovery, and updates focused registry/admission/dispatch coverage.\n\nPR surface: Source +96, Tests -168. Total -72 across 18 files.\n\nReproducibility: yes. Current-main source inspection shows running aborts can leave the operation registered until the owner completes, and visible admission lacks stale-running takeover; the PR also includes live black-hole gateway proof for abort-to-release behavior.",
-      "review_followup": "- [P2] The PR is draft/protected and needs a contributor/maintainer fix for suppressed CLI activity stamping plus the planned maintainer validation decision before merge.",
+      "repair_reason": "- No automated repair is needed now; the remaining blocker is owner acceptance of the fail-closed unknown-size fork behavior before merge.; Cleared: The diff changes session-fork logic, an internal decision type, gateway/reply callers, and tests; it does not change dependencies, workflows, secrets, package resolution, or other supply-chain surfaces. (sha=36e6ece642f01603bc35376824121fa74dec8397)",
+      "review_summary": "The PR adds a fresh-token fast path, a 1s parent-fork token probe timeout, new skip decisions for timed-out or unavailable parent sizing, caller handling, and regression tests.\n\nPR surface: Source +88, Tests +122. Total +210 across 5 files.\n\nReproducibility: yes. Source inspection shows current main awaits parent-token resolution without a timeout, and the PR body shows terminal proof that the patched production fork caller returns skipped after roughly one second when fs.stat never resolves.",
+      "review_followup": "- No automated repair is needed now; the remaining blocker is owner acceptance of the fail-closed unknown-size fork behavior before merge.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "4d4df31f087b8d2e5fc9d9e6eb6364ec5b375d81",
+      "expected_head_sha": "36e6ece642f01603bc35376824121fa74dec8397",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,143 +70,62 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(auto-reply): bound terminal reply-run settle and reclaim stale lanes",
-        "body": "### What Problem This Solves\n\nTrack A of #101863: a reply run that hangs (owner promise never settles) permanently wedges its session today.\n\n- `abortByUser()`/`abortForRestart()` set a terminal `result` and cancel the backend, but release the session lane only for `queued` operations. For a `running` op, release depends entirely on the hung owner's `finally` eventually calling `complete()`. Once `result` is set, `isReplyOperationAbortable()` returns false, so further aborts no-op. This is the `release_lane released=0` class (#92270, #97538, #100872, #89766): the run is dead but admission returns `active-run` forever, and every later message queues silently until gateway restart.\n- `ReplyOperation` carried no timestamps, so nothing could distinguish a progressing run from a wedged one.\n- Visible turns waited on active runs with no timeout; the only takeover path (`terminalRecovery`) covers already-terminal store snapshots, never a never-returning `running` op.\n- `dispatchReplyFromConfig` compensated with a caller-side recovery loop that invoked the stuck-session-recovery machinery on config-derived wall-clock thresholds — the same heuristics reported for killing healthy long runs (#88870).\n\n### Why This Change Was Made\n\nEstablishes the Track A invariant from #101863: **reaching a terminal state releases the lane, bounded, no matter what the owner does** — and staleness is judged by real activity evidence, not wall clock.\n\n1. **Bounded terminal settle** (`reply-run-registry.ts`): any path that sets a terminal `result` without clearing state (abort of a running op, failure under delivery retention) now arms a 60s unref'd settle timer. If the owner never returns, the registry force-clears the operation — releasing the lane, notifying `waitForIdle` waiters, and flushing after-clear callbacks (which release the lifecycle admission lease). A late owner `complete()` stays a harmless no-op.\n2. **Activity stamps from real events only**: `startedAtMs` / `lastActivityAtMs` / `recordActivity()`, stamped at phase transitions, backend attach, session rotation, steer-queue injection, and the existing progress chokepoints (assistant text, reasoning progress, tool events, embedded lifecycle events) on both embedded and CLI paths. Never from timers — this is the seam Track B extends.\n3. **Stale takeover at admission** (`reply-turn-admission.ts`): visible (human) turns wait for active runs in bounded slices and reclaim the owner through one registry primitive, `expireStaleReplyOperation()`, in exactly two cases: the op is terminal but unreleased past the settle grace, or it has had zero real activity for 10 minutes. The expired op gets the new closed failure code `run_stalled`. Heartbeat, queued-followup, and control-abort turns never take over.\n4. **Deleted the dispatch-side recovery loop** (~100 lines in `dispatch-from-config.ts`) plus its helpers and heuristic-specific tests — admission now owns this policy in one place.\n\nKnown tradeoff (maintainer-accepted, Track B refines it): a run whose tool is legitimately silent for 10+ minutes can be reclaimed when a new human turn arrives. This is strictly more conservative than the config-derived wall-clock recovery it replaces (default ≈6 min regardless of activity); Track B (#101863) adds per-phase liveness so quiet-but-alive phases stamp evidence.\n\n### User Impact\n\n- A wedged agent turn no longer makes the session permanently unresponsive: `/stop` (or any abort) frees the lane within 60s even if the underlying run never unwinds, and a new message reclaims a silently dead run after 10 minutes instead of never.\n- Queued messages behind a wedge get processed instead of deferring forever.\n- Healthy long runs are safer than before: takeover requires zero real activity with a human waiting, rather than the previous wall-clock threshold.\n\n### Evidence\n\n- Net −177 LOC (533+/710−, 16 files): one primitive replaces the caller-side recovery loop and its heuristics.\n- Unit/behavior tests added: terminal-settle force-release with a never-returning owner; late-owner `complete()` harmless after forced release; retained-failure ops still bounded; visible-turn reclaim of silent-stale and terminal-unreleased ops; fresh ops kept (waiting turn does not steal); `heartbeat`/`queued_followup` never reclaim; settle timer cancelled when the owner clears first.\n- Integration tests: `dispatch-from-config.stale-recovery.test.ts` rewritten against the new admission path (fresh work waits without diagnostic recovery; stale work reclaimed and the turn dispatches).\n- Validation: auto-reply owner shard (139 files / 2862 tests), import sweep over every test importing `reply-run-registry` / `reply-turn-admission` / `ReplyOperationFailureCode` (5 shards), and `tsgo` core lanes — all green on Testbox; focused suites re-run green after review edits and rebase onto current `main`.\n- Review follow-up: ClawSweeper's P1 (queued-followup reasoning progress not stamping activity) fixed structurally in 4d4df31f087 — activity now stamps once at the `runCliAgentWithLifecycle` bridge seam via `onActivity`; per-callback stamps deleted at both call sites.\n- Live E2E wedge/reclaim proof: posted as a PR comment (Test A: abort on a genuinely wedged model call frees the lane in ~107 ms and the next turn admits; forced-release backstop + takeover shapes proven at registry/dispatch level; scope caveats documented).\n\nPart of #101863 (Track A). Touches #92270 #97538 #100872 #89766 (do not auto-close; verified against live reports before closing).\n",
-        "branch": "fix/reply-run-terminal-release",
-        "head_sha": "4d4df31f087b8d2e5fc9d9e6eb6364ec5b375d81",
-        "author": "obviyus",
+        "title": "fix(session): avoid stalls when parent token probing hangs",
+        "body": "Closes #101718\n\n## What Problem This Solves\n\nFixes an issue where users creating or forking a session from a parent could wait indefinitely when parent transcript token probing did not settle.\n\n## Why This Change Was Made\n\nThe parent fork decision now uses fresh persisted token counts immediately, and otherwise bounds transcript token probing to a short wait. If probing times out or cannot verify the parent size, OpenClaw starts the child with isolated context instead of continuing into parent transcript copy. Quickly resolved small parents still fork, and fresh or quickly resolved oversized parents still use the existing isolated-session skip behavior.\n\n## User Impact\n\nSession creation and parent-fork workflows no longer stay blocked behind a stuck parent token probe or continue into another unbounded parent transcript read after the probe timeout. Users with oversized or unverified parent sessions get isolated context instead of inheriting unsafe parent history.\n\n## Impact Assessment\n\n- Scope: parent-session fork decision logic shared by session creation, parent-fork prepare, and subagent spawn paths.\n- Downstream: callers already handle `skip` decisions by avoiding transcript copy; timeout and unavailable-size probes now use that existing isolated-context path.\n- Edge cases: fresh token counts bypass transcript probing; quickly resolved oversized counts still skip; stalled probes clear their timer after the bounded wait; unresolved size probes do not fork.\n- Config surface: no new configuration, environment variable, or storage format.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs src/auto-reply/reply/session-fork.test.ts`\n\n```text\n[test] starting test/vitest/vitest.auto-reply.config.ts\n[test] passed 1 Vitest shard in 22.71s\n```\n\n- `pnpm tsgo:prod`\n\n```text\npassed\n```\n\n- `pnpm check:test-types`\n\n```text\npassed\n```\n\n## Real behavior proof\n\n**Behavior addressed:** Parent fork caller paths return instead of waiting indefinitely when parent token probing does not settle, and the timeout path avoids the later parent transcript copy.\n**Environment tested:** Linux, Node v22.22.0, local source checkout on branch `fix/101718-session-fork-token-timeout`, isolated temporary `OPENCLAW_HOME` and `OPENCLAW_STATE_DIR`.\n**Steps run after the patch:** Called the patched `forkSessionEntryFromParent` production caller path with a parent transcript whose token-probe `fs.promises.stat` never resolves, then verified fresh oversized parent tokens still produce the existing skip decision.\n**Evidence after fix:**\n\n```bash\nnode --import tsx --no-warnings -e '\nimport fs from \"node:fs/promises\";\nimport os from \"node:os\";\nimport path from \"node:path\";\n\nconst root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), \"openclaw-101718-proof-\")));\nprocess.env.OPENCLAW_HOME = path.join(root, \"home\");\nprocess.env.OPENCLAW_STATE_DIR = path.join(root, \"state\");\nconst { forkSessionEntryFromParent } = await import(\"./src/auto-reply/reply/session-fork.js\");\nconst activeStoreDir = path.join(root, \"active-store\");\nawait fs.mkdir(activeStoreDir, { recursive: true });\nconst storePath = path.join(activeStoreDir, \"sessions.json\");\nconst parentSessionKey = \"agent:main:main\";\nconst sessionKey = \"agent:main:subagent:child\";\nconst parentSessionFile = path.join(activeStoreDir, \"parent.jsonl\");\nconst now = Date.now();\nawait fs.writeFile(parentSessionFile, [\n  JSON.stringify({ type: \"session\", version: 3, id: \"parent-session\", timestamp: \"2026-07-08T00:00:00.000Z\", cwd: root }),\n  JSON.stringify({ type: \"message\", id: \"assistant-1\", parentId: null, timestamp: \"2026-07-08T00:00:01.000Z\", message: { role: \"assistant\", content: \"parent branch\" } }),\n].join(\"\\n\") + \"\\n\", \"utf-8\");\nawait fs.writeFile(storePath, JSON.stringify({\n  [parentSessionKey]: { sessionId: \"parent-session\", sessionFile: parentSessionFile, updatedAt: now },\n  [sessionKey]: { sessionId: \"\", updatedAt: now },\n}, null, 2), \"utf-8\");\n\nconst originalStat = fs.stat;\nlet parentStatCalls = 0;\nfs.stat = async (filePath, ...args) => {\n  if (String(filePath) === parentSessionFile) {\n    parentStatCalls += 1;\n    return await new Promise(() => {});\n  }\n  return await originalStat.call(fs, filePath, ...args);\n};\n\nconst started = Date.now();\ntry {\n  const result = await forkSessionEntryFromParent({\n    agentId: \"main\",\n    decisionSkipPatch: () => ({ forkedFromParent: false }),\n    fallbackEntry: { sessionId: \"\", updatedAt: now },\n    parentSessionKey,\n    sessionKey,\n    storePath,\n  });\n  const elapsedMs = Date.now() - started;\n  const allFiles = await fs.readdir(activeStoreDir);\n  console.log(JSON.stringify({\n    elapsedMs,\n    parentStatCalls,\n    resultStatus: result.status,\n    decisionReason: result.status === \"skipped\" ? result.decision?.reason : null,\n    resultSessionEntry: result.status === \"skipped\" ? result.sessionEntry : null,\n    activeStoreFiles: allFiles.sort(),\n    createdForkTranscriptCount: allFiles.filter((name) => name.endsWith(\".jsonl\") && name !== \"parent.jsonl\").length,\n  }, null, 2));\n} finally {\n  fs.stat = originalStat;\n  await fs.rm(root, { recursive: true, force: true });\n}\n'\n```\n\n```text\n{\n  \"elapsedMs\": 1032,\n  \"parentStatCalls\": 1,\n  \"resultStatus\": \"skipped\",\n  \"decisionReason\": \"parent-size-timeout\",\n  \"resultSessionEntry\": {\n    \"sessionId\": \"\",\n    \"updatedAt\": 1783476977699,\n    \"forkedFromParent\": false\n  },\n  \"activeStoreFiles\": [\n    \"parent.jsonl\",\n    \"sessions.json\"\n  ],\n  \"createdForkTranscriptCount\": 0\n}\n```\n\n```bash\nnode --import tsx --no-warnings --input-type=module -e '\nprocess.env.OPENCLAW_HOME = \"/tmp/openclaw-101718-proof-home\";\nprocess.env.OPENCLAW_STATE_DIR = \"/tmp/openclaw-101718-proof-state\";\nconst { resolveParentForkDecision } = await import(\"./src/auto-reply/reply/session-fork.js\");\nconst decision = await resolveParentForkDecision({\n  parentEntry: {\n    sessionId: \"parent-session\",\n    updatedAt: Date.now(),\n    totalTokens: 170_000,\n    totalTokensFresh: true,\n  },\n  storePath: \"/tmp/openclaw-sessions.json\",\n});\nconsole.log(JSON.stringify({\n  status: decision.status,\n  reason: decision.status === \"skip\" ? decision.reason : null,\n  maxTokens: decision.maxTokens,\n  parentTokens: \"parentTokens\" in decision ? decision.parentTokens : null,\n}, null, 2));\n'\n```\n\n```text\n{\n  \"status\": \"skip\",\n  \"reason\": \"parent-too-large\",\n  \"maxTokens\": 100000,\n  \"parentTokens\": 170000\n}\n```\n\n**Observed result after the fix:** The stalled parent token-probe caller path returned `skipped` with `parent-size-timeout` after roughly one second, kept the original `parent.jsonl`, and created zero fork transcripts. Fresh oversized tokens still returned `parent-too-large`.\n**Not tested:** A live gateway session creation with a real remote filesystem or transcript handle blocked indefinitely was not exercised locally.\n",
+        "branch": "fix/101718-session-fork-token-timeout",
+        "head_sha": "36e6ece642f01603bc35376824121fa74dec8397",
+        "author": "lilan0125",
         "labels": [
-          "maintainer",
-          "size: XL",
-          "proof: sufficient",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
+          "gateway",
+          "size: M",
+          "P2",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/agent-runner-cli-dispatch.test.ts",
-            "additions": 89,
-            "deletions": 0,
+            "path": "src/auto-reply/reply/session-fork.test.ts",
+            "additions": 123,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
-            "additions": 32,
-            "deletions": 10,
+            "path": "src/auto-reply/reply/session-fork.ts",
+            "additions": 80,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.preflight-stale-tokens.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.final-media-runreplyagent.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.media-paths.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.stale-recovery.test.ts",
-            "additions": 43,
-            "deletions": 603,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 3,
-            "deletions": 102,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.test.ts",
-            "additions": 122,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.ts",
-            "additions": 127,
+            "path": "src/auto-reply/reply/session-parent-fork-prepare.ts",
+            "additions": 8,
             "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/reply-turn-admission.test.ts",
-            "additions": 162,
+            "path": "src/config/sessions/session-accessor.ts",
+            "additions": 6,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/reply-turn-admission.ts",
-            "additions": 44,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic-stuck-session-recovery.runtime.ts",
-            "additions": 2,
-            "deletions": 1,
+            "path": "src/gateway/session-create-service.ts",
+            "additions": 5,
+            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 18,
-        "additions": 649,
-        "deletions": 721,
+        "changedFiles": 5,
+        "additions": 222,
+        "deletions": 12,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101910",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101910.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101932",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101932.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
@@ -215,9 +134,9 @@
           "total": 59,
           "gatingTotal": 54,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 50,
-            "SUCCESS": 7
+            "SUCCESS": 72,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:CANCELLED"
@@ -231,25 +150,144 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101932:4910830587:2026-07-08T02:26:12Z:re_review",
+      "comment_id": "4910830587",
+      "comment_version_key": "4910830587:2026-07-08T02:26:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101932#issuecomment-4910830587",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101932,
+      "author": "LiLan0125",
+      "author_id": 274403989,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-08T02:26:12Z",
+      "comment_updated_at": "2026-07-08T02:26:12Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(session): avoid stalls when parent token probing hangs",
+        "body": "Closes #101718\n\n## What Problem This Solves\n\nFixes an issue where users creating or forking a session from a parent could wait indefinitely when parent transcript token probing did not settle.\n\n## Why This Change Was Made\n\nThe parent fork decision now uses fresh persisted token counts immediately, and otherwise bounds transcript token probing to a short wait. If probing times out or cannot verify the parent size, OpenClaw starts the child with isolated context instead of continuing into parent transcript copy. Quickly resolved small parents still fork, and fresh or quickly resolved oversized parents still use the existing isolated-session skip behavior.\n\n## User Impact\n\nSession creation and parent-fork workflows no longer stay blocked behind a stuck parent token probe or continue into another unbounded parent transcript read after the probe timeout. Users with oversized or unverified parent sessions get isolated context instead of inheriting unsafe parent history.\n\n## Impact Assessment\n\n- Scope: parent-session fork decision logic shared by session creation, parent-fork prepare, and subagent spawn paths.\n- Downstream: callers already handle `skip` decisions by avoiding transcript copy; timeout and unavailable-size probes now use that existing isolated-context path.\n- Edge cases: fresh token counts bypass transcript probing; quickly resolved oversized counts still skip; stalled probes clear their timer after the bounded wait; unresolved size probes do not fork.\n- Config surface: no new configuration, environment variable, or storage format.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs src/auto-reply/reply/session-fork.test.ts`\n\n```text\n[test] starting test/vitest/vitest.auto-reply.config.ts\n[test] passed 1 Vitest shard in 22.71s\n```\n\n- `pnpm tsgo:prod`\n\n```text\npassed\n```\n\n- `pnpm check:test-types`\n\n```text\npassed\n```\n\n## Real behavior proof\n\n**Behavior addressed:** Parent fork caller paths return instead of waiting indefinitely when parent token probing does not settle, and the timeout path avoids the later parent transcript copy.\n**Environment tested:** Linux, Node v22.22.0, local source checkout on branch `fix/101718-session-fork-token-timeout`, isolated temporary `OPENCLAW_HOME` and `OPENCLAW_STATE_DIR`.\n**Steps run after the patch:** Called the patched `forkSessionEntryFromParent` production caller path with a parent transcript whose token-probe `fs.promises.stat` never resolves, then verified fresh oversized parent tokens still produce the existing skip decision.\n**Evidence after fix:**\n\n```bash\nnode --import tsx --no-warnings -e '\nimport fs from \"node:fs/promises\";\nimport os from \"node:os\";\nimport path from \"node:path\";\n\nconst root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), \"openclaw-101718-proof-\")));\nprocess.env.OPENCLAW_HOME = path.join(root, \"home\");\nprocess.env.OPENCLAW_STATE_DIR = path.join(root, \"state\");\nconst { forkSessionEntryFromParent } = await import(\"./src/auto-reply/reply/session-fork.js\");\nconst activeStoreDir = path.join(root, \"active-store\");\nawait fs.mkdir(activeStoreDir, { recursive: true });\nconst storePath = path.join(activeStoreDir, \"sessions.json\");\nconst parentSessionKey = \"agent:main:main\";\nconst sessionKey = \"agent:main:subagent:child\";\nconst parentSessionFile = path.join(activeStoreDir, \"parent.jsonl\");\nconst now = Date.now();\nawait fs.writeFile(parentSessionFile, [\n  JSON.stringify({ type: \"session\", version: 3, id: \"parent-session\", timestamp: \"2026-07-08T00:00:00.000Z\", cwd: root }),\n  JSON.stringify({ type: \"message\", id: \"assistant-1\", parentId: null, timestamp: \"2026-07-08T00:00:01.000Z\", message: { role: \"assistant\", content: \"parent branch\" } }),\n].join(\"\\n\") + \"\\n\", \"utf-8\");\nawait fs.writeFile(storePath, JSON.stringify({\n  [parentSessionKey]: { sessionId: \"parent-session\", sessionFile: parentSessionFile, updatedAt: now },\n  [sessionKey]: { sessionId: \"\", updatedAt: now },\n}, null, 2), \"utf-8\");\n\nconst originalStat = fs.stat;\nlet parentStatCalls = 0;\nfs.stat = async (filePath, ...args) => {\n  if (String(filePath) === parentSessionFile) {\n    parentStatCalls += 1;\n    return await new Promise(() => {});\n  }\n  return await originalStat.call(fs, filePath, ...args);\n};\n\nconst started = Date.now();\ntry {\n  const result = await forkSessionEntryFromParent({\n    agentId: \"main\",\n    decisionSkipPatch: () => ({ forkedFromParent: false }),\n    fallbackEntry: { sessionId: \"\", updatedAt: now },\n    parentSessionKey,\n    sessionKey,\n    storePath,\n  });\n  const elapsedMs = Date.now() - started;\n  const allFiles = await fs.readdir(activeStoreDir);\n  console.log(JSON.stringify({\n    elapsedMs,\n    parentStatCalls,\n    resultStatus: result.status,\n    decisionReason: result.status === \"skipped\" ? result.decision?.reason : null,\n    resultSessionEntry: result.status === \"skipped\" ? result.sessionEntry : null,\n    activeStoreFiles: allFiles.sort(),\n    createdForkTranscriptCount: allFiles.filter((name) => name.endsWith(\".jsonl\") && name !== \"parent.jsonl\").length,\n  }, null, 2));\n} finally {\n  fs.stat = originalStat;\n  await fs.rm(root, { recursive: true, force: true });\n}\n'\n```\n\n```text\n{\n  \"elapsedMs\": 1032,\n  \"parentStatCalls\": 1,\n  \"resultStatus\": \"skipped\",\n  \"decisionReason\": \"parent-size-timeout\",\n  \"resultSessionEntry\": {\n    \"sessionId\": \"\",\n    \"updatedAt\": 1783476977699,\n    \"forkedFromParent\": false\n  },\n  \"activeStoreFiles\": [\n    \"parent.jsonl\",\n    \"sessions.json\"\n  ],\n  \"createdForkTranscriptCount\": 0\n}\n```\n\n```bash\nnode --import tsx --no-warnings --input-type=module -e '\nprocess.env.OPENCLAW_HOME = \"/tmp/openclaw-101718-proof-home\";\nprocess.env.OPENCLAW_STATE_DIR = \"/tmp/openclaw-101718-proof-state\";\nconst { resolveParentForkDecision } = await import(\"./src/auto-reply/reply/session-fork.js\");\nconst decision = await resolveParentForkDecision({\n  parentEntry: {\n    sessionId: \"parent-session\",\n    updatedAt: Date.now(),\n    totalTokens: 170_000,\n    totalTokensFresh: true,\n  },\n  storePath: \"/tmp/openclaw-sessions.json\",\n});\nconsole.log(JSON.stringify({\n  status: decision.status,\n  reason: decision.status === \"skip\" ? decision.reason : null,\n  maxTokens: decision.maxTokens,\n  parentTokens: \"parentTokens\" in decision ? decision.parentTokens : null,\n}, null, 2));\n'\n```\n\n```text\n{\n  \"status\": \"skip\",\n  \"reason\": \"parent-too-large\",\n  \"maxTokens\": 100000,\n  \"parentTokens\": 170000\n}\n```\n\n**Observed result after the fix:** The stalled parent token-probe caller path returned `skipped` with `parent-size-timeout` after roughly one second, kept the original `parent.jsonl`, and created zero fork transcripts. Fresh oversized tokens still returned `parent-too-large`.\n**Not tested:** A live gateway session creation with a real remote filesystem or transcript handle blocked indefinitely was not exercised locally.\n",
+        "branch": "fix/101718-session-fork-token-timeout",
+        "head_sha": "36e6ece642f01603bc35376824121fa74dec8397",
+        "author": "lilan0125",
+        "labels": [
+          "gateway",
+          "size: M",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/session-fork.test.ts",
+            "additions": 123,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session-fork.ts",
+            "additions": 80,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/session-parent-fork-prepare.ts",
+            "additions": 8,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/session-accessor.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-create-service.ts",
+            "additions": 5,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 222,
+        "deletions": 12,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101932",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101932.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 105,
+          "gatingTotal": 100,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2024,
+    "total_ms": 2500,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 247
+        "ms": 389
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1529
+        "ms": 1767
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -265,7 +303,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 223
+        "ms": 316
       },
       {
         "name": "append_ledger",
