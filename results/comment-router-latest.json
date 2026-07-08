@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T01:32:33.388Z",
+  "generated_at": "2026-07-08T01:32:41.010Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T22:32:31.541Z",
+  "since": "2026-07-07T22:32:40.649Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101648
+    101945
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,257 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101648:4903924369:2026-07-08T01:32:26Z:clawsweeper_auto_repair",
-      "comment_id": "4903924369",
-      "comment_version_key": "4903924369:2026-07-08T01:32:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101648#issuecomment-4903924369",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101648,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T12:44:37Z",
-      "comment_updated_at": "2026-07-08T01:32:26Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=4c778d13697eb9cf073d9fd45ad388903d49192d)",
-      "review_summary": "The PR marks MidTurnPrecheckSignal with a shared Symbol.for sentinel and makes Agent.handleRunFailure skip synthetic error forwarding for sentinel-marked control-flow errors.\n\nPR surface: Source +35, Tests +95. Total +130 across 3 files.\n\nReproducibility: yes. Current main source shows MidTurnPrecheckSignal can be thrown from the mid-turn guard and then converted into failure events by Agent.handleRunFailure; the linked issue also includes redacted logs of the error before recovery.",
-      "review_followup": "- [P2] A narrow automated repair can preserve the sentinel suppression while adding clean terminal lifecycle settlement and focused tests.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "4c778d13697eb9cf073d9fd45ad388903d49192d",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: skip pushLoopFailure for MidTurnPrecheckSignal control-flow errors",
-        "body": "## Summary\n\n**Problem**: `MidTurnPrecheckSignal` — a control-flow signal thrown in `transformContext` to trigger tool-result truncation — was caught by `Agent.handleRunFailure` which unconditionally pushed a synthetic failure into the event stream, causing users to see a premature \"Context overflow\" error even though the internal retry succeeds.\n\n**Solution**: Mark `MidTurnPrecheckSignal` with a `Symbol.for(\"agent-core.controlFlowError\")` sentinel so `Agent.handleRunFailure` can recognize control-flow signals and skip error-forwarding. The existing attempt-runner recovery path (via `pendingMidTurnPrecheckRequest` callback) handles truncation and retry correctly. The sentinel uses a generic, agent-core-owned symbol name to make the contract explicit.\n\n**What changed**:\n- `agent.ts` (`handleRunFailure`): Skip failure-event push for errors carrying the `agent-core.controlFlowError` sentinel (with JSDoc contract documentation)\n- `midturn-precheck.ts`: Mark `MidTurnPrecheckSignal` with the `Symbol.for(\"agent-core.controlFlowError\")` sentinel\n- `agent-loop.test.ts`: Added 2 Agent-level tests (control-flow suppressed / real error retained)\n\n**What did NOT change**:\n- `agent-loop.ts`: Sentinel check kept out of the EventStream API — the fix is scoped to the production `Agent` class path only\n- `attempt.ts` recovery logic (unchanged)\n- `run.ts` retry logic (unchanged)\n- `tool-result-context-guard.ts` signal throw (unchanged)\n\nFixes #101621\n\n## What Problem This Solves\n\nWhen a tool result makes the next prompt exceed the context budget during a tool loop, `transformContext` throws `MidTurnPrecheckSignal`. This signal is a **control-flow mechanism**, not a terminal error. The throw interrupts the tool loop before the next LLM call, and the attempt runner handles truncation + retry via a side-channel callback (`pendingMidTurnPrecheckRequest`).\n\nHowever, `Agent.handleRunFailure` was treating this signal as a real error and pushing a synthetic failure with `isError=true` and `\"Context overflow: prompt too large for the model (mid-turn precheck)\"` into the event stream. The user sees this error immediately, even though ~15 seconds later the retry succeeds silently.\n\n## Root Cause\n\nThe production call path:\n\n```\ntransformContext() throws MidTurnPrecheckSignal\n  → streamAssistantResponse() → runLoop() → runAgentLoop()\n  → Agent.runPromptMessages()\n  → Agent.runWithLifecycle() catch\n    → handleRunFailure(error)  ← pushes synthetic error to stream\n```\n\n`MidTurnPrecheckSignal` extends `Error` and was indistinguishable from real errors at the agent-core layer. The attempt-runner's `isMidTurnPrecheckSignal(err)` catch block is never reached in normal operation because the error is swallowed by `handleRunFailure` first.\n\n## Design decision (addressing review feedback)\n\nThe `agent-loop.ts` EventStream API (`agentLoop`/`agentLoopContinue`) is **not used in production** — the production path goes through the `Agent` class → `runAgentLoop` (async). The sentinel check was removed from `agent-loop.ts` to keep embedded-runner concerns out of the public EventStream layer. The fix lives only in `Agent.handleRunFailure`, using a generic `Symbol.for(\"agent-core.controlFlowError\")` sentinel owned by agent-core. A JSDoc block documents the contract.\n\n## Real behavior proof\n\n**Behavior addressed**: `Agent.handleRunFailure` skips synthetic failure push for control-flow signals while still forwarding real errors.\n\n**Real environment tested**: Linux x86_64, Node 24.13.1, Gateway built from source\n\n**Exact steps or command run after this patch**:\n\nA standalone proof script imports the real `Agent` class and `MidTurnPrecheckSignal` from the production source:\n\n```terminal\nnpx tsx --tsconfig tsconfig.core.json proof-script.mjs\n```\n\n**After-fix evidence**:\n```terminal_output\n================================================================\nPR #101648 — Real Behavior Proof\n================================================================\nNode: v24.13.1\nTimestamp: 2026-07-08T01:15:28.661Z\n\n────────────────────────────────────────────────────────────────\nCheck 0: MidTurnPrecheckSignal carries sentinel\n────────────────────────────────────────────────────────────────\n  sentinel present: true\n  Result: ✅ PASS\n\n────────────────────────────────────────────────────────────────\nProof 1: MidTurnPrecheckSignal → NO error event leaked\n────────────────────────────────────────────────────────────────\n  Error events: 0\n  agent.state.errorMessage: (none)\n  Result: ✅ PASS — No premature error leaked\n\n────────────────────────────────────────────────────────────────\nProof 2: Real error → error event still fires (regression guard)\n────────────────────────────────────────────────────────────────\n  Error events (expect 1): 1\n  Result: ✅ PASS\n\n────────────────────────────────────────────────────────────────\nProof 3: Plain Error (no sentinel) → error event still fires\n────────────────────────────────────────────────────────────────\n  Error events (expect 1): 1\n  Result: ✅ PASS\n\n================================================================\nVERDICT\n================================================================\n  Check 0 (sentinel):  ✅\n  Proof 1 (suppress):  ✅\n  Proof 2 (real err):  ✅\n  Proof 3 (plain err): ✅\n  ✅ ALL CHECKS PASSED\n================================================================\n```\n\nThis exercises the **real production `Agent` class** with a **real `MidTurnPrecheckSignal`** carrying the **real `Symbol.for(\"agent-core.controlFlowError\")`** sentinel. Four checks:\n1. Sentinel is correctly set on MidTurnPrecheckSignal instances\n2. Control-flow signal → `handleRunFailure` skips error push (0 error events)\n3. Real Error → error event still fires (1 error event, regression guard)\n4. Plain Error without sentinel → error event still fires (1 error event)\n\n**Gateway compilation proof**:\n```terminal_output\n$ pnpm dev gateway\n[gateway] loading configuration…\n[gateway] resolving authentication…\n```\nGateway builds from source and loads the fix code without compilation errors. Exit code 78 (unconfigured — no API key in CI) is not a code error.\n\n**Observed result after the fix**: Control-flow signals are silently skipped by `handleRunFailure`. No premature error events leak into the UI stream. Real errors still produce error events normally. Gateway compiles and loads without errors.\n\n**What was not tested**: End-to-end large-MCP-output scenario requiring a configured LLM provider with API keys, which is not available in the current CI/development environment. The proof above exercises the exact same error propagation path with real production objects.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk — only errors carrying `Symbol.for(\"agent-core.controlFlowError\")` are suppressed, currently only `MidTurnPrecheckSignal`\n- [x] Real errors (without sentinel) still trigger normal error handling — regression proof included above\n- [x] The sentinel uses a generic `agent-core.controlFlowError` name owned by the agent-core package\n- [x] The check is scoped to `Agent.handleRunFailure` only (production path); removed from `agent-loop.ts` EventStream API\n- [x] No breaking API changes, no new dependencies\n- [x] JSDoc contract documentation in agent.ts\n- [x] Gateway compilation verified (`pnpm dev gateway` builds and loads successfully)\n",
-        "branch": "fix/issue-101621-midturn-precheck-signal-leak",
-        "head_sha": "4c778d13697eb9cf073d9fd45ad388903d49192d",
-        "author": "zhangqueping",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "packages/agent-core/src/agent-loop.test.ts",
-            "additions": 95,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/agent-core/src/agent.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/midturn-precheck.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 130,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101648",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101648.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 104,
-          "gatingTotal": 99,
-          "counts": {
-            "SUCCESS": 66,
-            "CANCELLED": 1,
-            "SKIPPED": 34,
-            "IN_PROGRESS": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:101648:4903721128:2026-07-07T12:20:35Z:re_review",
-      "comment_id": "4903721128",
-      "comment_version_key": "4903721128:2026-07-07T12:20:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101648#issuecomment-4903721128",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101648,
-      "author": "zhangqueping",
-      "author_id": 3436352,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T12:20:35Z",
-      "comment_updated_at": "2026-07-07T12:20:35Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: skip pushLoopFailure for MidTurnPrecheckSignal control-flow errors",
-        "body": "## Summary\n\n**Problem**: `MidTurnPrecheckSignal` — a control-flow signal thrown in `transformContext` to trigger tool-result truncation — was caught by `Agent.handleRunFailure` which unconditionally pushed a synthetic failure into the event stream, causing users to see a premature \"Context overflow\" error even though the internal retry succeeds.\n\n**Solution**: Mark `MidTurnPrecheckSignal` with a `Symbol.for(\"agent-core.controlFlowError\")` sentinel so `Agent.handleRunFailure` can recognize control-flow signals and skip error-forwarding. The existing attempt-runner recovery path (via `pendingMidTurnPrecheckRequest` callback) handles truncation and retry correctly. The sentinel uses a generic, agent-core-owned symbol name to make the contract explicit.\n\n**What changed**:\n- `agent.ts` (`handleRunFailure`): Skip failure-event push for errors carrying the `agent-core.controlFlowError` sentinel (with JSDoc contract documentation)\n- `midturn-precheck.ts`: Mark `MidTurnPrecheckSignal` with the `Symbol.for(\"agent-core.controlFlowError\")` sentinel\n- `agent-loop.test.ts`: Added 2 Agent-level tests (control-flow suppressed / real error retained)\n\n**What did NOT change**:\n- `agent-loop.ts`: Sentinel check kept out of the EventStream API — the fix is scoped to the production `Agent` class path only\n- `attempt.ts` recovery logic (unchanged)\n- `run.ts` retry logic (unchanged)\n- `tool-result-context-guard.ts` signal throw (unchanged)\n\nFixes #101621\n\n## What Problem This Solves\n\nWhen a tool result makes the next prompt exceed the context budget during a tool loop, `transformContext` throws `MidTurnPrecheckSignal`. This signal is a **control-flow mechanism**, not a terminal error. The throw interrupts the tool loop before the next LLM call, and the attempt runner handles truncation + retry via a side-channel callback (`pendingMidTurnPrecheckRequest`).\n\nHowever, `Agent.handleRunFailure` was treating this signal as a real error and pushing a synthetic failure with `isError=true` and `\"Context overflow: prompt too large for the model (mid-turn precheck)\"` into the event stream. The user sees this error immediately, even though ~15 seconds later the retry succeeds silently.\n\n## Root Cause\n\nThe production call path:\n\n```\ntransformContext() throws MidTurnPrecheckSignal\n  → streamAssistantResponse() → runLoop() → runAgentLoop()\n  → Agent.runPromptMessages()\n  → Agent.runWithLifecycle() catch\n    → handleRunFailure(error)  ← pushes synthetic error to stream\n```\n\n`MidTurnPrecheckSignal` extends `Error` and was indistinguishable from real errors at the agent-core layer. The attempt-runner's `isMidTurnPrecheckSignal(err)` catch block is never reached in normal operation because the error is swallowed by `handleRunFailure` first.\n\n## Design decision (addressing review feedback)\n\nThe `agent-loop.ts` EventStream API (`agentLoop`/`agentLoopContinue`) is **not used in production** — the production path goes through the `Agent` class → `runAgentLoop` (async). The sentinel check was removed from `agent-loop.ts` to keep embedded-runner concerns out of the public EventStream layer. The fix lives only in `Agent.handleRunFailure`, using a generic `Symbol.for(\"agent-core.controlFlowError\")` sentinel owned by agent-core. A JSDoc block documents the contract.\n\n## Real behavior proof\n\n**Behavior addressed**: `Agent.handleRunFailure` skips synthetic failure push for control-flow signals while still forwarding real errors.\n\n**Real environment tested**: Linux x86_64, Node 24.13.1, Gateway built from source\n\n**Exact steps or command run after this patch**:\n\nA standalone proof script imports the real `Agent` class and `MidTurnPrecheckSignal` from the production source:\n\n```terminal\nnpx tsx --tsconfig tsconfig.core.json proof-script.mjs\n```\n\n**After-fix evidence**:\n```terminal_output\n================================================================\nPR #101648 — Real Behavior Proof\n================================================================\nNode: v24.13.1\nTimestamp: 2026-07-08T01:15:28.661Z\n\n────────────────────────────────────────────────────────────────\nCheck 0: MidTurnPrecheckSignal carries sentinel\n────────────────────────────────────────────────────────────────\n  sentinel present: true\n  Result: ✅ PASS\n\n────────────────────────────────────────────────────────────────\nProof 1: MidTurnPrecheckSignal → NO error event leaked\n────────────────────────────────────────────────────────────────\n  Error events: 0\n  agent.state.errorMessage: (none)\n  Result: ✅ PASS — No premature error leaked\n\n────────────────────────────────────────────────────────────────\nProof 2: Real error → error event still fires (regression guard)\n────────────────────────────────────────────────────────────────\n  Error events (expect 1): 1\n  Result: ✅ PASS\n\n────────────────────────────────────────────────────────────────\nProof 3: Plain Error (no sentinel) → error event still fires\n────────────────────────────────────────────────────────────────\n  Error events (expect 1): 1\n  Result: ✅ PASS\n\n================================================================\nVERDICT\n================================================================\n  Check 0 (sentinel):  ✅\n  Proof 1 (suppress):  ✅\n  Proof 2 (real err):  ✅\n  Proof 3 (plain err): ✅\n  ✅ ALL CHECKS PASSED\n================================================================\n```\n\nThis exercises the **real production `Agent` class** with a **real `MidTurnPrecheckSignal`** carrying the **real `Symbol.for(\"agent-core.controlFlowError\")`** sentinel. Four checks:\n1. Sentinel is correctly set on MidTurnPrecheckSignal instances\n2. Control-flow signal → `handleRunFailure` skips error push (0 error events)\n3. Real Error → error event still fires (1 error event, regression guard)\n4. Plain Error without sentinel → error event still fires (1 error event)\n\n**Gateway compilation proof**:\n```terminal_output\n$ pnpm dev gateway\n[gateway] loading configuration…\n[gateway] resolving authentication…\n```\nGateway builds from source and loads the fix code without compilation errors. Exit code 78 (unconfigured — no API key in CI) is not a code error.\n\n**Observed result after the fix**: Control-flow signals are silently skipped by `handleRunFailure`. No premature error events leak into the UI stream. Real errors still produce error events normally. Gateway compiles and loads without errors.\n\n**What was not tested**: End-to-end large-MCP-output scenario requiring a configured LLM provider with API keys, which is not available in the current CI/development environment. The proof above exercises the exact same error propagation path with real production objects.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk — only errors carrying `Symbol.for(\"agent-core.controlFlowError\")` are suppressed, currently only `MidTurnPrecheckSignal`\n- [x] Real errors (without sentinel) still trigger normal error handling — regression proof included above\n- [x] The sentinel uses a generic `agent-core.controlFlowError` name owned by the agent-core package\n- [x] The check is scoped to `Agent.handleRunFailure` only (production path); removed from `agent-loop.ts` EventStream API\n- [x] No breaking API changes, no new dependencies\n- [x] JSDoc contract documentation in agent.ts\n- [x] Gateway compilation verified (`pnpm dev gateway` builds and loads successfully)\n",
-        "branch": "fix/issue-101621-midturn-precheck-signal-leak",
-        "head_sha": "4c778d13697eb9cf073d9fd45ad388903d49192d",
-        "author": "zhangqueping",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "packages/agent-core/src/agent-loop.test.ts",
-            "additions": 95,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/agent-core/src/agent.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/midturn-precheck.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 130,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101648",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101648.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 104,
-          "gatingTotal": 99,
-          "counts": {
-            "SUCCESS": 66,
-            "CANCELLED": 1,
-            "SKIPPED": 34,
-            "IN_PROGRESS": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2064,
+    "total_ms": 563,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 335
+        "ms": 346
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1493
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 4
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -295,11 +61,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 205
+        "ms": 202
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
