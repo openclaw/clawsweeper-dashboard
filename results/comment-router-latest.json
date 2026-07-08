@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T11:46:02.992Z",
+  "generated_at": "2026-07-08T11:47:02.544Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T08:46:00.776Z",
+  "since": "2026-07-08T08:47:02.213Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102013
+    89255
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 4,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,128 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102013:4911324881:2026-07-08T11:45:57Z:clawsweeper_needs_human",
-      "comment_id": "4911324881",
-      "comment_version_key": "4911324881:2026-07-08T11:45:57Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102013#issuecomment-4911324881",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 102013,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T04:16:56Z",
-      "comment_updated_at": "2026-07-08T11:45:57Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] No automated code repair is indicated; the PR needs maintainer review plus exact-head CI rerun or triage and refresh against current main.; Cleared: The diff only changes gateway usage concurrency and a focused test; it does not add dependencies, workflows, credentials, downloads, package metadata, or other supply-chain surface. (sha=4c6e05e703b07558a136ac03cca93dde3f3b8193)",
-      "review_summary": "The PR routes all-agent `sessions.usage` session discovery through the shared 12-way gateway concurrency helper and adds a focused regression test for peak discovery fan-out.\n\nPR surface: Source +8, Tests +64. Total +72 across 2 files.\n\nReproducibility: yes. at source level rather than a live outage replay. Current main and `v2026.6.11` start one `discoverAllSessions` call per configured agent through raw `Promise.all`, and the PR body includes real-handler proof plus a deterministic cap test.",
-      "review_followup": "- [P2] No automated code repair is indicated; the PR needs maintainer review plus exact-head CI rerun or triage and refresh against current main.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "4c6e05e703b07558a136ac03cca93dde3f3b8193",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): bound sessions.usage all-agent session discovery concurrency",
-        "body": "Related: #101589\n\n## What Problem This Solves\n\nResolves a problem where a gateway serving many agents can stall its own\nfilesystem/IO when the dashboard or CLI requests the all-agent session usage\nlist. The `sessions.usage` RPC (all-agent scope) discovers sessions for every\nconfigured agent at once with no concurrency cap, so on a 100+ agent gateway it\nlaunches 100+ concurrent per-agent transcript-directory scans in a single burst.\nThis is the same all-agent starvation class that #101589 just fixed for the\nsibling usage-cost cache load in this file — the session-discovery fan-out was\nleft uncapped.\n\n## Why This Change Was Made\n\n`discoverAllSessionsForUsage` used a raw `Promise.all` over\n`listAgentsForGateway(config).agents`. This change routes it through the same\n`runTasksWithConcurrency` helper (limit `USAGE_AGENT_LOAD_CONCURRENCY = 12`,\n`errorMode: \"stop\"`) that the sibling usage-cost load already uses in this file,\nand re-throws the first per-agent error so the RPC keeps its existing\nreject-on-failure behavior (no switch to partial/silent results). Result\nordering (`.flat().toSorted(...)`) is unchanged. This is unbounded concurrent\n**filesystem** discovery — distinct from the SQLite cost-cache read #101589\nbounded — so it is a focused, sibling-shaped follow-up, not a redesign.\n\n## User Impact\n\nOperators running gateways with many agents no longer risk an IO/filesystem\nburst (and the resulting latency spike or instability) when the session-usage\nlist view is opened for all agents. Concurrency is capped at 12 per-agent\ndiscoveries in flight, matching the existing usage-cost path. No API, config, or\nresponse-shape change.\n\n## Evidence\n\n### Real behavior proof (real handler, real agents, real transcripts)\n\nDrove the **real registered `sessions.usage` RPC handler** (`agentScope: \"all\"`)\nover **24 real configured agents**, each with a **real on-disk transcript\ndirectory + JSONL transcript** under a temp `OPENCLAW_STATE_DIR`. No mock of\n`discoverAllSessions` / `listAgentsForGateway` / the session store — the full\nproduction path runs unchanged. An observer around `fs.promises.readdir` counts\nconcurrent per-agent `.../sessions` scans (each per-agent discovery opens exactly\none such readdir, so this is the exact fan-out the cap bounds):\n\n```\n=== REAL sessions.usage all-agent proof ===\nconfigured agents      : 24\nUSAGE_AGENT_LOAD cap   : 12\nrespond success        : true\nerror shape            : none\ndiscovered sessions    : 24\npeak concurrent per-agent readdir : 12\nRESULT: PASS — all-agent request succeeded with peak fan-out 12 <= cap 12\n```\n\nThe all-agent request **succeeds** and returns all 24 sessions while never\nexceeding 12 concurrent transcript-directory scans. Negative control — reverting\n`discoverAllSessionsForUsage` to the upstream raw `Promise.all` and re-running the\nsame real harness — launches all 24 scans at once:\n\n```\nrespond success        : true\ndiscovered sessions    : 24\npeak concurrent per-agent readdir : 24\nRESULT: FAIL — peak 24 (ok=true)\n```\n\nThe response still succeeds functionally without the cap, so the bounded fan-out\nis the only behavioral difference — exactly the IO burst this PR removes.\n\n### Focused regression test\n\nA deterministic test drives the public `sessions.usage` handler with\n`agentScope: \"all\"` over 13 agents and a gated `discoverAllSessions`, asserting\npeak concurrency stays at the cap and the RPC still responds:\n\n```\n ✓ bounds sessions.usage all-agent session discovery\n   expect(peakBeforeRelease).toBe(12)         // 12 in flight, not 13\n   expect(discoverAllSessions).toHaveBeenCalledTimes(13)\n   expect(respond).toHaveBeenCalledWith(true, ...)\n\n Test Files  2 passed (2)\n      Tests  64 passed (64)\n```\n\nNegative control — reverting the fix (restoring the raw `Promise.all`) fails\nonly this test, confirming it exercises the bound:\n\n```\n × bounds sessions.usage all-agent session discovery\n   AssertionError: expected 13 to be 12\n      Tests  2 failed | 62 passed (64)\n```\n\nRun the unit test locally with\n`node scripts/run-vitest.mjs src/gateway/server-methods/usage.test.ts`;\nfull changed-lane checks are delegated to CI.\n",
-        "branch": "usage-session-discovery-concurrency",
-        "head_sha": "4c6e05e703b07558a136ac03cca93dde3f3b8193",
-        "author": "masatohoshino",
-        "labels": [
-          "gateway",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-methods/usage.test.ts",
-            "additions": 65,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/usage.ts",
-            "additions": 12,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 77,
-        "deletions": 5,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102013",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102013.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 105,
-          "gatingTotal": 100,
-          "counts": {
-            "SUCCESS": 69,
-            "SKIPPED": 34,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-whole-2:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-whole-2:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2433,
+    "total_ms": 633,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 266
+        "ms": 319
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1936
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -166,7 +61,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 206
+        "ms": 302
       },
       {
         "name": "append_ledger",
