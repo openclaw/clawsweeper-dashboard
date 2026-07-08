@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T07:37:11.997Z",
+  "generated_at": "2026-07-08T07:37:29.105Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T04:37:07.824Z",
+  "since": "2026-07-08T04:37:27.246Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101946
+    102063
   ],
-  "comment_ids": [
-    4912447883
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
@@ -33,18 +31,121 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101946:4912447883:2026-07-08T07:34:04Z:re_review",
-      "comment_id": "4912447883",
-      "comment_version_key": "4912447883:2026-07-08T07:34:04Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101946#issuecomment-4912447883",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102063:4911996099:2026-07-08T07:37:24Z:clawsweeper_auto_repair",
+      "comment_id": "4911996099",
+      "comment_version_key": "4911996099:2026-07-08T07:37:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102063#issuecomment-4911996099",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 101946,
-      "author": "xydt-tanshanshan",
-      "author_id": 291969148,
+      "issue_number": 102063,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T07:34:04Z",
-      "comment_updated_at": "2026-07-08T07:34:04Z",
+      "comment_created_at": "2026-07-08T06:30:23Z",
+      "comment_updated_at": "2026-07-08T07:37:24Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=190712deb45ea8683dcad67d3e3c0c87b2d545c0)",
+      "review_summary": "The PR moves embedded attempt `session.ended` trajectory recording to after cleanup and flushes the recorder after that final event.\n\nPR surface: Source -2. Total -2 across 1 file.\n\nReproducibility: yes. from source inspection: current main records normal-path `session.ended` immediately after `model.completed` and before cleanup, while recorder timestamps are generated at `recordEvent` time. I did not run a live trajectory export in this read-only review.",
+      "review_followup": "- [P2] Contributor follow-up is needed for the status fallback defect and real behavior proof; ClawSweeper should not supply proof for this external PR.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "190712deb45ea8683dcad67d3e3c0c87b2d545c0",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "[F3] fix(trajectory): record session.ended after cleanup instead of reusing model.completed timestamp",
+        "body": "## What Problem This Solves\n\nThe `session.ended` span had the **exact same timestamp** as the last `model.completed` span because both were recorded back-to-back in the main try block, before any cleanup work (acquiring cleanup lock, `cleanupEmbeddedAttemptResources`) executed. This made it impossible to measure actual session duration vs model compute time and broke latency analysis for cleanup operations.\n\n## Changes\n\n**1 file changed, 33 insertions(+), 36 deletions(-) (net −3)**\n\nMoved `session.ended` recording from the main try block (immediately after `model.completed` / `trace.artifacts`) to the inner `finally` block, **after** cleanup work completes. Three changes:\n\n1. **Capture terminal status** before the return into `trajectoryTerminalStatus` / `trajectoryTerminalError`\n2. **Remove** early `session.ended` recording and old fallback in the finally block\n3. **Record** `session.ended` after `cleanupEmbeddedAttemptResources`, using captured terminal data with inline fallback, then flush everything\n\nPrevious order: `model.completed` → `trace.artifacts` → `session.ended` (early) → return → cleanup → flush\nNew order:      `model.completed` → `trace.artifacts` → return → cleanup → `session.ended` → flush\n\n## Evidence\n\n**TypeScript compile:** ✅ `tsc --noEmit` passed\n\n**Unit tests (3 suites, 57 tests, all passed):**\n```\nattempt-trajectory-flush-cleanup  ✓ 2/2\nattempt-trajectory-status         ✓ 19/19\nattempt.model-diagnostic-events   ✓ 36/36\n```\n\n**Real behavior proof:**\n\nProof script (run with `node --import tsx proof/session-ended-timestamp.ts`):\n```typescript\nimport { createTrajectoryRuntimeRecorder } from \"../src/trajectory/runtime.js\";\n\nfunction captureWriter() {\n  const lines: string[] = [];\n  return { lines, writer: { write: (l: string) => void lines.push(l), flush: async () => {}, nextSourceSeq: () => 0 } };\n}\n\n/* Test 1: old behavior — session.ended recorded RIGHT AFTER model.completed */\nconst { lines: oldL, writer: oldW } = captureWriter();\nconst oldR = createTrajectoryRuntimeRecorder({ sessionId: `p-old-${Date.now()}`, ... , writer: oldW });\noldR.recordEvent(\"model.completed\", { status: \"success\" });\noldR.recordEvent(\"session.ended\",   { status: \"success\" });   // ← immediate, bug\nconst oldSame = JSON.parse(oldL[0]).ts === JSON.parse(oldL[1]).ts;\n\n/* Test 2: new behavior — session.ended AFTER cleanup */\nconst { lines: newL, writer: newW } = captureWriter();\nconst newR = createTrajectoryRuntimeRecorder({ sessionId: `p-new-${Date.now()}`, ... , writer: newW });\nnewR.recordEvent(\"model.completed\", { status: \"success\" });\nawait new Promise(r => setTimeout(r, 100));                     // simulate cleanup\nnewR.recordEvent(\"session.ended\",   { status: \"success\" });   // ← after cleanup! (the fix)\nconst newDiff = new Date(JSON.parse(newL[1]).ts).getTime() - new Date(JSON.parse(newL[0]).ts).getTime();\n\n/* Test 3: fallback — terminalData not captured */\nconst { lines: fbL, writer: fbW } = captureWriter();\nconst fbR = createTrajectoryRuntimeRecorder({ sessionId: `p-fb-${Date.now()}`, ... , writer: fbW });\nfbR.recordEvent(\"session.ended\", { status: undefined ?? \"error\", promptError: \"prompt failed\" });\nconst fbStatus = JSON.parse(fbL[0]).data?.status;              // should be \"error\"\n\nconsole.assert(newDiff >= 50, \"timestamps must differ\");\nconsole.assert(fbStatus === \"error\", \"fallback must produce error status\");\n```\n\nTerminal output (hostname: `LIN-66D8BD4EA2C`, PID: `1145179`):\n```\n── [Test 1] Old behavior: record immediately (before fix) ──\n  model.completed  ts = 2026-07-08T07:35:18.875Z\n  session.ended    ts = 2026-07-08T07:35:18.908Z\n\n── [Test 2] New behavior: record after cleanup (after fix) ──\n  model.completed  ts = 2026-07-08T07:35:18.910Z\n  cleanup          100ms delay...\n  session.ended    ts = 2026-07-08T07:35:19.019Z\n  Δ = 109ms ✅  (expected ≥50ms)\n\n── [Test 3] Fallback: terminalStatus not captured (exception path) ──\n  promptError = \"prompt failed\"  (terminalStatus = undefined)\n  session.ended status = \"error\"\n  ✅ fallback correct\n\n── [Test 4] Data integrity: status preserved ──\n  captured status    = \"success\"\n  session.ended.status = \"success\"\n  ✅ status preserved\n\n── Summary ──\n  Test 1 (old behavior):   ⚠️  (matches old bug, expected)\n  Test 2 (new behavior):   ✅ Δ = 109ms (distinct timestamps after cleanup)\n  Test 3 (fallback):       ✅\n  Test 4 (data integrity): ✅\n  Overall: ✅ All checks pass — fix is correct\n```\n\n## Review\n- Manually reviewed and verified\n- AI-assisted: Yes\n- Fixes #102014",
+        "branch": "fix/issue-102014-session-ended-timestamp",
+        "head_sha": "190712deb45ea8683dcad67d3e3c0c87b2d545c0",
+        "author": "zw-xysk",
+        "labels": [
+          "agents",
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof",
+          "merge-risk: 🚨 other"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 32,
+            "deletions": 34,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 32,
+        "deletions": 34,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102063",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102063.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 104,
+          "gatingTotal": 99,
+          "counts": {
+            "SUCCESS": 66,
+            "CANCELLED": 1,
+            "SKIPPED": 34,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102063:4912143524:2026-07-08T06:51:41Z:re_review",
+      "comment_id": "4912143524",
+      "comment_version_key": "4912143524:2026-07-08T06:51:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102063#issuecomment-4912143524",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102063,
+      "author": "zw-xysk",
+      "author_id": 294457748,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-08T06:51:41Z",
+      "comment_updated_at": "2026-07-08T06:51:41Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -73,124 +174,60 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "[AI] fix(memory): use truncateUtf16Safe for dreaming snippet truncation",
-        "body": "## What Problem This Solves\r\n\r\nFixes an issue where dreaming snippet truncation in `memory-core` can produce invalid UTF-16 output. When a complex emoji or surrogate pair straddles the 280-character truncation boundary, `.slice(0, 280)` cuts between the high and low surrogate code units, producing a lone surrogate that can cause display corruption, JSON encoding failures, or database rejections downstream.\r\n\r\n## Why This Change Was Made\r\n\r\nReplace all 5 `.slice(0, N)` calls in `extensions/memory-core/src/dreaming-phases.ts` with `truncateUtf16Safe` from `@openclaw/normalization-core/utf16-slice`. `truncateUtf16Safe` checks whether the cut position falls inside a surrogate pair (high surrogate `0xD800–0xDBFF` followed by low surrogate `0xDC00–0xDFFF`) and drops the orphaned high surrogate. The helper is already used in `session-cost-usage`, `cron`, `exec-approval`, and `node-host` for the same purpose. The change is +6/-5 in a single file.\r\n\r\n## User Impact\r\n\r\nNone for typical text content. For memory content that happens to contain an emoji or complex Unicode character at the truncation boundary, the dreaming snippet no longer includes a lone surrogate character, preventing potential downstream encoding issues.\r\n\r\n## Evidence\r\n\r\n**Environment**: Linux x86_64, Node v24.13.1, OpenClaw 2026.6.11, commit `9ae8803b90`, branch `fix/feishu-format-error-sender-name`.\r\n\r\n**Before/after — lone surrogate at 280-char boundary** (both `DAILY_INGESTION_MAX_SNIPPET_CHARS` and `SESSION_INGESTION_MAX_SNIPPET_CHARS` are 280):\r\n\r\n```\r\n$ node --import tsx -e \"\r\nimport { truncateUtf16Safe } from '@openclaw/normalization-core/utf16-slice';\r\nconst text = 'A'.repeat(279) + '😀';\r\n// slice(0, 280) cuts between 0xD83D (high) and 0xDE00 (low)\r\nconsole.log('.slice(0, 280):     last code unit 0x' +\r\n  text.slice(0, 280).charCodeAt(279).toString(16) + ' (LONE HIGH SURROGATE)');\r\nconsole.log('truncateUtf16Safe:   ' +\r\n  truncateUtf16Safe(text, 280).length + ' code units (clean)');\r\n\"\r\n.slice(0, 280):     last code unit 0xD83D (LONE HIGH SURROGATE)\r\ntruncateUtf16Safe:   279 code units (clean)\r\n```\r\n\r\n**Unit tests:**\r\n\r\n```console\r\n$ node scripts/run-vitest.mjs extensions/memory-core/src/dreaming-phases.test.ts --run\r\n Test Files  1 passed (1)\r\n      Tests  50 passed (50)\r\n\r\n$ node scripts/run-vitest.mjs packages/normalization-core/src/utf16-slice.test.ts --run\r\n Test Files  1 passed (1)\r\n      Tests  18 passed (18)\r\n```\r\n\r\n**What was NOT tested**: Full dreaming ingestion sweep with real memory files containing emoji at the truncation boundary. The 68 total passing tests cover the dreaming phases and surrogate-safe truncation independently; a full end-to-end dreaming pipeline run with emoji-rich daily/session corpus is deferred.\r\n",
-        "branch": "fix/dreaming-emoji-safe-truncation",
-        "head_sha": "9ae8803b904365e24b4ea88295b8cc288323b1d5",
-        "author": "xydt-tanshanshan",
+        "title": "[F3] fix(trajectory): record session.ended after cleanup instead of reusing model.completed timestamp",
+        "body": "## What Problem This Solves\n\nThe `session.ended` span had the **exact same timestamp** as the last `model.completed` span because both were recorded back-to-back in the main try block, before any cleanup work (acquiring cleanup lock, `cleanupEmbeddedAttemptResources`) executed. This made it impossible to measure actual session duration vs model compute time and broke latency analysis for cleanup operations.\n\n## Changes\n\n**1 file changed, 33 insertions(+), 36 deletions(-) (net −3)**\n\nMoved `session.ended` recording from the main try block (immediately after `model.completed` / `trace.artifacts`) to the inner `finally` block, **after** cleanup work completes. Three changes:\n\n1. **Capture terminal status** before the return into `trajectoryTerminalStatus` / `trajectoryTerminalError`\n2. **Remove** early `session.ended` recording and old fallback in the finally block\n3. **Record** `session.ended` after `cleanupEmbeddedAttemptResources`, using captured terminal data with inline fallback, then flush everything\n\nPrevious order: `model.completed` → `trace.artifacts` → `session.ended` (early) → return → cleanup → flush\nNew order:      `model.completed` → `trace.artifacts` → return → cleanup → `session.ended` → flush\n\n## Evidence\n\n**TypeScript compile:** ✅ `tsc --noEmit` passed\n\n**Unit tests (3 suites, 57 tests, all passed):**\n```\nattempt-trajectory-flush-cleanup  ✓ 2/2\nattempt-trajectory-status         ✓ 19/19\nattempt.model-diagnostic-events   ✓ 36/36\n```\n\n**Real behavior proof:**\n\nProof script (run with `node --import tsx proof/session-ended-timestamp.ts`):\n```typescript\nimport { createTrajectoryRuntimeRecorder } from \"../src/trajectory/runtime.js\";\n\nfunction captureWriter() {\n  const lines: string[] = [];\n  return { lines, writer: { write: (l: string) => void lines.push(l), flush: async () => {}, nextSourceSeq: () => 0 } };\n}\n\n/* Test 1: old behavior — session.ended recorded RIGHT AFTER model.completed */\nconst { lines: oldL, writer: oldW } = captureWriter();\nconst oldR = createTrajectoryRuntimeRecorder({ sessionId: `p-old-${Date.now()}`, ... , writer: oldW });\noldR.recordEvent(\"model.completed\", { status: \"success\" });\noldR.recordEvent(\"session.ended\",   { status: \"success\" });   // ← immediate, bug\nconst oldSame = JSON.parse(oldL[0]).ts === JSON.parse(oldL[1]).ts;\n\n/* Test 2: new behavior — session.ended AFTER cleanup */\nconst { lines: newL, writer: newW } = captureWriter();\nconst newR = createTrajectoryRuntimeRecorder({ sessionId: `p-new-${Date.now()}`, ... , writer: newW });\nnewR.recordEvent(\"model.completed\", { status: \"success\" });\nawait new Promise(r => setTimeout(r, 100));                     // simulate cleanup\nnewR.recordEvent(\"session.ended\",   { status: \"success\" });   // ← after cleanup! (the fix)\nconst newDiff = new Date(JSON.parse(newL[1]).ts).getTime() - new Date(JSON.parse(newL[0]).ts).getTime();\n\n/* Test 3: fallback — terminalData not captured */\nconst { lines: fbL, writer: fbW } = captureWriter();\nconst fbR = createTrajectoryRuntimeRecorder({ sessionId: `p-fb-${Date.now()}`, ... , writer: fbW });\nfbR.recordEvent(\"session.ended\", { status: undefined ?? \"error\", promptError: \"prompt failed\" });\nconst fbStatus = JSON.parse(fbL[0]).data?.status;              // should be \"error\"\n\nconsole.assert(newDiff >= 50, \"timestamps must differ\");\nconsole.assert(fbStatus === \"error\", \"fallback must produce error status\");\n```\n\nTerminal output (hostname: `LIN-66D8BD4EA2C`, PID: `1145179`):\n```\n── [Test 1] Old behavior: record immediately (before fix) ──\n  model.completed  ts = 2026-07-08T07:35:18.875Z\n  session.ended    ts = 2026-07-08T07:35:18.908Z\n\n── [Test 2] New behavior: record after cleanup (after fix) ──\n  model.completed  ts = 2026-07-08T07:35:18.910Z\n  cleanup          100ms delay...\n  session.ended    ts = 2026-07-08T07:35:19.019Z\n  Δ = 109ms ✅  (expected ≥50ms)\n\n── [Test 3] Fallback: terminalStatus not captured (exception path) ──\n  promptError = \"prompt failed\"  (terminalStatus = undefined)\n  session.ended status = \"error\"\n  ✅ fallback correct\n\n── [Test 4] Data integrity: status preserved ──\n  captured status    = \"success\"\n  session.ended.status = \"success\"\n  ✅ status preserved\n\n── Summary ──\n  Test 1 (old behavior):   ⚠️  (matches old bug, expected)\n  Test 2 (new behavior):   ✅ Δ = 109ms (distinct timestamps after cleanup)\n  Test 3 (fallback):       ✅\n  Test 4 (data integrity): ✅\n  Overall: ✅ All checks pass — fix is correct\n```\n\n## Review\n- Manually reviewed and verified\n- AI-assisted: Yes\n- Fixes #102014",
+        "branch": "fix/issue-102014-session-ended-timestamp",
+        "head_sha": "190712deb45ea8683dcad67d3e3c0c87b2d545c0",
+        "author": "zw-xysk",
         "labels": [
-          "extensions: memory-core",
-          "size: XS",
+          "agents",
+          "size: S",
           "P2",
           "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
+          "status: 📣 needs proof",
+          "merge-risk: 🚨 other"
         ],
         "files": [
           {
-            "path": "extensions/memory-core/src/dreaming-phases.ts",
-            "additions": 6,
-            "deletions": 5,
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 32,
+            "deletions": 34,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 1,
-        "additions": 6,
-        "deletions": 5,
+        "additions": 32,
+        "deletions": 34,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101946",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101946.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102063",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102063.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
+        "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 104,
+          "gatingTotal": 99,
           "counts": {
-            "SUCCESS": 62,
-            "SKIPPED": 35
+            "SUCCESS": 66,
+            "CANCELLED": 1,
+            "SKIPPED": 34,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
+            "Real behavior proof:CANCELLED",
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
           ],
           "pending": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
+            "Real behavior proof:CANCELLED",
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -202,21 +239,21 @@
     }
   ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 4559,
+    "total_ms": 2066,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2016
+        "ms": 238
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2142
+        "ms": 1604
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 4
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -232,11 +269,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 386
+        "ms": 196
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
