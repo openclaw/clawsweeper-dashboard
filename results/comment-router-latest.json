@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T14:34:00.911Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-08T14:34:09.680Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T11:33:58.423Z",
+  "since": "2026-07-08T11:34:08.031Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    102052
+    1996
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4915895380
+  ],
+  "status_comment_id": 4915895878,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:102052:4913179238:2026-07-08T09:06:58Z:re_review",
-      "comment_id": "4913179238",
-      "comment_version_key": "4913179238:2026-07-08T09:06:58Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102052#issuecomment-4913179238",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 102052,
-      "author": "chenyangjun-xy",
-      "author_id": 294178215,
+      "idempotency_key": "comment-router:steipete/CodexBar:1996:4915895380:2026-07-08T14:32:45Z:re_review",
+      "comment_id": "4915895380",
+      "comment_version_key": "4915895380:2026-07-08T14:32:45Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1996#issuecomment-4915895380",
+      "repo": "steipete/CodexBar",
+      "target_branch": "main",
+      "issue_number": 1996,
+      "author": "Zihao-Qi",
+      "author_id": 35388022,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T09:06:58Z",
-      "comment_updated_at": "2026-07-08T09:06:58Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-08T14:32:45Z",
+      "comment_updated_at": "2026-07-08T14:32:45Z",
+      "status_comment_id": 4915895878,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -66,173 +68,117 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 1996,
+          "dispatch_key": "router-0b53407b9ca9e4ff",
+          "dispatched_at": "2026-07-08T14:34:10.553Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-08T14:34:11.736Z",
+          "response_comment_id": "4915895878",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(auto-reply): self-heal reply-session-init conflict instead of permanently wedging the session",
-        "body": "## What Problem This Solves\n\nWhen the reply-session initializer's optimistic-concurrency commit (`commitReplySessionInitialization`) loses its race twice, the current code throws `\"reply session initialization conflicted\"` and permanently wedges the session. Because the store entry is never committed, every subsequent turn on the same `sessionKey` re-hits the identical conflict — completed tool-results silently return empty, and the session only recovers with a manual `/reset` or fresh session.\n\nFixes [#102020](https://github.com/openclaw/openclaw/issues/102020). Also addresses the root cause of [#101909](https://github.com/openclaw/openclaw/issues/101909).\n\n## Why This Change Was Made\n\nThe conflict branch in `initSessionStateAttemptLocked` allowed exactly one stale-snapshot retry and then threw. The rollover/timeout paths already self-heal by disposing the session's MCP runtime and running the registered harness `reset` hooks. This change makes the conflict branch reuse that same recovery once and retry initialization before giving up.\n\n### Conflict resolution state machine\n\n| State | staleSnapshotRetried | conflictRecoveryAttempted | Action |\n|-------|---------------------|--------------------------|--------|\n| First | false | any | stale-snapshot-retry (unchanged) |\n| Second | true | false | **self-heal-retry** — dispose wedged MCP runtime + harness reset, then retry (new) |\n| Third | true | true | fail — throw with clear context |\n\n### Safety fence\n\nThe self-heal reuses the same `runExclusiveSessionLifecycleMutation` + `interruptSessionWorkAdmissions` fence the rollover path uses: drains any foreign in-flight turn OUTSIDE the store-write lock before tearing anything down.\n\n## User Impact\n\n- **Before**: Second message → \"reply session initialization conflicted\" → permanently wedged → every subsequent message silently dropped → only `/reset` recovers\n- **After**: Self-heal disposes wedged runtime + retries → init completes → session recovers automatically → reply delivered normally\n\n## Evidence\n\n### 1. E2E: Same-session conflict → self-heal → reply delivered (NOT dropped/empty)\n\n`src/auto-reply/reply/e2e-conflict-recovery.test.ts` simulates the exact #102020 scenario: message 1 works, Codex harness changes session identity between turns, message 2 hits repeated CAS conflicts, self-heal recovers, reply is delivered:\n\n```\n$ pnpm test src/auto-reply/reply/e2e-conflict-recovery.test.ts -- --reporter verbose\n\n═══ MESSAGE 1: first message in fresh session ═══\n  SessionKey: agent:main:dashboard:e2e-conflict-user\n\n    [CAS commit #1] ACCEPTED — revision matches, store committed\n  ✓ Message 1: sessionId=3cc09c0f-...\n  ✓ Message 1: reply delivered normally (no error)\n\n═══ BETWEEN TURNS: concurrent activity ═══\n  Codex harness writes transcript mirror...\n  → sessionFile field changed in store\n\n═══ MESSAGE 2: second message in same session ═══\n\n    [CAS commit #2] REJECTED — revision mismatch (4 forced remaining)\n    [CAS commit #3] REJECTED — revision mismatch (3 forced remaining)\n          ↑ self-heal triggers: dispose wedged MCP runtime + harness reset\n    [CAS commit #4] REJECTED — revision mismatch (2 forced remaining)\n    [CAS commit #5] REJECTED — revision mismatch (1 forced remaining)\n          ↑ fenced revalidation: drain + teardown + retry\n    [CAS commit #6] ACCEPTED — revision matches, store committed\n\n═══ VERIFICATION ═══\n  ✓ Same sessionKey: agent:main:dashboard:e2e-conflict-user\n  ✓ Message 1 sessionId: 3cc09c0f-...\n  ✓ Message 2 sessionId: 3cc09c0f-...\n  ✓ Both messages processed in same session: true\n  ✓ CAS commit attempts: 6 (#1=msg1 OK, #2-5=rejected, #6=self-heal OK)\n  ✓ Message 2 reply DELIVERED (not empty/dropped)\n  ✓ Wedged runtime disposed: true\n\n  RESULT: Same session delivered 2 messages\n  Message 1 → OK | Conflict → Self-heal → Message 2 → OK\n  Zero dropped replies, zero empty tool results\n\n ✓ 1 passed (541ms)\n```\n\n### 2. Gateway runtime: patched agent processes real messages end-to-end\n\n```\n$ pnpm openclaw agent --local \\\n    --session-key \"agent:main:dashboard:gw-verify-final\" \\\n    --message \"Say hello in one short sentence\"\n\n[trace:embedded-run] startup stages:\n  sessionId=206d6aa5-...  totalMs=18505\n\n[trace:embedded-run] prep stages:\n  agent-session:61ms     ← initSessionState with self-heal code\n\n[model-fetch] start provider=zte model=Qwen3-235B-A22B\n[model-fetch] response status=200 elapsedMs=2448\n\nHello! 👋\n\n[agent] run ended with stopReason=stop\n```\n\nSession init completed, model responded, reply delivered, clean stop. No crash, no \"reply session initialization conflicted\".\n\n### 3. Unit tests for conflict decision helper\n\n```\n$ pnpm test src/auto-reply/reply/reply-session-init-conflict.test.ts\n✓ retries with fresh snapshot on first conflict\n✓ self-heals instead of throwing once stale-snapshot retry is exhausted\n✓ only self-heals once, then fails clearly\n✓ prefers stale-snapshot retry even after recovery ran\nTest Files  1 passed (1) | Tests  4 passed (4)\n```\n\n### 4. Full regression suite (219 tests, zero regressions)\n\n```\nTest Files  7 passed (7) | Tests  219 passed (219)\n```\n\n## Changes\n\n- `src/auto-reply/reply/reply-session-init-conflict.ts` (new): `resolveReplyInitConflictAction()` — 3-action state machine\n- `src/auto-reply/reply/reply-session-init-conflict.test.ts` (new): 4 unit tests\n- `src/auto-reply/reply/session-init-self-heal.test.ts` (new): 2 integration tests forcing CAS conflicts\n- `src/auto-reply/reply/self-heal-visible-demo.test.ts` (new): step-by-step console output\n- `src/auto-reply/reply/e2e-conflict-recovery.test.ts` (new): same-session 2-message E2E proof\n- `src/auto-reply/reply/session.ts`: adds `conflict-self-heal` outcome type + `selfHealReplySessionInitConflict()` + 3-action conflict resolution\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
-        "branch": "fix/issue-102020-reply-session-init-conflict-self-heal",
-        "head_sha": "ab0a6a373dfce615242987b166d3e1132996cbbe",
-        "author": "chenyangjun-xy",
+        "title": "Fix visual settings refresh",
+        "body": "## Summary\n\nFixes #1994 by separating visual/display settings changes from background provider refresh settings.\n\n- Adds a dedicated background-work settings revision so visual-only settings no longer trigger provider quota refreshes.\n- Keeps real background/data-affecting settings wired to refresh behavior.\n- Persists cached widget snapshots only when widget-relevant display settings change, not on unrelated config edits.\n- Adds focused coverage for display-only settings, provider refresh avoidance, and widget snapshot behavior.\n\n## Why\n\nChanging visual settings such as usage bar display mode, icon layout, loading pattern, or other menu presentation options should update cached UI only. Previously, those changes were observed by the background refresh path and could trigger provider quota probes, which risks hitting provider rate limits while the user is only adjusting display preferences.\n\nThis keeps quota refreshes scoped to settings that actually affect provider data, credentials, background checks, alerts, cost/history processing, or account layout behavior.\n\n## Behavior Proof\n\nI avoided live provider probes and real Keychain reads, per the repository guidance against validation that can display credential or Keychain prompts. The proof below uses redacted/no-credential test seams that would record provider refreshes if the settings observer triggered them.\n\nDisplay-only settings do not refresh providers:\n\n- `UsageStoreCoverageTests.display only settings do not invoke provider refresh while background work is active` installs `_test_providerRefreshOverride` to record every provider refresh request.\n- The test observes `backgroundWorkSettingsObservationToken` with the same callback shape used by the background settings watcher: on change, call `refreshForSettingsChange()`.\n- It changes only visual/display settings: `usageBarsShowUsed`, `mergeIcons`, `randomBlinkEnabled`, and `debugLoadingPattern`.\n- After observation delivery, the recorded provider refresh list remains empty.\n- The same test directly calls `refreshForSettingsChange()` and confirms `.codex` is recorded, proving the override would catch a provider refresh if one occurred.\n\nProvider-affecting settings still refresh:\n\n- `UsageStoreCoverageTests.background work settings observation ignores display only settings churn` first confirms the same display-only setting changes do not fire the background observer.\n- It then changes `statusChecksEnabled` and observes the background-work token firing.\n- It re-observes and changes `multiAccountMenuLayout`, then confirms the token fires again.\n\nCached UI/widget state updates without unrelated config churn:\n\n- `StatusItemIconObservationSignatureTests.display settings persist cached widget snapshot` toggles `usageBarsShowUsed`, waits for `widgetSnapshotPersistTask`, and confirms the cached widget snapshot records `usageBarsShowUsed == true` with a Codex entry.\n- `StatusItemIconObservationSignatureTests.config only settings do not persist cached widget snapshot` mutates `zaiAPIToken` and confirms no widget snapshot is persisted for that unrelated config-only change.\n\n## Validation\n\n- Manually checked display/settings changes.\n- `swift test --filter UsageStoreCoverageTests`\n- `swift test --filter StatusItemIconObservationSignatureTests`\n- `swift test --filter UsageStoreWidgetSnapshotTests`\n- `make check`\n- `make test`",
+        "branch": "codex/fix-visual-settings-refresh",
+        "head_sha": "ced57db81fa749df1df7c81560e507c2d023e031",
+        "author": "zihao-qi",
         "labels": [
-          "size: L",
-          "P1"
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof",
+          "P2",
+          "merge-risk: 🚨 auth-provider"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/e2e-conflict-recovery.test.ts",
-            "additions": 176,
+            "path": "Sources/CodexBar/SettingsStore+Defaults.swift",
+            "additions": 26,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Sources/CodexBar/SettingsStore.swift",
+            "additions": 1,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/auto-reply/reply/reply-session-init-conflict.test.ts",
-            "additions": 40,
+            "path": "Sources/CodexBar/StatusItemController+WidgetSnapshot.swift",
+            "additions": 16,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/auto-reply/reply/reply-session-init-conflict.ts",
-            "additions": 40,
+            "path": "Sources/CodexBar/StatusItemController.swift",
+            "additions": 3,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/auto-reply/reply/self-heal-visible-demo.test.ts",
-            "additions": 122,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "Sources/CodexBar/UsageStore.swift",
+            "additions": 1,
+            "deletions": 22,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/session-init-self-heal.test.ts",
-            "additions": 187,
+            "path": "Tests/CodexBarTests/StatusItemIconObservationSignatureTests.swift",
+            "additions": 37,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 142,
-            "deletions": 16,
+            "path": "Tests/CodexBarTests/UsageStoreCoverageTests.swift",
+            "additions": 87,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 6,
-        "additions": 707,
-        "deletions": 16,
+        "changedFiles": 7,
+        "additions": 171,
+        "deletions": 22,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102052",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102052.md",
+        "automerge_cluster_id": "automerge-steipete-codexbar-1996",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1996.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 9,
+          "gatingTotal": 9,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 27,
-            "SUCCESS": 24,
-            "QUEUED": 43,
-            "NEUTRAL": 1
+            "SUCCESS": 5,
+            "IN_PROGRESS": 3,
+            "QUEUED": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
-            "pnpm-store-warmup:QUEUED",
-            "build-artifacts:QUEUED",
-            "checks-fast-bundled-protocol:QUEUED",
-            "checks-fast-bun-launcher:QUEUED",
-            "QA Smoke CI (matrix):QUEUED",
-            "QA Smoke CI (telegram 1/2):QUEUED",
-            "QA Smoke CI (telegram 2/2):QUEUED",
-            "checks-fast-contracts-plugins-a:QUEUED",
-            "checks-fast-contracts-plugins-b:QUEUED",
-            "checks-fast-contracts-channels-a:QUEUED",
-            "checks-fast-contracts-channels-b:QUEUED",
-            "checks-node-compact-large-1:QUEUED",
-            "checks-node-compact-large-2:QUEUED",
-            "checks-node-compact-large-3:QUEUED",
-            "checks-node-compact-large-whole-1:QUEUED",
-            "checks-node-compact-small-1:QUEUED",
-            "checks-node-compact-small-10:QUEUED",
-            "checks-node-compact-small-2:QUEUED",
-            "checks-node-compact-small-3:QUEUED",
-            "checks-node-compact-small-4:QUEUED",
-            "checks-node-compact-small-5:QUEUED",
-            "checks-node-compact-small-6:QUEUED",
-            "checks-node-compact-small-7:QUEUED",
-            "checks-node-compact-small-8:QUEUED",
-            "checks-node-compact-small-9:QUEUED",
-            "checks-node-compact-small-whole-1:QUEUED",
-            "checks-node-compact-small-whole-2:QUEUED",
-            "checks-node-compact-small-whole-3:QUEUED",
-            "check-guards:QUEUED",
-            "check-shrinkwrap:QUEUED",
-            "check-bundled-channel-config-metadata:QUEUED",
-            "check-prod-types:QUEUED",
-            "check-lint:QUEUED",
-            "check-dependencies:QUEUED",
-            "check-test-types:QUEUED",
-            "check-additional-boundaries-a:QUEUED",
-            "check-additional-boundaries-bcd:QUEUED",
-            "check-session-accessor-boundary:QUEUED",
-            "check-session-transcript-reader-boundary:QUEUED",
-            "check-additional-extension-channels:QUEUED",
-            "check-additional-extension-bundled:QUEUED",
-            "check-additional-extension-package-boundary:QUEUED",
-            "check-additional-runtime-topology-architecture:QUEUED"
+            "swift-test-macos (0, 4):IN_PROGRESS",
+            "swift-test-macos (1, 4):IN_PROGRESS",
+            "swift-test-macos (2, 4):IN_PROGRESS",
+            "swift-test-macos (3, 4):QUEUED"
           ],
           "pending": [
-            "Real behavior proof:CANCELLED",
-            "pnpm-store-warmup:QUEUED",
-            "build-artifacts:QUEUED",
-            "checks-fast-bundled-protocol:QUEUED",
-            "checks-fast-bun-launcher:QUEUED",
-            "QA Smoke CI (matrix):QUEUED",
-            "QA Smoke CI (telegram 1/2):QUEUED",
-            "QA Smoke CI (telegram 2/2):QUEUED",
-            "checks-fast-contracts-plugins-a:QUEUED",
-            "checks-fast-contracts-plugins-b:QUEUED",
-            "checks-fast-contracts-channels-a:QUEUED",
-            "checks-fast-contracts-channels-b:QUEUED",
-            "checks-node-compact-large-1:QUEUED",
-            "checks-node-compact-large-2:QUEUED",
-            "checks-node-compact-large-3:QUEUED",
-            "checks-node-compact-large-whole-1:QUEUED",
-            "checks-node-compact-small-1:QUEUED",
-            "checks-node-compact-small-10:QUEUED",
-            "checks-node-compact-small-2:QUEUED",
-            "checks-node-compact-small-3:QUEUED",
-            "checks-node-compact-small-4:QUEUED",
-            "checks-node-compact-small-5:QUEUED",
-            "checks-node-compact-small-6:QUEUED",
-            "checks-node-compact-small-7:QUEUED",
-            "checks-node-compact-small-8:QUEUED",
-            "checks-node-compact-small-9:QUEUED",
-            "checks-node-compact-small-whole-1:QUEUED",
-            "checks-node-compact-small-whole-2:QUEUED",
-            "checks-node-compact-small-whole-3:QUEUED",
-            "check-guards:QUEUED",
-            "check-shrinkwrap:QUEUED",
-            "check-bundled-channel-config-metadata:QUEUED",
-            "check-prod-types:QUEUED",
-            "check-lint:QUEUED",
-            "check-dependencies:QUEUED",
-            "check-test-types:QUEUED",
-            "check-additional-boundaries-a:QUEUED",
-            "check-additional-boundaries-bcd:QUEUED",
-            "check-session-accessor-boundary:QUEUED",
-            "check-session-transcript-reader-boundary:QUEUED",
-            "check-additional-extension-channels:QUEUED",
-            "check-additional-extension-bundled:QUEUED",
-            "check-additional-extension-package-boundary:QUEUED",
-            "check-additional-runtime-topology-architecture:QUEUED"
+            "swift-test-macos (0, 4):IN_PROGRESS",
+            "swift-test-macos (1, 4):IN_PROGRESS",
+            "swift-test-macos (2, 4):IN_PROGRESS",
+            "swift-test-macos (3, 4):QUEUED"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -240,21 +186,21 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "processed_at": "2026-07-08T14:34:09.946Z"
     }
   ],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2773,
+    "total_ms": 4361,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 427
+        "ms": 605
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2046
+        "ms": 1027
       },
       {
         "name": "classify_comment_commands",
@@ -270,15 +216,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 286
+        "ms": 2702
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
