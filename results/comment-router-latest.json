@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T17:05:21.549Z",
+  "generated_at": "2026-07-08T17:06:40.601Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T14:05:19.270Z",
+  "since": "2026-07-08T14:06:40.172Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102255
+    102257
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,127 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102255:4917160641:2026-07-08T17:05:14Z:clawsweeper_needs_human",
-      "comment_id": "4917160641",
-      "comment_version_key": "4917160641:2026-07-08T17:05:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102255#issuecomment-4917160641",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 102255,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T16:51:38Z",
-      "comment_updated_at": "2026-07-08T17:05:14Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] No automated repair is queued because the remaining blocker is contributor real behavior proof and a maintainer choice on whether committed regression coverage is required.; Cleared: The diff only changes cron scheduler TypeScript state checks and does not touch dependencies, workflows, secrets, package resolution, or code-loading paths. (sha=c4eb000e89a6d9d55f88b5dda78aff2a9a25aa8d)",
-      "review_summary": "The PR updates cron due-job selection and disabled-job state normalization so active run markers survive disable/re-enable cycles and block duplicate dispatch.\n\nPR surface: Source +28. Total +28 across 3 files.\n\nReproducibility: yes. from source, but not independently executed in this read-only review. The linked issue gives the run, disable, re-enable, then timer-tick path, and current main confirms the reservation clear plus missing active-registry check.",
-      "review_followup": "- [P1] No automated repair is queued because the remaining blocker is contributor real behavior proof and a maintainer choice on whether committed regression coverage is required.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "c4eb000e89a6d9d55f88b5dda78aff2a9a25aa8d",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): prevent double dispatch after disable/enable cycle during in-flight run",
-        "body": "## What Problem This Solves\n\nDisabling and re-enabling a cron job while one of its runs is still in flight clears the persisted `runningAtMs` reservation, so the next scheduler tick dispatches a second concurrent run. The result is two overlapping executions of a job that is supposed to run once.\n\nThe root cause is that `isRunnableJob` only consulted the persisted `runningAtMs` field and never checked the in-memory active-jobs registry (`isCronJobActive`). When `update(id, { enabled: false })` cleared `runningAtMs` unconditionally (even during an in-flight run), and a subsequent `update(id, { enabled: true })` recomputed `nextRunAtMs` to a past-due time, the next tick found no concurrency guard and dispatched a second run.\n\n## Changes\n\nThree files, 30 insertions, 2 deletions:\n\n1. **`src/cron/service/timer.ts`** (`isRunnableJob`): Added `isCronJobActive(job.id)` check so the in-memory active-jobs registry guards against double dispatch even when `runningAtMs` was cleared externally. This is the primary fix matching the issue’s recommendation.\n\n2. **`src/cron/service/ops.ts`** (`finalizeUpdatedJob`): The disable branch now preserves `runningAtMs` when the job is currently in-flight, making the guard durable across process restarts (defense-in-depth).\n\n3. **`src/cron/service/jobs.ts`** (`normalizeJobTickState`): The disabled-job branch now uses the same `STUCK_RUN_MS` (2h) gate as enabled jobs instead of unconditionally clearing `runningAtMs`. This prevents the maintenance recompute path from undoing fix 2 and keeps behavior consistent.\n\n## Evidence\n\n**Unit tests (124/124 passed, 1308/1308 tests):**\n```\n Test Files  124 passed (124)\n      Tests  1308 passed (1308)\n```\n\n**Real behavior proof:**\n```\n=== REPRO PROOF: #102238 disable/enable double-dispatch fix ===\nhostname: LIN-66D8BD4EA2C\npid: 3346559\ntimestamp: 2026-07-08T16:33:47Z\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n```\n\nThe proof test drives the real scheduler code paths end to end: `ops.run(id, \"force\")` starts an isolated-agent run that hangs on a deferred `runIsolatedAgentJob`; while the run is in flight, `ops.update(id, { enabled: false })` then `ops.update(id, { enabled: true })` are called; finally `timer.onTimer(state)` drives a scheduler tick. The test asserts that `runIsolatedAgentJob` was called exactly once (no second dispatch), that `isCronJobActive()` remains true throughout, and that `runningAtMs` is preserved after the disable step.\n\n**Lint + Type check:**\n```\n$ npx oxlint src/cron/service/timer.ts src/cron/service/ops.ts src/cron/service/jobs.ts\nFound 0 warnings and 0 errors (pre-existing lint issues in unchanged code only).\n\n$ npx tsc --project tsconfig.json --noEmit\n(no type errors in changed files)\n```\n\n## Review\n- Manually reviewed and verified\n- AI-assisted: Yes\n- Fixes #102238",
-        "branch": "fix/cron-disable-enable-double-dispatch",
-        "head_sha": "c4eb000e89a6d9d55f88b5dda78aff2a9a25aa8d",
-        "author": "zw-xysk",
-        "labels": [
-          "size: XS",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cron/service/jobs.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 30,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102255",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102255.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 105,
-          "gatingTotal": 100,
-          "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2481,
+    "total_ms": 753,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 297
+        "ms": 417
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1969
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -161,15 +57,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 191
+        "ms": 324
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
