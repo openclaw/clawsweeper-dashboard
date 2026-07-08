@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T02:20:14.990Z",
+  "generated_at": "2026-07-08T02:20:50.343Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T23:20:12.847Z",
+  "since": "2026-07-07T23:20:47.813Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    101800
+    100945
   ],
   "comment_ids": [
-    4910796129
+    4910799039
   ],
-  "status_comment_id": 4910796371,
+  "status_comment_id": 4910799320,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101800:4910796129:2026-07-08T02:18:45Z:re_review",
-      "comment_id": "4910796129",
-      "comment_version_key": "4910796129:2026-07-08T02:18:45Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101800#issuecomment-4910796129",
+      "idempotency_key": "comment-router:openclaw/openclaw:100945:4910799039:2026-07-08T02:19:17Z:re_review",
+      "comment_id": "4910799039",
+      "comment_version_key": "4910799039:2026-07-08T02:19:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100945#issuecomment-4910799039",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 101800,
+      "issue_number": 100945,
       "author": "hugenshen",
       "author_id": 16300669,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T02:18:45Z",
-      "comment_updated_at": "2026-07-08T02:18:45Z",
-      "status_comment_id": 4910796371,
+      "comment_created_at": "2026-07-08T02:19:17Z",
+      "comment_updated_at": "2026-07-08T02:19:17Z",
+      "status_comment_id": 4910799320,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -76,78 +76,103 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 101800,
-          "dispatch_key": "router-616cd7d06ccd45e7",
-          "dispatched_at": "2026-07-08T02:20:16.119Z"
+          "item_number": 100945,
+          "dispatch_key": "router-8a246fe26189f020",
+          "dispatched_at": "2026-07-08T02:20:51.462Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-08T02:20:17.395Z",
-          "response_comment_id": "4910796371",
+          "commented_at": "2026-07-08T02:20:52.608Z",
+          "response_comment_id": "4910799320",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(mattermost): cap outbound target caches to prevent unbounded memory growth",
-        "body": "## What Problem This Solves\n\nFixes an issue where long-running Mattermost-connected OpenClaw processes gradually accumulate unbounded heap memory proportional to the number of unique users, channel names, and DM pairs they have ever addressed. On active servers with many distinct recipients the four module-level Maps in `send.ts` — `botUserCache`, `userByNameCache`, `channelByNameCache`, `dmChannelCache` — grow without limit and are never evicted.\n\n**Concrete example:** An OpenClaw instance routing messages to 5 000 distinct Mattermost users over a week records 5 000 entries in `userByNameCache` and another 5 000 in `dmChannelCache`. No TTL, no eviction, no bound — every unique `(baseUrl, token, target)` triple stays in memory for the life of the process.\n\n## Why This Change Was Made\n\nAdded four named cap constants and one `pruneMapToMaxSize` call after each cache `.set()`. `pruneMapToMaxSize` (from `openclaw/plugin-sdk/collection-runtime`) evicts the oldest insertion-order entry whenever the map exceeds its limit — the same LRU-like strategy used in `src/infra/map-size.ts`.\n\nCap values follow the existing Slack precedent (`SLACK_DM_CHANNEL_CACHE_MAX = 1024` at `extensions/slack/src/send.ts:49`):\n\n| Cache | Cap |\n|---|---|\n| `botUserCache` | 64 (bounded by distinct bot accounts) |\n| `userByNameCache` | 512 |\n| `channelByNameCache` | 512 |\n| `dmChannelCache` | 1024 |\n\n## User Impact\n\n**Before:** Memory in the Mattermost send path grows linearly with the number of unique targets seen since process start. Operators on large servers must restart periodically to reclaim memory.\n\n**After:** Each outbound cache is capped; the total overhead per cache is bounded and stable under sustained traffic.\n\n## Evidence\n\n- `extensions/mattermost/src/mattermost/send.ts:70–73` — four unbounded `Map` declarations, no cap or TTL before this PR\n- `extensions/slack/src/send.ts:49,572–578` — direct Slack precedent with `SLACK_DM_CHANNEL_CACHE_MAX`\n- `src/infra/map-size.ts` — `pruneMapToMaxSize` implementation; `openclaw/plugin-sdk/collection-runtime` re-exports it\n- Diff: production change is +13 lines in `extensions/mattermost/src/mattermost/send.ts`; call-site regressions added in `extensions/mattermost/src/mattermost/send.test.ts`\n\n### Behavior proof\n\n```text\n$ pnpm test extensions/mattermost/src/mattermost/send.test.ts\n\n Test Files  1 passed (1)\n      Tests  35 passed (35)\n```\n\nNew regressions in `extensions/mattermost/src/mattermost/send.test.ts` assert outbound caches stay bounded:\n\n- `evicts oldest DM channel cache entries after the configured cap` — 1025 distinct `user:` sends force a cache miss on the first entry after the 1024 cap.\n- `evicts oldest user-by-name cache entries after the configured cap` — 513 distinct `@username` sends force a username re-lookup for the first entry after the 512 cap.\n\nThis mirrors the Slack DM cache precedent and reuses the shared `pruneMapToMaxSize` helper contract from `src/infra/map-size.ts`.\n\n---\n\n> **AI-assisted PR** — Generated with Cursor/Claude. Logic verified against `src/infra/map-size.ts` and `extensions/slack/src/send.ts` precedent. Diff is minimal and non-breaking: existing callers are unaffected, cache semantics are preserved, only the maximum retained size changes.\n\nMade with [Cursor](https://cursor.com)\n",
-        "branch": "fix/mattermost-outbound-cache-cap",
-        "head_sha": "56f241100786f3b332cab21f133523d60ec0e9ef",
+        "title": "security(audit): flag control-plane exposure and plugin command surfaces",
+        "body": "## What Problem This Solves\n\nFixes two related gaps in `openclaw security audit` where operators could miss high-impact exposure on open chat surfaces and extension plugin command entry points.\n\n### Gap 1: Control-plane tools on open inbound policy\n\nWhen a channel uses `groupPolicy=\"open\"` or an open DM policy, the exposure matrix flagged elevated and runtime/filesystem tools but did **not** separately flag **control-plane tools** (`cron`, `gateway`).\n\n### Gap 2: Extension plugin commands on chat command surfaces\n\nThe plugin trust audit did not evaluate native command surfaces separately, name affected channels in finding detail, or warn when enabled extension plugins register commands reachable on those surfaces.\n\n## Why This Change Was Made\n\n**Control-plane exposure:** `collectRiskyToolExposureContexts()` now probes `cron` and `gateway`. Emits `security.exposure.open_groups_with_control_plane` (critical) when open inbound policy can reach control-plane tools.\n\n**Plugin command surface audit:** `collectPluginsTrustFindings()` adds `collectConfiguredCommandSurfaces()` and new/updated findings:\n\n| checkId | After |\n|---|---|\n| `plugins.extensions_no_allowlist` | critical when native commands **or** skill commands enabled without `plugins.allow`; detail names channels |\n| `plugins.commands_reachable_chat_surface` | warn when enabled extensions register commands and native commands are configured |\n\n**Docs:** `docs/gateway/security/audit-checks.md` uses the correct `plugins.allow` config key.\n\n## User Impact\n\n* Operators get clearer findings when open chats can reach gateway/cron control or extension plugin commands.\n* `plugins.extensions_no_allowlist` may now report `critical` when native commands are active without `plugins.allow`.\n* No runtime behavior change.\n\n## Evidence\n\n```bash\nnode scripts/run-vitest.mjs run \\\n  src/security/audit-plugins-trust.test.ts \\\n  src/security/audit-trust-model.test.ts \\\n  --reporter=verbose\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Open inbound policy could expose gateway/cron control-plane tools and plugin command surfaces without dedicated audit findings.\n- **Real environment tested:** macOS (Darwin arm64), Node.js v22.22.0, local source checkout on branch `codex/audit-plugin-command-control-surface` (single commit on latest `main`).\n- **Exact steps or command run after this patch:**\n  1. `node scripts/run-vitest.mjs run src/security/audit-plugins-trust.test.ts src/security/audit-trust-model.test.ts --reporter=verbose`\n- **Evidence after fix:**\n\n```text\n ✓ security audit trust model findings > evaluates trust-model exposure findings\n   (includes security.exposure.open_groups_with_control_plane scenarios)\n ✓ security audit install metadata findings > evaluates install metadata findings\n   (includes plugins.commands_reachable_chat_surface scenarios)\n\n Test Files  2 passed (2)\n      Tests  6 passed (6)\n```\n\n- **Observed result after fix:** Production collectors `collectExposureMatrixFindings` and `collectPluginsTrustFindings` emit `security.exposure.open_groups_with_control_plane` for open group + coding profile setups and `plugins.commands_reachable_chat_surface` when enabled extensions register commands on configured native command surfaces.\n- **What was not tested:** Full `openclaw security audit --deep` CLI against a live gateway; no committed `scripts/proof-*.mjs` helpers. Control-plane check ID overlaps with [#100965](https://github.com/openclaw/openclaw/pull/100965) — maintainers should pick one canonical contract.\n\n## AI-assisted disclosure\n\n- AI-assisted (Cursor agent)\n- Human-directed scope and review of audit logic\n",
+        "branch": "codex/audit-plugin-command-control-surface",
+        "head_sha": "9c08808bd78f20637cb7348dbb1acba22d125c0f",
         "author": "hugenshen",
         "labels": [
-          "channel: mattermost",
-          "size: S",
-          "P2"
+          "docs",
+          "gateway",
+          "security",
+          "size: M",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/mattermost/src/mattermost/send.test.ts",
-            "additions": 80,
-            "deletions": 0,
+            "path": "docs/gateway/security/audit-checks.md",
+            "additions": 3,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/send.ts",
-            "additions": 13,
-            "deletions": 0,
+            "path": "src/security/audit-extra.sync.ts",
+            "additions": 48,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/security/audit-plugins-trust.test.ts",
+            "additions": 90,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/security/audit-plugins-trust.ts",
+            "additions": 101,
+            "deletions": 36,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/security/audit-trust-model.test.ts",
+            "additions": 45,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 93,
-        "deletions": 0,
+        "changedFiles": 5,
+        "additions": 287,
+        "deletions": 67,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101800",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101800.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100945",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100945.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 90,
-          "gatingTotal": 85,
+          "total": 97,
+          "gatingTotal": 92,
           "counts": {
-            "SUCCESS": 58,
-            "SKIPPED": 27,
-            "IN_PROGRESS": 4,
+            "SUCCESS": 66,
+            "SKIPPED": 25,
+            "IN_PROGRESS": 5,
             "NEUTRAL": 1
           },
           "blockers": [
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
             "QA Smoke CI (telegram 2/2):IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS"
           ],
           "pending": [
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
             "QA Smoke CI (telegram 2/2):IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS"
           ],
           "terminalBlockers": [],
@@ -156,21 +181,21 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-08T02:20:15.308Z"
+      "processed_at": "2026-07-08T02:20:50.705Z"
     }
   ],
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5224,
+    "total_ms": 5529,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 636
+        "ms": 873
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1493
+        "ms": 1639
       },
       {
         "name": "classify_comment_commands",
@@ -190,7 +215,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3068
+        "ms": 2987
       },
       {
         "name": "append_ledger",
