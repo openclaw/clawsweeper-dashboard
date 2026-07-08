@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T02:21:56.687Z",
+  "generated_at": "2026-07-08T02:21:57.402Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T23:21:54.440Z",
+  "since": "2026-07-07T23:21:55.868Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    101782
+    101742
   ],
   "comment_ids": [
-    4910796810
+    4910797702
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101782:4910796810:2026-07-08T02:18:52Z:re_review",
-      "comment_id": "4910796810",
-      "comment_version_key": "4910796810:2026-07-08T02:18:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101782#issuecomment-4910796810",
+      "idempotency_key": "comment-router:openclaw/openclaw:101742:4910797702:2026-07-08T02:19:02Z:re_review",
+      "comment_id": "4910797702",
+      "comment_version_key": "4910797702:2026-07-08T02:19:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101742#issuecomment-4910797702",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 101782,
+      "issue_number": 101742,
       "author": "hugenshen",
       "author_id": 16300669,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T02:18:52Z",
-      "comment_updated_at": "2026-07-08T02:18:52Z",
+      "comment_created_at": "2026-07-08T02:19:02Z",
+      "comment_updated_at": "2026-07-08T02:19:02Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -73,48 +73,54 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(slack): keep thread label snippet truncation UTF-16 safe",
-        "body": "<!--\nAI-assisted: generated with Cursor / Claude Sonnet 4.6\n-->\n\n## What Problem This Solves\n\nFixes an issue where Slack thread labels injected into the agent prompt context could contain invalid Unicode when thread starter messages contain emoji near the 80-character snippet boundary.\n\nWhen a Slack thread reply arrives, OpenClaw builds a human-readable label for the thread (e.g. `\"Slack thread #general: Great idea about the 🚀 launch…\"`) and injects it into the LLM's context. The snippet is produced by collapsing whitespace then calling `.slice(0, 80)`. Emoji and supplementary-plane characters are represented as two UTF-16 code units (a surrogate pair). If the cut point lands between the two halves, the result contains an isolated surrogate — invalid Unicode — which is then passed to the model as part of its context string.\n\nThis affects two sibling helper functions:\n- `prepareSlackThreadContext` in `prepare-thread-context.ts` — builds `threadLabel` for live thread replies\n- `resolveSlackAssistantRootThreadLabel` in `prepare-thread-context-root.ts` — builds the label for assistant-root thread sessions\n\n## Why This Change Was Made\n\nReplace `.slice(0, 80)` with `truncateUtf16Safe(..., 80)` in both helpers. The surrounding `.replace(/\\s+/g, \" \")` and `.trim()` calls are unchanged; only the final truncation step is made surrogate-safe. `truncateUtf16Safe` from `openclaw/plugin-sdk/text-utility-runtime` is the established helper for this pattern throughout the codebase.\n\nBoth sites are fixed in the same PR because they share the identical bug pattern and are tested together.\n\n## User Impact\n\nSlack users who start threads with emoji-rich messages long enough to reach the 80-character boundary (common in practice — a single sentence with a few emoji easily hits this) would cause the agent to receive a malformed thread label in its prompt context. This can produce garbled context, confuse the model about the thread subject, or trigger a rejected API call on providers that validate Unicode input. After this fix, thread labels are always valid Unicode strings.\n\n## Evidence\n\n- **`prepare-thread-context.ts:228`** (pre-fix): `const snippet = starter.text.replace(/\\s+/g, \" \").slice(0, 80);` — `snippet` is used on the next line as `threadLabel = \\`Slack thread ${params.roomLabel}: ${snippet}\\``.\n- **`prepare-thread-context-root.ts:111`** (pre-fix): `const snippet = params.starterText.replace(/\\s+/g, \" \").slice(0, 80).trim();` — `snippet` is returned as part of the label string `\\`${base} (assistant root): ${snippet}\\``.\n- Both labels are consumed by downstream prompt-context builders and reach the LLM.\n- **Fix:** `truncateUtf16Safe(..., 80)` — same length cap, surrogate-pair-safe.\n- **Diff:** 5-line change across 2 files — two new imports, two call-site replacements; no logic change.\n\n- [x] AI-assisted (Cursor / Claude Sonnet 4.6)\n- [x] I understand what the code does\n- [x] Change is focused and does not mix unrelated concerns\n",
-        "branch": "fix/slack-thread-label-utf16",
-        "head_sha": "7c3661dad298b1d60f2ab5ec456ffe06b8a7005a",
+        "title": "fix(feishu): cap sender-name and streaming token caches",
+        "body": "## What Problem This Solves\n\nFixes two unbounded in-process Maps in the Feishu plugin:\n\n1. **`senderNameCache`** — sender display name lookups with no eviction under high message volume.\n2. **`tokenCache`** — streaming-card tenant access token cache with no eviction.\n\n## Why This Change Was Made\n\nApplies `pruneMapToMaxSize` after each cache write: sender names capped at **500**, streaming tokens at **256**, both with LRU eviction.\n\n## User Impact\n\nLong-lived Feishu gateways get bounded memory for sender-name and streaming-token caches. Normal workloads below the caps are unchanged.\n\n## Evidence\n\n```bash\nnode scripts/run-vitest.mjs run \\\n  extensions/feishu/src/bot-sender-name.test.ts \\\n  extensions/feishu/src/streaming-card.test.ts \\\n  --reporter=verbose\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Feishu sender-name and streaming token caches grew without bound.\n- **Real environment tested:** macOS (Darwin arm64), Node.js v22.22.0, local source checkout on branch `fix/feishu-cap-sender-and-token-caches`.\n- **Exact steps or command run after this patch:**\n  1. `node scripts/run-vitest.mjs run extensions/feishu/src/bot-sender-name.test.ts extensions/feishu/src/streaming-card.test.ts --reporter=verbose`\n- **Evidence after fix:**\n\n```text\n ✓ evicts oldest sender name cache entries once the cache exceeds its cap\n ✓ evicts oldest streaming token cache entries once the cache exceeds its cap\n\n Test Files  2 passed (2)\n      Tests  25 passed (25)\n```\n\n- **Observed result after fix:** Regression tests exercise production cache helpers and confirm oldest entries are evicted at cap while newest entries remain cached.\n- **What was not tested:** Live Feishu/Lark API token fetch or contact lookup.\n",
+        "branch": "fix/feishu-cap-sender-and-token-caches",
+        "head_sha": "1d447aaa8e4d23e7fa0fd2da4d14efa28e9600e3",
         "author": "hugenshen",
         "labels": [
-          "channel: slack",
-          "size: XS",
+          "channel: feishu",
+          "size: S",
           "P2",
           "rating: 🦪 silver shellfish",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/slack/src/monitor/message-handler/prepare-thread-context-root.test.ts",
-            "additions": 7,
+            "path": "extensions/feishu/src/bot-sender-name.test.ts",
+            "additions": 18,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/bot-sender-name.ts",
+            "additions": 15,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/streaming-card.test.ts",
+            "additions": 38,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/slack/src/monitor/message-handler/prepare-thread-context-root.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/message-handler/prepare-thread-context.ts",
-            "additions": 2,
-            "deletions": 1,
+            "path": "extensions/feishu/src/streaming-card.ts",
+            "additions": 10,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 12,
+        "changedFiles": 4,
+        "additions": 81,
         "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101782",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101782.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101742",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101742.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
@@ -123,12 +129,25 @@
           "total": 92,
           "gatingTotal": 87,
           "counts": {
-            "SUCCESS": 64,
-            "SKIPPED": 27,
+            "SUCCESS": 58,
+            "SKIPPED": 26,
+            "IN_PROGRESS": 5,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -141,15 +160,15 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2545,
+    "total_ms": 1733,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 760
+        "ms": 469
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1472
+        "ms": 1051
       },
       {
         "name": "classify_comment_commands",
@@ -169,7 +188,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 298
+        "ms": 199
       },
       {
         "name": "append_ledger",
