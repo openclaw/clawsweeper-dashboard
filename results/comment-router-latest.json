@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T02:23:32.565Z",
+  "generated_at": "2026-07-08T02:23:42.817Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T23:23:30.321Z",
+  "since": "2026-07-07T23:23:42.347Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101920
+    101961
   ],
-  "comment_ids": [
-    4910812720
-  ],
-  "status_comment_id": 4910812914,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,235 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:101920:4910812720:2026-07-08T02:22:14Z:re_review",
-      "comment_id": "4910812720",
-      "comment_version_key": "4910812720:2026-07-08T02:22:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101920#issuecomment-4910812720",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 101920,
-      "author": "nicknmorty",
-      "author_id": 16600979,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T02:22:14Z",
-      "comment_updated_at": "2026-07-08T02:22:14Z",
-      "status_comment_id": 4910812914,
-      "trigger": "mention",
-      "command": "re-review please — new head `09aac6a706f` addresses the p1 stale-candidate teardown race",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "please — new head `09aac6a706f` addresses the P1 stale-candidate teardown race.",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 101920,
-          "dispatch_key": "router-3b7dd36b22e67ecf",
-          "dispatched_at": "2026-07-08T02:23:33.315Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-08T02:23:34.237Z",
-          "response_comment_id": "4910812914",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(auto-reply): self-heal reply-session-init conflict instead of permanently wedging the session",
-        "body": "## What Problem This Solves\nFixes #101909.\n\nThe reply-session initializer's conflict branch in `src/auto-reply/reply/session.ts` allowed a single stale-snapshot retry and then threw `reply session initialization conflicted for <sessionKey>`. Because initialization never completed, the session-store entry was never committed and the session wedged **permanently** for that `sessionKey`: every subsequent turn re-hit the same conflict, completed tool executions (`exec`/`read`/etc.) had no channel back to the model, and tool-results silently returned empty. It survived gateway restarts (the conflict is keyed to the persistent sessionKey) and cleared only on a fresh session or `/reset`.\n\nThe conflict lives in reply-session initialization / session-store optimistic commit, **above** the model runtime, so it is **runtime-agnostic by construction**. Every case we observed live ran under the Codex app-server harness; on that harness the never-written transcript mirror (`<session>.jsonl.codex-app-server.json`, which carries the threadId) is a runtime-specific casualty, but the root cause is the conflict branch failing to recover — not anything Codex-specific.\n\nThis is the reply-session analogue of the ACP-harness init conflict fixed in #98931, which established the dispose-runtime + harness-reset recovery pattern reused here.\n\n## Fix\nThe rollover/timeout paths already self-heal by disposing the session's MCP runtime and running the registered harness `reset` hooks. This change makes the conflict branch reuse that same recovery **once** and retry initialization before giving up:\n\n1. stale-snapshot retry (unchanged — benign concurrent-revision case)\n2. if still conflicted: dispose the wedged runtime + run harness self-heal, then retry init exactly once (recursion bounded by `conflictRecoveryAttempted`)\n3. if it still cannot commit: throw with clear context instead of leaving the session able to silently return empty tool-results\n\n**Safety fence (commit `ede72284b`):** the first version of the self-heal called the teardown primitives inline while holding `runExclusiveSessionStoreWrite`. That lock does not block a foreign turn's execution, so a genuinely active concurrent turn on the same sessionKey (hot topic / rapid messages / rollover racing a fresh turn) could be disposed mid-flight, and draining inside the lock could deadlock. The self-heal now routes through the same fence the rollover path uses: it drains foreign work admissions via `interruptSessionWorkAdmissions` **outside** the store-write lock before disposing the wedged runtime and retrying. No new machinery — it reuses `runExclusiveSessionLifecycleMutation` + `interruptSessionWorkAdmissions`.\n\nThe decision logic is isolated in a small pure helper (`src/auto-reply/reply/reply-session-init-conflict.ts`) with unit tests.\n\n## Evidence\n**Focused tests**\n- `npx vitest run src/auto-reply/reply/reply-session-init-conflict.test.ts src/auto-reply/reply/session.test.ts` → **142/142 pass** (4 decider unit tests + 138 session tests, including 2 new integration tests driving the real `session.ts` wiring: a forced double commit conflict disposes the wedged MCP runtime and completes in exactly 3 commit attempts; an actively-admitted foreign turn is interrupted/drained before teardown rather than torn down).\n- `npx tsc --noEmit -p tsconfig.json` → no type errors in changed files (only pre-existing, unrelated errors in `src/plugins/providers.test.ts`).\n\n**Live proof.** Captured on a real OpenClaw 2026.6.11 host. The wedge reproduced on **two independent agents / sessionKeys**, each re-hitting the identical conflict on the same persistent sessionKey for the same inbound message across repeated retries — a permanent wedge, not a transient race. Group/topic identifiers redacted; structure and error text preserved.\n\n```\n# Agent A — same sessionKey + same messageId re-hit on every retry\n2026-07-07T22:41:04.633Z [diagnostic] message processed: sessionKey=agent:<A>:telegram:group:<redacted>:topic:<redacted> messageId=<M1> outcome=error error=\"Error: reply session initialization conflicted for agent:<A>:telegram:group:<redacted>:topic:<redacted>\"\n2026-07-07T22:41:10.189Z [diagnostic] message processed: sessionKey=agent:<A>...:topic:<redacted> messageId=<M1> outcome=error error=\"Error: reply session initialization conflicted ...\"\n2026-07-07T22:41:20.687Z [diagnostic] message processed: sessionKey=agent:<A>...:topic:<redacted> messageId=<M1> outcome=error\n2026-07-07T22:41:41.222Z [diagnostic] message processed: sessionKey=agent:<A>...:topic:<redacted> messageId=<M1> outcome=error\n2026-07-07T22:42:21.772Z [diagnostic] message processed: sessionKey=agent:<A>...:topic:<redacted> messageId=<M1> outcome=error\n\n# Agent B — separate agent + separate gateway process, identical failure mode\n2026-07-07T22:33:05.485Z [diagnostic] message processed: sessionKey=agent:<B>:telegram:group:<redacted> messageId=<M2> outcome=error error=\"Error: reply session initialization conflicted for agent:<B>:telegram:group:<redacted>\"\n2026-07-07T22:33:10.578Z [diagnostic] message processed: sessionKey=agent:<B>:telegram:group:<redacted> messageId=<M2> outcome=error\n2026-07-07T22:34:21.172Z [diagnostic] message processed: sessionKey=agent:<B>:telegram:group:<redacted> messageId=<M2> outcome=error\n```\n\nThe same inbound message re-hits the identical conflict on every retry across ~1-2 minutes, confirming the session-store entry is never committed and the session cannot recover on its own. Operational mitigation before this fix was `/reset` or a fresh session.\n\n## Scope\nThis addresses the conflict-wedge failure mode. It does not attempt to address a separate operational failure where the Codex app-server child is not running at all — a different cause that presents the same empty-tool-result surface.\n",
-        "branch": "fix/codex-reply-session-conflict-mirror",
-        "head_sha": "09aac6a706f26a8ba16b90e1bdffe4f97cf49043",
-        "author": "nicknmorty",
-        "labels": [
-          "size: L",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/auto-reply/reply/reply-session-init-conflict.test.ts",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-session-init-conflict.ts",
-            "additions": 61,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.test.ts",
-            "additions": 225,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 180,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 512,
-        "deletions": 16,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101920",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101920.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "gatingTotal": 98,
-          "counts": {
-            "SUCCESS": 31,
-            "SKIPPED": 32,
-            "IN_PROGRESS": 39,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-session-transcript-reader-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-08T02:23:32.795Z"
-    }
-  ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4362,
+    "total_ms": 777,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 565
+        "ms": 455
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1664
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -271,15 +57,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2106
+        "ms": 307
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
