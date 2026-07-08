@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T06:53:16.667Z",
+  "generated_at": "2026-07-08T06:54:28.373Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T03:53:09.674Z",
+  "since": "2026-07-08T03:54:26.497Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    102063
+    101964
   ],
   "comment_ids": [
-    4912143524
+    4912151743
   ],
-  "status_comment_id": 4912143958,
+  "status_comment_id": 4912152007,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:102063:4912143524:2026-07-08T06:51:41Z:re_review",
-      "comment_id": "4912143524",
-      "comment_version_key": "4912143524:2026-07-08T06:51:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102063#issuecomment-4912143524",
+      "idempotency_key": "comment-router:openclaw/openclaw:101964:4912151743:2026-07-08T06:52:46Z:re_review",
+      "comment_id": "4912151743",
+      "comment_version_key": "4912151743:2026-07-08T06:52:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101964#issuecomment-4912151743",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 102063,
-      "author": "zw-xysk",
-      "author_id": 294457748,
+      "issue_number": 101964,
+      "author": "sunlit-deng",
+      "author_id": 253064511,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T06:51:41Z",
-      "comment_updated_at": "2026-07-08T06:51:41Z",
-      "status_comment_id": 4912143958,
+      "comment_created_at": "2026-07-08T06:52:46Z",
+      "comment_updated_at": "2026-07-08T06:52:46Z",
+      "status_comment_id": 4912152007,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -76,139 +76,195 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 102063,
-          "dispatch_key": "router-95a20d27f113ab9b",
-          "dispatched_at": "2026-07-08T06:53:17.811Z"
+          "item_number": 101964,
+          "dispatch_key": "router-58ea7705be4934e3",
+          "dispatched_at": "2026-07-08T06:54:29.053Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-08T06:53:18.962Z",
-          "response_comment_id": "4912143958",
+          "commented_at": "2026-07-08T06:54:29.999Z",
+          "response_comment_id": "4912152007",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "[F3] fix(trajectory): record session.ended after cleanup instead of reusing model.completed timestamp",
-        "body": "## What Problem This Solves\n\nThe `session.ended` span had the **exact same timestamp** as the last `model.completed` span because both were recorded back-to-back in the main try block, before any cleanup work (acquiring cleanup lock, `cleanupEmbeddedAttemptResources`) executed. This made it impossible to measure actual session duration vs model compute time and broke latency analysis for cleanup operations.\n\n## Changes\n\n**1 file changed, 25 insertions(+), 28 deletions(-) (net −3)**\n\nMoved `session.ended` recording from the main try block (immediately after `model.completed` / `trace.artifacts`) to the inner `finally` block, **after** cleanup work completes. The change:\n\n1. **Captures** `attemptTrajectoryTerminal.status` / `terminalError` before the return into function-scoped variables\n2. **Removes** the early `session.ended` recording (old location, before cleanup)\n3. **Removes** the old fallback `session.ended` in the finally block and the now-unused `trajectoryEndRecorded` flag\n4. **Records** `session.ended` after `cleanupEmbeddedAttemptResources`, using the captured terminal data with inline fallback\n\nPreviously: `model.completed` → `trace.artifacts` → `session.ended` (early) → return → cleanup\nNow:      `model.completed` → `trace.artifacts` → return → cleanup → `session.ended` (real timestamp)\n\n## Evidence\n\n**TypeScript compile:** ✅ `tsc --noEmit` passed\n\n**Unit tests (3 suites, 57 tests, all passed):**\n```\nattempt-trajectory-flush-cleanup  ✓ 2/2\nattempt-trajectory-status         ✓ 19/19\nattempt.model-diagnostic-events   ✓ 36/36\n```\n\n**Real behavior proof:**\n\nProof script (run with `node --import tsx proof/session-ended-timestamp.ts`):\n```typescript\nimport { createTrajectoryRuntimeRecorder } from \"../src/trajectory/runtime.js\";\n\nconst lines: string[] = [];\nconst writer = {\n  write: (l: string) => void lines.push(l),\n  flush: async () => {},\n  nextSourceSeq: () => 0,\n};\n\nconst recorder = createTrajectoryRuntimeRecorder({\n  sessionId: `proof-${Date.now()}`,\n  sessionKey: \"proof:session-ended\",\n  runId: \"proof-run\",\n  provider: \"proof\",\n  modelId: \"proof/model\",\n  writer,\n});\n\n// Step 1: model.completed (same timestamp as before fix)\nrecorder.recordEvent(\"model.completed\", { status: \"success\", usage: { inputTokens: 100, outputTokens: 200 } });\n\n// Step 2: simulated cleanup work\nawait new Promise((r) => setTimeout(r, 100));\n\n// Step 3: session.ended AFTER cleanup (THE FIX)\nrecorder.recordEvent(\"session.ended\", { status: \"completed\" });\n\n// Verify\nconst mcTs = JSON.parse(lines[0]).ts;  // model.completed timestamp\nconst seTs = JSON.parse(lines[2]).ts;  // session.ended timestamp\nconsole.assert(mcTs !== seTs, \"❌ FAIL: timestamps are identical\");\nconsole.log(`✅ PASS: Δ = ${new Date(seTs).getTime() - new Date(mcTs).getTime()}ms`);\n```\n\nTerminal output:\n```\nHostname: LIN-66D8BD4EA2C  PID: 848624\nStarted at: 2026-07-08T06:25:31.010Z\n\n [model.completed]  ts = 2026-07-08T06:25:31.012Z\n [trace.artifacts]   ts = 2026-07-08T06:25:31.031Z\n [cleanup]           simulating cleanup work...\n [session.ended]     ts = 2026-07-08T06:25:31.133Z\n\n── Verdict ──\n ✅ PASS: session.ended differs from model.completed\n     Δ = 121 ms (expected ≥ ~100 ms)\n ✅ TIMING: delay reflects real cleanup work (≥50ms)\n\n── Raw events ──\n  model.completed      ts=2026-07-08T06:25:31.012Z  seq=1\n  trace.artifacts      ts=2026-07-08T06:25:31.031Z  seq=2\n  session.ended        ts=2026-07-08T06:25:31.133Z  seq=3\n```\n\n## Review\n- Manually reviewed and verified\n- AI-assisted: Yes\n- Fixes #102014",
-        "branch": "fix/issue-102014-session-ended-timestamp",
-        "head_sha": "88bb0bab536131388cc68a0ff8104bca8fc6f583",
-        "author": "zw-xysk",
+        "title": "fix(msteams): cap team-group-id cache with pruneMapToMaxSize",
+        "body": "## What Problem This Solves\r\n\r\nThe `teamGroupIdCache` Map in `resolveTeamGroupId` had TTL-based expiry (10 min) but no size cap. A large Teams workspace with many distinct team IDs could accumulate entries faster than the TTL window, allowing unbounded growth.\r\n\r\n## Why This Change Was Made\r\n\r\nAdded a 500-entry cap via `pruneMapToMaxSize` — the shared SDK helper already used by 11 other files. The cap is applied after each successful cache insert.\r\n\r\n## User Impact\r\n\r\nNo change for normal usage. Memory usage bounded at ~500 entries regardless of workspace size.\r\n\r\n## Evidence\r\n\r\n### Vitest regression — `resolveTeamGroupId` capped at 500 through mocked Graph responses\r\n\r\nThe test mocks `fetchGraphJson` to return successful Graph responses, calls `resolveTeamGroupId` 501 times with distinct team IDs, and verifies the cache cap works:\r\n\r\n```text\r\n$ pnpm vitest run --project extension-msteams extensions/msteams/src/graph-thread.test.ts --reporter=verbose\r\n\r\n ✓ resolveTeamGroupId > caps cache at 500 entries — evicts oldest on overflow\r\n ... 21 passed (21)\r\n```\r\n\r\nThe test exercises the full `resolveTeamGroupId` path:\r\n- Fills 500 entries through successful mocked Graph lookups\r\n- 501st entry triggers `pruneMapToMaxSize` → oldest entry (team-0) evicted\r\n- Verifies team-0 is re-fetched from Graph (eviction proof)\r\n- Verifies team-1 is still cached (LRU semantics)\r\n\r\n### Lint\r\n\r\n```text\r\n$ npx oxlint extensions/msteams/src/graph-thread.ts\r\n0 errors, 0 warnings\r\n```\r\n\r\nAI-assisted: built with Codex",
+        "branch": "fix/msteams-graph-thread-cache-cap",
+        "head_sha": "1304d3c1cf9c6d36e0a775d7a82d381e56a82845",
+        "author": "sunlit-deng",
         "labels": [
-          "agents",
-          "size: S",
+          "channel: msteams",
+          "size: XS",
+          "triage: blank-template",
           "P2",
           "rating: 🧂 unranked krab",
-          "status: 📣 needs proof",
-          "merge-risk: 🚨 other"
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 25,
-            "deletions": 28,
+            "path": "extensions/msteams/src/graph-thread.test.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/graph-thread.ts",
+            "additions": 3,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 1,
-        "additions": 25,
-        "deletions": 28,
+        "changedFiles": 2,
+        "additions": 27,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102063",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102063.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101964",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101964.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 103,
-          "gatingTotal": 98,
+          "total": 87,
+          "gatingTotal": 82,
           "counts": {
-            "FAILURE": 3,
-            "SUCCESS": 47,
-            "CANCELLED": 2,
-            "SKIPPED": 32,
-            "IN_PROGRESS": 18,
-            "NEUTRAL": 1
+            "FAILURE": 1,
+            "IN_PROGRESS": 49,
+            "SUCCESS": 12,
+            "SKIPPED": 25
           },
           "blockers": [
             "no-tabs:FAILURE",
-            "Real behavior proof:CANCELLED",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "actionlint:FAILURE",
-            "security-sensitive-guard:CANCELLED",
-            "security-fast:FAILURE",
+            "dependency-guard-detect:IN_PROGRESS",
+            "Real behavior proof:IN_PROGRESS",
+            "actionlint:IN_PROGRESS",
+            "security-fast:IN_PROGRESS",
+            "pnpm-store-warmup:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
             "QA Smoke CI (matrix):IN_PROGRESS",
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
             "QA Smoke CI (telegram 2/2):IN_PROGRESS",
             "checks-fast-contracts-plugins-a:IN_PROGRESS",
             "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
             "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
             "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
             "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
-            "Real behavior proof:CANCELLED",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
+            "dependency-guard-detect:IN_PROGRESS",
+            "Real behavior proof:IN_PROGRESS",
+            "actionlint:IN_PROGRESS",
+            "security-fast:IN_PROGRESS",
+            "pnpm-store-warmup:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
             "QA Smoke CI (matrix):IN_PROGRESS",
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
             "QA Smoke CI (telegram 2/2):IN_PROGRESS",
             "checks-fast-contracts-plugins-a:IN_PROGRESS",
             "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
             "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
             "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
             "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "terminalBlockers": [
-            "no-tabs:FAILURE",
-            "actionlint:FAILURE",
-            "security-sensitive-guard:CANCELLED",
-            "security-fast:FAILURE"
+            "no-tabs:FAILURE"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-08T06:53:16.960Z"
+      "processed_at": "2026-07-08T06:54:28.589Z"
     }
   ],
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 10108,
+    "total_ms": 3931,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 4673
+        "ms": 553
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2307
+        "ms": 1307
       },
       {
         "name": "classify_comment_commands",
@@ -228,11 +284,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3104
+        "ms": 2041
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
