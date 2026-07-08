@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T09:58:15.184Z",
+  "generated_at": "2026-07-08T09:58:40.454Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T06:58:14.795Z",
+  "since": "2026-07-08T06:58:38.018Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    102135
+    101078
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4913599171
+  ],
+  "status_comment_id": 4913599473,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,23 +31,169 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_claimed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101078:4913599171:2026-07-08T09:57:08Z:re_review",
+      "comment_id": "4913599171",
+      "comment_version_key": "4913599171:2026-07-08T09:57:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101078#issuecomment-4913599171",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 101078,
+      "author": "xialonglee",
+      "author_id": 22994703,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-08T09:57:08Z",
+      "comment_updated_at": "2026-07-08T09:57:08Z",
+      "status_comment_id": 4913599473,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 101078,
+          "dispatch_key": "router-b7a4bfba3f76bbc5",
+          "dispatched_at": "2026-07-08T09:58:41.352Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-08T09:58:42.512Z",
+          "response_comment_id": "4913599473",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): preserve cron context in session entry for async completion wakes",
+        "body": "## What Problem This Solves\n\nFixes #99919\n\nWhen a cron job uses an async media generation tool (`image_generate`, `video_generate`, `music_generate`), the cron run ends while the media task is still in progress. When the media task later completes and wakes the session, the resumed agent run **loses the original cron context**:\n\n- `provider` / `model` — falls back to account defaults instead of the cron's configured model\n- `thinkLevel` — not restored\n- `bootstrapContextRunKind` — missing; the resumed agent doesn't know it is a cron run\n\nThe agent wakes up, sees only \"image done\" with no memory of the original multi-step task, replies once, and ends. The remaining steps silently dead-end with `NO_REPLY`.\n\nAdditionally, the in-process gateway dispatch in `runAnnounceAgentCall` was not authorized to pass model overrides on the synthetic client. Even with the correct `provider`/`model` fields in the agent params, the gateway would reject them without `allowSyntheticModelOverride`.\n\n## Why This Change Was Made\n\nThe fix has four parts:\n\n**1. Mark** — `prepareCronRunContext` (`src/cron/isolated-agent/run.ts`) sets `bootstrapContextRunKind: \"cron\"` on the base cron session entry before the cron run.\n\n**2. Persist** — `updateSessionStoreAfterAgentRun` (`src/agents/agent-command.ts`) persists `bootstrapContextRunKind` onto the `SessionEntry` in the session store. A **pre-mutation snapshot** is captured so `persistSessionEntry` can compute a real delta via `mergeSessionSnapshotChanges(initial, next)` — without the snapshot, `initialEntry === entry` would produce a zero delta and silently drop the field.\n\n**3. Restore** — `sendSubagentAnnounceDirectly` (`src/agents/subagent-announce-delivery.ts`) reads `requesterEntry.bootstrapContextRunKind` from the loaded session entry. If `\"cron\"`, it injects `provider`, `model`, `thinking`, and `bootstrapContextRunKind` into the wake params. The wake is routed to the **base cron session key** (not the ephemeral `:run:` key) so the persisted entry with transcript is found.\n\n**4. Authorize** — `runAnnounceAgentCall` passes `allowSyntheticModelOverride: true` when the agent params carry a `provider` or `model` override. This authorizes the trusted in-process gateway dispatch.\n\n**Safety**: Only cron session entries carry `bootstrapContextRunKind: \"cron\"`. Subagent session entries never have this field, so subagent-to-subagent completion paths are completely unaffected.\n\n## User Impact\n\n- **Before**: Cron jobs using async media generation silently lost context on wake. The resumed agent had the wrong model and no memory of the task, causing multi-step jobs to dead-end after the first async call.\n- **After**: Async completion wakes restore the cron's provider, model, thinking level, and run kind from the persisted session entry. The agent continues the original task instead of falling back to account defaults.\n\n## Evidence\n\n### Revision 7 (378c815): Fix persistence delta bug + add live async completion wake proof (2026-07-08)\n\n#### Bug fix: persistence snapshot delta\n\nClawSweeper identified a defect in the post-run persistence block (`src/agents/agent-command.ts:2395-2396`): the code passed the same `sessionEntry` object as both `initialEntry` and `entry` to `persistSessionEntry`. Because `mergeSessionSnapshotChanges` projects deltas by comparing `initial[key] !== next[key]`, a same-object reference produces no delta and `bootstrapContextRunKind` is silently dropped.\n\n**Fix** (378c8150cf): Capture `{ ...sessionEntry }` before the mutation, pass the pre-mutation snapshot as `initialEntry`:\n\n```typescript\nconst preCronMarkerEntry = sessionEntry ? { ...sessionEntry } : undefined;\nif (opts.bootstrapContextRunKind && sessionEntry) {\n  sessionEntry.bootstrapContextRunKind = opts.bootstrapContextRunKind;\n  if (sessionKey) {\n    const persisted = await persistSessionEntry({\n      sessionStore, sessionKey, storePath,\n      initialEntry: preCronMarkerEntry,  // ← pre-mutation snapshot\n      entry: sessionEntry,               // ← mutated entry (has bootstrapContextRunKind)\n    });\n    sessionEntry = persisted ?? sessionEntry;\n  }\n}\n```\n\n#### Live async completion wake proof\n\n**Environment**: Linux x86_64, Node v24.13.1, commit 378c8150cf, branch `fix/cron-async-media-wake-loses-context`\n\nUsed an env-gated stub (`OPENCLAW_IMAGE_GENERATE_PROOF=1`) in `image-generate-tool.ts` to bypass the image-generation provider requirement, so DeepSeek could exercise the full `image_generate` → background task → wake chain. The stub creates a valid 1×1 PNG, saves it to the media store, and completes the background task through the real `scheduleMediaGenerationTaskCompletion` → `wakeTaskCompletion` → `deliverSubagentAnnouncement` path. **The stub code was applied, proof collected, then reverted — the final branch carries only the production fix.**\n\n**Step 1: Build + Gateway startup**\n```bash\nOPENCLAW_IMAGE_GENERATE_PROOF=1 pnpm build              # full dist, exit 0\nOPENCLAW_IMAGE_GENERATE_PROOF=1 node dist/index.js gateway --port 18789 --bind loopback run &\n# → {\"ok\":true,\"status\":\"live\"}\n```\n\n**Step 2: Create and trigger cron job with image_generate**\n```bash\npnpm openclaw cron add --name \"proof-async-wake\" --every \"365d\" \\\n  --message \"Use image_generate to create a sunset image...\" \\\n  --tools \"image_generate write\" --model \"deepseek/deepseek-v4-pro\" \\\n  --thinking \"low\" --timeout-seconds 30 --session \"isolated\"\n# → Job ID: c0b8735a-d64c-4373-bcdd-9fa908790196\n\npnpm openclaw gateway call cron.run --params '{\"id\":\"c0b8735a-...\"}'\n# → {\"ok\":true,\"enqueued\":true}\n```\n\n**Step 3: Gateway log — full chain observed**\n\n*Cron agent lifecycle (phase=start → 439 thinking frames → phase=end):*\n```\n16:41:28 → event agent run=aaeb2670…614a agent=main_assistant\n  session=cron:c0b8735a-...:run:aaeb2670-6e9d-4c41-9434-0a0a3cc0614a\n  stream=lifecycle phase=start\n\n16:41:46 → event agent run=aaeb2670…614a\n  stream=lifecycle aseq=439 phase=end aborted=false\n```\n\n*Agent called image_generate, background task started:*\n```\nAssistant output: \"已提交日落图像生成任务（ID: 4c824733）。任务在后台处理中…\n  完成后将由 completion agent 在此会话中回传结果。当前状态：处理中。\"\n\n→ event task seq=per-client (×4 task events — background task lifecycle)\n```\n\n*Model-fetch calls (3 total — cron agent + wake agents):*\n```\n16:41:28 [model-fetch] start provider=deepseek model=deepseek-v4-pro\n  → 200 OK, 365ms                              ← cron agent primary run\n\n16:41:36 [model-fetch] start provider=deepseek model=deepseek-v4-pro  \n  → 200 OK, 346ms                              ← async completion wake #1\n\n16:41:39 [model-fetch] start provider=deepseek model=deepseek-v4-pro\n  → 200 OK, 353ms                              ← async completion wake #2\n```\n\n*Message processed — wake attempted delivery:*\n```\nmessage processed: channel=cron sessionKey=agent:main_assistant:cron:c0b8735a-...:run:aaeb2670-...\n  outcome=error duration=18229ms\n  error=\"Channel is required when multiple channels are configured: qqbot, feishu.\"\n```\n\nThe delivery error is expected — this is an **isolated** session without a channel configured. The wake agent itself ran successfully (model-fetch confirmed), attempted delivery, and could not find a channel. This is the correct behavior; in production, a cron job with a configured delivery channel would receive the completion message.\n\n**Step 4: Session store — bootstrapContextRunKind persisted**\n```\nKey: agent:main_assistant:cron:c0b8735a-d64c-4373-bcdd-9fa908790196\n  bootstrapContextRunKind: cron          ← ✅ persisted on base cron key\n  modelProvider: deepseek                ← ✅ cron-configured model\n  model: deepseek-v4-pro                 ← ✅ cron-configured model\n```\n\n**Step 5: Run-key fallback proof (on live session store)**\n```\nRun key lookup:  agent:main_assistant:cron:c0b8735a-...:run:run-deadbeef\n  → NOT in store  ✅  (expected — run keys never persisted)\n\nBase key lookup: agent:main_assistant:cron:c0b8735a-...\n  → Found  ✅\n  → bootstrapContextRunKind: cron       ✅\n  → modelProvider: deepseek             ✅\n  → model: deepseek-v4-pro              ✅\n\n→ effectiveSessionKey = base cron key (not :run: key)\n→ inject provider=deepseek, model=deepseek-v4-pro, bootstrapContextRunKind=cron\n```\n\n#### Evidence summary\n\n| Evidence | Result |\n|---|---|\n| `pnpm build` | ✅ Full dist build |\n| Gateway startup | ✅ `{\"ok\":true,\"status\":\"live\"}` |\n| Cron agent calls image_generate | ✅ \"已提交日落图像生成任务（ID: 4c824733）\" |\n| Background task lifecycle | ✅ 4 task events + \"任务在后台处理中\" |\n| Wake agent model calls | ✅ 3 model-fetch calls (cron + 2 wakes) |\n| bootstrapContextRunKind persisted | ✅ On base cron key |\n| Run-key → base-key fallback | ✅ Verified on live session store |\n| Pre-mutation snapshot delta | ✅ `{...sessionEntry}` before mutate |\n| All unit tests | ✅ 128/128 passed |\n| Lint + Format | ✅ Clean |\n\n### Targeted tests\n\n```bash\npnpm test src/agents/agent-command.ingress-diagnostics.test.ts    # 17/17 passed\npnpm test src/agents/agent-command.live-model-switch.test.ts      # 76/76 passed\npnpm test src/commands/agent.test.ts                              # 35/35 passed\npnpm test src/agents/subagent-announce-delivery.test.ts           # 115/115 passed\npnpm check:test-types                                             # clean\n```\n\n### Change summary vs upstream/main\n\n```\nsrc/agents/agent-command.ts                   |  22 added   (pre-mutation snapshot + persistence)\nsrc/agents/subagent-announce-delivery.test.ts | 211 added   (cron context injection × 3 tests)\nsrc/agents/subagent-announce-delivery.ts      |  76 +-      (base-key fallback + context restore + authorize)\nsrc/config/sessions/types.ts                  |   2 added   (bootstrapContextRunKind field)\nsrc/cron/isolated-agent/run.ts                |   5 added   (mark cron session entry)\nsrc/plugins/session-entry-slot-keys.ts        |   1 added   (reserved slot key)\n```\n\nTotal: 309 additions, 8 deletions across 6 files. No regressions.\n",
+        "branch": "fix/cron-async-media-wake-loses-context",
+        "head_sha": "a119d25d6890d6c7ca3115f0f41c09435c2e914f",
+        "author": "xialonglee",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/agent-command.ts",
+            "additions": 22,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 211,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 68,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/session-entry-slot-keys.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 309,
+        "deletions": 8,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101078",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101078.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 105,
+          "gatingTotal": 100,
+          "counts": {
+            "SUCCESS": 71,
+            "SKIPPED": 33,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-08T09:58:40.717Z"
+    }
+  ],
+  "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 700,
+    "total_ms": 5147,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 375
+        "ms": 618
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1356
+        "ms": 1805
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -57,11 +205,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 311
+        "ms": 2689
       },
       {
         "name": "append_ledger",
