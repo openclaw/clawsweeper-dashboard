@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T02:07:49.428Z",
+  "generated_at": "2026-07-08T02:07:55.598Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T23:07:46.802Z",
+  "since": "2026-07-07T23:07:53.323Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    96592
+    101943
   ],
   "comment_ids": [
     4910730827
@@ -33,19 +33,136 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:96592:4910730827:2026-07-08T02:06:23Z:re_review",
-      "comment_id": "4910730827",
-      "comment_version_key": "4910730827:2026-07-08T02:06:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/96592#issuecomment-4910730827",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101943:4910534708:2026-07-08T02:07:49Z:clawsweeper_needs_human",
+      "comment_id": "4910534708",
+      "comment_version_key": "4910534708:2026-07-08T02:07:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101943#issuecomment-4910534708",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 96592,
-      "author": "vincentkoc",
-      "author_id": 25068,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-07-08T02:06:23Z",
-      "comment_updated_at": "2026-07-08T02:06:23Z",
-      "status_comment_id": 4910731092,
+      "target_branch": null,
+      "issue_number": 101943,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-08T01:24:54Z",
+      "comment_updated_at": "2026-07-08T02:07:49Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Contributor-owned real behavior proof is still required before merge; there is no narrow ClawSweeper repair to queue from the current review.; Cleared: The diff only changes memory-core error handling and tests; it adds no dependencies, scripts, credentials, permissions, downloads, or supply-chain execution paths. (sha=7c16b7e987336a578e40e10b389e2d4c4afe7955)",
+      "review_summary": "The branch adds guarded memory-core error handling for fallback provider activation, direct wiki reads, and corpus supplement search fan-out, plus three regression tests.\n\nPR surface: Source +32, Tests +99. Total +131 across 4 files.\n\nReproducibility: yes. Source inspection gives a high-confidence path: register failing corpus supplements and call memory_search corpus=all/wiki or memory_get corpus=wiki, then compare current rejection/not-found behavior with the PR's structured degraded results.",
+      "review_followup": "- [P1] Contributor-owned real behavior proof is still required before merge; there is no narrow ClawSweeper repair to queue from the current review.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "7c16b7e987336a578e40e10b389e2d4c4afe7955",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-core): guard catch-block async calls and supplement search against unhandled rejections",
+        "body": "## What Problem This Solves\n\nThree untracked async-rejection paths exist in memory-core where a function called without its own error guard can throw, causing the rejection to escape the enclosing context as an unhandled promise rejection.\n\n### 1. `activateFallbackProvider` — called from inside `catch` blocks, throws when dual-provider creation fails\n\nBoth `ensureSourceWideSync` and `runMemoryTargetedSessionSync` catch embedding errors and attempt to activate a fallback provider via `activateFallbackProvider()`. Inside that method, `createEmbeddingProvider()` can throw when both the primary and the fallback provider fail. Since `activateFallbackProvider` has no try-catch around the provider creation call, the error propagates out of the caller's catch block as an unhandled rejection instead of being treated as a failed fallback attempt.\n\n**Impact:** A transient embedding provider outage during a sync operation causes a process-level unhandled rejection and tear-down of the full sync job rather than a clean \"fallback unavailable\" signal that lets the caller decide how to proceed.\n\n### 2. `getSupplementMemoryReadResult` in `corpus=wiki` — untracked promise rejection from supplement `get()`\n\nThe `memory_get` tool's `corpus=wiki` branch calls `getSupplementMemoryReadResult()` without any try-catch. If a registered wiki supplement's `get()` method throws (e.g., DB connection error, config loading failure), the rejection propagates up through the tool-execute handler and becomes an unhandled rejection, crashing the tool call. Previously the catch would also silently report \"not found\" indistinguishable from a missing document; now the actual error is surfaced.\n\n**Impact:** A misbehaving wiki supplement takes down the entire `memory_get corpus=wiki` tool invocation instead of returning a structured `{disabled: true}` error result with the actual backend failure message.\n\n### 3. `searchMemoryCorpusSupplements` — `Promise.all` over supplement searches discards all results when one fails\n\nThe corpus supplement search dispatches all registered supplements via `Promise.all`. If any single supplement's `search()` throws, the entire `Promise.all` rejects immediately, discarding results from every other (potentially healthy) supplement. Additionally, if ALL registered supplements fail, the error is now propagated so caller's unavailable-phase handling returns an explicit unavailable result instead of silently reporting empty success.\n\n**Impact:** One broken supplement pollutes results for all others, silently losing valid search results that other supplements already computed.\n\n## Changes\n\n### `extensions/memory-core/src/memory/manager-sync-ops.ts`\n\n`activateFallbackProvider()` — add `.catch()` to the `createEmbeddingProvider()` call so that failures during fallback provider creation return `false` (no fallback activated) instead of throwing. The caller's catch block then sees a clean boolean and either retries with the existing provider or re-throws the original embedding error.\n\n### `extensions/memory-core/src/tools.ts`\n\n`createMemoryGetTool` corpus=wiki branch — wrap `getSupplementMemoryReadResult()` in try-catch. On catch, capture the actual error message via `formatErrorMessage()` and return it as the `error` field in the disabled result. This distinguishes backend failures (DB/config error) from missing documents (\"wiki corpus result not found\").\n\n### `extensions/memory-core/src/tools.shared.ts`\n\n`searchMemoryCorpusSupplements()` — wrap each per-supplement `registration.supplement.search(params)` call in its own try-catch with failure-count tracking:\n- A failing supplement returns an empty array `[]` and increments the failure counter, isolating failures so one broken supplement cannot discard results from other supplements.\n- When ALL registered supplements fail (`failureCount === supplements.length`), the function throws so the caller's `runUnavailablePhase` handling returns an explicit unavailable result instead of silently reporting empty success.\n\n## Evidence\n\n**TypeScript check:** clean — no errors on any changed files.\n\n**Unit tests (26/26 passed):**\n```\n RUN  v4.1.9 /home/0668001248/IdeaProjects/zw-openclaw/openclaw\n\n Test Files  1 passed (1)\n      Tests  26 passed (26)\n   Start at  09:54:09\n   Duration  83.20s\n```\n\n**Proof tests added:**\n\n| Test | What it proves |\n|------|---------------|\n| `returns structured error when corpus=wiki supplement get throws` | Register a supplement whose `get()` throws, call `memory_get corpus=wiki` → returns `{disabled: true, error: \"wiki supplement get failed\"}` (actual error), **not** `\"not found\"` or a crash |\n| `returns unavailable result when all supplements fail to search` | Register two supplements whose `search()` both throw, call `memory_search corpus=all` → unavailable result with `\"All corpus supplements failed to search\"` error, not empty success |\n| `isolates per-supplement search failures so one broken supplement does not discard results from others` | Register broken (throws) + healthy supplement, call `memory_search corpus=all` → healthy supplement's `entities/alpha.md` still returned, sibling preservation works |\n\n**Summary of changes by file:**\n\n| File | Change | Lines |\n|------|--------|-------|\n| `manager-sync-ops.ts` | `.catch()` on `createEmbeddingProvider` in `activateFallbackProvider` | +6/-0 |\n| `tools.ts` | try-catch around `getSupplementMemoryReadResult` in `corpus=wiki` path, surfaces actual error | +6/-1 |\n| `tools.shared.ts` | per-supplement try-catch with failure-count, throws on all-fail for unavailable signal | +8/-0 |\n| `tools.citations.test.ts` | 3 new proof tests (wiki get throws, all supplements fail, one-of-many fails) | +90/-0 |\n\n## Review\n- Manually reviewed and verified\n- AI-assisted: Yes",
+        "branch": "fix/issue-101809-supplement-throw-v2",
+        "head_sha": "7c16b7e987336a578e40e10b389e2d4c4afe7955",
+        "author": "zw-xysk",
+        "labels": [
+          "extensions: memory-core",
+          "size: S",
+          "triage: blank-template",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/tools.citations.test.ts",
+            "additions": 99,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/tools.shared.ts",
+            "additions": 17,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/tools.ts",
+            "additions": 16,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 140,
+        "deletions": 9,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101943",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101943.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "gatingTotal": 91,
+          "counts": {
+            "SUCCESS": 61,
+            "SKIPPED": 34,
+            "IN_PROGRESS": 1
+          },
+          "blockers": [
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101943:4910678975:2026-07-08T01:57:31Z:re_review",
+      "comment_id": "4910678975",
+      "comment_version_key": "4910678975:2026-07-08T01:57:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101943#issuecomment-4910678975",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101943,
+      "author": "zw-xysk",
+      "author_id": 294457748,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-08T01:57:31Z",
+      "comment_updated_at": "2026-07-08T01:57:31Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -91,66 +208,74 @@
       "author_repository_permission": "admin",
       "target": {
         "kind": "pull_request",
-        "title": "improve(diagnostics-otel): make agent-duration histograms usable beyond 10s",
-        "body": "## What Problem This Solves\r\n\r\nThe `openclaw.run.duration_ms`, `openclaw.harness.duration_ms`, and\r\n`openclaw.context.tokens` histograms used the OTel SDK default bucket\r\nboundaries. The default duration buckets top out at 10s, but agent runs\r\nroutinely take minutes — so nearly every run lands in the `+Inf` overflow\r\nbucket. Anyone reading p50/p95/p99 latency for agent runs sees a flat,\r\nmeaningless distribution unless they reconfigure buckets at the collector.\r\n\r\n## Why This Change Was Made\r\n\r\nAttach `explicit_bucket_boundaries` advice via named constants, matching the\r\nexisting `GEN_AI_*_BUCKETS` convention already in this file:\r\n- `AGENT_DURATION_MS_BUCKETS` (1s … 1h) for the run and harness duration\r\n  histograms, which share the same latency range.\r\n- `CONTEXT_TOKENS_BUCKETS` for the small-integer context-size histogram.\r\n\r\nHistogram bucket advice only affects how new data is aggregated; it changes\r\nno recorded values and no public API.\r\n\r\n## User Impact\r\n\r\nOperators get meaningful latency percentiles for agent runs and harness\r\nlifecycle out of the box, across the full seconds-to-an-hour range, without\r\nany collector-side bucket configuration.\r\n\r\n## Evidence\r\n\r\n- New unit test asserts all three histograms advertise the expected bucket\r\n  boundaries and that run/harness share the same set.\r\n- `extensions/diagnostics-otel` test suite: **96 passed**.\r\n- Typecheck (`tsgo:extensions`, `tsgo:extensions:test`), lint\r\n  (`lint:extensions`), and format (`oxfmt --check`) all pass on the changed\r\n  files.",
-        "branch": "feat/otel-histogram-duration-buckets",
-        "head_sha": "f3461d0e13f50463db80a447160c80d891063728",
-        "author": "hcnode",
+        "title": "fix(memory-core): guard catch-block async calls and supplement search against unhandled rejections",
+        "body": "## What Problem This Solves\n\nThree untracked async-rejection paths exist in memory-core where a function called without its own error guard can throw, causing the rejection to escape the enclosing context as an unhandled promise rejection.\n\n### 1. `activateFallbackProvider` — called from inside `catch` blocks, throws when dual-provider creation fails\n\nBoth `ensureSourceWideSync` and `runMemoryTargetedSessionSync` catch embedding errors and attempt to activate a fallback provider via `activateFallbackProvider()`. Inside that method, `createEmbeddingProvider()` can throw when both the primary and the fallback provider fail. Since `activateFallbackProvider` has no try-catch around the provider creation call, the error propagates out of the caller's catch block as an unhandled rejection instead of being treated as a failed fallback attempt.\n\n**Impact:** A transient embedding provider outage during a sync operation causes a process-level unhandled rejection and tear-down of the full sync job rather than a clean \"fallback unavailable\" signal that lets the caller decide how to proceed.\n\n### 2. `getSupplementMemoryReadResult` in `corpus=wiki` — untracked promise rejection from supplement `get()`\n\nThe `memory_get` tool's `corpus=wiki` branch calls `getSupplementMemoryReadResult()` without any try-catch. If a registered wiki supplement's `get()` method throws (e.g., DB connection error, config loading failure), the rejection propagates up through the tool-execute handler and becomes an unhandled rejection, crashing the tool call. Previously the catch would also silently report \"not found\" indistinguishable from a missing document; now the actual error is surfaced.\n\n**Impact:** A misbehaving wiki supplement takes down the entire `memory_get corpus=wiki` tool invocation instead of returning a structured `{disabled: true}` error result with the actual backend failure message.\n\n### 3. `searchMemoryCorpusSupplements` — `Promise.all` over supplement searches discards all results when one fails\n\nThe corpus supplement search dispatches all registered supplements via `Promise.all`. If any single supplement's `search()` throws, the entire `Promise.all` rejects immediately, discarding results from every other (potentially healthy) supplement. Additionally, if ALL registered supplements fail, the error is now propagated so caller's unavailable-phase handling returns an explicit unavailable result instead of silently reporting empty success.\n\n**Impact:** One broken supplement pollutes results for all others, silently losing valid search results that other supplements already computed.\n\n## Changes\n\n### `extensions/memory-core/src/memory/manager-sync-ops.ts`\n\n`activateFallbackProvider()` — add `.catch()` to the `createEmbeddingProvider()` call so that failures during fallback provider creation return `false` (no fallback activated) instead of throwing. The caller's catch block then sees a clean boolean and either retries with the existing provider or re-throws the original embedding error.\n\n### `extensions/memory-core/src/tools.ts`\n\n`createMemoryGetTool` corpus=wiki branch — wrap `getSupplementMemoryReadResult()` in try-catch. On catch, capture the actual error message via `formatErrorMessage()` and return it as the `error` field in the disabled result. This distinguishes backend failures (DB/config error) from missing documents (\"wiki corpus result not found\").\n\n### `extensions/memory-core/src/tools.shared.ts`\n\n`searchMemoryCorpusSupplements()` — wrap each per-supplement `registration.supplement.search(params)` call in its own try-catch with failure-count tracking:\n- A failing supplement returns an empty array `[]` and increments the failure counter, isolating failures so one broken supplement cannot discard results from other supplements.\n- When ALL registered supplements fail (`failureCount === supplements.length`), the function throws so the caller's `runUnavailablePhase` handling returns an explicit unavailable result instead of silently reporting empty success.\n\n## Evidence\n\n**TypeScript check:** clean — no errors on any changed files.\n\n**Unit tests (26/26 passed):**\n```\n RUN  v4.1.9 /home/0668001248/IdeaProjects/zw-openclaw/openclaw\n\n Test Files  1 passed (1)\n      Tests  26 passed (26)\n   Start at  09:54:09\n   Duration  83.20s\n```\n\n**Proof tests added:**\n\n| Test | What it proves |\n|------|---------------|\n| `returns structured error when corpus=wiki supplement get throws` | Register a supplement whose `get()` throws, call `memory_get corpus=wiki` → returns `{disabled: true, error: \"wiki supplement get failed\"}` (actual error), **not** `\"not found\"` or a crash |\n| `returns unavailable result when all supplements fail to search` | Register two supplements whose `search()` both throw, call `memory_search corpus=all` → unavailable result with `\"All corpus supplements failed to search\"` error, not empty success |\n| `isolates per-supplement search failures so one broken supplement does not discard results from others` | Register broken (throws) + healthy supplement, call `memory_search corpus=all` → healthy supplement's `entities/alpha.md` still returned, sibling preservation works |\n\n**Summary of changes by file:**\n\n| File | Change | Lines |\n|------|--------|-------|\n| `manager-sync-ops.ts` | `.catch()` on `createEmbeddingProvider` in `activateFallbackProvider` | +6/-0 |\n| `tools.ts` | try-catch around `getSupplementMemoryReadResult` in `corpus=wiki` path, surfaces actual error | +6/-1 |\n| `tools.shared.ts` | per-supplement try-catch with failure-count, throws on all-fail for unavailable signal | +8/-0 |\n| `tools.citations.test.ts` | 3 new proof tests (wiki get throws, all supplements fail, one-of-many fails) | +90/-0 |\n\n## Review\n- Manually reviewed and verified\n- AI-assisted: Yes",
+        "branch": "fix/issue-101809-supplement-throw-v2",
+        "head_sha": "7c16b7e987336a578e40e10b389e2d4c4afe7955",
+        "author": "zw-xysk",
         "labels": [
-          "extensions: diagnostics-otel",
+          "extensions: memory-core",
           "size: S",
+          "triage: blank-template",
           "P2",
-          "rating: 🦪 silver shellfish",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/diagnostics-otel/src/service.test.ts",
-            "additions": 32,
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
+            "additions": 8,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/diagnostics-otel/src/service.ts",
-            "additions": 40,
+            "path": "extensions/memory-core/src/tools.citations.test.ts",
+            "additions": 99,
             "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/tools.shared.ts",
+            "additions": 17,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/tools.ts",
+            "additions": 16,
+            "deletions": 8,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 72,
-        "deletions": 0,
+        "changedFiles": 4,
+        "additions": 140,
+        "deletions": 9,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-96592",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-96592.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101943",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101943.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 95,
-          "gatingTotal": 90,
+          "total": 96,
+          "gatingTotal": 91,
           "counts": {
-            "SUCCESS": 57,
+            "SUCCESS": 61,
             "SKIPPED": 34,
-            "IN_PROGRESS": 4
+            "IN_PROGRESS": 1
           },
           "blockers": [
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
           ],
           "pending": [
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -164,15 +289,15 @@
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5756,
+    "total_ms": 2684,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 750
+        "ms": 454
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1862
+        "ms": 1804
       },
       {
         "name": "classify_comment_commands",
@@ -188,11 +313,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3103
+        "ms": 399
       },
       {
         "name": "append_ledger",
