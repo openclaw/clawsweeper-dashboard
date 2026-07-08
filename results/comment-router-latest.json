@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T21:40:11.152Z",
+  "generated_at": "2026-07-08T21:40:34.055Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T18:40:08.980Z",
+  "since": "2026-07-08T18:40:32.024Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    95676
+    98021
   ],
   "comment_ids": [
-    4919439526
+    4919441896
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:95676:4919439526:2026-07-08T21:37:07Z:re_review",
-      "comment_id": "4919439526",
-      "comment_version_key": "4919439526:2026-07-08T21:37:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95676#issuecomment-4919439526",
+      "idempotency_key": "comment-router:openclaw/openclaw:98021:4919441896:2026-07-08T21:37:29Z:re_review",
+      "comment_id": "4919441896",
+      "comment_version_key": "4919441896:2026-07-08T21:37:29Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/98021#issuecomment-4919441896",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 95676,
+      "issue_number": 98021,
       "author": "anyech",
       "author_id": 8743351,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T21:37:07Z",
-      "comment_updated_at": "2026-07-08T21:37:07Z",
+      "comment_created_at": "2026-07-08T21:37:29Z",
+      "comment_updated_at": "2026-07-08T21:37:29Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -60,7 +60,7 @@
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "8198938ccf3b0c41efe6bce95125a581d54e9e76",
+      "expected_head_sha": null,
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -73,15 +73,22 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): retry same profile before timeout auth rotation",
-        "body": "## Summary\n\nThis PR keeps ordinary assistant-stage timeouts from immediately spending an auth-profile rotation. A first ordinary timeout now gets one bounded retry on the same model/profile; if the retry budget is exhausted, the existing auth-profile rotation path still runs.\n\nThe change deliberately does **not** weaken real failover for rate-limit/auth/quota/billing-style failures. Those reasons continue through the existing profile rotation / escalation path rather than being hidden by the timeout retry.\n\n## What Problem This Solves\n\nAn ordinary assistant-stage timeout is not necessarily evidence that the current auth profile is bad. Rotating the auth profile on the first ordinary timeout can spend a scarce profile/fallback lane too early and make transient timeout handling look like an auth-profile failure.\n\nThis patch keeps the first ordinary timeout local to the same model/profile retry budget while preserving the existing fast-failover behavior for real auth/rate-limit/quota/billing-style failures.\n\n## Why this is not covered by adjacent timeout fixes\n\nRelated timeout/failover work already exists, but it addresses adjacent seams rather than this one:\n\n- #80449 made idle watchdog timeouts participate in profile/model failover.\n- #87538 made timeout cooldowns model-scoped, so one model timeout does not block unrelated fallback models on the same profile.\n- #1576 classifies provider `Request was aborted` errors as timeout-like for fallback.\n- #95650 is about compaction retry behavior with backup auth profiles.\n- #87122 is about provider overload cooldown semantics.\n\nCurrent `origin/main` still only has the idle-timeout-specific same-model retry gate (`same_model_idle_timeout`). It does not have an ordinary request-timeout same-profile retry gate before `advanceAuthProfile()`.\n\n## Behavior addressed\n\nBefore this patch, an ordinary assistant-stage timeout could be classified as `rotate_profile` and call `advanceAuthProfile()` on the first timeout, marking the current profile as a timeout failure.\n\nAfter this patch:\n\n- ordinary assistant-stage timeout: retry the same model/profile once first;\n- repeated ordinary timeout after the retry budget is exhausted: use the existing auth-profile rotation path;\n- rate-limit/auth/quota/billing-style failures: keep existing fast failover behavior;\n- compaction/tool-execution timeouts: remain excluded from this assistant-stage retry gate;\n- configured fallback is intentionally not a bypass for the first ordinary timeout; the retry budget is one, so fallback/rotation remains available on the next timeout.\n\n## Implementation notes\n\n- Generalizes the previous idle-only retry state from `same_model_idle_timeout` to `same_model_timeout`.\n- Keeps the retry budget bounded at one same-profile retry.\n- Adds an ordinary-timeout guard so unrelated failure reasons are not masked by a timeout flag.\n- Extracts `shouldAllowSameModelTimeoutRetry` so the run-loop gate is directly tested for ordinary timeout, compaction/tool-execution exclusion, restart support, and retry budget.\n- Leaves the existing rate-limit short-window retry and overload/profile-rotation behavior intact.\n\n## Session-state blocker addressed in this update\n\nAfter the proof review, ClawSweeper moved the remaining blocker from proof to `merge-risk: 🚨 session-state`: the timeout retry path must not expand a known transcript replay hazard where an aborted empty assistant leaf can remain before the trailing-user repair path.\n\nThis head includes the same transcript-safe repair from sibling PR #95766:\n\n- drops an empty aborted assistant leaf before checking/repairing the trailing-user invariant;\n- covers the helper behavior in `attempt.prompt-helpers.test.ts`;\n- preserves the timeout retry behavior from this PR while avoiding an additional session-state replay risk.\n\n## Real Behavior Proof\n\n### Runtime proof: local OpenAI-compatible timeout service\n\nI re-ran this PR through the actual embedded runtime, not only the helper. The proof uses:\n\n- current PR head: `3414cee48409b1b4fe3b765e71b6ff493185f322`\n- `openclaw agent --local` from this PR checkout\n- a temporary isolated user home, OpenClaw config, state directory, and workspace\n- a local OpenAI-compatible Responses service with its endpoint/port redacted\n- synthetic model names: `timeout-primary` and `fallback-ok`\n- no live gateway, no production state, no external provider call, and no real credentials\n\nThe local service intentionally holds the first two `timeout-primary` Responses requests past the configured 1 second provider timeout, then returns a valid streamed Responses success for `fallback-ok`.\n\nObserved runtime request order:\n\n```text\nPOST /v1/responses request #1 model=timeout-primary  -> provider timeout\nPOST /v1/responses request #2 model=timeout-primary  -> same model/profile retry before fallback\nPOST /v1/responses request #3 model=fallback-ok      -> streamed success\n```\n\nObserved final visible payload:\n\n```text\nPR95676_RUNTIME_OK\n```\n\nRedacted runtime log excerpts:\n\n```text\n[agent/embedded] [llm-timeout] openai/timeout-primary hit idle watchdog; retrying same profile before auth-profile rotation\n[agent/embedded] embedded run failover decision: stage=assistant decision=fallback_model reason=timeout from=openai/timeout-primary profile=- rawError=LLM idle timeout (1s): no response from model\n[model-fallback/decision] model fallback decision: decision=candidate_failed requested=openai/timeout-primary candidate=openai/timeout-primary reason=timeout next=openai/fallback-ok detail=LLM idle timeout (1s): no response from model\n[model-fallback/decision] model fallback decision: decision=candidate_succeeded requested=openai/timeout-primary candidate=openai/fallback-ok reason=unknown next=none\n[agent] run ended with stopReason=stop\n```\n\nMachine-readable proof summary, with paths, temp session IDs, endpoint/port, and local state locations omitted:\n\n```json\n{\n  \"proof\": \"PR #95676 embedded runtime timeout failover proof\",\n  \"runtime\": \"openclaw agent --local\",\n  \"service\": \"local OpenAI-compatible Responses timeout service\",\n  \"head\": \"3414cee48409b1b4fe3b765e71b6ff493185f322\",\n  \"assertion\": {\n    \"ok\": true,\n    \"responseModels\": [\"timeout-primary\", \"timeout-primary\", \"fallback-ok\"],\n    \"expected\": [\"timeout-primary\", \"timeout-primary\", \"fallback-ok\"],\n    \"visibleResponse\": \"PR95676_RUNTIME_OK\"\n  },\n  \"privacy\": \"temporary paths, endpoint/port, state locations, and credentials redacted; no live gateway or external provider used\"\n}\n```\n\nThis addresses the ClawSweeper proof request: the first ordinary assistant timeout stays on the same model/profile, and after the retry budget is exhausted the configured fallback path runs and succeeds.\n\n## Evidence\n\nCurrent head: `3414cee48409b1b4fe3b765e71b6ff493185f322`.\nLocal validation base after current-main refresh: `openclaw/openclaw@0edd84f910564173ace15f011de3b1280a0c05c1`.\nGitHub PR state after the push: `mergeable_state=clean` with no failing or pending current-head checks.\n\nLocal validation on the current checkout after rebasing onto current `main` and including the #95766 transcript repair:\n\n```bash\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.agents.config.ts \\\n  src/agents/embedded-agent-runner/run.cross-provider-fallback-error-context.test.ts \\\n  src/agents/embedded-agent-runner/run/assistant-failover.test.ts \\\n  src/agents/embedded-agent-runner/run/attempt.prompt-helpers.test.ts\nnode scripts/plugin-sdk-surface-report.mjs --check\ngit diff --check\n```\n\nObserved completed results on this head:\n\n```text\nassistant-failover.test.ts + attempt.prompt-helpers.test.ts + run.cross-provider-fallback-error-context.test.ts: 53 passed\nplugin-sdk-surface-report --check: passed (public exports 10337, public callable exports 5190)\ngit diff --check: passed\nruntime proof with local OpenAI-compatible timeout service on this head: passed\nGitHub current-head checks: 64 success, 26 skipped, 1 neutral, 0 pending/failing at verification time\n```\n\nRuntime proof on this head preserved the intended order:\n\n```text\nPOST /v1/responses request #1 model=timeout-primary  -> provider timeout\nPOST /v1/responses request #2 model=timeout-primary  -> same model/profile retry before fallback\nPOST /v1/responses request #3 model=fallback-ok      -> streamed success\nvisible response: PR95676_RUNTIME_OK\n```\n\n## What was not tested\n\n- No live gateway/production runtime validation.\n- No external provider call.\n- No real credential or production auth-profile material was used.\n",
-        "branch": "fix/auth-profile-timeout-same-profile-retry",
-        "head_sha": "6397c77520f9a2bcf90b10ba52a34a4d8d65f82d",
+        "title": "Support Ultra thinking for the native Codex runtime",
+        "body": "## Summary\n\nAdds `ultra` as a first-class thinking level for OpenClaw's **native Codex app-server runtime** when the live Codex model catalog advertises that level.\n\nThis is intentionally not a generic `ultra -> max` alias. Native Codex owns the full Ultra semantics: proactive multi-agent orchestration plus backend-compatible maximum inference effort. Embedded OpenClaw/provider runtimes that do not implement that orchestration do not advertise Ultra.\n\nLegacy aliases remain stable: `ultrathink` continues to normalize to `high`; only explicit `ultra` selects the new tier.\n\n## What Problem This Solves\n\nOpenAI Codex PR <https://github.com/openai/codex/pull/29899> defines Ultra as a user-facing orchestration level:\n\n- Codex Core selects `MultiAgentMode::Proactive`.\n- Codex injects proactive delegation instructions and owns native sub-agent execution.\n- At inference boundaries, Codex maps Ultra to the backend-compatible `max` effort.\n\nTherefore OpenClaw should pass explicit `ultra` unchanged to the native Codex app-server, not flatten it to `max` itself. Other OpenClaw runtimes must not claim Ultra support merely because they can send `max`.\n\n## Changes\n\n- Add `ultra` to canonical thinking-level/session types needed to carry a native Codex selection.\n- Preserve `ultrathink -> high` for backwards compatibility; explicit `ultra` is required.\n- Expose Ultra only from the native Codex provider profile when live app-server discovery advertises it.\n- Pass `effort: \"ultra\"` through native Codex `turn/start` and collaboration-mode settings.\n- Keep embedded OpenClaw/OpenAI/Google/Anthropic provider profiles Ultra-free unless they separately implement equivalent orchestration semantics.\n- Add tests for normalization, Codex profile discovery, native request payloads, unsupported-runtime rejection/clamping, and legacy alias behavior.\n- Update thinking-level documentation with the native-Codex-only scope.\n\n## Evidence\n\n### Official semantics\n\nOpenAI Codex PR <https://github.com/openai/codex/pull/29899> implements Ultra in Codex Core. Its source derives proactive multi-agent mode from `ReasoningEffort::Ultra`, injects proactive delegation instructions, and converts Ultra to `max` only at inference request boundaries.\n\n### Real configured-provider behavior (sanitized)\n\nCodex CLI 0.142.4 was configured with:\n\n```toml\nmodel = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"ultra\"\n```\n\nLive model discovery advertised:\n\n```text\ngpt-5.6-sol: low, medium, high, xhigh, max, ultra\n```\n\nA real ephemeral read-only turn completed successfully:\n\n```text\n$ codex exec --ephemeral --skip-git-repo-check --sandbox read-only --json \\\n    'Reply exactly with ULTRA_OK_1424 and nothing else.'\n...\nitem.completed: ULTRA_OK_1424\nturn.completed\n```\n\nThis proves the native Codex 0.142.4 runtime accepts and executes the Ultra selection. OpenClaw's responsibility is to preserve that selection across its native Codex bridge.\n\n\n### Current-head native app-server bridge proof (sanitized, 2026-07-03)\n\nA current-head OpenClaw bridge proof was run with a disposable app-server home and a non-default entitlement fixture. This is intentionally classified as `PASS_CONTAMINATED_ONLY`; it validates the native app-server entitlement and OpenClaw bridge behavior, not clean-stage default-profile behavior. Production Gateway state and production config were not used.\n\n```text\nhead: 78fb055d\nlive model/list target: gpt-5.6-sol\nlive supportedReasoningEfforts: low, medium, high, xhigh, max, ultra\nthread/start: accepted, model=gpt-5.6-sol\nturn/start: accepted\ncaptured turn/start.effort: ultra\ncaptured turn/start.collaborationMode.settings.reasoning_effort: ultra\ncleanup: copied entitlement fixture absent after run\nverdict: APP_SERVER_BRIDGE_ULTRA_OK\n```\n\nThis directly exercises current-head OpenClaw source constructing a real native Codex app-server `turn/start` request after live discovery advertised Ultra.\n\n### OpenClaw validation\n\nThe revised branch passed:\n\n```text\nnode scripts/run-vitest.mjs \\\n  src/auto-reply/thinking.test.ts \\\n  src/llm/model-utils.test.ts \\\n  src/config/config.schema-regressions.test.ts \\\n  extensions/codex/provider.test.ts \\\n  extensions/codex/src/app-server/thread-lifecycle.test.ts\n\n# 198 focused tests passed, including 89 native Codex provider/turn tests\n\npnpm tsgo:core       # passed\npnpm tsgo:core:test  # passed\n```\n\nAdditional OpenAI/Anthropic/Google/provider-stream safety suites passed after verifying that non-Codex profiles do not expose Ultra and stale internal Ultra values are handled defensively rather than forwarded as a claimed feature.\n\n## Non-goals\n\n- No generic Ultra profile exposure for embedded OpenClaw/provider runtimes.\n- No claim that `max` alone is equivalent to Ultra. Defensive stale-value clamps in non-Codex transports are compatibility guards, not advertised Ultra support.\n- No reimplementation of Codex proactive multi-agent policy inside OpenClaw; the native Codex app-server owns that behavior.\n",
+        "branch": "feat/ultra-thinking-level",
+        "head_sha": "09713a234ce50fd5945732b963e403c58ed53757",
         "author": "anyech",
         "labels": [
+          "docs",
+          "gateway",
           "agents",
-          "size: M",
+          "size: L",
+          "extensions: kimi-coding",
+          "extensions: codex",
           "proof: sufficient",
+          "extensions: amazon-bedrock",
+          "extensions: google",
+          "extensions: openrouter",
           "P2",
           "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
@@ -91,74 +98,374 @@
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/run.cross-provider-fallback-error-context.test.ts",
-            "additions": 22,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 8,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/assistant-failover.test.ts",
-            "additions": 109,
+            "path": "docs/tools/thinking.md",
+            "additions": 6,
             "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/assistant-failover.ts",
-            "additions": 43,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.prompt-helpers.test.ts",
-            "additions": 135,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.prompt-helpers.ts",
-            "additions": 63,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "path": "extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.test.ts",
             "additions": 26,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.ts",
+            "additions": 11,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/stream.runtime.test.ts",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/stream.runtime.ts",
+            "additions": 4,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/provider-catalog.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/provider.test.ts",
+            "additions": 21,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/provider.ts",
+            "additions": 9,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/idle-timeout-breaker.ts",
+            "path": "extensions/codex/src/app-server/run-attempt.reasoning-effort.test.ts",
+            "additions": 112,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/thread-lifecycle.test.ts",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/thread-lifecycle.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/transport-stream.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/transport-stream.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/kimi-coding/stream.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/kimi-coding/stream.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/openrouter/index.test.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/openrouter/stream.ts",
             "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/agent-core/src/reasoning.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/agent-core/src/types.ts",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/model-utils.ts",
+            "additions": 6,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/azure-openai-responses.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/google-shared.test.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/google-shared.ts",
+            "additions": 20,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-chatgpt-responses.test.ts",
+            "additions": 22,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-chatgpt-responses.ts",
+            "additions": 10,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-completions.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-completions.ts",
+            "additions": 11,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-reasoning-effort.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-responses-shared.ts",
+            "additions": 3,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/simple-options.test.ts",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "packages/ai/src/providers/simple-options.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/llm-core/src/types.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/model-catalog-core/src/model-catalog-normalize.test.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/model-catalog-core/src/model-catalog-types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/anthropic-transport-stream.ts",
+            "additions": 24,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-selection.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-thinking-default.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/runtime-plan/types.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sessions/model-resolver.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sessions/settings-manager.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/thinking.shared.ts",
+            "additions": 7,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/thinking.test.ts",
+            "additions": 26,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.agent-defaults.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.agents.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.gateway.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-defaults.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-runtime.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.core.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-log.ts",
+            "additions": 4,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/model-utils.test.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/stream-wrappers/reasoning-effort-utils.test.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/stream-wrappers/reasoning-effort-utils.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/provider-stream-shared.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/provider-stream-shared.ts",
+            "additions": 8,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/cli-backend.types.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/provider-thinking.types.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/vitest/vitest.extension-codex-app-server-attempt-extra.config.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 8,
-        "additions": 407,
-        "deletions": 38,
+        "changedFiles": 58,
+        "additions": 688,
+        "deletions": 80,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95676",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95676.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-98021",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-98021.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 96,
-          "gatingTotal": 91,
+          "total": 97,
+          "gatingTotal": 92,
           "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 27,
+            "SUCCESS": 71,
+            "SKIPPED": 23,
             "IN_PROGRESS": 2,
             "NEUTRAL": 1
           },
@@ -182,19 +489,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2471,
+    "total_ms": 2205,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 599
+        "ms": 506
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1558
+        "ms": 1510
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -210,11 +517,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 300
+        "ms": 175
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
