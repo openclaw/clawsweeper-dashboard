@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T07:10:16.312Z",
+  "generated_at": "2026-07-08T07:11:50.531Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T04:10:13.509Z",
+  "since": "2026-07-08T04:11:48.585Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    100057
+    102063
   ],
-  "comment_ids": [
-    4912254303
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,18 +31,125 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:100057:4883527081:2026-07-08T07:10:01Z:clawsweeper_needs_human",
-      "comment_id": "4883527081",
-      "comment_version_key": "4883527081:2026-07-08T07:10:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100057#issuecomment-4883527081",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102063:4911996099:2026-07-08T07:11:44Z:clawsweeper_auto_repair",
+      "comment_id": "4911996099",
+      "comment_version_key": "4911996099:2026-07-08T07:11:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102063#issuecomment-4911996099",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 102051,
-      "author": "SunnyShu0925",
-      "author_id": 265248434,
+      "issue_number": 102063,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T07:07:06Z",
-      "comment_updated_at": "2026-07-08T07:07:06Z",
+      "comment_created_at": "2026-07-08T06:30:23Z",
+      "comment_updated_at": "2026-07-08T07:11:44Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=8e29a3687312a8e154ef9811fb8285b06636d166)",
+      "review_summary": "The PR defers embedded-runner `session.ended` trajectory recording until after cleanup and carries terminal status/error through function-scoped variables.\n\nPR surface: Source -3. Total -3 across 1 file.\n\nReproducibility: yes. from source inspection: the branch flushes the recorder before the new `session.ended` event, and `recordEvent()` only queues data while `flush()` persists it. I did not run a live trajectory export in this read-only review.",
+      "review_followup": "- [P1] Contributor follow-up is needed for a code fix and real behavior proof, and ClawSweeper should not repair the PR while the external proof gate is still missing.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "8e29a3687312a8e154ef9811fb8285b06636d166",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "[F3] fix(trajectory): record session.ended after cleanup instead of reusing model.completed timestamp",
+        "body": "## What Problem This Solves\n\nThe `session.ended` span had the **exact same timestamp** as the last `model.completed` span because both were recorded back-to-back in the main try block, before any cleanup work (acquiring cleanup lock, `cleanupEmbeddedAttemptResources`) executed. This made it impossible to measure actual session duration vs model compute time and broke latency analysis for cleanup operations.\n\n## Changes\n\n**1 file changed, 25 insertions(+), 28 deletions(-) (net −3)**\n\nMoved `session.ended` recording from the main try block (immediately after `model.completed` / `trace.artifacts`) to the inner `finally` block, **after** cleanup work completes. The change:\n\n1. **Captures** `attemptTrajectoryTerminal.status` / `terminalError` before the return into function-scoped variables\n2. **Removes** the early `session.ended` recording (old location, before cleanup)\n3. **Removes** the old fallback `session.ended` in the finally block and the now-unused `trajectoryEndRecorded` flag\n4. **Records** `session.ended` after `cleanupEmbeddedAttemptResources`, using the captured terminal data with inline fallback\n\nPreviously: `model.completed` → `trace.artifacts` → `session.ended` (early) → return → cleanup\nNow:      `model.completed` → `trace.artifacts` → return → cleanup → `session.ended` (real timestamp)\n\n## Evidence\n\n**TypeScript compile:** ✅ `tsc --noEmit` passed\n\n**Unit tests (3 suites, 57 tests, all passed):**\n```\nattempt-trajectory-flush-cleanup  ✓ 2/2\nattempt-trajectory-status         ✓ 19/19\nattempt.model-diagnostic-events   ✓ 36/36\n```\n\n**Real behavior proof:**\n\nProof script (run with `node --import tsx proof/session-ended-timestamp.ts`):\n```typescript\nimport { createTrajectoryRuntimeRecorder } from \"../src/trajectory/runtime.js\";\n\nconst lines: string[] = [];\nconst writer = {\n  write: (l: string) => void lines.push(l),\n  flush: async () => {},\n  nextSourceSeq: () => 0,\n};\n\nconst recorder = createTrajectoryRuntimeRecorder({\n  sessionId: `proof-${Date.now()}`,\n  sessionKey: \"proof:session-ended\",\n  runId: \"proof-run\",\n  provider: \"proof\",\n  modelId: \"proof/model\",\n  writer,\n});\n\n// Step 1: model.completed (same timestamp as before fix)\nrecorder.recordEvent(\"model.completed\", { status: \"success\", usage: { inputTokens: 100, outputTokens: 200 } });\n\n// Step 2: simulated cleanup work\nawait new Promise((r) => setTimeout(r, 100));\n\n// Step 3: session.ended AFTER cleanup (THE FIX)\nrecorder.recordEvent(\"session.ended\", { status: \"completed\" });\n\n// Verify\nconst mcTs = JSON.parse(lines[0]).ts;  // model.completed timestamp\nconst seTs = JSON.parse(lines[2]).ts;  // session.ended timestamp\nconsole.assert(mcTs !== seTs, \"❌ FAIL: timestamps are identical\");\nconsole.log(`✅ PASS: Δ = ${new Date(seTs).getTime() - new Date(mcTs).getTime()}ms`);\n```\n\nTerminal output:\n```\nHostname: LIN-66D8BD4EA2C  PID: 848624\nStarted at: 2026-07-08T06:25:31.010Z\n\n [model.completed]  ts = 2026-07-08T06:25:31.012Z\n [trace.artifacts]   ts = 2026-07-08T06:25:31.031Z\n [cleanup]           simulating cleanup work...\n [session.ended]     ts = 2026-07-08T06:25:31.133Z\n\n── Verdict ──\n ✅ PASS: session.ended differs from model.completed\n     Δ = 121 ms (expected ≥ ~100 ms)\n ✅ TIMING: delay reflects real cleanup work (≥50ms)\n\n── Raw events ──\n  model.completed      ts=2026-07-08T06:25:31.012Z  seq=1\n  trace.artifacts      ts=2026-07-08T06:25:31.031Z  seq=2\n  session.ended        ts=2026-07-08T06:25:31.133Z  seq=3\n```\n\n## Review\n- Manually reviewed and verified\n- AI-assisted: Yes\n- Fixes #102014",
+        "branch": "fix/issue-102014-session-ended-timestamp",
+        "head_sha": "8e29a3687312a8e154ef9811fb8285b06636d166",
+        "author": "zw-xysk",
+        "labels": [
+          "agents",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof",
+          "merge-risk: 🚨 other"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 25,
+            "deletions": 28,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 25,
+        "deletions": 28,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102063",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102063.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 98,
+          "gatingTotal": 93,
+          "counts": {
+            "FAILURE": 2,
+            "CANCELLED": 1,
+            "SUCCESS": 66,
+            "SKIPPED": 27,
+            "IN_PROGRESS": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "no-tabs:FAILURE",
+            "dependency-guard-detect:CANCELLED",
+            "actionlint:FAILURE",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "no-tabs:FAILURE",
+            "dependency-guard-detect:CANCELLED",
+            "actionlint:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102063:4912143524:2026-07-08T06:51:41Z:re_review",
+      "comment_id": "4912143524",
+      "comment_version_key": "4912143524:2026-07-08T06:51:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102063#issuecomment-4912143524",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102063,
+      "author": "zw-xysk",
+      "author_id": 294457748,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-08T06:51:41Z",
+      "comment_updated_at": "2026-07-08T06:51:41Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -70,25 +175,93 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "[F3] fix(trajectory): record session.ended after cleanup instead of reusing model.completed timestamp",
+        "body": "## What Problem This Solves\n\nThe `session.ended` span had the **exact same timestamp** as the last `model.completed` span because both were recorded back-to-back in the main try block, before any cleanup work (acquiring cleanup lock, `cleanupEmbeddedAttemptResources`) executed. This made it impossible to measure actual session duration vs model compute time and broke latency analysis for cleanup operations.\n\n## Changes\n\n**1 file changed, 25 insertions(+), 28 deletions(-) (net −3)**\n\nMoved `session.ended` recording from the main try block (immediately after `model.completed` / `trace.artifacts`) to the inner `finally` block, **after** cleanup work completes. The change:\n\n1. **Captures** `attemptTrajectoryTerminal.status` / `terminalError` before the return into function-scoped variables\n2. **Removes** the early `session.ended` recording (old location, before cleanup)\n3. **Removes** the old fallback `session.ended` in the finally block and the now-unused `trajectoryEndRecorded` flag\n4. **Records** `session.ended` after `cleanupEmbeddedAttemptResources`, using the captured terminal data with inline fallback\n\nPreviously: `model.completed` → `trace.artifacts` → `session.ended` (early) → return → cleanup\nNow:      `model.completed` → `trace.artifacts` → return → cleanup → `session.ended` (real timestamp)\n\n## Evidence\n\n**TypeScript compile:** ✅ `tsc --noEmit` passed\n\n**Unit tests (3 suites, 57 tests, all passed):**\n```\nattempt-trajectory-flush-cleanup  ✓ 2/2\nattempt-trajectory-status         ✓ 19/19\nattempt.model-diagnostic-events   ✓ 36/36\n```\n\n**Real behavior proof:**\n\nProof script (run with `node --import tsx proof/session-ended-timestamp.ts`):\n```typescript\nimport { createTrajectoryRuntimeRecorder } from \"../src/trajectory/runtime.js\";\n\nconst lines: string[] = [];\nconst writer = {\n  write: (l: string) => void lines.push(l),\n  flush: async () => {},\n  nextSourceSeq: () => 0,\n};\n\nconst recorder = createTrajectoryRuntimeRecorder({\n  sessionId: `proof-${Date.now()}`,\n  sessionKey: \"proof:session-ended\",\n  runId: \"proof-run\",\n  provider: \"proof\",\n  modelId: \"proof/model\",\n  writer,\n});\n\n// Step 1: model.completed (same timestamp as before fix)\nrecorder.recordEvent(\"model.completed\", { status: \"success\", usage: { inputTokens: 100, outputTokens: 200 } });\n\n// Step 2: simulated cleanup work\nawait new Promise((r) => setTimeout(r, 100));\n\n// Step 3: session.ended AFTER cleanup (THE FIX)\nrecorder.recordEvent(\"session.ended\", { status: \"completed\" });\n\n// Verify\nconst mcTs = JSON.parse(lines[0]).ts;  // model.completed timestamp\nconst seTs = JSON.parse(lines[2]).ts;  // session.ended timestamp\nconsole.assert(mcTs !== seTs, \"❌ FAIL: timestamps are identical\");\nconsole.log(`✅ PASS: Δ = ${new Date(seTs).getTime() - new Date(mcTs).getTime()}ms`);\n```\n\nTerminal output:\n```\nHostname: LIN-66D8BD4EA2C  PID: 848624\nStarted at: 2026-07-08T06:25:31.010Z\n\n [model.completed]  ts = 2026-07-08T06:25:31.012Z\n [trace.artifacts]   ts = 2026-07-08T06:25:31.031Z\n [cleanup]           simulating cleanup work...\n [session.ended]     ts = 2026-07-08T06:25:31.133Z\n\n── Verdict ──\n ✅ PASS: session.ended differs from model.completed\n     Δ = 121 ms (expected ≥ ~100 ms)\n ✅ TIMING: delay reflects real cleanup work (≥50ms)\n\n── Raw events ──\n  model.completed      ts=2026-07-08T06:25:31.012Z  seq=1\n  trace.artifacts      ts=2026-07-08T06:25:31.031Z  seq=2\n  session.ended        ts=2026-07-08T06:25:31.133Z  seq=3\n```\n\n## Review\n- Manually reviewed and verified\n- AI-assisted: Yes\n- Fixes #102014",
+        "branch": "fix/issue-102014-session-ended-timestamp",
+        "head_sha": "8e29a3687312a8e154ef9811fb8285b06636d166",
+        "author": "zw-xysk",
+        "labels": [
+          "agents",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof",
+          "merge-risk: 🚨 other"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 25,
+            "deletions": 28,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 25,
+        "deletions": 28,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102063",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102063.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 98,
+          "gatingTotal": 93,
+          "counts": {
+            "FAILURE": 2,
+            "CANCELLED": 1,
+            "SUCCESS": 66,
+            "SKIPPED": 27,
+            "IN_PROGRESS": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "no-tabs:FAILURE",
+            "dependency-guard-detect:CANCELLED",
+            "actionlint:FAILURE",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "no-tabs:FAILURE",
+            "dependency-guard-detect:CANCELLED",
+            "actionlint:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 5309,
+    "total_ms": 2241,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2790
+        "ms": 418
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1511
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -104,11 +277,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2506
+        "ms": 286
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
