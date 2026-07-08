@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T13:46:00.857Z",
+  "generated_at": "2026-07-08T13:46:00.715Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T10:45:58.159Z",
+  "since": "2026-07-08T10:45:55.340Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102052
+    101663
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
+  "scanned_comments": 2,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:102052:4913179238:2026-07-08T09:06:58Z:re_review",
-      "comment_id": "4913179238",
-      "comment_version_key": "4913179238:2026-07-08T09:06:58Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102052#issuecomment-4913179238",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101663:4904097392:2026-07-08T13:45:47Z:clawsweeper_needs_human",
+      "comment_id": "4904097392",
+      "comment_version_key": "4904097392:2026-07-08T13:45:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101663#issuecomment-4904097392",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 102052,
-      "author": "chenyangjun-xy",
-      "author_id": 294178215,
+      "issue_number": 101663,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T09:06:58Z",
-      "comment_updated_at": "2026-07-08T09:06:58Z",
+      "comment_created_at": "2026-07-07T13:03:51Z",
+      "comment_updated_at": "2026-07-08T13:45:47Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -50,15 +50,15 @@
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] Manual release-owner review is needed because the remaining decision is whether to accept or split the workflow token-default changes, not a narrow automated repair.; Cleared: No concrete security or supply-chain regression was found; the patch reduces documented temp-file exposure and narrows workflow defaults, with release automation uncertainty tracked as merge risk. (sha=3d0398f3b4b51b53b8fda5552b638ce067ed0e7d)",
+      "review_summary": "The PR adds top-level `permissions: {}` to six release workflows and updates GHSA/secret-scanning maintainer skill guidance for safer temp files and verification snippets.\n\nPR surface: Docs +60, Config +12. Total +72 across 8 files.\n\nReproducibility: not applicable. this is a security/automation hardening PR rather than a reported runtime bug. Source inspection verifies the current-main examples and workflow defaults, and PR-head inspection verifies the proposed hardened state.",
+      "review_followup": "- [P2] Manual release-owner review is needed because the remaining decision is whether to accept or split the workflow token-default changes, not a narrow automated repair.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "3d0398f3b4b51b53b8fda5552b638ce067ed0e7d",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -71,146 +71,97 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(auto-reply): self-heal reply-session-init conflict instead of permanently wedging the session",
-        "body": "## What Problem This Solves\n\nWhen the reply-session initializer's optimistic-concurrency commit (`commitReplySessionInitialization`) loses its race twice, the current code throws `\"reply session initialization conflicted\"` and permanently wedges the session. Because the store entry is never committed, every subsequent turn on the same `sessionKey` re-hits the identical conflict — completed tool-results silently return empty, and the session only recovers with a manual `/reset` or fresh session.\n\nFixes [#102020](https://github.com/openclaw/openclaw/issues/102020). Also addresses the root cause of [#101909](https://github.com/openclaw/openclaw/issues/101909) — the conflict lives in the session-store optimistic-commit path above any model runtime, so the wedge is runtime-agnostic by construction.\n\n## Why This Change Was Made\n\nThe conflict branch in `initSessionStateAttemptLocked` allowed exactly one stale-snapshot retry and then threw. The rollover/timeout paths already self-heal by disposing the session's MCP runtime and running the registered harness `reset` hooks. This change makes the conflict branch reuse that same recovery once and retry initialization before giving up.\n\n### Conflict resolution state machine\n\n| State | staleSnapshotRetried | conflictRecoveryAttempted | Action |\n|-------|---------------------|--------------------------|--------|\n| First | false | any | stale-snapshot-retry (unchanged) |\n| Second | true | false | **self-heal-retry** — dispose wedged MCP runtime + harness reset, then retry (new) |\n| Third | true | true | fail — throw with clear context |\n\n### Safety fence\n\nThe self-heal reuses the same `runExclusiveSessionLifecycleMutation` + `interruptSessionWorkAdmissions` fence the rollover path uses: drains any foreign in-flight turn OUTSIDE the store-write lock before tearing anything down.\n\n## User Impact\n\n- **Before**: Second message → \"reply session initialization conflicted\" → permanently wedged → every subsequent message silently dropped → only `/reset` recovers\n- **After**: Self-heal disposes wedged runtime + retries → init completes → session recovers automatically\n\n## Evidence\n\n### 1. Self-heal lifecycle: repeated conflicts → recovery → delivery (terminal output)\n\n`src/auto-reply/reply/self-heal-visible-demo.test.ts` forces 4 consecutive CAS conflicts through `initSessionState`, then verifies the self-heal recovers and the message is delivered:\n\n```\n$ pnpm test src/auto-reply/reply/self-heal-visible-demo.test.ts -- --reporter verbose\n\nstdout:\n  [setup] Wedged MCP runtime: wedged-demo-session\n  [setup] CAS forced conflicts: 4\n\n  ═══ Message arrives: initSessionState() called ═══\n  [step 1] Loading snapshot from store...\n\n    [commit #1] CAS REJECTED: revision mismatch (4 forced conflicts remaining)\n    [commit #2] CAS REJECTED: revision mismatch (3 forced conflicts remaining)\n          ↑ self-heal triggers here: dispose wedged MCP runtime + harness reset\n    [commit #3] CAS REJECTED: revision mismatch (2 forced conflicts remaining)\n    [commit #4] CAS REJECTED: revision mismatch (1 forced conflicts remaining)\n          ↑ fenced revalidation: identity still conflicts → drain + teardown + retry\n    [commit #5] CAS ACCEPTED: revision matches → store committed\n\n  ═══ VERIFICATION ═══\n  ✓ initSessionState COMPLETED (sessionId=wedged-demo-session)\n  ✓ Runtime disposed: true\n  ✓ Total commit attempts: 5\n  ✓ Message DELIVERED successfully after self-heal recovery\n\n ✓ |auto-reply| shows the full self-heal lifecycle 604ms\n Test Files  1 passed (1) | Tests  1 passed (1)\n```\n\n**Key observation**: commits #1-4 are rejected (CAS race), the self-heal disposes the wedged runtime between #2-3 and drains/re-commits between #4-5, then commit #5 succeeds — the session is unwedged and delivery completes.\n\n### 2. Real machine: patched agent processes messages end-to-end\n\nBuilt the patched code, sent a real message through the full pipeline:\n\n```\n$ pnpm openclaw agent --local \\\n    --session-key \"agent:main:dashboard:patched-gw-real-test-2\" \\\n    --message \"Say hello in one sentence\"\n\n[trace:embedded-run] startup stages:\n  sessionId=5d219f63-cce0-43ce-b8cc-e276f28b5598\n  totalMs=9764\n  stages=workspace:1ms, runtime-plugins:9165ms, hooks:3ms,\n          model-resolution:487ms, auth:78ms, context-engine:6ms\n\n[model-fetch] start provider=zte model=Qwen3-235B-A22B\n[model-fetch] response status=200 elapsedMs=2548\n\nHello! 👋\n\n[agent] run ended with stopReason=stop\n```\n\nThe `initSessionState` (our modified code) completed, model responded, agent finished cleanly. No crash, no \"reply session initialization conflicted\".\n\n### 3. Unit tests for conflict decision helper\n\n```\n$ pnpm test src/auto-reply/reply/reply-session-init-conflict.test.ts\n\n✓ retries with fresh snapshot on first conflict\n✓ self-heals instead of throwing once stale-snapshot retry is exhausted\n✓ only self-heals once, then fails clearly\n✓ prefers stale-snapshot retry even after recovery ran\n\nTest Files  1 passed (1) | Tests  4 passed (4)\n```\n\n### 4. Full regression suite (218 tests, zero regressions)\n\n```\n$ pnpm test \\\n    src/auto-reply/reply/reply-session-init-conflict.test.ts \\\n    src/auto-reply/reply/session-init-self-heal.test.ts \\\n    src/auto-reply/reply/self-heal-visible-demo.test.ts \\\n    src/auto-reply/reply/session.test.ts \\\n    src/config/sessions/session-accessor.test.ts \\\n    src/config/sessions/session-accessor.reply-init-concurrency.test.ts\n\nTest Files  6 passed (6) | Tests  218 passed (218)\n```\n\n## Changes\n\n- `src/auto-reply/reply/reply-session-init-conflict.ts` (new): pure decision helper `resolveReplyInitConflictAction()` — 3-action state machine\n- `src/auto-reply/reply/reply-session-init-conflict.test.ts` (new): 4 unit tests covering all state transitions\n- `src/auto-reply/reply/session-init-self-heal.test.ts` (new): 2 session-level integration tests forcing repeated CAS conflicts through `initSessionState`\n- `src/auto-reply/reply/self-heal-visible-demo.test.ts` (new): step-by-step console output showing conflict → self-heal → recovery → delivery\n- `src/auto-reply/reply/session.ts`: adds `conflict-self-heal` outcome type; routes conflict recovery through lifecycle mutation fence; adds `selfHealReplySessionInitConflict()`; 3-action conflict resolution\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
-        "branch": "fix/issue-102020-reply-session-init-conflict-self-heal",
-        "head_sha": "7e5d927c4cccf5d0216ff78f0a64f3a138c677d8",
-        "author": "chenyangjun-xy",
+        "title": "security: deny-all top-level token permissions on release workflows; maintainer-skill temp-file hygiene",
+        "body": "## Summary\n\nSecurity hardening in three small pieces, all metadata/docs-only (no runtime code):\n\n1. **Top-level `permissions: {}` on the 6 release workflows** (`docker-release`, `macos-release`, `openclaw-npm-release`, `openclaw-release-checks`, `plugin-clawhub-release`, `plugin-npm-release`). Audited every job in all six workflows: each already declares its own job-level `permissions`, so the implicitly permissive workflow-default `GITHUB_TOKEN` was unused attack surface. Deny-all at the top level makes the job-level declarations the single source of truth.\n2. **GHSA maintainer skill — temp-file hygiene**: the documented pattern used fixed, predictable `/tmp/ghsa.*` paths for pre-publish advisory drafts (sensitive until published). Now uses `mktemp -d` + a cleanup `trap`. Also fixes the verify example, which read `/tmp/ghsa.refetch.json` without any step ever writing that file — it now captures the `gh api` refetch into a variable and checks `state`/`published_at`/escaped-newline in one pass. Follow-up (ClawSweeper P2 + two defects found while reproducing it): the escaped-newline check now gates explicitly with `if … rg -q …` printing `FAIL`/`PASS` instead of leaving the bare `rg` exit as the result (rg exits 0 exactly when the forbidden literal `\\n` is present, so the bad state looked like the passing path); the pattern is now `rg '\\\\n'` (the previous `rg '\\\\\\\\n'` matched two backslashes + `n` and never matched the guarded sample); and the snippet uses `printf '%s'` instead of `echo` (zsh/dash `echo` rewrites backslash escapes, turning the JSON's escaped backslash-n into a real newline before jq/rg see it — hiding the very thing the check guards).\n3. **Secret-scanning maintainer skill**: the Step 7 example used a fixed `/tmp/results.json`, contradicting the skill's own \"mktemp with random UUIDs for all temp files\" rule — now uses a `mktemp -d` work dir. The commit-leak section previously said only \"Cannot clean. Notify author…\"; it now includes context gathering (is the commit on an open PR?) and situation-matched remediation templates (amend for the latest commit, rebase for an older one, escalate-without-force-push-instructions when merged to the default branch).\n\nDeliberately **not** included (evaluated and dropped):\n\n- Wiring `lint:tmp:dynamic-import-warts` into the CI boundary checks: the script is advisory-by-default and the tree currently has 4 outstanding findings (matrix, qa-lab, qa-matrix, qqbot), so gating it is a separate ratcheting effort.\n- Migrating `extensions/acpx/index.ts` to `definePluginEntry()`: 48 of 139 bundled entries still use the plain-object pattern, so a single-plugin migration is churn, not a completion.\n\n## Verification\n\nMetadata/docs-only change; validated with the light path:\n\n- `git diff --check` — clean.\n- YAML parse + semantic assert on all 6 workflows (`permissions` parses to `{}` at top level, `jobs` intact).\n- Per-job permissions audit: every job in all 6 workflows declares job-level `permissions`, so deny-all cannot strip a permission any job relies on.\n- `oxfmt --check` on all 8 changed files — clean (repo-wide `pnpm format:check` fails on 193 pre-existing files on current `main`, unrelated to this change).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n## Real behavior proof\n\nBehavior addressed: Implicitly permissive workflow-default `GITHUB_TOKEN` on the 6 release workflows; predictable fixed `/tmp` temp paths plus a verify example that read a never-written file in the GHSA and secret-scanning maintainer skills.\nReal environment tested: Local source checkout on top of `openclaw/openclaw@2ba622ca301` (macOS, Node 25, pnpm 11.2.2). The change is CI metadata + skill docs only; no app runtime surface exists to exercise.\nExact steps or command run after this patch: `git diff --check`; YAML parse + assert of all 6 workflows (top-level `permissions` parses to `{}` and `jobs` intact) via `node` with the repo's yaml package; awk audit listing every job and its job-level `permissions` block in all 6 workflows; `npx oxfmt --check` on all 8 changed files; verifier probe: two synthetic advisory JSON fixtures built with `jq -n` (one whose description contains a literal escaped `\\n`, one with only a real newline) run through the exact documented snippet (with `gh api` substituted by `cat fixture`) under zsh.\nEvidence after fix: All 6 workflows parse clean with top-level `permissions: {}`; the per-job audit shows every job (5+1+3+16+6+5) declares its own `permissions`, so deny-all cannot strip a permission any job uses; oxfmt reports all 8 files format-clean; the fixed verifier prints `FAIL: description contains a literal escaped \\n` on the bad fixture and `PASS: description clean` on the clean one (the prior snippet printed nothing on the bad fixture and exited 0).\nObserved result after fix: No behavior change to any runtime path; release workflows keep their explicit job-level grants and lose only the unused implicit default token scope.\nWhat was not tested: An actual release-workflow run under the deny-all default (release workflows are maintainer-triggered tag/dispatch flows; the per-job permissions audit above is the safety argument). The skill markdown changes are operator documentation and were not executed end-to-end against a live advisory/alert.\n\n",
+        "branch": "security/ci-hardening-and-skill-improvements-v2",
+        "head_sha": "3d0398f3b4b51b53b8fda5552b638ce067ed0e7d",
+        "author": "sablehead",
         "labels": [
-          "size: L",
-          "P1"
+          "size: S",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 automation",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/reply-session-init-conflict.test.ts",
-            "additions": 40,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": ".agents/skills/openclaw-ghsa-maintainer/SKILL.md",
+            "additions": 19,
+            "deletions": 7,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/reply-session-init-conflict.ts",
-            "additions": 40,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": ".agents/skills/openclaw-secret-scanning-maintainer/SKILL.md",
+            "additions": 51,
+            "deletions": 3,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/self-heal-visible-demo.test.ts",
-            "additions": 122,
+            "path": ".github/workflows/docker-release.yml",
+            "additions": 2,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/session-init-self-heal.test.ts",
-            "additions": 187,
+            "path": ".github/workflows/macos-release.yml",
+            "additions": 2,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 142,
-            "deletions": 16,
+            "path": ".github/workflows/openclaw-npm-release.yml",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": ".github/workflows/openclaw-release-checks.yml",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": ".github/workflows/plugin-clawhub-release.yml",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": ".github/workflows/plugin-npm-release.yml",
+            "additions": 2,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 531,
-        "deletions": 16,
+        "changedFiles": 8,
+        "additions": 82,
+        "deletions": 10,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102052",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102052.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101663",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101663.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 90,
+          "gatingTotal": 85,
           "counts": {
             "CANCELLED": 2,
-            "SKIPPED": 26,
-            "SUCCESS": 33,
-            "IN_PROGRESS": 35,
+            "SKIPPED": 19,
+            "SUCCESS": 68,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+            "Real behavior proof:CANCELLED"
           ],
           "pending": [
-            "Real behavior proof:CANCELLED",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+            "Real behavior proof:CANCELLED"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -224,15 +175,15 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2999,
+    "total_ms": 5692,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 429
+        "ms": 414
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2254
+        "ms": 4947
       },
       {
         "name": "classify_comment_commands",
@@ -248,11 +199,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 302
+        "ms": 307
       },
       {
         "name": "append_ledger",
