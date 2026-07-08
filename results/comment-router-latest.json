@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T08:43:58.391Z",
+  "generated_at": "2026-07-08T08:44:03.192Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T05:43:56.481Z",
+  "since": "2026-07-08T05:44:00.825Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102052
+    102111
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102052:4911871450:2026-07-08T08:43:51Z:clawsweeper_needs_human",
-      "comment_id": "4911871450",
-      "comment_version_key": "4911871450:2026-07-08T08:43:51Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102052#issuecomment-4911871450",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102111:4912673318:2026-07-08T08:43:55Z:clawsweeper_needs_human",
+      "comment_id": "4912673318",
+      "comment_version_key": "4912673318:2026-07-08T08:43:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102111#issuecomment-4912673318",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 102052,
+      "issue_number": 102111,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T06:08:58Z",
-      "comment_updated_at": "2026-07-08T08:43:51Z",
+      "comment_created_at": "2026-07-08T08:04:38Z",
+      "comment_updated_at": "2026-07-08T08:43:55Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] The remaining blocker is maintainer/contributor proof and canonical-branch selection, not a narrow ClawSweeper repair task.; Cleared: The diff is limited to TypeScript session recovery logic and tests, with no dependency, workflow, secret, package, lockfile, or supply-chain surface changed. (sha=1ba8bf363950f95852c8904aab1db7097549a2e9)",
-      "review_summary": "The branch adds a reply-session init conflict decision helper, routes repeated commit conflicts through a fenced runtime/harness self-heal retry, and adds focused unit/integration tests.\n\nPR surface: Source +166, Tests +227. Total +393 across 4 files.\n\nReproducibility: yes. at source level: current main retries one stale reply-init conflict and then throws, matching the linked live reports. I did not run a live conflict reproduction in this read-only review.",
-      "review_followup": "- [P1] The remaining blocker is maintainer/contributor proof and canonical-branch selection, not a narrow ClawSweeper repair task.",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=07c63b8f2e59c8580ec4efa3a4ec9b2a6e06206a)",
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "1ba8bf363950f95852c8904aab1db7097549a2e9",
+      "expected_head_sha": "07c63b8f2e59c8580ec4efa3a4ec9b2a6e06206a",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,81 +70,68 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(auto-reply): self-heal reply-session-init conflict instead of permanently wedging the session",
-        "body": "## What Problem This Solves\n\nWhen the reply-session initializer's optimistic-concurrency commit (`commitReplySessionInitialization`) loses its race twice, the current code throws `\"reply session initialization conflicted\"` and permanently wedges the session. Because the store entry is never committed, every subsequent turn on the same `sessionKey` re-hits the identical conflict — completed tool-results silently return empty, and the session only recovers with a manual `/reset` or fresh session.\n\nFixes [#102020](https://github.com/openclaw/openclaw/issues/102020). Also addresses the root cause of [#101909](https://github.com/openclaw/openclaw/issues/101909) — the conflict lives in the session-store optimistic-commit path above any model runtime, so the wedge is runtime-agnostic by construction.\n\n## Why This Change Was Made\n\nThe conflict branch in `initSessionStateAttemptLocked` allowed exactly one stale-snapshot retry and then threw. The rollover/timeout paths already self-heal by disposing the session's MCP runtime and running the registered harness `reset` hooks — a runtime-agnostic fan-out where each runtime releases its own lane and clears its stale native thread binding. This change makes the conflict branch reuse that same recovery once and retry initialization before giving up.\n\n### Conflict resolution state machine\n\n| State | staleSnapshotRetried | conflictRecoveryAttempted | Action |\n|-------|---------------------|--------------------------|--------|\n| First | false | any | stale-snapshot-retry (unchanged) |\n| Second | true | false | **self-heal-retry** — dispose wedged MCP runtime + harness reset, then retry (new) |\n| Third | true | true | fail — throw with clear context |\n\n### Safety fence\n\nThe self-heal reuses the same `runExclusiveSessionLifecycleMutation` + `interruptSessionWorkAdmissions` fence the rollover path uses: drains any foreign in-flight turn OUTSIDE the store-write lock before tearing anything down.\n\n## User Impact\n\n- **Before**: Second message → \"reply session initialization conflicted\" → permanently wedged → every subsequent message silently dropped → only `/reset` recovers\n- **After**: Self-heal disposes wedged runtime + retries → init completes → session recovers automatically\n\n## Evidence\n\n### 1. Real machine: patched gateway processes messages end-to-end\n\nBuilt the patched code, sent a real message with `openclaw agent --local`, and the full pipeline executed successfully — session init (with our self-heal code), tool resolution, model call, response, and clean completion:\n\n```\n$ pnpm openclaw agent --local \\\n    --session-key \"agent:main:dashboard:patched-gw-real-test-2\" \\\n    --message \"Say hello in one sentence\"\n\n[state-migrations] Legacy state migration warnings (5 skipped, SQLite rows already exist)\n[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: searxng\n\n[trace:embedded-run] startup stages:\n  runId=fa4a8e22... sessionId=5d219f63-cce0-43ce-b8cc-e276f28b5598\n  totalMs=9764\n  stages=workspace:1ms, runtime-plugins:9165ms, hooks:3ms,\n          model-resolution:487ms, auth:78ms, context-engine:6ms\n\n[trace:embedded-run] core-plugin-tool stages:\n  totalMs=2340\n\n[model-fetch] start provider=zte model=Qwen3-235B-A22B\n[model-fetch] response status=200 elapsedMs=2548\n\nHello! 👋\n\n[agent] run fa4a8e22... ended with stopReason=stop\n```\n\nThe `sessionId=5d219f63...` proves `initSessionState` (our modified code) completed successfully. The model responded normally. No crash, no \"reply session initialization conflicted\" error.\n\n### 2. Self-heal integration test (forced 4x CAS conflicts → recovers)\n\n`src/auto-reply/reply/session-init-self-heal.test.ts` exercises the full `initSessionState` path through store/writer/admission with deterministic forced conflicts:\n\n```\n$ pnpm test src/auto-reply/reply/session-init-self-heal.test.ts -- --reporter verbose\n\n✓ unwedges the session via fenced self-heal when commit keeps conflicting (676ms)\n  → Forces 4 consecutive CAS conflicts\n  → initSessionState completes (sessionId preserved)\n  → Wedged MCP runtime disposed by self-heal teardown\n  → 5 commit attempts: stale-retry + self-heal request + fenced reval 2 + success\n\n✓ throws after self-heal budget is exhausted (300ms)\n  → Forces 6 conflicts (exceeds all recovery budgets)\n  → Correctly throws \"after harness self-heal retry\"\n\nTest Files  1 passed (1) | Tests  2 passed (2)\n```\n\n### 3. Unit tests for conflict decision helper\n\n```\n$ pnpm test src/auto-reply/reply/reply-session-init-conflict.test.ts\n\n✓ retries with fresh snapshot on first conflict\n✓ self-heals instead of throwing once stale-snapshot retry is exhausted\n✓ only self-heals once, then fails clearly\n✓ prefers stale-snapshot retry even after recovery ran\n\nTest Files  1 passed (1) | Tests  4 passed (4)\n```\n\n### 4. Full regression suite (217 tests, zero regressions)\n\n```\n$ pnpm test \\\n    src/auto-reply/reply/reply-session-init-conflict.test.ts \\\n    src/auto-reply/reply/session-init-self-heal.test.ts \\\n    src/auto-reply/reply/session.test.ts \\\n    src/config/sessions/session-accessor.test.ts \\\n    src/config/sessions/session-accessor.reply-init-concurrency.test.ts\n\nTest Files  5 passed (5) | Tests  217 passed (217)\n```\n\n## Changes\n\n- `src/auto-reply/reply/reply-session-init-conflict.ts` (new): pure decision helper `resolveReplyInitConflictAction()` — 3-action state machine\n- `src/auto-reply/reply/reply-session-init-conflict.test.ts` (new): 4 unit tests covering all state transitions\n- `src/auto-reply/reply/session-init-self-heal.test.ts` (new): 2 session-level integration tests — forces repeated CAS conflicts through `initSessionState` + store/writer/admission, verifies fenced self-heal recovery\n- `src/auto-reply/reply/session.ts`: adds `conflict-self-heal` outcome type; routes conflict recovery through lifecycle mutation fence; adds `selfHealReplySessionInitConflict()` (dispose runtime + harness reset under safety fence); 3-action conflict resolution\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
-        "branch": "fix/issue-102020-reply-session-init-conflict-self-heal",
-        "head_sha": "1ba8bf363950f95852c8904aab1db7097549a2e9",
-        "author": "chenyangjun-xy",
+        "title": "fix: don't mark exact-size web_fetch responses as truncated (#101837)",
+        "body": "## Summary\n\nFixes #101837: `web_fetch` reports exact-size responses as truncated when the streamed response body is exactly `maxResponseBytes` bytes.\n\n*(Recreated from clean `upstream/main` — the previous PR #102099 had a stale fork base with unrelated commits. Apologies for the noise!)*\n\n## Root Cause\n\n`readResponseText` in `src/agents/tools/web-shared.ts` set `truncated = true` when `bytesRead >= maxBytes` without checking whether the stream had actually ended. A response body that happened to be exactly the byte limit was treated the same as a genuinely oversized response.\n\n## Fix\n\nAfter hitting the byte limit, peek one additional `reader.read()` call:\n- If `done: true` → the stream ended naturally, response is **complete** (not truncated)\n- If `done: false` → there is more data, response is genuinely **truncated**\n\n## Evidence\n\n### Real behavior proof — exact-size responses are no longer truncated\n\nBefore (current main): exact-size response → truncated:\n\n```\nreadResponseText(exact5ByteStream, { maxBytes: 5 })\n→ { text: \"exact\", truncated: true, bytesRead: 5 }   // ❌ wrong\n```\n\nAfter (PR branch): exact-size response → complete:\n\n```\nreadResponseText(exact5ByteStream, { maxBytes: 5 })\n→ { text: \"exact\", truncated: false, bytesRead: 5 }  // ✅ correct\n```\n\nOverflow still detected correctly:\n\n```\nreadResponseText(streamWithMoreData, { maxBytes: 5 })\n→ { text: \"exact\", truncated: true, bytesRead: 5 }   // ✅ still correct\n```\n\n### Vitest\n\n```\n✓ src/agents/tools/web-shared.test.ts (26 tests)\n  ✓ releases bounded response readers after complete reads\n  ✓ cancels and releases bounded response readers after truncation\n  ✓ does not mark exact-size responses as truncated          ← new\n  ✓ marks response as truncated when more data follows       ← new\n```\n\n## Files changed\n- `src/agents/tools/web-shared.ts`: 1 peek read after hitting byte limit\n- `src/agents/tools/web-shared.test.ts`: 2 regression tests (exact-size + post-limit)\n\nCloses #101837\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "fix/issue-101837-v2",
+        "head_sha": "07c63b8f2e59c8580ec4efa3a4ec9b2a6e06206a",
+        "author": "lsr911",
         "labels": [
-          "size: M",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "agents",
+          "size: XS",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/reply-session-init-conflict.test.ts",
-            "additions": 40,
+            "path": "src/agents/tools/web-shared.test.ts",
+            "additions": 36,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/reply-session-init-conflict.ts",
-            "additions": 40,
+            "path": "src/agents/tools/web-shared.ts",
+            "additions": 8,
             "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/session-init-self-heal.test.ts",
-            "additions": 187,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 142,
-            "deletions": 16,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 409,
-        "deletions": 16,
+        "changedFiles": 2,
+        "additions": 44,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102052",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102052.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102111",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102111.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
+        "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 105,
+          "gatingTotal": 100,
           "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 26,
-            "IN_PROGRESS": 4,
+            "FAILURE": 3,
+            "SUCCESS": 68,
+            "SKIPPED": 33,
             "NEUTRAL": 1
           },
           "blockers": [
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+            "Real behavior proof:FAILURE",
+            "QA Smoke CI (telegram 2/2):FAILURE",
+            "QA Smoke CI:FAILURE"
           ],
-          "pending": [
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "QA Smoke CI (telegram 2/2):FAILURE",
+            "QA Smoke CI:FAILURE"
           ],
-          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -156,15 +143,15 @@
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2109,
+    "total_ms": 2706,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 369
+        "ms": 453
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1525
+        "ms": 1899
       },
       {
         "name": "classify_comment_commands",
@@ -184,7 +171,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 189
+        "ms": 329
       },
       {
         "name": "append_ledger",
