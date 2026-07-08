@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T00:56:15.303Z",
+  "generated_at": "2026-07-08T00:56:41.976Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T21:56:13.659Z",
+  "since": "2026-07-07T21:56:39.620Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    101521
+    101655
   ],
   "comment_ids": [
-    4910398714
+    4910401535
   ],
-  "status_comment_id": 4910398948,
+  "status_comment_id": 4910401796,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101521:4903536832:2026-07-07T12:00:16Z:re_review",
-      "comment_id": "4903536832",
-      "comment_version_key": "4903536832:2026-07-07T12:00:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101521#issuecomment-4903536832",
+      "idempotency_key": "comment-router:openclaw/openclaw:101655:4910401535:2026-07-08T00:55:16Z:re_review",
+      "comment_id": "4910401535",
+      "comment_version_key": "4910401535:2026-07-08T00:55:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101655#issuecomment-4910401535",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101521,
-      "author": "xmoxmo",
-      "author_id": 112841961,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-07T12:00:16Z",
-      "comment_updated_at": "2026-07-07T12:00:16Z",
-      "status_comment_id": null,
+      "target_branch": "main",
+      "issue_number": 101655,
+      "author": "Darren2030",
+      "author_id": 295268494,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-08T00:55:16Z",
+      "comment_updated_at": "2026-07-08T00:55:16Z",
+      "status_comment_id": 4910401796,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,75 +68,103 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 101655,
+          "dispatch_key": "router-c99c1bc308962a1f",
+          "dispatched_at": "2026-07-08T00:56:43.010Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-08T00:56:44.214Z",
+          "response_comment_id": "4910401796",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(tools): route sessions_send announcements back to requester channel for non-plugin transports",
-        "body": "## Problem\n\nWhen a session uses a non-standard transport channel (e.g., `bncr`), `sessions_send` announce replies are silently dropped instead of being delivered back to the requester's channel.\n\nThree root causes:\n\n### 1. Early return in `resolveAnnounceTarget` for non-plugin channels\n\n`resolveAnnounceTarget` has an early-return path for channels without `preferSessionLookupForAnnounceTarget`. For standard plugin channels this is fine — the plugin provides proper target format. But for non-plugin channels (like bncr), the fallback target contains a raw conversation id (e.g., `group:74674f...`) instead of the properly formatted delivery target expected by the transport (e.g., `Bncr:tgBot:-5043812861:0`).\n\n### 2. `primaryReply` not delivered before ping-pong in cross-agent A2A\n\nWhen requester ≠ target (cross-agent scenario), the `primaryReply` (round 1 response) is consumed by the A2A ping-pong loop without ever being delivered to the requester's channel. The final announcement step relies on the target agent actively choosing to announce, which it often declines via the `ANNOUNCE_SKIP` token.\n\n### 3. Ping-pong requester round causes 60s lane self-deadlock\n\nThe ping-pong loop starts by running `runAgentStep` on the requester's session with the requester's per-session lane (`nested:<requesterSessionKey>`). However, the requester's session lane is already held by the parent task (the `sessions_send` tool caller). The nested `runAgentStep` waits for the same lane to become available, causing a ~60s self-deadlock timeout.\n\n## Fix\n\n### `sessions-announce-target.ts`\n- Only return early for channels with an actual plugin registered. Non-plugin channels now fall through to the session-list-based `deliveryContextFromSession` lookup, which returns the properly formatted target (channel + to).\n\n### `sessions-send-tool.a2a.ts` — primaryReply pre-delivery\n- Deliver `primaryReply` to the requester's channel *before* entering the ping-pong loop. This matches the subagent announce delivery pattern, ensuring the first response always reaches the requester regardless of ping-pong or final-announce behavior.\n\n### `sessions-send-tool.a2a.ts` — ping-pong deadlock fix\n- Start the ping-pong loop with `currentSessionKey = params.targetSessionKey` instead of `params.requesterSessionKey`, so the first agent step runs on the target (unlocked) session rather than the requester (locked) session.\n- Add a guard `if (currentSessionKey === params.requesterSessionKey) break;` inside the loop to skip any requester round that would deadlock.\n- After this fix, one target ping-pong reply is produced; the requester round is correctly skipped.\n\n### `sessions-send-tool.a2a.ts` — skip redundant announce when primaryReply is already visible\n- When `primaryReply` was already delivered to the user before ping-pong, skip the announce step entirely. This avoids an extra agent-thinking pass (10–30s) on the target session that would add marginal value since the response is already visible in the requester's chat.\n\n## Testing\n\n### Unit tests\n\n18 tests total (3 added, 2 updated):\n\n- **New**: `runs one target ping-pong turn when requester !== target and skips requester round` — covers the cross-session ping-pong path with `maxPingPongTurns > 0`, verifying primaryReply delivery, single target `runAgentStep` call, requester guard skip, and announce suppression.\n- **Updated**: `skips announce when primaryReply is already delivered and ping-pong is disabled` — adapted from the old \"skips requester steps but still announces\" test to reflect the new announce-skip behavior.\n- **Updated**: `skips announce when primaryReply is present regardless of reply content` — adapted from the old \"suppresses announce control reply\" test.\n\nAll 15 pre-existing tests remain unchanged and pass.\n\n### Live verification (bncr / Telegram Bot)\n\nVerified with a bncr (Telegram Bot) transport:\n\nPre-fix: `sourceChannel=bncr` in provenance metadata but no visible delivery to the group chat; ping-pong caused 60s session lock timeout.\n\nPost-fix:\n- announce reply confirmed delivered via bncr outbound log:\n  `[bncr] outbound text|Bncr:tgBot:-5043812861:0|...`\n  `[ws] ⇄ res ✓ send 138ms channel=bncr`\n- Ping-pong no longer deadlocks: target replies within normal agent thinking time (~10s), requester round correctly skipped.\n- No long in-progress wait after primaryReply delivery: announce step skipped, session releases immediately.\n\n## Related\n\n- Subagent announce path has similar protection via `sendSubagentAnnounceDirectly` which passes three explicit delivery contexts and falls back to `loadRequesterSessionEntry`.",
-        "branch": "fix/sessions-send-announce-bncr-routing",
-        "head_sha": "cec785156a0592932a8823a0f8605a7807a7d658",
-        "author": "xmoxmo",
+        "title": "fix(diagnostics-otel): metrics and logs posted to the traces endpoint when the shared OTLP endpoint is signal-qualified",
+        "body": "Closes #98886\n\n## What Problem This Solves\n\nFixes an issue where operators configuring a single shared OTLP `endpoint` that ends in a signal path (e.g. a hosted frontend URL such as `https://host/api/public/otel/v1/traces`) would have **metrics and logs POSTed to the traces endpoint** when more than one signal was enabled. OTLP backends then reject the wrong wire type (Langfuse logs `invalid wire type 7`), so metrics and logs never arrive.\n\n## Why This Change Was Made\n\n`resolveOtelUrl` now normalizes only the *shared* endpoint: when it already ends in `/v1/<signal>`, the trailing segment is rewritten to match the signal being resolved (`/v1/traces` -> `/v1/metrics` or `/v1/logs`), preserving any query string or fragment. Explicit per-signal overrides (`*Endpoint` config and `OTEL_EXPORTER_OTLP_*_ENDPOINT` env) are still used verbatim, and bare base URLs keep the existing append behavior — so no currently-working configuration changes.\n\nThis is the same design as the open #98911 (and the closed #98899 / #98915). A fresh PR is opened because #98911 has been stale since Jul 2 (merge-conflicting, all CI checks cancelled, not mergeable) with no maintainer activity. Happy to close this in favor of a rebased #98911 if a maintainer prefers — the goal is just to land a correct, mergeable, green fix. This PR also adds a docs note and a regression test that fails on the unfixed code.\n\n## User Impact\n\nOperators can point a single shared `endpoint` at a signal-qualified OTLP URL and have traces, metrics, and logs each delivered to the correct path, without needing per-signal `*Endpoint` overrides.\n\n## Evidence\n\n- New regression test `normalizes a shared signal-qualified endpoint for the other signals` (shared `.../v1/traces?timeout=30s`, traces + metrics + logs): traces unchanged, metrics -> `.../v1/metrics?timeout=30s`, logs -> `.../v1/logs?timeout=30s`. Verified it **fails on the pre-fix source** (metric URL resolved to `.../v1/traces`) and passes after.\n- New lock-in test `preserves an explicit per-signal signal-qualified endpoint verbatim` guards the preserve path against future over-normalization.\n- `extensions/diagnostics-otel/src/service.test.ts`: **108 passed** (`vitest.extension-misc.config.ts`); `oxlint` clean.",
+        "branch": "claude/98886-otel-shared-endpoint",
+        "head_sha": "91452b8cf27bc744b619a09618c188d911dae4d6",
+        "author": "darren2030",
         "labels": [
-          "agents",
+          "docs",
+          "gateway",
+          "extensions: diagnostics-otel",
+          "scripts",
           "size: M",
-          "P1",
-          "triage: needs-pr-context"
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/tools/sessions-announce-target.ts",
-            "additions": 5,
-            "deletions": 1,
+            "path": "docs/gateway/opentelemetry.md",
+            "additions": 10,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/tools/sessions-send-tool.a2a.test.ts",
-            "additions": 110,
-            "deletions": 17,
+            "path": "extensions/diagnostics-otel/src/service.test.ts",
+            "additions": 35,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/tools/sessions-send-tool.a2a.ts",
-            "additions": 62,
-            "deletions": 33,
+            "path": "extensions/diagnostics-otel/src/service.ts",
+            "additions": 38,
+            "deletions": 6,
             "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/repro/issue-98886-otel-shared-endpoint.mts",
+            "additions": 254,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 177,
-        "deletions": 51,
+        "changedFiles": 4,
+        "additions": 337,
+        "deletions": 6,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101521",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101521.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101655",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101655.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
+        "merge_state_status": "BLOCKED",
         "review_decision": "",
         "checks": {
           "total": 97,
           "gatingTotal": 92,
           "counts": {
-            "CANCELLED": 2,
+            "SUCCESS": 40,
+            "IN_PROGRESS": 30,
             "SKIPPED": 26,
-            "SUCCESS": 42,
-            "IN_PROGRESS": 24,
-            "FAILURE": 2,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
+            "Security High (process-exec-boundary):IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
             "QA Smoke CI (matrix):IN_PROGRESS",
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
             "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:FAILURE",
+            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-1:IN_PROGRESS",
@@ -147,24 +175,28 @@
             "checks-node-compact-small-6:IN_PROGRESS",
             "checks-node-compact-small-7:IN_PROGRESS",
             "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
             "checks-node-compact-small-whole-3:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
-            "check-test-types:FAILURE",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+            "check-additional-extension-package-boundary:IN_PROGRESS"
           ],
           "pending": [
-            "Real behavior proof:CANCELLED",
+            "Security High (process-exec-boundary):IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
             "QA Smoke CI (matrix):IN_PROGRESS",
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
             "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
             "checks-node-compact-small-1:IN_PROGRESS",
@@ -175,40 +207,39 @@
             "checks-node-compact-small-6:IN_PROGRESS",
             "checks-node-compact-small-7:IN_PROGRESS",
             "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
             "checks-node-compact-small-whole-3:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "checks-node-compact-large-2:FAILURE",
-            "check-test-types:FAILURE"
+            "check-additional-extension-package-boundary:IN_PROGRESS"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "processed_at": "2026-07-08T00:56:42.301Z"
     }
   ],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1830,
+    "total_ms": 5331,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 206
+        "ms": 662
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1422
+        "ms": 1679
       },
       {
         "name": "classify_comment_commands",
@@ -228,7 +259,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 186
+        "ms": 2965
       },
       {
         "name": "append_ledger",
