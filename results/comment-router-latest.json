@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T14:50:42.684Z",
+  "generated_at": "2026-07-08T14:50:42.639Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T11:50:42.257Z",
+  "since": "2026-07-08T11:50:39.602Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102208
+    101023
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,122 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101023:4895840612:2026-07-08T14:50:33Z:clawsweeper_needs_human",
+      "comment_id": "4895840612",
+      "comment_version_key": "4895840612:2026-07-08T14:50:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101023#issuecomment-4895840612",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101023,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-06T17:39:01Z",
+      "comment_updated_at": "2026-07-08T14:50:33Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No ClawSweeper repair lane is needed; the remaining action is ordinary maintainer review, exact-head freshness checks, and merge handling for the existing PR.; Cleared: Cleared: the diff changes in-memory rollback logic and focused tests only; it adds no dependencies, workflows, secrets handling, permissions, or new execution surface. (sha=bcd4668cb2358809ac6fda32214d4afd2ad7c341)",
+      "review_summary": "The branch adds snapshot-and-restore rollback around generic current-conversation binding persistence/load paths and adds tests for failed SQLite writes and failed initial cache load.\n\nPR surface: Source +38, Tests +197. Total +235 across 2 files.\n\nReproducibility: yes. at source level: current main mutates or clears the one-time process cache before durable SQLite operations complete, and the PR body includes a before/after real SQLite write-failure transcript. I did not independently execute the harness in this read-only review.",
+      "review_followup": "- No ClawSweeper repair lane is needed; the remaining action is ordinary maintainer review, exact-head freshness checks, and merge handling for the existing PR.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "bcd4668cb2358809ac6fda32214d4afd2ad7c341",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(outbound): restore current-conversation binding map when persist fails",
+        "body": "## What Problem This Solves\n\nFixes an issue where plugin channels that use the generic current-conversation\nbinding (any channel without a custom binding adapter) could route inbound\nmessages to the wrong or a deleted session target after a failed durable write.\n\nThe binding mutators — bind, touch, unbind, and expiry prune-on-read — update the\nprocess-wide in-memory binding map first and then persist it to SQLite. If the\npersist throws (disk full, read-only DB, transaction failure), the map is left\nahead of disk. Because the map is only loaded from disk once per process\n(`bindingsLoaded` is a one-time flag), the diverged bindings are then served for\nthe rest of the process lifetime — until a restart — even though the caller\nalready received the error. Inbound messages get delivered to a stale binding\n(a resolved session that was actually unbound, or a target that never persisted).\n\nThe one-time load path has the same weakness in the other direction: it flips\n`bindingsLoaded` and clears the map before the DB read completes, so a failing\ninitial read latches an empty cache until restart.\n\n## Why This Change Was Made\n\nEach mutating path now snapshots the in-memory map, and if the durable write\nthrows it restores that snapshot before rethrowing, so runtime state never drifts\nahead of disk. This mirrors the rollback pattern already merged for the cron\nscheduler in #99960 (`persistOrRestore` in `src/cron/service/ops.ts`). The\nunbind-by-session path snapshots after its expiry scan settles (that scan can\nitself persist prune deletes), so a later batch failure cannot resurrect a\nbinding the scan already dropped from disk. The one-time load now reads into a\nlocal first and marks the cache loaded only after the read succeeds.\n\nScope is deliberately narrow: no change to the write mechanism, the store schema,\nor the broader session-binding surface. The snapshot is a shallow map copy, which\nis sufficient because records are always replaced wholesale (never mutated in\nplace), keeping the hot binding paths cheap.\n\n## User Impact\n\nOperators no longer end up with a process serving conversation bindings that\ndisagree with what is on disk after a transient storage failure. A failed\nmutation now leaves the in-memory state exactly as it was before\nthe attempt, and the error still surfaces to the caller. No config, API, or\nbehavior change on the success path.\n\nAffected paths: bind, touch, unbind by binding id, unbind by target session\nkey, and the expiry prune-on-read.\n\n## Evidence\n\n### Real-behavior proof — genuine shared-SQLite write failure\n\nDrives the real production path (`bindGenericCurrentConversation` →\n`runOpenClawStateWriteTransaction`) against a real `state/openclaw.sqlite`, and\ninjects a **genuine durable-write failure** (not a mock): `PRAGMA query_only = ON`\non the production cached state connection, so the next write transaction raises\n`SQLITE_READONLY`. It then compares disk ground-truth (read straight from the\n`current_conversation_bindings` table) against what a caller is served by\n`resolveGenericCurrentConversationBinding`. Same recipe merged for #99960.\n\n`bind` conversation → `session-A` (persists), inject the fault, then re-`bind`\nthe same conversation → `session-B` (write throws):\n\n**BEFORE (main `5e22787ba1`, no rollback):**\n\n```\n[fault] bind B threw            : Error: attempt to write a readonly database\n[after] disk ground-truth       : [ 'agent:codex:acp:session-A' ]\n[after] resolve() serves         : agent:codex:acp:session-B\nRESULT: DIVERGENCE — caller served agent:codex:acp:session-B but disk holds agent:codex:acp:session-A (BUG present)\n```\n\nThe caller saw the write error, disk still holds `session-A`, yet the in-memory\nmap serves `session-B` — a target that never persisted. Because `bindingsLoaded`\nis a one-time flag, this phantom binding is served until process restart.\n\n**AFTER (this PR `bcd4668cb2`, with rollback):**\n\n```\n[fault] bind B threw            : Error: attempt to write a readonly database\n[after] disk ground-truth       : [ 'agent:codex:acp:session-A' ]\n[after] resolve() serves         : agent:codex:acp:session-A\nRESULT: CONSISTENT — caller served agent:codex:acp:session-A, matches disk (rollback worked)\n```\n\nSame genuine `SQLITE_READONLY`, same surfaced error, but the map is rolled back\nto the last-persisted state — the caller is served what is actually on disk.\n\n<details>\n<summary>Harness (<code>node --import tsx proof.mts</code>, temp <code>OPENCLAW_STATE_DIR</code>)</summary>\n\n```ts\nconst CONV = { channel: \"workspace\", accountId: \"default\", conversationId: \"C-real-proof\" };\nconst SESSION_A = \"agent:codex:acp:session-A\";\nconst SESSION_B = \"agent:codex:acp:session-B\";\n\nfunction setQueryOnly(on: boolean): void {\n  // Toggle the production cached connection read-only so the next real write\n  // transaction raises a genuine SQLITE_READONLY (like a read-only mount).\n  openOpenClawStateDatabase().db.exec(`PRAGMA query_only = ${on ? \"ON\" : \"OFF\"};`);\n}\n\n// 1. Durably persist conversation -> SESSION_A via the real production path.\nawait bindGenericCurrentConversation({ targetSessionKey: SESSION_A, targetKind: \"session\", conversation: CONV });\n// 2. Inject a genuine durable-write failure on the shared SQLite connection.\nsetQueryOnly(true);\n// 3. Re-bind same conversation -> SESSION_B; the real write transaction throws.\ntry { await bindGenericCurrentConversation({ targetSessionKey: SESSION_B, targetKind: \"session\", conversation: CONV }); }\ncatch (err) { /* caller sees the write error */ }\n// 4. Lift the fault, read disk ground-truth, observe what resolve() serves.\nsetQueryOnly(false);\nconst disk = /* SELECT target_session_key FROM current_conversation_bindings */;\nconst inMemory = resolveGenericCurrentConversationBinding(CONV)?.targetSessionKey;\n// BEFORE: inMemory === SESSION_B (diverges from disk SESSION_A). AFTER: inMemory === SESSION_A.\n```\n\n</details>\n\n### Focused fault-injection tests\n\n`src/infra/outbound/current-conversation-bindings.test.ts` covers each mutating\npath (bind, touch, unbind-by-id, unbind-by-session, prune-on-read), the mixed\nunbind-by-session case where an expired binding is pruned mid-scan before the\nbatch fails, and a failing initial load that must not latch an empty cache. Same\nproof shape merged for the cron rollback in #99960.\n\n```\n$ node scripts/run-vitest.mjs src/infra/outbound/current-conversation-bindings.test.ts\n Test Files  1 passed (1)\n      Tests  17 passed (17)   # 10 existing + 7 new\n```\n\n- `pnpm tsgo:core` — clean (0 type errors)\n- oxlint / oxfmt — clean\n",
+        "branch": "fix/conversation-bindings-persist-rollback",
+        "head_sha": "bcd4668cb2358809ac6fda32214d4afd2ad7c341",
+        "author": "masatohoshino",
+        "labels": [
+          "size: M",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/infra/outbound/current-conversation-bindings.test.ts",
+            "additions": 197,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/current-conversation-bindings.ts",
+            "additions": 47,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 244,
+        "deletions": 9,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101023",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101023.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "gatingTotal": 97,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 34,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 789,
+    "total_ms": 3440,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 414
+        "ms": 439
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2583
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +160,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 361
+        "ms": 392
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
