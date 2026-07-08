@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T06:43:07.369Z",
+  "generated_at": "2026-07-08T06:43:18.448Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T03:43:05.016Z",
+  "since": "2026-07-08T03:43:17.949Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     101078
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4912056610
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -37,16 +39,16 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/101078#issuecomment-4896514565",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 101078,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 101999,
+      "author": "momothemage",
+      "author_id": 35096042,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-06T18:51:11Z",
-      "comment_updated_at": "2026-07-08T06:43:00Z",
+      "comment_created_at": "2026-07-08T06:39:57Z",
+      "comment_updated_at": "2026-07-08T06:39:57Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -68,119 +70,25 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): preserve cron context in session entry for async completion wakes",
-        "body": "## What Problem This Solves\n\nFixes #99919\n\nWhen a cron job uses an async media generation tool (`image_generate`, `video_generate`, `music_generate`), the cron run ends while the media task is still in progress. When the media task later completes and wakes the session, the resumed agent run **loses the original cron context**:\n\n- `provider` / `model` — falls back to account defaults instead of the cron's configured model\n- `thinkLevel` — not restored\n- `bootstrapContextRunKind` — missing; the resumed agent doesn't know it is a cron run\n\nThe agent wakes up, sees only \"image done\" with no memory of the original multi-step task, replies once, and ends. The remaining steps silently dead-end with `NO_REPLY`.\n\nAdditionally, the in-process gateway dispatch in `runAnnounceAgentCall` was not authorized to pass model overrides on the synthetic client. Even with the correct `provider`/`model` fields in the agent params, the gateway's `server-methods/agent` handler would reject them without `allowSyntheticModelOverride`.\n\n## Why This Change Was Made\n\nThe fix has four parts:\n\n**1. Mark** — In `prepareCronRunContext` (`src/cron/isolated-agent/run.ts`), set `bootstrapContextRunKind: \"cron\"` on the cron session entry so the cron origin is discoverable by async completion wakes.\n\n**2. Persist** — When a cron agent run completes in `updateSessionStoreAfterAgentRun` (`src/agents/agent-command.ts`), persist `bootstrapContextRunKind` onto the `SessionEntry` in the session store so it survives across session reloads.\n\n**3. Restore** — In `sendSubagentAnnounceDirectly` (`src/agents/subagent-announce-delivery.ts`), when building `directAgentParams` for an async completion wake, read `requesterEntry.bootstrapContextRunKind` from the loaded session entry. If it equals `\"cron\"`, inject `provider`, `model`, `thinking`, and `bootstrapContextRunKind` into the wake params. Also route the wake to the base cron session key instead of the ephemeral `:run:` key so the persisted entry with transcript is found.\n\n**4. Authorize** — `runAnnounceAgentCall` now passes `allowSyntheticModelOverride: true` when the agent params carry a `provider` or `model` override. This authorizes the trusted in-process gateway dispatch so the synthetic client's model override is accepted.\n\n**Safety**: Only cron session entries carry `bootstrapContextRunKind: \"cron\"`. Subagent session entries never have this field, so subagent-to-subagent completion paths are completely unaffected.\n\n## User Impact\n\n- **Before**: Cron jobs using async media generation silently lost context on wake. The resumed agent had the wrong model and no memory of the task, causing multi-step jobs to dead-end after the first async call. Even after restoring provider/model in the params, the gateway could reject them.\n- **After**: Async completion wakes restore the cron's provider, model, thinking level, and run kind from the persisted session entry. The in-process dispatch authorizes the model override. The agent continues the original task instead of falling back to account defaults.\n\n## Evidence\n\n### Revision 6 (1b532f4): Rebase onto upstream main + address all ClawSweeper rank-up moves (2026-07-08)\n\nThe previous head (3aa8298) was 572 commits behind `upstream/main`, causing the branch to **drop several upstream behaviors** in `agent-command.ts`:\n\n- `resolveAgentExplicitRecipientSession` import + call site (explicit recipient routing)\n- `resolveAgentRunLifecycleEndLogLevel` function + test export (lifecycle log normalization)\n- `transcriptMedia` handling in `persistAcpTurnTranscript` and `createUserTurnTranscriptRecorder`\n- `touchActivity: !isHeartbeatLifecycleRun && !opts.internalEvents?.length` (internal wake suppression)\n- `buildAgentRunTerminalOutcome` import (used by lifecycle log level)\n\n**Fix**: Rebased onto `upstream/main` (35d5ea069a), restored `agent-command.ts` to the upstream version, and kept only the narrow `bootstrapContextRunKind` persistence block. All ClawSweeper P1/P2 rank-up moves are now addressed.\n\n### Change summary vs upstream/main\n\n```\nsrc/agents/agent-command.ts                   |  17 added   (only bootstrapContextRunKind persistence)\nsrc/agents/subagent-announce-delivery.test.ts | 211 added   (cron context injection tests × 3)\nsrc/agents/subagent-announce-delivery.ts      |  76 +-      (cron wake routing + context restore + authorize)\nsrc/config/sessions/types.ts                  |   2 added   (bootstrapContextRunKind field)\nsrc/cron/isolated-agent/run.ts                |   5 added   (mark cron session entry)\nsrc/plugins/session-entry-slot-keys.ts        |   1 added   (reserved slot key)\n```\n\nTotal: 304 additions, 8 deletions across 6 files. No regressions.\n\n### ClawSweeper rank-up moves addressed\n\n- **[P1] ✅ Restore explicit recipient session routing** — `resolveAgentExplicitRecipientSession` restored; `src/agents/agent-command.ts:640-757`\n- **[P1] ✅ Preserve transcript media in agent turns** — `transcriptMedia`-aware `persistAcpTurnTranscript` + `createUserTurnTranscriptRecorder` restored; `src/agents/agent-command.ts:1225-1235, 1841-1860`\n- **[P2] ✅ Keep lifecycle end logging normalized** — `resolveAgentRunLifecycleEndLogLevel` function + testing export restored; `src/agents/agent-command.ts:254-282, 2772, 2789`\n- **[P2] ✅ Keep internal wakes from marking sessions active** — `touchActivity: !isHeartbeatLifecycleRun && !opts.internalEvents?.length` restored; `src/agents/agent-command.ts:2378`\n\n### CI-failing tests — now passing\n\n```bash\n# check-test-types — was TS2339 (resolveAgentRunLifecycleEndLogLevel not exported)\npnpm check:test-types\n# → clean (exit 0)\n\n# checks-node-compact-small-3 — was 2 failures (recipient routing + Telegram gap-fill)\npnpm test src/commands/agent.test.ts\n# → 35/35 passed\n\n# checks-node-compact-large-3 — was 6 failures (4 ingress-diagnostics + 2 live-model-switch)\npnpm test src/agents/agent-command.ingress-diagnostics.test.ts\n# → 17/17 passed\n\npnpm test src/agents/agent-command.live-model-switch.test.ts\n# → 76/76 passed\n```\n\n### Targeted tests\n\n```bash\npnpm test src/agents/subagent-announce-delivery.test.ts\n# → 115/115 passed (includes 3 new tests for cron context injection, non-cron safety, override authorization)\n```\n\n### Lint & Format\n\n```bash\nnode_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.json --quiet \\\n  src/agents/agent-command.ts \\\n  src/agents/subagent-announce-delivery.ts \\\n  src/agents/subagent-announce-delivery.test.ts \\\n  src/config/sessions/types.ts \\\n  src/cron/isolated-agent/run.ts \\\n  src/plugins/session-entry-slot-keys.ts\n# → clean (exit 0)\n\npnpm format:check -- <all-changed-files>\n# → All matched files use the correct format\n```\n\n### Real behavior proof: Live gateway cron runs with model context persistence\n\n**Environment**: Linux x86_64, Node v24.13.1, commit 1b532f4857, branch `fix/cron-async-media-wake-loses-context`\n\n#### 1. Build & Gateway startup\n\n```bash\npnpm build  # full dist build successful (434s)\n\n# Start gateway\npnpm openclaw gateway --port 18789 --bind loopback run --verbose &\n# → Gateway ready: {\"ok\":true,\"status\":\"live\"}\n# → 14 plugins loaded in 50.5s\n# → agent model: deepseek/deepseek-v4-pro (thinking=high, fast=off)\n```\n\n#### 2. Trigger existing cron job (deepseek/deepseek-v4-pro)\n\n```bash\npnpm openclaw gateway call --url ws://127.0.0.1:18789 --token \"<redacted>\" \\\n  --params '{\"id\":\"b9c18aea-d542-4707-bc96-c2a7af3f98e7\"}' cron.run --json\n# → {\"ok\":true,\"enqueued\":true,\"runId\":\"manual:b9c18aea-...:1783491946000:1\"}\n```\n\n**Gateway log confirms real model call:**\n```\n[model-fetch] start provider=deepseek api=openai-completions model=deepseek-v4-pro\n  method=POST url=https://api.deepseek.com/chat/completions\n[model-fetch] response provider=deepseek api=openai-completions model=deepseek-v4-pro\n  status=200 elapsedMs=695 contentType=text/event-stream; charset=utf-8\n```\n\n**Session store — bootstrapContextRunKind persisted:**\n```\nKey: agent:main_assistant:cron:b9c18aea-d542-4707-bc96-c2a7af3f98e7\n  bootstrapContextRunKind: cron          ← ✅ NEW: cron marker persisted\n  modelProvider: deepseek\n  model: deepseek-v4-pro\n```\n\n#### 3. Add and trigger a NEW cron job with a different model (minimax/MiniMax-M2.7)\n\nCreated a test cron job configured with `--model minimax/MiniMax-M2.7 --tools \"image_generate write\"` to verify model context is preserved per-job (not hardcoded to the default):\n\n```bash\npnpm openclaw cron add \\\n  --url ws://127.0.0.1:18789 --token \"<redacted>\" \\\n  --name \"Proof: async media wake test\" \\\n  --every \"365d\" \\\n  --message \"Generate a simple 16x16 pixel art sunset image...\" \\\n  --tools \"image_generate write\" \\\n  --model \"minimax/MiniMax-M2.7\" \\\n  --thinking \"low\" \\\n  --session \"isolated\" \\\n  --timeout-seconds 30\n# → Job ID: 50a11bc0-9cee-41ca-b910-d0b41dec301a\n\npnpm openclaw gateway call --url ws://127.0.0.1:18789 --token \"<redacted>\" \\\n  --params '{\"id\":\"50a11bc0-9cee-41ca-b910-d0b41dec301a\"}' cron.run --json\n# → {\"ok\":true,\"enqueued\":true}\n```\n\n**Gateway lifecycle — cron agent starts with the correct (non-default) model:**\n```\n[14:29:40.754] → event agent run=80737c67…5384 agent=main_assistant\n  session=cron:50a11bc0-9cee-41ca-b910-d0b41dec301a:run:80737c67-...\n  stream=lifecycle phase=start\n\n[14:29:40.841] [model-fetch] start provider=minimax api=openai-completions\n  model=MiniMax-M2.7 method=POST url=https://api.minimaxi.com/v1/chat/completions\n\n[14:29:41.584] [model-fetch] response provider=minimax api=openai-completions\n  model=MiniMax-M2.7 status=429 elapsedMs=744\n  (rate limited — Minimax plan quota exhausted, but confirmed the CORRECT model was used)\n```\n\n**Session store — both cron entries with distinct models:**\n```\nKey: agent:main_assistant:cron:b9c18aea-d542-4707-bc96-c2a7af3f98e7\n  bootstrapContextRunKind: cron\n  modelProvider: deepseek\n  model: deepseek-v4-pro\n\nKey: agent:main_assistant:cron:50a11bc0-9cee-41ca-b910-d0b41dec301a   ← NEW\n  bootstrapContextRunKind: cron\n  modelProvider: minimax              ← ✅ NOT the default deepseek\n  model: MiniMax-M2.7                 ← ✅ matches cron job config\n```\n\n#### 4. Evidence summary\n\n| Evidence | Result |\n|---|---|\n| `pnpm build` | ✅ Full dist build successful |\n| Gateway startup + health | ✅ 14 plugins loaded, `{\"ok\":true,\"status\":\"live\"}` |\n| `cron.list` RPC | ✅ Returns existing cron jobs |\n| `cron.run` RPC | ✅ Triggers cron execution; `\"ok\":true` |\n| DeepSeek model call (existing cron) | ✅ 200 OK, 695ms — real API call confirmed |\n| MiniMax model call (proof cron) | ✅ 429 (rate limited) — **correct model was used** (not default) |\n| `bootstrapContextRunKind: \"cron\"` persisted | ✅ On BOTH cron entries |\n| Model preserved per-job (not hardcoded) | ✅ deepseek ≠ minimax entries confirmed |\n| Session key = base cron key (no `:run:` suffix) | ✅ `agent:main_assistant:cron:<uuid>` |\n| All 4 previously failing CI tests | ✅ Pass locally |\n\n### What was not tested\n\n- **Async completion wake with real image_generate** — Minimax hit rate limit (429) preventing the image_generate tool call; the agent run ended with rate_limit error before reaching the async media path. However, the critical preconditions are proven: `bootstrapContextRunKind` is persisted, model context is preserved per-job, and the session key structure (base cron key) is correct for the wake path to find the entry.\n- Full end-to-end multi-step cron task with real media generation → completion → wake → continue — requires a provider with both text + image generation quota.\n",
-        "branch": "fix/cron-async-media-wake-loses-context",
-        "head_sha": "1b532f48574c34381d3047580f1cb4253b10d2ef",
-        "author": "xialonglee",
-        "labels": [
-          "agents",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-announce-delivery.test.ts",
-            "additions": 211,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-announce-delivery.ts",
-            "additions": 68,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/session-entry-slot-keys.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 304,
-        "deletions": 8,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101078",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101078.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 105,
-          "gatingTotal": 100,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 34,
-            "SUCCESS": 67,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-small-whole-2:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [
-            "checks-node-compact-small-whole-2:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2549,
+    "total_ms": 2019,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 298
+        "ms": 485
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2038
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -196,7 +104,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 186
+        "ms": 1521
       },
       {
         "name": "append_ledger",
