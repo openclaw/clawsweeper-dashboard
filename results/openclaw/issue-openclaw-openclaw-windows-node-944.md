@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-944"
 mode: "autonomous"
-run_id: "28952976121"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28952976121"
+run_id: "28956999516"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28956999516"
 head_sha: "9b7281103ab54ecb97d8d66e5ddf4165ea8469fc"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-08T15:07:55.554Z"
+published_at: "2026-07-08T16:05:52.738Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/944"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/944"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28952976121](https://github.com/openclaw/clawsweeper/actions/runs/28952976121)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28956999516](https://github.com/openclaw/clawsweeper/actions/runs/28956999516)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/944
 
 ## Summary
 
-Issue #944 remains a viable narrow native-chat session-state bug on current main. The hydrated issue is open, non-security, and now has additional reporter confirmation that the reopened chat defaults to the first session from the bottom of the session list rather than the last user-selected chat. No active implementation PR is present; #897 is already merged and unrelated. Plan a new narrow fix PR from `clawsweeper/issue-openclaw-openclaw-windows-node-944`.
+Issue #944 remains a viable narrow native-chat session-state bug on current main. The hydrated issue is open, non-security, and includes reporter confirmation that reopened native chat selects a default session from the bottom of the list instead of the last user-selected session. No active implementation PR is present; #897 is already merged and unrelated. Plan a new narrow fix PR from `clawsweeper/issue-openclaw-openclaw-windows-node-944`.
 
 ## Impact
 
