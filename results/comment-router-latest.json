@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T06:42:34.021Z",
+  "generated_at": "2026-07-08T06:42:58.447Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T03:42:33.693Z",
+  "since": "2026-07-08T03:42:53.706Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    102060
+    101715
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4912055770
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +31,132 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101715:4912055770:2026-07-08T06:39:49Z:re_review",
+      "comment_id": "4912055770",
+      "comment_version_key": "4912055770:2026-07-08T06:39:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101715#issuecomment-4912055770",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101715,
+      "author": "LZY3538",
+      "author_id": 293718838,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-08T06:39:49Z",
+      "comment_updated_at": "2026-07-08T06:39:49Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(model-fallback): re-throw LiveSessionModelSwitchError for outer retry loop (#101676)",
+        "body": "## What Problem This Solves\n\nWhen a user changes the model mid-turn (via `/model`, session_status override, or cron job) while the AI is actively generating a response, the run terminates with an error instead of retrying the turn against the newly-selected model.\n\n**Observed before fix (#101676):**\n```\ninfo: live session model switch requested: claude-sonnet-5 -> claude-sonnet-4-6\nwarn: model_fallback_decision decision=candidate_failed ... fallbackConfigured=false\nerror: Embedded agent failed before reply: Live session model switch requested\n```\n\n## Why This Change Was Made\n\nThe `runWithModelFallback` loop catches `LiveSessionModelSwitchError` from the embedded runner. When the switch target is not a later fallback candidate, it was wrapping the error as `FailoverError`. With no fallbacks configured, this reached `throwFallbackFailureSummary` producing `FallbackSummaryError` — not `LiveSessionModelSwitchError` — so the outer retry loop never caught it.\n\n**Fix:** A new helper `isLiveSessionModelSwitchTargetInCandidates` distinguishes between three scenarios:\n\n| Scenario | Behavior |\n|----------|----------|\n| Target IS a later fallback candidate | Redirect there (unchanged, preserves #57471) |\n| Target IS in candidates but stale (same/earlier) | Failover → continue fallback (preserves #58496) |\n| Target NOT in candidates at all (genuine user switch) | **Rethrow → outer loop retries (#101676 fix)** |\n\nThe helper also accounts for auth-profile changes: credential-only switches (same model, different `authProfileId`) are treated as not-in-candidates so the outer retry loop can apply the new auth profile via `applyLiveModelSwitchToRun`.\n\nThe outer loop has bounded retries (`MAX_LIVE_SWITCH_RETRIES = 5` subagents, `2` main agent).\n\n## Evidence\n\n### Real Runtime Behavior — Live Mid-Turn Model Switch\n\nA mid-turn model switch from `anthropic/claude-haiku-3-5` to `openrouter/free` was exercised on this PR head. The embedded runner detects the pending switch, `runWithModelFallback` re-throws it (target `openrouter/free` is not in the `[anthropic/claude-haiku-3-5]` candidate list), and the outer retry loop catches it and retries with the switched model:\n\n```\n[agent/embedded] embedded run agent end: isError=true\n[agent/embedded] live session model switch requested during active attempt:\n                 anthropic/claude-haiku-3-5 -> openrouter/openrouter/free\n[agents/agent-command] Live session model switch in subagent run:\n                       switching to openrouter/openrouter/free\n[model-fetch] start provider=openrouter model=openrouter/free\n[model-fetch] response status=200\n```\n\nThe turn completes successfully with the user-requested model. Before the fix, `LiveSessionModelSwitchError` was wrapped as `FailoverError` → the outer loop never saw it → the turn failed with \"Agent failed before reply: Live session model switch requested.\"\n\n### Focused Tests — Seven Control-Flow Branches\n\n```\n ✓ re-throws when the switch target is not a configured candidate (#101676)\n ✓ re-throws when target is not a later fallback candidate (#101676)\n ✓ re-throws on last candidate when switch target not in candidates (#101676)\n ✓ retries with the switched model after re-throw (#101676 end-to-end)\n ✓ re-throws for auth-profile-only switch (same model, different credentials) (#101676)\n ✓ jumps to a later live-session model switch candidate (#57471)\n ✓ keeps stale same-candidate switch errors in fallback rotation (#58496)\n```\n\n### Full Test Suite\n\n```\nmodel-fallback.test.ts:              118 passed\nlive-model-switch.test.ts:            21 passed\nagent-command.live-model-switch.test.ts: 76 passed\nTotal: 215 passed\n```\n\n### Static Checks\n\n```\noxfmt --check: All matched files use the correct format\ngit diff --check: passed, no issues\n```\n\n### Changes\n\n| File | + | - | Net |\n|------|---|---|-----|\n| `src/agents/model-fallback.ts` | +68 | -29 | +39 |\n| `src/agents/model-fallback.test.ts` | +180 | -19 | +161 |\n| `scripts/live-model-switch-proof.ts` | +325 | 0 | +325 |\n\nCloses #101676.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/live-model-switch-mid-attempt-101676",
+        "head_sha": "e4939d962256f13110a37a956cd859b9e6521646",
+        "author": "lzy3538",
+        "labels": [
+          "scripts",
+          "agents",
+          "size: L",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/live-model-switch-proof.ts",
+            "additions": 325,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/model-fallback.test.ts",
+            "additions": 148,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 65,
+            "deletions": 29,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 538,
+        "deletions": 48,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101715",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101715.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 521,
+    "total_ms": 5078,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 312
+        "ms": 2075
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2648
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,7 +172,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 194
+        "ms": 338
       },
       {
         "name": "append_ledger",
