@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T17:33:18.773Z",
+  "generated_at": "2026-07-08T17:34:51.683Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T14:33:16.567Z",
+  "since": "2026-07-08T14:34:50.988Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4917485697
   ],
-  "status_comment_id": 4917486193,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4917485697:2026-07-08T17:31:57Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/102255#issuecomment-4917485697",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 102255,
       "author": "zw-xysk",
       "author_id": 294457748,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-08T17:31:57Z",
       "comment_updated_at": "2026-07-08T17:31:57Z",
-      "status_comment_id": 4917486193,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,120 +68,27 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 102255,
-          "dispatch_key": "router-d72a1e0ac6d144cb",
-          "dispatched_at": "2026-07-08T17:33:19.454Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-08T17:33:20.525Z",
-          "response_comment_id": "4917486193",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): prevent double dispatch after disable/enable cycle during in-flight run",
-        "body": "## What Problem This Solves\n\nDisabling and re-enabling a cron job while one of its runs is still in flight clears the persisted `runningAtMs` reservation, so the next scheduler tick dispatches a second concurrent run. The result is two overlapping executions of a job that is supposed to run once.\n\nThe root cause is that `isRunnableJob` only consulted the persisted `runningAtMs` field and never checked the in-memory active-jobs registry (`isCronJobActive`). When `update(id, { enabled: false })` cleared `runningAtMs` unconditionally (even during an in-flight run), and a subsequent `update(id, { enabled: true })` recomputed `nextRunAtMs` to a past-due time, the next tick found no concurrency guard and dispatched a second run.\n\n## Changes\n\nFour files, 197 insertions, 2 deletions:\n\n1. **`src/cron/service/timer.ts`** (`isRunnableJob`): Added `isCronJobActive(job.id)` check so the in-memory active-jobs registry guards against double dispatch even when `runningAtMs` was cleared externally. This is the primary fix matching the issue's recommendation.\n\n2. **`src/cron/service/ops.ts`** (`finalizeUpdatedJob`): The disable branch now preserves `runningAtMs` when the job is currently in-flight, making the guard durable across process restarts (defense-in-depth).\n\n3. **`src/cron/service/jobs.ts`** (`normalizeJobTickState`): The disabled-job branch now uses the same `STUCK_RUN_MS` (2h) gate as enabled jobs instead of unconditionally clearing `runningAtMs`. This prevents the maintenance recompute path from undoing fix 2 and keeps behavior consistent.\n\n4. **`src/cron/service.issue-102238-double-dispatch.test.ts`** (new): Committed regression test covering the exact disable→re-enable→tick sequence end to end with real persisted store, real scheduler code paths, and diagnostic state dumps at every step.\n\n## Evidence\n\n**Unit tests (124/124 passed, 1308/1308 tests):**\n```\n Test Files  124 passed (124)\n      Tests  1308 passed (1308)\n```\n\n**Committed regression test (+1 file, +1 test):**\n```\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n```\n\n**Real behavior proof — live terminal transcript driving the real cron scheduler runtime end to end:**\n\n```\n==== REAL BEHAVIOR PROOF: #102238 ====\nhostname: LIN-66D8BD4EA2C\npid: 3484927\ntimestamp: 2026-07-08T17:07:14Z\n\n--- while first run in flight (after manual force run) ---\ndispatches=1\nrunningAtMs=1783598400000\nnextRunAtMs=1783598340000\nactiveRegistrySaysRunning=true\n\n--- after update disable then update enable (still mid-run) ---\nrunningAtMs=1783598400000           ← FIX 2: preserved!\nnextRunAtMs=1783598340000\nnextRunAtMsIsPastDue=true\nactiveRegistrySaysRunning=true\n\n--- after one scheduler tick (onTimer) ---\ndispatches=1                        ← FIX: NO second dispatch!\nmaxConcurrentInFlight=1\n\n--- after original run completes ---\nrunningAtMs=undefined\nlastRunAtMs=1783598400000\nlastStatus=ok\nmaxConcurrentInFlight=1\n```\n\nThe proof drives the real scheduler code paths end to end via `ops.run(id, \"force\")` → `ops.update(id, { enabled: false })` → `ops.update(id, { enabled: true })` → `timer.onTimer(state)` against a real persisted JSON store. The `runIsolatedAgentJob` execution boundary is the only stub — the same stubbing used in the upstream issue's own proof. Raw state is read directly from disk (`loadCronStore`) at each step, and `isCronJobActive()` reflects the process-global active-jobs registry.\n\nKey findings from the transcript:\n- `runningAtMs=1783598400000` is preserved after disable/enable (Fix 2)\n- `activeRegistrySaysRunning=true` throughout (Fix 1)\n- `dispatches=1` after the scheduler tick — no second dispatch\n- `maxConcurrentInFlight=1` — exactly one concurrent run, as expected\n\n**Lint + Type check:**\nNo new lint or type errors introduced.\n\n## Review\n- Manually reviewed and verified\n- AI-assisted: Yes\n- Fixes #102238",
-        "branch": "fix/cron-disable-enable-double-dispatch",
-        "head_sha": "532866fea051d5a8fc85bcdcfdb8975fe75cb4b3",
-        "author": "zw-xysk",
-        "labels": [
-          "size: M",
-          "P2"
-        ],
-        "files": [
-          {
-            "path": "src/cron/service.issue-102238-double-dispatch.test.ts",
-            "additions": 169,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/service/jobs.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 199,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102255",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102255.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "gatingTotal": 97,
-          "counts": {
-            "SUCCESS": 64,
-            "SKIPPED": 35,
-            "IN_PROGRESS": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-08T17:33:18.964Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4379,
+    "total_ms": 2642,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 530
+        "ms": 676
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1661
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -193,15 +100,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2163
+        "ms": 1948
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
