@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T02:46:31.752Z",
+  "generated_at": "2026-07-08T02:46:32.540Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T23:46:29.558Z",
+  "since": "2026-07-07T23:46:29.991Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101504
+    100751
   ],
   "comment_ids": [
-    4910908659
+    4910915807
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4910915972,
   "max_autoclose_targets": 8,
-  "scanned_comments": 12,
-  "commands_seen": 5,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101504:4902036243:2026-07-08T02:46:05Z:clawsweeper_needs_human",
-      "comment_id": "4902036243",
-      "comment_version_key": "4902036243:2026-07-08T02:46:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101504#issuecomment-4902036243",
+      "idempotency_key": "comment-router:openclaw/openclaw:100751:4910915807:2026-07-08T02:45:10Z:re_review",
+      "comment_id": "4910915807",
+      "comment_version_key": "4910915807:2026-07-08T02:45:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/100751#issuecomment-4910915807",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101648,
-      "author": "zhangqueping",
-      "author_id": 3436352,
+      "target_branch": "main",
+      "issue_number": 100751,
+      "author": "Monkey-wusky",
+      "author_id": 66244686,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T02:43:28Z",
-      "comment_updated_at": "2026-07-08T02:43:28Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-08T02:45:10Z",
+      "comment_updated_at": "2026-07-08T02:45:10Z",
+      "status_comment_id": 4910915972,
       "trigger": "mention",
-      "command": "re-review",
+      "command": "rerun",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -68,111 +68,100 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 100751,
+          "dispatch_key": "router-6db24080fad2195b",
+          "dispatched_at": "2026-07-08T02:46:33.152Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-08T02:46:34.909Z",
+          "response_comment_id": "4900809049",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix: skip pushLoopFailure for MidTurnPrecheckSignal control-flow errors",
-        "body": "## Summary\n\n**Problem**: `MidTurnPrecheckSignal` — a control-flow signal thrown in `transformContext` to trigger tool-result truncation — was caught by `Agent.handleRunFailure` which unconditionally pushed a synthetic failure into the event stream, causing users to see a premature \"Context overflow\" error even though the internal retry succeeds.\n\n**Solution**: Mark `MidTurnPrecheckSignal` with a `Symbol.for(\"agent-core.controlFlowError\")` sentinel so `Agent.handleRunFailure` can recognize control-flow signals, skip the synthetic failure push, and instead emit a clean `agent_end` event to settle lifecycle subscribers (compaction waiters, session-state cleanup, terminal hooks). The existing attempt-runner recovery path (via `pendingMidTurnPrecheckRequest` callback) handles truncation and retry correctly.\n\n**What changed**: `agent.ts` (`handleRunFailure`): For control-flow errors, skip synthetic failure push but still emit clean `agent_end` with actual state messages so lifecycle subscribers settle properly. Added `isControlFlowError()` helper and `AGENT_CORE_CONTROL_FLOW_SENTINEL` constant with JSDoc contract. `midturn-precheck.ts`: Mark `MidTurnPrecheckSignal` with sentinel. `agent-loop.test.ts`: Added 2 Agent-level tests verifying clean `agent_end` for control-flow signals and error events for real errors.\n\n**What did NOT change**: `agent-loop.ts` EventStream API (unchanged — fix scoped to `Agent` class production path). `attempt.ts` recovery logic. `run.ts` retry logic. `tool-result-context-guard.ts` signal throw.\n\nFixes #101621\n\n## What Problem This Solves\n\nWhen a tool result makes the next prompt exceed the context budget during a tool loop, `transformContext` throws `MidTurnPrecheckSignal`. This signal is a **control-flow mechanism**, not a terminal error. The throw interrupts the tool loop before the next LLM call, and the attempt runner handles truncation + retry via a side-channel callback (`pendingMidTurnPrecheckRequest`).\n\nHowever, `Agent.handleRunFailure` was treating this signal as a real error and pushing a synthetic failure with `isError=true` and `\"Context overflow: prompt too large for the model (mid-turn precheck)\"` into the event stream. The user sees this error immediately, even though ~15 seconds later the retry succeeds silently.\n\n## Root Cause\n\nThe production call path: `transformContext() throws MidTurnPrecheckSignal → streamAssistantResponse() → runLoop() → runAgentLoop() → Agent.runPromptMessages() → Agent.runWithLifecycle() catch → handleRunFailure(error)` pushes synthetic error. `MidTurnPrecheckSignal` extends `Error` and was indistinguishable from real errors at the agent-core layer.\n\n## Design decisions\n\n**Why agent-core sentinel vs embedded-runner-owned fix**: The sentinel uses `Symbol.for(\"agent-core.controlFlowError\")` — owned by the agent-core package, not OpenClaw-specific. This makes the contract explicit and documented. The `agent-loop.ts` EventStream API is not used in production — the production path goes through the `Agent` class → `runAgentLoop` (async).\n\n**Why clean agent_end instead of silent return**: The first iteration returned silently, but ClawSweeper correctly noted this could leave lifecycle subscribers in an inconsistent state. The fix now emits `agent_end` with the current state messages so compaction waiters, session-state cleanup, and terminal hooks still see the run end, while no error event leaks.\n\n## Real behavior proof\n\n**Behavior addressed**: `Agent.handleRunFailure` emits a clean `agent_end` (no error event) for control-flow signals, while still emitting error events for real errors\n\n**Real environment tested**: Linux x86_64, Node 24.13.1\n\n**Exact steps or command run after this patch**:\n```terminal\nnpx tsx --tsconfig tsconfig.core.json proof-script.mjs\npnpm test -- packages/agent-core/src/agent-loop.test.ts\npnpm test -- src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts\npnpm test -- src/agents/embedded-agent-runner/tool-result-context-guard.test.ts\n```\n\n**After-fix evidence**:\n```terminal_output\n================================================================\nPR #101648 — Real Behavior Proof (Round 3)\nNode: v24.13.1\n\nCheck 0: MidTurnPrecheckSignal carries sentinel → ✅ PASS\nProof 1: Control-flow → clean agent_end, no error event → ✅ PASS\n  Error events (expect 0): 0 | agent_end events (expect 1): 1\nProof 2: Real error → error + agent_end → ✅ PASS\n  Error events (expect 1): 1 | agent_end events (expect 1): 1\nProof 3: Plain Error → error + agent_end → ✅ PASS\n  Error events (expect 1): 1 | agent_end events (expect 1): 1\n\nVERDICT: ✅ ALL 7 CHECKS PASSED\n```\n\nUnit tests: 24/24 (agent-loop) + 90/90 (lifecycle + tool-result-context-guard) = 114/114 passed.\n\n**Observed result after the fix**: Control-flow signals produce clean `agent_end` (lifecycle subscribers settle) with no error event. Real errors still produce error event + `agent_end`. All lifecycle and tool-result-context-guard tests pass.\n\n**What was not tested**: End-to-end large-MCP-output scenario requiring a configured LLM provider with API keys, not available in the current CI environment. The proof exercises the exact error propagation path with real production objects.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk — only errors carrying `Symbol.for(\"agent-core.controlFlowError\")` sentinel are handled specially, currently only `MidTurnPrecheckSignal`\n- [x] Control-flow signals now emit `agent_end` (lifecycle settlement) instead of returning silently — addressed review concern\n- [x] Real errors (without sentinel) still trigger full error handling — 2 regression tests confirm\n- [x] The sentinel name is owned by agent-core package, explicit JSDoc contract\n- [x] Lifecycle subscribers, compaction waiters, and terminal hooks all see clean `agent_end`\n- [x] No breaking API changes, no new dependencies\n- [x] 114/114 tests pass including lifecycle + tool-result-context-guard suites\n",
-        "branch": "fix/issue-101621-midturn-precheck-signal-leak",
-        "head_sha": "112f5bf0f8d88d52da1433d68a52a605ce1052de",
-        "author": "zhangqueping",
+        "title": "fix(code-mode): use Object.hasOwn instead of Object.prototype.hasOwnProperty.call",
+        "body": "## What Problem This Solves\n\n`Object.prototype.hasOwnProperty.call(obj, key)` and `Object.hasOwn(obj, key)` are semantically identical — both check own properties only, skipping inherited prototype keys. However:\n\n1. **Readability**: `Object.hasOwn(baseTools, name)` is ~60% shorter and immediately clear\n2. **Safety**: If any tool in the catalog is itself named `hasOwnProperty`, the `call` pattern still works (it takes the method from `Object.prototype`), but `Object.hasOwn` is immune to this entire class of concern by design\n3. **Consistency**: `Object.hasOwn` is already used 15+ times across the codebase (`src/infra/`, `src/param-key.ts`, `packages/agent-core/`, etc.) — this was the one remaining `Object.prototype.hasOwnProperty.call` pattern\n\n## Changes\n\n- **`src/agents/code-mode.worker.ts`**: Replace `Object.prototype.hasOwnProperty.call(baseTools, name)` with `Object.hasOwn(baseTools, name)` in the baseTools deduplication guard\n- **`src/agents/code-mode.test.ts`**: Add test verifying that prototype-named tool identifiers (toString, __proto__, constructor, hasOwnProperty) are safely handled without throwing\n\n## Evidence\n\n- **Before**: `Object.prototype.hasOwnProperty.call(baseTools, name)` — works correctly but verbose, indirect, and inconsistent with the rest of the codebase\n- **After**: `Object.hasOwn(baseTools, name)` — semantically identical behavior, concise, consistent with the 15+ existing `Object.hasOwn` usages\n- All 60 existing tests pass identically before and after the change\n- New test covering prototype-named tool identifiers (toString, __proto__, constructor, hasOwnProperty) passes\n\n```diff\n-    if (!id || safeNameCounts.get(name) !== 1 || Object.prototype.hasOwnProperty.call(baseTools, name)) {\n+    if (!id || safeNameCounts.get(name) !== 1 || Object.hasOwn(baseTools, name)) {\n```\n\n1 line changed in source + 30 lines of test coverage. Pure mechanical refactor — no behavior change.\n\n## Real Behavior Proof\n\n### All 60 existing tests pass (before and after — no behavioral regression)\n\n```\n$ pnpm test src/agents/code-mode.test.ts\n\n RUN  v4.1.9 /home/0668001457/openclaw\n\n Test Files  1 passed (1)\n      Tests  60 passed (60)\n   Duration  36.72s\n```\n\n### New test: prototype-named tool identifiers do not throw\n\nThe added test registers tools with names `toString`, `__proto__`, `constructor`, and `hasOwnProperty` — all of which are `Object.prototype` properties — and asserts that `applyCodeModeCatalog` does not throw:\n\n```typescript\nconst protoTools = [\"toString\", \"__proto__\", \"constructor\", \"hasOwnProperty\"].map((name) =>\n  mcpTool({ name, serverName: \"proto-test\", toolName: name, ... }),\n);\n\nexpect(() => applyCodeModeCatalog({ ...tools: [...codeModeTools, ...protoTools] })).not.toThrow();\n```\n\nThis confirms that the `Object.hasOwn` guard correctly handles edge-case tool names at the prototype boundary.",
+        "branch": "fix/code-mode-use-object-hasown",
+        "head_sha": "20aa16a3554b7d8d39de90b859b322299e42b395",
+        "author": "monkey-wusky",
         "labels": [
           "agents",
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
+          "size: XS",
+          "P3",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "packages/agent-core/src/agent-loop.test.ts",
-            "additions": 107,
+            "path": "src/agents/code-mode.test.ts",
+            "additions": 30,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/agent-core/src/agent.ts",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/midturn-precheck.ts",
-            "additions": 13,
-            "deletions": 0,
+            "path": "src/agents/code-mode.worker.ts",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 149,
-        "deletions": 0,
+        "changedFiles": 2,
+        "additions": 31,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101648",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101648.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-100751",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100751.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 105,
+          "gatingTotal": 100,
           "counts": {
-            "SUCCESS": 61,
-            "SKIPPED": 26,
-            "IN_PROGRESS": 9,
+            "SUCCESS": 69,
+            "SKIPPED": 35,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS"
-          ],
-          "pending": [
-            "QA Smoke CI (matrix):IN_PROGRESS",
-            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
-            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "processed_at": "2026-07-08T02:46:32.719Z"
     }
   ],
-  "ledger_claimed": false,
+  "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2481,
+    "total_ms": 5317,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 679
+        "ms": 534
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1499
+        "ms": 2001
       },
       {
         "name": "classify_comment_commands",
@@ -188,11 +177,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 287
+        "ms": 2758
       },
       {
         "name": "append_ledger",
