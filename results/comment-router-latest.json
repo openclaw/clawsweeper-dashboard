@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T04:50:25.707Z",
+  "generated_at": "2026-07-08T04:50:32.412Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T01:50:25.428Z",
+  "since": "2026-07-08T01:50:29.787Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    102029
+    68280
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4911464715
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
@@ -29,19 +31,191 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:68280:4911464715:2026-07-08T04:47:31Z:re_review",
+      "comment_id": "4911464715",
+      "comment_version_key": "4911464715:2026-07-08T04:47:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/68280#issuecomment-4911464715",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 68280,
+      "author": "amittell",
+      "author_id": 1388680,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-08T04:47:31Z",
+      "comment_updated_at": "2026-07-08T04:47:31Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): fail fast on missing local probe auth",
+        "body": "## Summary\n\nAdds a fail-fast in `openclaw gateway status` for the local loopback case: when `gateway.auth.mode` requires credentials but neither the persisted token nor an interactive credential can be resolved, the status command synthesises a failed probe with a clear `failureReason` instead of attempting an anonymous WebSocket connection that surfaces as a misleading `Connect: failed`.\n\nExplicit `--url`/`--rpc-url` targets are intentionally exempt: a user pointing at a remote, forwarded, or open gateway should not be blocked by missing local-config credentials.\n\n## Details\n\n- `resolveAuthForTarget` resolves through the probe-surface helper. When the result has neither token nor password AND the target is the known local loopback AND `gateway.auth.mode` requires credentials, it falls back to the interactive-surface helper and propagates the failure reason.\n- The fail-fast is scoped to `surface === \"local\" && target.kind === \"localLoopback\"`. Targets with `kind === \"explicit\"` (i.e. `--url`/`--rpc-url`) skip the check.\n- Tests cover both the local fail-fast path and the explicit-target carve-out, and isolate ambient `gateway.auth.token` env in the probe-auth test to avoid cross-test contamination.\n- Review follow-ups (head `a4b92bef28`): when the missing-local-auth fail-fast synthesizes the daemon status rpc failure, the restart-health pass is skipped too, so `inspectGatewayRestart` no longer runs the unauthenticated loopback re-probe the fail-fast avoided. The unresolved-SecretRef warning is split so fail-fast results no longer claim \"probing without configured auth credentials\" when no probe ran.\n\n## Real behavior proof\n\n- **Behavior addressed**: before this patch, `openclaw gateway status` against a local config with `gateway.auth.mode: \"token\"` but an unresolvable token (e.g. `secrets.token.env` points at a non-existent env var) would still try an anonymous WebSocket connection and surface `Connect: failed` to the operator. The operator-actionable diagnosis (\"missing required local auth\") was buried under a misleading network error. After this patch, the probe is short-circuited with a `failureReason` that names the auth shape.\n\n- **Real environment tested**: two real runs. (1) Gateway status: `openclaw` runtime built from an earlier PR head on a local laptop checkout, run against an isolated test config at `/tmp/probe-test-68280/openclaw.json` so the live gateway and its real auth are not touched. (2) Daemon status: current PR head `a4b92bef28` (rebased onto current `upstream/main` `22376d80e1`) run from the source checkout via the repo CLI entry (`tsx src/entry.ts daemon status`) on macOS, with isolated `OPENCLAW_STATE_DIR`/`OPENCLAW_CONFIG_PATH` pointing at a scratch state dir whose config sets `gateway.auth.mode: \"token\"` and `gateway.auth.token` as an env SecretRef (`MISSING_GATEWAY_TOKEN`, unset in the shell); no live gateway/service was touched.\n\n- **Exact steps or command run after this patch**:\n  ```\n  unset OPENCLAW_PROBE_NONEXISTENT_TEST_VAR\n  OPENCLAW_CONFIG_PATH=/tmp/probe-test-68280/openclaw.json node dist/index.js gateway status --json | jq '.rpc | {ok, error, kind}'\n  OPENCLAW_CONFIG_PATH=/tmp/probe-test-68280/openclaw.json node dist/index.js gateway status --url ws://127.0.0.1:18999 --json | jq '{rpc: .rpc | {ok, error, kind}, probeUrl: .gateway.probeUrl}'\n  # daemon status path, at head a4b92bef28 (paths redacted to <scratch>):\n  OPENCLAW_STATE_DIR=<scratch>/state OPENCLAW_CONFIG_PATH=<scratch>/state/openclaw.json node_modules/.bin/tsx src/entry.ts daemon status\n  OPENCLAW_STATE_DIR=<scratch>/state OPENCLAW_CONFIG_PATH=<scratch>/state/openclaw.json node_modules/.bin/tsx src/entry.ts daemon status --json --timeout 3000\n  ```\n\n- **Evidence after fix**: Captured live from the patched runtime. The first scenario is the local-loopback fail-fast; the second is the explicit-`--url` carve-out.\n\n  ```\n  $ node dist/index.js gateway status --json | jq '.rpc | {ok, error, kind}'\n  {\n    \"ok\": false,\n    \"error\": \"Missing gateway auth token.\",\n    \"kind\": null\n  }\n\n  $ node dist/index.js gateway status --url ws://127.0.0.1:18999 --json | jq '{rpc: .rpc | {ok, error, kind}, probeUrl: .gateway.probeUrl}'\n  {\n    \"rpc\": {\n      \"ok\": false,\n      \"error\": \"connect ECONNREFUSED 127.0.0.1:18999\",\n      \"kind\": \"connect\"\n    },\n    \"probeUrl\": \"ws://127.0.0.1:18999\"\n  }\n  ```\n\n  Daemon status path, captured at head `a4b92bef28` (redacted: scratch state paths shortened to `<scratch>`):\n\n  ```\n  $ openclaw daemon status\n  Service: LaunchAgent (not loaded)\n  Config (cli): <scratch>/state/openclaw.json\n  Config (service): <scratch>/state/openclaw.json\n\n  Gateway: bind=loopback (127.0.0.1), port=18789 (env/config)\n  Probe target: ws://127.0.0.1:18789\n\n  Runtime: unknown (Bad request.\n  Could not find service \"ai.openclaw.gateway\" in domain for user gui: 501)\n  Connectivity probe: failed\n  Probe auth: gateway.auth.token SecretRef is unresolved in this command path.\n  Probe target: ws://127.0.0.1:18789\n    gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).\n\n  Service unit not found.\n  Service not installed. Run: openclaw gateway install\n\n  $ openclaw daemon status --json  # rpc excerpt\n  \"rpc\": {\n    \"ok\": false,\n    \"error\": \"gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).\",\n    \"url\": \"ws://127.0.0.1:18789\",\n    \"authWarning\": \"gateway.auth.token SecretRef is unresolved in this command path.\"\n  }\n  ```\n\n- **Observed result after fix**: in the local-loopback scenario, `rpc.kind` is `null` (no probe attempt was made) and `rpc.error` names the actionable auth diagnostic instead of a network error. In the explicit-URL scenario, `rpc.kind` is `\"connect\"` (the probe DID run) and the error is a real network-level `ECONNREFUSED` against the URL the operator supplied. In the daemon status scenario, `rpc.ok` is `false` with the synthesized SecretRef failure reason, `rpc.authWarning` no longer claims a probe ran (\"SecretRef is unresolved in this command path\" with no \"probing without configured auth credentials\" suffix), the gateway version stays `null` (no WebSocket probe was attempted), and no restart-health loopback re-probe runs after the synthetic failure (`status.health` is absent; covered by the `inspectGatewayRestart` not-called assertion in `status.gather.test.ts`).\n\n- **What was not tested**: the explicit-URL daemon `--rpc-url` flag was exercised only via the unit test added in `a4b92bef28` (probe runs against the override despite unresolved local auth), not end-to-end against a live gateway. The restart-health pass against a live loaded service with a genuine (non-synthetic) probe failure was not exercised live; that path is unchanged and covered by existing unit tests. The compatibility question of shipping fail-closed behavior for configured-but-unresolved local credentials (ClawSweeper P1) is a gateway/auth owner decision and is intentionally not resolved by this contributor change.\n",
+        "branch": "fix/loopback-local-probe-auth",
+        "head_sha": "a4b92bef28d5d2b56014f548b3041cd3f66506d7",
+        "author": "amittell",
+        "labels": [
+          "gateway",
+          "cli",
+          "commands",
+          "size: L",
+          "proof: supplied",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/daemon-cli/status.gather.test.ts",
+            "additions": 15,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/daemon-cli/status.gather.ts",
+            "additions": 34,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/gateway-status.test.ts",
+            "additions": 8,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/gateway-status/helpers.test.ts",
+            "additions": 92,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/gateway-status/helpers.ts",
+            "additions": 44,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/gateway-status/probe-run.ts",
+            "additions": 27,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/status.gateway-probe.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/status.scan.shared.test.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/status.scan.shared.ts",
+            "additions": 40,
+            "deletions": 24,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/probe-auth.test.ts",
+            "additions": 72,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/probe-auth.ts",
+            "additions": 121,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 11,
+        "additions": 481,
+        "deletions": 93,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-68280",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-68280.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "SUCCESS": 65,
+            "SKIPPED": 26,
+            "IN_PROGRESS": 5,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 475,
+    "total_ms": 3073,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 268
+        "ms": 563
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2047
       },
       {
         "name": "classify_comment_commands",
@@ -61,7 +235,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 196
+        "ms": 447
       },
       {
         "name": "append_ledger",
