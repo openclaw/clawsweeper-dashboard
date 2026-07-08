@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T02:45:00.942Z",
+  "generated_at": "2026-07-08T02:45:37.064Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T23:44:58.569Z",
+  "since": "2026-07-07T23:45:35.344Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    101648
+    101964
   ],
   "comment_ids": [
-    4910908659
+    4910912177
   ],
-  "status_comment_id": 4910908868,
+  "status_comment_id": 4910912346,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101648:4910908659:2026-07-08T02:43:28Z:re_review",
-      "comment_id": "4910908659",
-      "comment_version_key": "4910908659:2026-07-08T02:43:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101648#issuecomment-4910908659",
+      "idempotency_key": "comment-router:openclaw/openclaw:101964:4910912177:2026-07-08T02:44:19Z:re_review",
+      "comment_id": "4910912177",
+      "comment_version_key": "4910912177:2026-07-08T02:44:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101964#issuecomment-4910912177",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 101648,
-      "author": "zhangqueping",
-      "author_id": 3436352,
+      "issue_number": 101964,
+      "author": "sunlit-deng",
+      "author_id": 253064511,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T02:43:28Z",
-      "comment_updated_at": "2026-07-08T02:43:28Z",
-      "status_comment_id": 4910908868,
+      "comment_created_at": "2026-07-08T02:44:19Z",
+      "comment_updated_at": "2026-07-08T02:44:19Z",
+      "status_comment_id": 4910912346,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,76 +68,90 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 101964,
+          "dispatch_key": "router-0e900fa479f0d5c3",
+          "dispatched_at": "2026-07-08T02:45:37.739Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-08T02:45:38.708Z",
+          "response_comment_id": "4910912346",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix: skip pushLoopFailure for MidTurnPrecheckSignal control-flow errors",
-        "body": "## Summary\n\n**Problem**: `MidTurnPrecheckSignal` — a control-flow signal thrown in `transformContext` to trigger tool-result truncation — was caught by `Agent.handleRunFailure` which unconditionally pushed a synthetic failure into the event stream, causing users to see a premature \"Context overflow\" error even though the internal retry succeeds.\n\n**Solution**: Mark `MidTurnPrecheckSignal` with a `Symbol.for(\"agent-core.controlFlowError\")` sentinel so `Agent.handleRunFailure` can recognize control-flow signals, skip the synthetic failure push, and instead emit a clean `agent_end` event to settle lifecycle subscribers (compaction waiters, session-state cleanup, terminal hooks). The existing attempt-runner recovery path (via `pendingMidTurnPrecheckRequest` callback) handles truncation and retry correctly.\n\n**What changed**: `agent.ts` (`handleRunFailure`): For control-flow errors, skip synthetic failure push but still emit clean `agent_end` with actual state messages so lifecycle subscribers settle properly. Added `isControlFlowError()` helper and `AGENT_CORE_CONTROL_FLOW_SENTINEL` constant with JSDoc contract. `midturn-precheck.ts`: Mark `MidTurnPrecheckSignal` with sentinel. `agent-loop.test.ts`: Added 2 Agent-level tests verifying clean `agent_end` for control-flow signals and error events for real errors.\n\n**What did NOT change**: `agent-loop.ts` EventStream API (unchanged — fix scoped to `Agent` class production path). `attempt.ts` recovery logic. `run.ts` retry logic. `tool-result-context-guard.ts` signal throw.\n\nFixes #101621\n\n## What Problem This Solves\n\nWhen a tool result makes the next prompt exceed the context budget during a tool loop, `transformContext` throws `MidTurnPrecheckSignal`. This signal is a **control-flow mechanism**, not a terminal error. The throw interrupts the tool loop before the next LLM call, and the attempt runner handles truncation + retry via a side-channel callback (`pendingMidTurnPrecheckRequest`).\n\nHowever, `Agent.handleRunFailure` was treating this signal as a real error and pushing a synthetic failure with `isError=true` and `\"Context overflow: prompt too large for the model (mid-turn precheck)\"` into the event stream. The user sees this error immediately, even though ~15 seconds later the retry succeeds silently.\n\n## Root Cause\n\nThe production call path: `transformContext() throws MidTurnPrecheckSignal → streamAssistantResponse() → runLoop() → runAgentLoop() → Agent.runPromptMessages() → Agent.runWithLifecycle() catch → handleRunFailure(error)` pushes synthetic error. `MidTurnPrecheckSignal` extends `Error` and was indistinguishable from real errors at the agent-core layer.\n\n## Design decisions\n\n**Why agent-core sentinel vs embedded-runner-owned fix**: The sentinel uses `Symbol.for(\"agent-core.controlFlowError\")` — owned by the agent-core package, not OpenClaw-specific. This makes the contract explicit and documented. The `agent-loop.ts` EventStream API is not used in production — the production path goes through the `Agent` class → `runAgentLoop` (async).\n\n**Why clean agent_end instead of silent return**: The first iteration returned silently, but ClawSweeper correctly noted this could leave lifecycle subscribers in an inconsistent state. The fix now emits `agent_end` with the current state messages so compaction waiters, session-state cleanup, and terminal hooks still see the run end, while no error event leaks.\n\n## Real behavior proof\n\n**Behavior addressed**: `Agent.handleRunFailure` emits a clean `agent_end` (no error event) for control-flow signals, while still emitting error events for real errors\n\n**Real environment tested**: Linux x86_64, Node 24.13.1\n\n**Exact steps or command run after this patch**:\n```terminal\nnpx tsx --tsconfig tsconfig.core.json proof-script.mjs\npnpm test -- packages/agent-core/src/agent-loop.test.ts\npnpm test -- src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts\npnpm test -- src/agents/embedded-agent-runner/tool-result-context-guard.test.ts\n```\n\n**After-fix evidence**:\n```terminal_output\n================================================================\nPR #101648 — Real Behavior Proof (Round 3)\nNode: v24.13.1\n\nCheck 0: MidTurnPrecheckSignal carries sentinel → ✅ PASS\nProof 1: Control-flow → clean agent_end, no error event → ✅ PASS\n  Error events (expect 0): 0 | agent_end events (expect 1): 1\nProof 2: Real error → error + agent_end → ✅ PASS\n  Error events (expect 1): 1 | agent_end events (expect 1): 1\nProof 3: Plain Error → error + agent_end → ✅ PASS\n  Error events (expect 1): 1 | agent_end events (expect 1): 1\n\nVERDICT: ✅ ALL 7 CHECKS PASSED\n```\n\nUnit tests: 24/24 (agent-loop) + 90/90 (lifecycle + tool-result-context-guard) = 114/114 passed.\n\n**Observed result after the fix**: Control-flow signals produce clean `agent_end` (lifecycle subscribers settle) with no error event. Real errors still produce error event + `agent_end`. All lifecycle and tool-result-context-guard tests pass.\n\n**What was not tested**: End-to-end large-MCP-output scenario requiring a configured LLM provider with API keys, not available in the current CI environment. The proof exercises the exact error propagation path with real production objects.\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk — only errors carrying `Symbol.for(\"agent-core.controlFlowError\")` sentinel are handled specially, currently only `MidTurnPrecheckSignal`\n- [x] Control-flow signals now emit `agent_end` (lifecycle settlement) instead of returning silently — addressed review concern\n- [x] Real errors (without sentinel) still trigger full error handling — 2 regression tests confirm\n- [x] The sentinel name is owned by agent-core package, explicit JSDoc contract\n- [x] Lifecycle subscribers, compaction waiters, and terminal hooks all see clean `agent_end`\n- [x] No breaking API changes, no new dependencies\n- [x] 114/114 tests pass including lifecycle + tool-result-context-guard suites\n",
-        "branch": "fix/issue-101621-midturn-precheck-signal-leak",
-        "head_sha": "112f5bf0f8d88d52da1433d68a52a605ce1052de",
-        "author": "zhangqueping",
+        "title": "fix(msteams): cap team-group-id cache with pruneMapToMaxSize",
+        "body": "## What Problem This Solves\n\nThe `teamGroupIdCache` Map in `resolveTeamGroupId` had TTL-based expiry (10 min) but no size cap. A large Teams workspace with many distinct team IDs could accumulate entries faster than the TTL window, allowing unbounded growth.\n\n## Why This Change Was Made\n\nAdded a 500-entry cap via `pruneMapToMaxSize` — the shared SDK helper already used by 11 other files. The cap is applied after each successful cache insert.\n\n## User Impact\n\nNo change for normal usage. Memory usage bounded at ~500 entries regardless of workspace size.\n\n## Evidence\n\n### Real-path proof — `pruneMapToMaxSize` with 501 entries capped to 500\n\nThe same `pruneMapToMaxSize` helper imported in the PR is exercised directly. A Map with 501 entries is pruned to 500, and the oldest entry is evicted while the newest survives:\n\n```text\n$ node --import tsx -e \"\nimport { pruneMapToMaxSize } from 'openclaw/plugin-sdk/collection-runtime';\nconst cache = new Map();\nfor (let i = 0; i < 501; i++) cache.set('k-' + i, { v: i });\nconsole.log('Before prune: ' + cache.size + ' entries');\npruneMapToMaxSize(cache, 500);\nconsole.log('After prune:  ' + cache.size + ' entries');\nconsole.log('Has k-0 (oldest): ' + cache.has('k-0'));\nconsole.log('Has k-500 (newest): ' + cache.has('k-500'));\n\"\n\nBefore prune: 501 entries\nAfter prune:  500 entries\nHas k-0 (oldest): false\nHas k-500 (newest): true\nOK: capped at 500\n```\n\nThe same `pruneMapToMaxSize(teamGroupIdCache, TEAM_GROUP_ID_CACHE_MAX_ENTRIES)` is called in `graph-thread.ts` after each successful Graph API lookup, keeping the cache at or below 500 entries.\n\n### Lint\n\n```text\n$ npx oxlint extensions/msteams/src/graph-thread.ts\n  (no output — 0 errors)\n```\n\nAI-assisted: built with Codex",
+        "branch": "fix/msteams-graph-thread-cache-cap",
+        "head_sha": "9ea8b96897d819577efef87eb7cd6bb3142d5357",
+        "author": "sunlit-deng",
         "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P1",
+          "channel: msteams",
+          "size: XS",
+          "P2",
           "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "packages/agent-core/src/agent-loop.test.ts",
-            "additions": 107,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/agent-core/src/agent.ts",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/midturn-precheck.ts",
-            "additions": 13,
+            "path": "extensions/msteams/src/graph-thread.ts",
+            "additions": 3,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 149,
+        "changedFiles": 1,
+        "additions": 3,
         "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101648",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101648.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101964",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101964.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 97,
-          "gatingTotal": 92,
+          "total": 89,
+          "gatingTotal": 84,
           "counts": {
-            "SUCCESS": 46,
+            "SUCCESS": 19,
             "SKIPPED": 26,
-            "IN_PROGRESS": 24,
-            "NEUTRAL": 1
+            "IN_PROGRESS": 44
           },
           "blockers": [
+            "pnpm-store-warmup:IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
             "QA Smoke CI (matrix):IN_PROGRESS",
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
             "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
@@ -149,21 +163,41 @@
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
             "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
             "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
+            "pnpm-store-warmup:IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
             "QA Smoke CI (matrix):IN_PROGRESS",
             "QA Smoke CI (telegram 1/2):IN_PROGRESS",
             "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
@@ -175,11 +209,20 @@
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
             "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
             "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "terminalBlockers": [],
@@ -188,21 +231,21 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "processed_at": "2026-07-08T02:45:37.282Z"
     }
   ],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2691,
+    "total_ms": 3810,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 800
+        "ms": 490
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1557
+        "ms": 1216
       },
       {
         "name": "classify_comment_commands",
@@ -218,11 +261,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 318
+        "ms": 2076
       },
       {
         "name": "append_ledger",
