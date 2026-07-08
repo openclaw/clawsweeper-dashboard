@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T06:00:09.276Z",
+  "generated_at": "2026-07-08T06:00:09.362Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T03:00:08.534Z",
+  "since": "2026-07-08T03:00:05.584Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102033
+    101715
   ],
   "comment_ids": [
-    4911812932
+    4911815626
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4911815844,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:102033:4911812932:2026-07-08T05:58:12Z:re_review",
-      "comment_id": "4911812932",
-      "comment_version_key": "4911812932:2026-07-08T05:58:12Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102033#issuecomment-4911812932",
+      "idempotency_key": "comment-router:openclaw/openclaw:101715:4911815626:2026-07-08T05:58:43Z:re_review",
+      "comment_id": "4911815626",
+      "comment_version_key": "4911815626:2026-07-08T05:58:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101715#issuecomment-4911815626",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 102003,
-      "author": "moguangyu5-design",
-      "author_id": 237363243,
+      "target_branch": "main",
+      "issue_number": 101715,
+      "author": "LZY3538",
+      "author_id": 293718838,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T05:57:09Z",
-      "comment_updated_at": "2026-07-08T05:57:09Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-08T05:58:43Z",
+      "comment_updated_at": "2026-07-08T05:58:43Z",
+      "status_comment_id": 4911815844,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,23 +68,185 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 101715,
+          "dispatch_key": "router-4833827f26fd5b09",
+          "dispatched_at": "2026-07-08T06:00:10.035Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-08T06:00:10.952Z",
+          "response_comment_id": "4911815844",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(model-fallback): re-throw LiveSessionModelSwitchError for outer retry loop (#101676)",
+        "body": "## What Problem This Solves\n\nWhen a user changes the model mid-turn (via `/model`, session_status model override, or cron job override) while the AI is actively generating a response, the run terminates with an error instead of retrying the turn against the newly-selected model.\n\n**Evidence from the issue (#101676):**\n```\ninfo: live session model switch requested: claude-sonnet-5 -> claude-sonnet-4-6\nwarn: model_fallback_decision decision=candidate_failed ... fallbackConfigured=false\nerror: Embedded agent failed before reply: Live session model switch requested\n```\n\n## Why This Change Was Made\n\nThe `runWithModelFallback` loop catches `LiveSessionModelSwitchError` from the embedded runner. When the switch target is not a later fallback candidate, it was wrapping the error as `FailoverError`. With no fallbacks configured, this reached `throwFallbackFailureSummary` producing `FallbackSummaryError` — not `LiveSessionModelSwitchError` — so the outer retry loop never caught it.\n\n**Fix:** A new helper `isLiveSessionModelSwitchTargetInCandidates` distinguishes between:\n\n| Scenario | Behavior |\n|----------|----------|\n| Target IS a later fallback candidate | Redirect there (unchanged) |\n| Target IS in candidates but stale (same/earlier) | Failover → continue fallback (#58496 guard preserved) |\n| Target NOT in candidates at all (genuine user switch) | **Rethrow → outer loop retries (#101676 fix)** |\n\nThe outer loop has bounded retries (`MAX_LIVE_SWITCH_RETRIES = 5` subagents, `2` main agent).\n\n## Evidence\n\n### Layer 1 — Live Runtime Proof: Real Mid-Turn Model Switch Retry\n\n**Scenario:** Agent running with `anthropic/claude-haiku-3-5` (no API key configured → guaranteed 401). Session has `liveModelSwitchPending` with target `openrouter/free` (NOT in fallback candidates). API call fails → embedded runner detects switch → `LiveSessionModelSwitchError` thrown → `runWithModelFallback` re-throws (new `isLiveSessionModelSwitchTargetInCandidates` guard) → outer retry loop catches → retries with `openrouter/free` → **200 OK**.\n\n```\n[model-fetch] start provider=anthropic model=claude-haiku-3-5\n[model-fetch] response status=401 elapsedMs=387\n[agent/embedded] embedded run agent end: isError=true error=LLM request failed\n                 (Authentication Fails, Your api key: ****roof is invalid)\n[agent/embedded] live session model switch requested during active attempt:\n                 anthropic/claude-haiku-3-5 -> openrouter/openrouter/free\n[agents/agent-command] Live session model switch in subagent run:\n                       switching to openrouter/openrouter/free\n[model-fetch] start provider=openrouter model=openrouter/free\n[model-fetch] response status=200 ✅\n```\n\n**Before the fix (#101676):** The `LiveSessionModelSwitchError` would be wrapped as `FailoverError` → `FallbackSummaryError` → turn terminates with \"Agent failed before reply.\"  \n**After the fix:** Error re-thrown to outer loop → retry succeeds with user-requested model.\n\n### Layer 2 — Standalone Proof Script (Build Verification)\n\n`scripts/live-model-switch-proof.ts` exercises the **real `runWithModelFallback`** through production-equivalent outer retry loops (main agent, subagent, bounded retry guard). Run: `npx tsx scripts/live-model-switch-proof.ts`\n\n### Layer 3 — Focused Tests: Six Control-Flow Branches\n\n```\n ✓ re-throws when the switch target is not a configured candidate (#101676)\n ✓ re-throws when target is not a later fallback candidate (#101676)\n ✓ re-throws on last candidate when switch target is not in candidates (#101676)\n ✓ retries with the switched model after re-throw (#101676 end-to-end)  ← bridges mock gap\n ✓ jumps to a later live-session model switch candidate (#57471)\n ✓ keeps stale same-candidate switch errors in fallback rotation (#58496)\n```\n\nThe end-to-end test bridges the mock gap: **neither** `agent-runner-execution.test.ts` **nor** `agent-command.live-model-switch.test.ts` exercises the real `runWithModelFallback` because both mock `model-fallback.js` at module level.\n\n### Layer 4 — Full Test Suite\n\n```\nmodel-fallback.test.ts:              117 passed (116 existing + 1 new)\nlive-model-switch.test.ts:            21 passed\nagent-command.live-model-switch.test.ts: 76 passed\nTotal: 214 passed\n```\n\n### Layer 5 — Static Checks\n\n```\npnpm exec oxfmt --check: All matched files use the correct format\ngit diff --check:       passed, no issues\n```\n\n### Changes\n\n| File | + | - | Net |\n|------|---|---|-----|\n| `src/agents/model-fallback.ts` | +57 | -29 | +28 |\n| `src/agents/model-fallback.test.ts` | +119 | -19 | +100 |\n| `scripts/live-model-switch-proof.ts` | +325 | 0 | +325 |\n\nCloses #101676.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/live-model-switch-mid-attempt-101676",
+        "head_sha": "804e2f6d602ab7c79f8f4cbbfbb2c300d06fac92",
+        "author": "lzy3538",
+        "labels": [
+          "scripts",
+          "agents",
+          "size: L",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 automation",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/live-model-switch-proof.ts",
+            "additions": 325,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/model-fallback.test.ts",
+            "additions": 119,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 57,
+            "deletions": 29,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 501,
+        "deletions": 48,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101715",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101715.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "gatingTotal": 92,
+          "counts": {
+            "SUCCESS": 30,
+            "IN_PROGRESS": 40,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (matrix):IN_PROGRESS",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (matrix):IN_PROGRESS",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-08T06:00:09.565Z"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1999,
+    "total_ms": 5833,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 729
+        "ms": 2261
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1501
       },
       {
         "name": "classify_comment_commands",
@@ -104,7 +266,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1258
+        "ms": 2044
       },
       {
         "name": "append_ledger",
