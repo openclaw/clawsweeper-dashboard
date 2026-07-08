@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-101999"
 mode: "autonomous"
-run_id: "28926646307"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28926646307"
+run_id: "28928738764"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/28928738764"
 head_sha: "9b7281103ab54ecb97d8d66e5ddf4165ea8469fc"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-08T08:06:28.180Z"
+published_at: "2026-07-08T08:50:19.165Z"
 canonical: "#101999"
 canonical_issue: null
 canonical_pr: "#101999"
 actions_total: 1
 fix_executed: 0
 fix_failed: 0
-fix_blocked: 1
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/28926646307](https://github.com/openclaw/clawsweeper/actions/runs/28926646307)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/28928738764](https://github.com/openclaw/clawsweeper/actions/runs/28928738764)
 
 Workflow conclusion: success
 
@@ -44,9 +44,9 @@ Make PR #101999 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 | Worker actions | 1 |
 | Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 1 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,14 +54,13 @@ Make PR #101999 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/101999 |  | source PR #101999 is paused by clawsweeper:human-review; refusing to mutate the PR branch |
-| automerge_repair_outcome_comment | updated | #101999 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/101999 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #101999 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
