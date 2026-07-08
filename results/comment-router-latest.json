@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T03:28:17.364Z",
+  "generated_at": "2026-07-08T03:30:01.004Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T00:28:15.384Z",
+  "since": "2026-07-08T00:30:00.567Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101781
+    78139
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 3,
+  "scanned_comments": 7,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,285 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101781:4905928648:2026-07-08T03:28:11Z:clawsweeper_needs_human",
-      "comment_id": "4905928648",
-      "comment_version_key": "4905928648:2026-07-08T03:28:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101781#issuecomment-4905928648",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101781,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-07T16:16:26Z",
-      "comment_updated_at": "2026-07-08T03:28:11Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] No repair lane is appropriate because the code change is already narrow; the remaining blocker is contributor or maintainer-supplied real Telegram proof.; Cleared: The diff only changes an existing Telegram string truncation call site and adds a test, with no dependency, workflow, permission, secret, or code-execution surface. (sha=96c56bdb071350ddf141d5dbde1e71c2b4548bd5)",
-      "review_summary": "This PR replaces Telegram DM-topic auto-label input `.slice(0, 500)` with `truncateUtf16Safe` and adds a surrogate-boundary dispatch regression test.\n\nPR surface: Source +1, Tests +30. Total +31 across 2 files.\n\nReproducibility: yes. for source-level reproduction: current main raw-slices the first-turn DM-topic label input at 500 UTF-16 code units, which can split an emoji surrogate pair. I did not establish a live Telegram topic reproduction in this read-only review.",
-      "review_followup": "- [P1] No repair lane is appropriate because the code change is already narrow; the remaining blocker is contributor or maintainer-supplied real Telegram proof.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "96c56bdb071350ddf141d5dbde1e71c2b4548bd5",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): keep DM topic auto-rename user message UTF-16 safe",
-        "body": "## What Problem This Solves\r\n\r\nFixes an issue where users who send long Telegram messages containing emoji as their first turn in a DM topic session would get a garbled or empty auto-renamed topic title.\r\n\r\nOpenClaw can automatically rename Telegram forum topics on the first turn of a session. To do this it truncates the user's message to 500 characters and passes it to an LLM for label generation. The truncation uses `.slice(0, 500)`, which counts UTF-16 code units. Emoji and other characters outside the Basic Multilingual Plane are represented as surrogate pairs (two UTF-16 code units). If such a character straddles the 500-unit boundary, the slice discards the second half of the pair, producing an isolated high surrogate — invalid Unicode.\r\n\r\n## Why This Change Was Made\r\n\r\nReplace `.slice(0, 500)` with `truncateUtf16Safe(..., 500)`, which backs up one code unit when the cut point falls inside a surrogate pair. This helper is the established pattern for all user-text truncation in the codebase (`openclaw/plugin-sdk/text-utility-runtime`).\r\n\r\n## User Impact\r\n\r\nUsers sending emoji-heavy first messages in Telegram DM topic sessions (e.g. `\"Hi 👋 tell me about 🦞🦞🦞 …\"` long enough to reach 500 chars) would receive a malformed auto-topic label — either a replacement character, garbled output, or a rejected model call. After this fix the topic label is always derived from a valid Unicode string.\r\n\r\n## Evidence\r\n\r\n- **Affected path:** `extensions/telegram/src/bot-message-dispatch.ts:3078` — `userMessage` is built with `truncateUtf16Safe(ctxPayload.RawBody ?? ctxPayload.Body ?? \"\", 500)` then passed to `generateTopicLabel({ userMessage, … })`.\r\n- **Fix:** `truncateUtf16Safe(..., 500)` — same semantics, surrogate-safe boundary.\r\n- **Pattern match:** `truncateUtf16Safe` is used in the same way throughout the Telegram plugin for other string limits (e.g. `raw-update-log.ts`) and was added for exactly this class of bug.\r\n- **Diff:** one new import, one call-site replacement in `bot-message-dispatch.ts`; surrogate-boundary regression in `bot-message-dispatch.test.ts`.\r\n\r\n### Behavior proof\r\n\r\n#### 1) Node runtime boundary reproduction (exact `bot-message-dispatch.ts` expression, no mocks)\r\n\r\nUses the same input shape as the regression test (`499 × 'a' + 😀tail`) and the production truncation expression:\r\n\r\n```text\r\n=== Telegram DM topic auto-rename UTF-16 reproduction (Node runtime, bot-message-dispatch.ts logic, no mocks) ===\r\nNode: v22.22.0\r\nrawBody code units: 505\r\nold .slice(0, 500) code units: 500\r\nold userMessage has unpaired surrogate: true\r\nold userMessage last char: U+D83D\r\ntruncateUtf16Safe(rawBody, 500) code units: 499\r\nfixed userMessage has unpaired surrogate: false\r\nfixed userMessage equals 499 ASCII a's: true\r\nfixed userMessage would reach generateTopicLabel cleanly: true\r\n```\r\n\r\nThis shows the before/after contract on the auto-topic label input path: emoji straddling the 500 cap is dropped whole instead of leaving `U+D83D` in `userMessage`.\r\n\r\n#### 2) Call-site regression through production `dispatchTelegramMessage`\r\n\r\n```text\r\n$ pnpm test extensions/telegram/src/bot-message-dispatch.test.ts -t \"truncates DM topic auto-rename\" --reporter=verbose\r\n\r\n ✓ dispatchTelegramMessage draft streaming > truncates DM topic auto-rename input on UTF-16 boundaries\r\n\r\n Test Files  1 passed (1)\r\n      Tests  1 passed | 171 skipped (172)\r\n```\r\n\r\nRegression drives the real DM-topic auto-rename branch and asserts `generateTopicLabel` receives `userMessage` with length ≤ 500, no unpaired surrogate, and value exactly `499 × 'a'` for boundary input `499 × 'a' + 😀tail`.\r\n\r\n**Proof gap:** No redacted live Telegram Desktop / Bot API transcript in this validation environment. Node reproduction plus the `dispatchTelegramMessage` regression cover the production truncation before `generateTopicLabel`; optional supplemental proof is a redacted first-turn DM topic rename showing a long emoji-near-boundary message produces a well-formed topic title.\r\n\r\n- [x] AI-assisted (Cursor / Claude Sonnet 4.6)\r\n- [x] I understand what the code does\r\n- [x] Change is focused and does not mix unrelated concerns\r\n",
-        "branch": "fix/telegram-utf16-dm-topic-rename",
-        "head_sha": "96c56bdb071350ddf141d5dbde1e71c2b4548bd5",
-        "author": "hugenshen",
-        "labels": [
-          "channel: telegram",
-          "size: XS",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.test.ts",
-            "additions": 30,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 32,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101781",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101781.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 92,
-          "gatingTotal": 87,
-          "counts": {
-            "SUCCESS": 60,
-            "SKIPPED": 27,
-            "FAILURE": 4,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "QA Smoke CI (telegram 2/2):FAILURE",
-            "checks-node-compact-large-1:FAILURE",
-            "checks-node-compact-large-3:FAILURE",
-            "QA Smoke CI:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "QA Smoke CI (telegram 2/2):FAILURE",
-            "checks-node-compact-large-1:FAILURE",
-            "checks-node-compact-large-3:FAILURE",
-            "QA Smoke CI:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:101781:4911073273:2026-07-08T03:21:27Z:re_review",
-      "comment_id": "4911073273",
-      "comment_version_key": "4911073273:2026-07-08T03:21:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101781#issuecomment-4911073273",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101781,
-      "author": "hugenshen",
-      "author_id": 16300669,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T03:21:27Z",
-      "comment_updated_at": "2026-07-08T03:21:27Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): keep DM topic auto-rename user message UTF-16 safe",
-        "body": "## What Problem This Solves\r\n\r\nFixes an issue where users who send long Telegram messages containing emoji as their first turn in a DM topic session would get a garbled or empty auto-renamed topic title.\r\n\r\nOpenClaw can automatically rename Telegram forum topics on the first turn of a session. To do this it truncates the user's message to 500 characters and passes it to an LLM for label generation. The truncation uses `.slice(0, 500)`, which counts UTF-16 code units. Emoji and other characters outside the Basic Multilingual Plane are represented as surrogate pairs (two UTF-16 code units). If such a character straddles the 500-unit boundary, the slice discards the second half of the pair, producing an isolated high surrogate — invalid Unicode.\r\n\r\n## Why This Change Was Made\r\n\r\nReplace `.slice(0, 500)` with `truncateUtf16Safe(..., 500)`, which backs up one code unit when the cut point falls inside a surrogate pair. This helper is the established pattern for all user-text truncation in the codebase (`openclaw/plugin-sdk/text-utility-runtime`).\r\n\r\n## User Impact\r\n\r\nUsers sending emoji-heavy first messages in Telegram DM topic sessions (e.g. `\"Hi 👋 tell me about 🦞🦞🦞 …\"` long enough to reach 500 chars) would receive a malformed auto-topic label — either a replacement character, garbled output, or a rejected model call. After this fix the topic label is always derived from a valid Unicode string.\r\n\r\n## Evidence\r\n\r\n- **Affected path:** `extensions/telegram/src/bot-message-dispatch.ts:3078` — `userMessage` is built with `truncateUtf16Safe(ctxPayload.RawBody ?? ctxPayload.Body ?? \"\", 500)` then passed to `generateTopicLabel({ userMessage, … })`.\r\n- **Fix:** `truncateUtf16Safe(..., 500)` — same semantics, surrogate-safe boundary.\r\n- **Pattern match:** `truncateUtf16Safe` is used in the same way throughout the Telegram plugin for other string limits (e.g. `raw-update-log.ts`) and was added for exactly this class of bug.\r\n- **Diff:** one new import, one call-site replacement in `bot-message-dispatch.ts`; surrogate-boundary regression in `bot-message-dispatch.test.ts`.\r\n\r\n### Behavior proof\r\n\r\n#### 1) Node runtime boundary reproduction (exact `bot-message-dispatch.ts` expression, no mocks)\r\n\r\nUses the same input shape as the regression test (`499 × 'a' + 😀tail`) and the production truncation expression:\r\n\r\n```text\r\n=== Telegram DM topic auto-rename UTF-16 reproduction (Node runtime, bot-message-dispatch.ts logic, no mocks) ===\r\nNode: v22.22.0\r\nrawBody code units: 505\r\nold .slice(0, 500) code units: 500\r\nold userMessage has unpaired surrogate: true\r\nold userMessage last char: U+D83D\r\ntruncateUtf16Safe(rawBody, 500) code units: 499\r\nfixed userMessage has unpaired surrogate: false\r\nfixed userMessage equals 499 ASCII a's: true\r\nfixed userMessage would reach generateTopicLabel cleanly: true\r\n```\r\n\r\nThis shows the before/after contract on the auto-topic label input path: emoji straddling the 500 cap is dropped whole instead of leaving `U+D83D` in `userMessage`.\r\n\r\n#### 2) Call-site regression through production `dispatchTelegramMessage`\r\n\r\n```text\r\n$ pnpm test extensions/telegram/src/bot-message-dispatch.test.ts -t \"truncates DM topic auto-rename\" --reporter=verbose\r\n\r\n ✓ dispatchTelegramMessage draft streaming > truncates DM topic auto-rename input on UTF-16 boundaries\r\n\r\n Test Files  1 passed (1)\r\n      Tests  1 passed | 171 skipped (172)\r\n```\r\n\r\nRegression drives the real DM-topic auto-rename branch and asserts `generateTopicLabel` receives `userMessage` with length ≤ 500, no unpaired surrogate, and value exactly `499 × 'a'` for boundary input `499 × 'a' + 😀tail`.\r\n\r\n**Proof gap:** No redacted live Telegram Desktop / Bot API transcript in this validation environment. Node reproduction plus the `dispatchTelegramMessage` regression cover the production truncation before `generateTopicLabel`; optional supplemental proof is a redacted first-turn DM topic rename showing a long emoji-near-boundary message produces a well-formed topic title.\r\n\r\n- [x] AI-assisted (Cursor / Claude Sonnet 4.6)\r\n- [x] I understand what the code does\r\n- [x] Change is focused and does not mix unrelated concerns\r\n",
-        "branch": "fix/telegram-utf16-dm-topic-rename",
-        "head_sha": "96c56bdb071350ddf141d5dbde1e71c2b4548bd5",
-        "author": "hugenshen",
-        "labels": [
-          "channel: telegram",
-          "size: XS",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.test.ts",
-            "additions": 30,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 32,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101781",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101781.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 92,
-          "gatingTotal": 87,
-          "counts": {
-            "SUCCESS": 60,
-            "SKIPPED": 27,
-            "FAILURE": 4,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "QA Smoke CI (telegram 2/2):FAILURE",
-            "checks-node-compact-large-1:FAILURE",
-            "checks-node-compact-large-3:FAILURE",
-            "QA Smoke CI:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "QA Smoke CI (telegram 2/2):FAILURE",
-            "checks-node-compact-large-1:FAILURE",
-            "checks-node-compact-large-3:FAILURE",
-            "QA Smoke CI:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:101781:4910797037:2026-07-08T02:18:55Z:re_review",
-      "comment_id": "4910797037",
-      "comment_version_key": "4910797037:2026-07-08T02:18:55Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101781#issuecomment-4910797037",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101781,
-      "author": "hugenshen",
-      "author_id": 16300669,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T02:18:55Z",
-      "comment_updated_at": "2026-07-08T02:18:55Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2734,
+    "total_ms": 765,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 410
+        "ms": 426
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1553
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -323,11 +61,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 740
+        "ms": 329
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
