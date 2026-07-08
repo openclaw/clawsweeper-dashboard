@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T07:12:44.208Z",
+  "generated_at": "2026-07-08T07:12:45.123Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T04:12:43.883Z",
+  "since": "2026-07-08T04:12:42.254Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102076
+    101999
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,261 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101999:4911174475:2026-07-08T07:12:38Z:clawsweeper_needs_human",
+      "comment_id": "4911174475",
+      "comment_version_key": "4911174475:2026-07-08T07:12:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101999#issuecomment-4911174475",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101999,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-08T03:43:41Z",
+      "comment_updated_at": "2026-07-08T07:12:38Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No automated repair is needed; maintainers should refresh/review the behind branch and decide whether to land this linked fix.; Cleared: The diff only adds in-process timer cleanup and focused tests; it does not change dependencies, CI, secrets, permissions, persisted schema, or external code execution. (sha=8e60237455318296e10aa9370d1bbe5dfbe4db5e)",
+      "review_summary": "Adds a session-suspension timer cleanup helper, calls it from gateway close, and adds focused session-suspension and shutdown tests.\n\nPR surface: Source +15, Tests +34. Total +49 across 4 files.\n\nReproducibility: yes. at source level: current main schedules an unref'd session-suspension lane timer, and the gateway close path does not clear it. I did not run a live SIGTERM/SIGINT crash reproduction in this read-only review.",
+      "review_followup": "- No automated repair is needed; maintainers should refresh/review the behind branch and decide whether to land this linked fix.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "8e60237455318296e10aa9370d1bbe5dfbe4db5e",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: clear session suspension timers on gateway shutdown",
+        "body": "Closes #101720\n\n## What Problem This Solves\n\nFixes an issue where sessions suspended for quota or circuit reasons could leave lane auto-resume timers pending while the gateway was shutting down. Those timers could later call back into command lane concurrency after shutdown had already begun.\n\n## Why This Change Was Made\n\nThe session-suspension module now owns a cleanup hook for pending lane auto-resume timers, and the gateway shutdown path invokes it after drain handling and before tearing down runtimes and background services. The change keeps normal TTL auto-resume behavior intact while preventing stale shutdown-time timer callbacks.\n\n## User Impact\n\nGateway shutdown and restart are less likely to race with delayed session-suspension timers. Suspended lanes still auto-resume normally during regular runtime operation.\n\n## Data Model / Upgrade Compatibility\n\nNo persisted schema or migration behavior changes. The production change only clears the in-memory `laneResumeTimers` map during gateway shutdown. Existing `quotaSuspension` entries remain schemaVersion 1 and are neither rewritten nor migrated by the new cleanup hook. The serialized-state surface ClawSweeper detected is test coverage around the existing session suspension shape, not a new stored field.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs src/agents/session-suspension.test.ts src/gateway/server-close.test.ts` - passed, 2 Vitest shards.\n- `node_modules/.bin/oxfmt --check --threads=1 src/agents/session-suspension.ts src/agents/session-suspension.test.ts src/gateway/server-close.ts src/gateway/server-close.test.ts` - passed.\n- `git diff --check` - passed.\n- `OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false node scripts/check-changed.mjs -- src/agents/session-suspension.ts src/gateway/server-close.ts src/agents/session-suspension.test.ts src/gateway/server-close.test.ts` - passed locally in child mode. Testbox delegation was blocked because the local Crabbox binary is 0.15.0 and the Testbox flow requires >=0.22.0; the local run also emitted Node 22.18.0 engine warnings.\n\n## Real Behavior Proof\n\nRan a standalone Node/tsx proof that imports the real `suspendSession()`, real command queue state, real timers, and the real `createGatewayCloseHandler()` shutdown path. The control leg proves the pending auto-resume timer normally fires after TTL; the shutdown leg proves gateway close clears the pending timer so it cannot restore lane concurrency after teardown begins.\n\n```text\n$ node --import tsx --input-type=module <standalone #101720 shutdown proof>\nOpenClaw #101720 runtime proof root: /var/folders/sx/2qmmyr8s7rz8m6d22p3htynw0000gn/T/openclaw-101720-proof-pZFur4\nUsing real suspendSession(), real timers, real command queue, and createGatewayCloseHandler().\ncontrol after suspend: lane=main maxConcurrent=0 queued=0 active=0\n[session-suspension] auto-resumed lane after suspension TTL\ncontrol after ttl without shutdown: lane=main maxConcurrent=4 queued=0 active=0\nshutdown case after suspend: lane=main maxConcurrent=0 queued=0 active=0\n[shutdown] started: proof shutdown for #101720\nshutdown drainActiveSessionsForShutdown reason=shutdown\n[gmail-watcher] gmail watcher stopped\n[shutdown] completed cleanly in 29ms\ngateway close completed warnings=[] durationMs=29\nshutdown case immediately after close: lane=main maxConcurrent=0 queued=0 active=0\nshutdown case after ttl post-close: lane=main maxConcurrent=0 queued=0 active=0\n```\n\nThe important behavior is the final line: after waiting longer than the suspension TTL after gateway close, the main lane remains suspended at `maxConcurrent=0`; in the control leg, the same TTL restores the lane to `maxConcurrent=4`.",
+        "branch": "feature/issue-101720-session-suspension-cleanup",
+        "head_sha": "8e60237455318296e10aa9370d1bbe5dfbe4db5e",
+        "author": "momothemage",
+        "labels": [
+          "gateway",
+          "agents",
+          "maintainer",
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/session-suspension.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-suspension.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-close.test.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-close.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 49,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101999",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101999.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 106,
+          "gatingTotal": 101,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 35,
+            "SUCCESS": 68,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101999:4912056610:2026-07-08T06:39:57Z:re_review",
+      "comment_id": "4912056610",
+      "comment_version_key": "4912056610:2026-07-08T06:39:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101999#issuecomment-4912056610",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101999,
+      "author": "momothemage",
+      "author_id": 35096042,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-08T06:39:57Z",
+      "comment_updated_at": "2026-07-08T06:39:57Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: clear session suspension timers on gateway shutdown",
+        "body": "Closes #101720\n\n## What Problem This Solves\n\nFixes an issue where sessions suspended for quota or circuit reasons could leave lane auto-resume timers pending while the gateway was shutting down. Those timers could later call back into command lane concurrency after shutdown had already begun.\n\n## Why This Change Was Made\n\nThe session-suspension module now owns a cleanup hook for pending lane auto-resume timers, and the gateway shutdown path invokes it after drain handling and before tearing down runtimes and background services. The change keeps normal TTL auto-resume behavior intact while preventing stale shutdown-time timer callbacks.\n\n## User Impact\n\nGateway shutdown and restart are less likely to race with delayed session-suspension timers. Suspended lanes still auto-resume normally during regular runtime operation.\n\n## Data Model / Upgrade Compatibility\n\nNo persisted schema or migration behavior changes. The production change only clears the in-memory `laneResumeTimers` map during gateway shutdown. Existing `quotaSuspension` entries remain schemaVersion 1 and are neither rewritten nor migrated by the new cleanup hook. The serialized-state surface ClawSweeper detected is test coverage around the existing session suspension shape, not a new stored field.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs src/agents/session-suspension.test.ts src/gateway/server-close.test.ts` - passed, 2 Vitest shards.\n- `node_modules/.bin/oxfmt --check --threads=1 src/agents/session-suspension.ts src/agents/session-suspension.test.ts src/gateway/server-close.ts src/gateway/server-close.test.ts` - passed.\n- `git diff --check` - passed.\n- `OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false node scripts/check-changed.mjs -- src/agents/session-suspension.ts src/gateway/server-close.ts src/agents/session-suspension.test.ts src/gateway/server-close.test.ts` - passed locally in child mode. Testbox delegation was blocked because the local Crabbox binary is 0.15.0 and the Testbox flow requires >=0.22.0; the local run also emitted Node 22.18.0 engine warnings.\n\n## Real Behavior Proof\n\nRan a standalone Node/tsx proof that imports the real `suspendSession()`, real command queue state, real timers, and the real `createGatewayCloseHandler()` shutdown path. The control leg proves the pending auto-resume timer normally fires after TTL; the shutdown leg proves gateway close clears the pending timer so it cannot restore lane concurrency after teardown begins.\n\n```text\n$ node --import tsx --input-type=module <standalone #101720 shutdown proof>\nOpenClaw #101720 runtime proof root: /var/folders/sx/2qmmyr8s7rz8m6d22p3htynw0000gn/T/openclaw-101720-proof-pZFur4\nUsing real suspendSession(), real timers, real command queue, and createGatewayCloseHandler().\ncontrol after suspend: lane=main maxConcurrent=0 queued=0 active=0\n[session-suspension] auto-resumed lane after suspension TTL\ncontrol after ttl without shutdown: lane=main maxConcurrent=4 queued=0 active=0\nshutdown case after suspend: lane=main maxConcurrent=0 queued=0 active=0\n[shutdown] started: proof shutdown for #101720\nshutdown drainActiveSessionsForShutdown reason=shutdown\n[gmail-watcher] gmail watcher stopped\n[shutdown] completed cleanly in 29ms\ngateway close completed warnings=[] durationMs=29\nshutdown case immediately after close: lane=main maxConcurrent=0 queued=0 active=0\nshutdown case after ttl post-close: lane=main maxConcurrent=0 queued=0 active=0\n```\n\nThe important behavior is the final line: after waiting longer than the suspension TTL after gateway close, the main lane remains suspended at `maxConcurrent=0`; in the control leg, the same TTL restores the lane to `maxConcurrent=4`.",
+        "branch": "feature/issue-101720-session-suspension-cleanup",
+        "head_sha": "8e60237455318296e10aa9370d1bbe5dfbe4db5e",
+        "author": "momothemage",
+        "labels": [
+          "gateway",
+          "agents",
+          "maintainer",
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/session-suspension.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-suspension.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-close.test.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-close.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 49,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101999",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101999.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 106,
+          "gatingTotal": 101,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 35,
+            "SUCCESS": 68,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 550,
+    "total_ms": 3091,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 313
+        "ms": 312
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2538
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +299,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 226
+        "ms": 213
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
