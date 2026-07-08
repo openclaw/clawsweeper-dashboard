@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T09:16:16.687Z",
+  "generated_at": "2026-07-08T09:17:46.913Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T06:16:14.659Z",
+  "since": "2026-07-08T06:17:45.318Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    101910
+    101985
   ],
   "comment_ids": [
-    4913256466
+    4913256683
   ],
-  "status_comment_id": 4913256885,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101910:4913256466:2026-07-08T09:14:49Z:re_review",
-      "comment_id": "4913256466",
-      "comment_version_key": "4913256466:2026-07-08T09:14:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101910#issuecomment-4913256466",
+      "idempotency_key": "comment-router:openclaw/openclaw:101985:4913256683:2026-07-08T09:14:50Z:re_review",
+      "comment_id": "4913256683",
+      "comment_version_key": "4913256683:2026-07-08T09:14:50Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101985#issuecomment-4913256683",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 101910,
+      "target_branch": null,
+      "issue_number": 101985,
       "author": "obviyus",
       "author_id": 22031114,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T09:14:49Z",
-      "comment_updated_at": "2026-07-08T09:14:49Z",
-      "status_comment_id": 4913256885,
+      "comment_created_at": "2026-07-08T09:14:50Z",
+      "comment_updated_at": "2026-07-08T09:14:50Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,176 +68,122 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 101910,
-          "dispatch_key": "router-1f188ace8bb60a53",
-          "dispatched_at": "2026-07-08T09:16:17.805Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-08T09:16:19.023Z",
-          "response_comment_id": "4913256885",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(auto-reply): bound terminal reply-run settle and reclaim stale lanes",
-        "body": "### What Problem This Solves\n\nTrack A of #101863: a reply run that hangs (owner promise never settles) permanently wedges its session today.\n\n- `abortByUser()`/`abortForRestart()` set a terminal `result` and cancel the backend, but release the session lane only for `queued` operations. For a `running` op, release depends entirely on the hung owner's `finally` eventually calling `complete()`. Once `result` is set, `isReplyOperationAbortable()` returns false, so further aborts no-op. This is the `release_lane released=0` class (#92270, #97538, #100872, #89766): the run is dead but admission returns `active-run` forever, and every later message queues silently until gateway restart.\n- `ReplyOperation` carried no timestamps, so nothing could distinguish a progressing run from a wedged one.\n- Visible turns waited on active runs with no timeout; the only takeover path (`terminalRecovery`) covers already-terminal store snapshots, never a never-returning `running` op.\n- `dispatchReplyFromConfig` compensated with a caller-side recovery loop that invoked the stuck-session-recovery machinery on config-derived wall-clock thresholds — the same heuristics reported for killing healthy long runs (#88870).\n\n### Why This Change Was Made\n\nEstablishes the Track A invariant from #101863: **reaching a terminal state releases the lane, bounded, no matter what the owner does** — and staleness is judged by real activity evidence, not wall clock.\n\n1. **Bounded terminal settle** (`reply-run-registry.ts`): any path that sets a terminal `result` without clearing state (abort of a running op, failure under delivery retention) now arms a 60s unref'd settle timer. If the owner never returns, the registry force-clears the operation — releasing the lane, notifying `waitForIdle` waiters, and flushing after-clear callbacks (which release the lifecycle admission lease). A late owner `complete()` stays a harmless no-op.\n2. **Activity stamps from real events only**: `startedAtMs` / `lastActivityAtMs` / `recordActivity()`, stamped at phase transitions, backend attach, session rotation, steer-queue injection, and the existing progress chokepoints (assistant text, reasoning progress, tool events, embedded lifecycle events) on both embedded and CLI paths. Never from timers — this is the seam Track B extends.\n3. **Stale takeover at admission** (`reply-turn-admission.ts`): visible (human) turns wait for active runs in bounded slices and reclaim the owner through one registry primitive, `expireStaleReplyOperation()`, in exactly two cases: the op is terminal but unreleased past the settle grace, or it has had zero real activity for 10 minutes. The expired op gets the new closed failure code `run_stalled`. Heartbeat, queued-followup, and control-abort turns never take over.\n4. **Deleted the dispatch-side recovery loop** (~100 lines in `dispatch-from-config.ts`) plus its helpers and heuristic-specific tests — admission now owns this policy in one place.\n\nKnown tradeoff (maintainer-accepted, Track B refines it): a run whose tool is legitimately silent for 10+ minutes can be reclaimed when a new human turn arrives. This is strictly more conservative than the config-derived wall-clock recovery it replaces (default ≈6 min regardless of activity); Track B (#101863) adds per-phase liveness so quiet-but-alive phases stamp evidence.\n\n### User Impact\n\n- A wedged agent turn no longer makes the session permanently unresponsive: `/stop` (or any abort) frees the lane within 60s even if the underlying run never unwinds, and a new message reclaims a silently dead run after 10 minutes instead of never.\n- Queued messages behind a wedge get processed instead of deferring forever.\n- Healthy long runs are safer than before: takeover requires zero real activity with a human waiting, rather than the previous wall-clock threshold.\n\n### Evidence\n\n- Net −177 LOC (533+/710−, 16 files): one primitive replaces the caller-side recovery loop and its heuristics.\n- Unit/behavior tests added: terminal-settle force-release with a never-returning owner; late-owner `complete()` harmless after forced release; retained-failure ops still bounded; visible-turn reclaim of silent-stale and terminal-unreleased ops; fresh ops kept (waiting turn does not steal); `heartbeat`/`queued_followup` never reclaim; settle timer cancelled when the owner clears first.\n- Integration tests: `dispatch-from-config.stale-recovery.test.ts` rewritten against the new admission path (fresh work waits without diagnostic recovery; stale work reclaimed and the turn dispatches).\n- Validation: auto-reply owner shard (139 files / 2862 tests), import sweep over every test importing `reply-run-registry` / `reply-turn-admission` / `ReplyOperationFailureCode` (5 shards), and `tsgo` core lanes — all green on Testbox; focused suites re-run green after review edits and rebase onto current `main`.\n- Review follow-up: ClawSweeper's P1 (queued-followup reasoning progress not stamping activity) fixed structurally in 4d4df31f087 — activity now stamps once at the `runCliAgentWithLifecycle` bridge seam via `onActivity`; per-callback stamps deleted at both call sites.\n- Live E2E wedge/reclaim proof: posted as a PR comment (Test A: abort on a genuinely wedged model call frees the lane in ~107 ms and the next turn admits; forced-release backstop + takeover shapes proven at registry/dispatch level; scope caveats documented).\n\nPart of #101863 (Track A). Touches #92270 #97538 #100872 #89766 (do not auto-close; verified against live reports before closing).\n",
-        "branch": "fix/reply-run-terminal-release",
-        "head_sha": "1ca9288cf2f787cf838a73f11c624c45804f067c",
+        "title": "fix(agents): make run liveness evidence-based",
+        "body": "### What Problem This Solves\n\nTrack B (sub-tracks B1/B4/B5) of #101863 — the \"truthful liveness\" half of the run-lifecycle reliability design. Stacked on #101910 (Track A) and uses its primitives (`expireStaleReplyOperation`, `run_stalled`, activity stamps).\n\nThree verified defects:\n\n1. **#96168 — fake CLI liveness.** `startClaudeLiveActiveToolHeartbeat` emitted `cli_live:tool_running` on a 10s `setInterval` while a tool was merely *marked* active, resetting the shared `lastProgressAt` clock with zero evidence the CLI child was alive. The `blocked_tool_call` classifier — which correctly requires BOTH tool age AND progress age to be stale — could structurally never fire for a wedged CLI tool, and neither could any stuck-recovery abort gate.\n2. **#88870 — watchdog kills blamed on the user + quiet tools killed.** Stuck-recovery aborts of reply-owned runs routed through `operation.abortByUser()`, so watchdog kills surfaced as `aborted_by_user`. And any truthful-evidence fix would expose quiet-but-alive tools to the generic ~6-min abort threshold. **#101670** — staleness ages are raw `Date.now()` deltas, so an event-loop stall inflates every age at the next heartbeat tick and trips spurious recovery.\n3. **Live E2E gap from #101910** — steer capture accepts messages into a run based only on streaming/stopped state; a wedged run swallows the very human message that would trigger stale takeover at admission.\n\n### Why This Change Was Made\n\n- **B1:** deleted the timer heartbeat entirely (mechanism, constant, lifecycle wiring). Real frames — tool start/result, terminal result, any stdout frame — were already stamping progress; they are now the only stamps. To keep truthful evidence from re-exposing quiet tools, `blocked_tool_call` recovery eligibility gains a floor: `max(stuckSessionAbortMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS = 15 min)`. Early warnings (naming the tool) keep current thresholds; the CLI byte-level no-output watchdog (evidence-based, ≤600s for truly-silent children) is untouched.\n- **B4:** stuck-recovery expiry of reply-owned runs now routes through `expireStaleReplyOperation(…, \"stuck_recovery\")` → terminal result `{failed, run_stalled}` instead of `aborted_by_user`. The diagnostic heartbeat records its own tick time; a tick delayed >3× the interval defers all recovery decisions to the next on-time tick (a late tick means the *process* stalled, not the sessions).\n- **B5:** both steer-capture gates now refuse evidence-stale runs — `queueReplyRunMessage` when the operation's `lastActivityAtMs` exceeds the stale-takeover window, `prepareEmbeddedAgentQueueMessage` when diagnostic `lastProgressAgeMs` exceeds the paired constant (new closed failure reason `stale_run`; consumers fall through like `no_active_run`). Refused messages take the normal followup-admission path where Track A's takeover can reclaim. Draining already-captured entries from dead handles stays Track C (durability).\n\n### User Impact\n\n- A wedged CLI tool is now *detectable*: stuck-session classification and recovery work as designed instead of being permanently disarmed by a fake heartbeat.\n- Legit quiet long tools are safer than before: recovery aborts need 15 min of zero evidence (previously ~6 min wall-clock whenever the heuristics did fire).\n- Watchdog recoveries stop reading as \"aborted by user\".\n- A gateway event-loop stall no longer mass-aborts healthy sessions on the next heartbeat tick.\n- Messages sent to a dead-looking session reach admission (and Track A reclaim) instead of being swallowed into the wedged run's queue.\n\n### Evidence\n\n- The defeat mechanism, thresholds, and every stamp site were mapped from source before design (see the Track B design comment on #101863 for the full file:line mechanism maps).\n- Tests: wedged-tool staleness → classification → floor-gated recovery eligibility; real frames keep runs live; recovery expiry yields `run_stalled` (user aborts still `aborted_by_user`); delayed-tick guard (fake timers); both steer gates (stale refused → fall-through, fresh accepted, no-snapshot skip); `stale_run` consumer fall-through.\n- Validation: focused suites + import sweep over every test touching the changed modules + `tsgo` core/core-test lanes green on Testbox; re-run green after review edits.\n- Net LOC: a whole liveness mechanism deleted; source diff dominated by the two guards and gates.\n- Live behavior proof posted as a PR comment: fake-heartbeat string absent from dist; `reason=stale_run` steer refusal on a 16-min-stale lane (steer-accepted unconditionally on main); channel-turn takeover 34 ms after a rescue message on a 10-min wedge with the turn re-running on a fresh model call; recovery-attribution race found live and fixed (expire-ordering on the #101910 base + live-handle recovery leg here), both with regression tests.\n\nPart of #101863 (Tracks B1/B4/B5). Fixes #96168; addresses the abort-attribution and quiet-tool halves of #88870 and the heartbeat half of #101670. Stacked on #101910 — do not merge before it.\n",
+        "branch": "fix/truthful-run-liveness",
+        "head_sha": "1eb76b6c090728d5808028adf0b250b2a64c67b7",
         "author": "obviyus",
         "labels": [
+          "agents",
           "maintainer",
-          "size: XL",
+          "size: M",
           "proof: sufficient",
-          "mantis: telegram-visible-proof",
           "P1",
-          "rating: 🦐 gold shrimp",
+          "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 session-state",
           "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/agent-runner-cli-dispatch.test.ts",
-            "additions": 89,
+            "path": "TRACK_B1_BRIEF.md",
+            "additions": 70,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/cli-runner.spawn.test.ts",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/claude-live-session.ts",
+            "additions": 0,
+            "deletions": 34,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/runs.test.ts",
+            "additions": 108,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
-            "additions": 32,
-            "deletions": 10,
+            "path": "src/agents/embedded-agent-runner/runs.ts",
+            "additions": 31,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts",
-            "additions": 3,
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 54,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
-            "additions": 3,
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 6,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.preflight-stale-tokens.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
+            "path": "src/agents/tools/sessions-send-tool.ts",
             "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.final-media-runreplyagent.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.media-paths.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.stale-recovery.test.ts",
-            "additions": 43,
-            "deletions": 603,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 3,
-            "deletions": 102,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.ts",
-            "additions": 2,
-            "deletions": 0,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
             "path": "src/auto-reply/reply/reply-run-registry.test.ts",
-            "additions": 145,
+            "additions": 32,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
             "path": "src/auto-reply/reply/reply-run-registry.ts",
-            "additions": 130,
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic.test.ts",
+            "additions": 81,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic.ts",
+            "additions": 26,
             "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-turn-admission.test.ts",
-            "additions": 162,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-turn-admission.ts",
-            "additions": 44,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic-stuck-session-recovery.runtime.ts",
-            "additions": 2,
-            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 18,
-        "additions": 675,
-        "deletions": 721,
+        "changedFiles": 12,
+        "additions": 431,
+        "deletions": 46,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101910",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101910.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101985",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101985.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 53,
-          "gatingTotal": 48,
+          "total": 59,
+          "gatingTotal": 54,
           "counts": {
-            "SKIPPED": 43,
-            "SUCCESS": 10
+            "SUCCESS": 9,
+            "SKIPPED": 50
           },
           "blockers": [],
           "pending": [],
@@ -247,25 +193,25 @@
       },
       "maintainer_authorized": true,
       "author_readonly_authorized": false,
-      "processed_at": "2026-07-08T09:16:17.030Z"
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5050,
+    "total_ms": 1828,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 605
+        "ms": 480
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1407
+        "ms": 1099
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -281,7 +227,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3010
+        "ms": 233
       },
       {
         "name": "append_ledger",
