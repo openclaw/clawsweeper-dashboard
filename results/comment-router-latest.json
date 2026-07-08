@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T00:52:08.266Z",
+  "generated_at": "2026-07-08T00:52:08.806Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-07T21:52:07.872Z",
+  "since": "2026-07-07T21:52:06.964Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    101931
+    101762
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,23 +29,143 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101762:4905641694:2026-07-08T00:52:02Z:clawsweeper_auto_repair",
+      "comment_id": "4905641694",
+      "comment_version_key": "4905641694:2026-07-08T00:52:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101762#issuecomment-4905641694",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101762,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-07T15:45:23Z",
+      "comment_updated_at": "2026-07-08T00:52:02Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=254ed8cd72d46bd907c1c5c810f4daffdf9dd589)",
+      "review_summary": "The branch adds an agent-core control-flow symbol, marks `MidTurnPrecheckSignal` with it, and has `Agent.handleRunFailure` emit a non-error settlement for marked control-flow errors.\n\nPR surface: Source +38, Tests +47. Total +85 across 3 files.\n\nReproducibility: yes. at source level: current main throws `MidTurnPrecheckSignal` from the tool-result context guard after a tool turn and routes the rejection through generic agent failure handling. I did not run the full Gateway+MCP large-output reproduction in this read-only review.",
+      "review_followup": "- [P1] Contributor follow-up is needed for the lifecycle code defect and real-path proof; this is not a cleanup-close item or a safe automated repair lane while proof is contributor-owned.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "254ed8cd72d46bd907c1c5c810f4daffdf9dd589",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agent-core): skip handleRunFailure error forwarding for control-flow signals",
+        "body": "## What Problem This Solves\r\n\r\nWhen a tool result makes the next prompt exceed the context budget during a tool loop, `transformContext` throws `MidTurnPrecheckSignal` — a **control-flow mechanism** to trigger tool-result truncation and retry, not a terminal error.\r\n\r\nHowever, `Agent.handleRunFailure` was treating this signal as a real error and pushing a synthetic failure event (`stopReason: \"error\"`) into the stream. Users see \"Context overflow: prompt too large for the model (mid-turn precheck).\" immediately, even though the retry succeeds ~15 seconds later via the `pendingMidTurnPrecheckRequest` side-channel callback.\r\n\r\nFixes [#101621](https://github.com/openclaw/openclaw/issues/101621).\r\n\r\n## Why This Change Was Made\r\n\r\nMark `MidTurnPrecheckSignal` with a `Symbol.for(\"agent-core.controlFlowError\")` sentinel so `Agent.handleRunFailure` can recognize control-flow signals and skip error-forwarding. The existing attempt-runner recovery path (`pendingMidTurnPrecheckRequest` callback) handles truncation and retry correctly. The symbol-based approach uses a generic, agent-core-owned name to keep the contract explicit without OpenClaw-specific coupling.\r\n\r\n### Production call path (root cause)\r\n\r\n```\r\ntransformContext() throws MidTurnPrecheckSignal\r\n  → streamAssistantResponse() → runLoop() → runAgentLoop()\r\n  → Agent.runPromptMessages()\r\n  → Agent.runWithLifecycle() catch\r\n    → handleRunFailure(error)  ← was pushing synthetic error to stream\r\n```\r\n\r\n`MidTurnPrecheckSignal` extends `Error` and was indistinguishable from real errors at the agent-core layer. The attempt-runner's `isMidTurnPrecheckSignal(err)` catch block was never reached because `handleRunFailure` swallowed the error first.\r\n\r\n### Design decision\r\n\r\nThe `agent-loop.ts` EventStream API (`agentLoop`/`agentLoopContinue`) is **not used in production** — the production path goes through `Agent` → `runAgentLoop` (async). The sentinel check is scoped to `Agent.handleRunFailure` only; not applied to the public EventStream layer.\r\n\r\n### Files changed\r\n\r\n| File | Change |\r\n|------|--------|\r\n| `packages/agent-core/src/agent.ts` | Export `CONTROL_FLOW_ERROR` symbol; `handleRunFailure` returns early for sentinel errors |\r\n| `src/agents/embedded-agent-runner/run/midturn-precheck.ts` | Mark `MidTurnPrecheckSignal` with the sentinel in constructor |\r\n| `packages/agent-core/src/agent-loop.test.ts` | 2 new Agent-level tests |\r\n\r\n### Files NOT changed\r\n\r\n`agent-loop.ts`, `attempt.ts` recovery, `run.ts` retry, `tool-result-context-guard.ts`.\r\n\r\n## User Impact\r\n\r\n- **Before**: Users see a premature \"Context overflow: prompt too large for the model (mid-turn precheck).\" error flash during tool loops, even though the truncation+retry succeeds silently ~15 seconds later.\r\n- **After**: Control-flow signals are silently skipped by `handleRunFailure`. No premature error events leak into the UI. Real errors still produce error events normally (regression test included).\r\n\r\n## Evidence\r\n\r\n### Unit & Integration Tests (114/114 passed)\r\n\r\nEnvironment: Linux x86_64, Node 22.19.0, vitest 4.1.9\r\n\r\n```\r\n$ OPENCLAW_VITEST_MAX_WORKERS=1 node node_modules/vitest/vitest.mjs run \\\r\n    --config vitest.config.ts \\\r\n    packages/agent-core/src/agent-loop.test.ts \\\r\n    src/agents/embedded-agent-runner/tool-result-context-guard.test.ts \\\r\n    src/agents/embedded-agent-runner/run/midturn-precheck.test.ts\r\n\r\n Test Files  3 passed (3)\r\n      Tests  114 passed (114)\r\n```\r\n\r\nIncluding 2 new Agent-class tests in `agent-loop.test.ts`:\r\n\r\n```\r\n ✓ suppresses failure events for control-flow errors carrying the sentinel  1ms\r\n ✓ still forwards real errors through handleRunFailure  1ms\r\n```\r\n\r\nThese exercise the **real `Agent` class** (not mocked):\r\n- Control-flow error with `Symbol.for(\"agent-core.controlFlowError\")` → `agent.state.errorMessage` is `undefined` (no leak)\r\n- Real `Error(\"provider exploded\")` → `agent.state.errorMessage` is `\"provider exploded\"` (normal behavior preserved)\r\n\r\n### Gateway Startup Proof\r\n\r\nGateway built and started successfully from the patched source tree (dirty watched source detected + rebuilt):\r\n\r\n```\r\n$ OPENCLAW_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway\r\n\r\n[openclaw] Building TypeScript (dist is stale: dirty_watched_tree - dirty watched source tree).\r\n[openclaw] Building bundled plugin assets.\r\nruntime-postbuild: ...\r\n[gateway] loading configuration…\r\n[gateway] starting...\r\n[gateway] agent model: openai/gpt-5.5 (thinking=medium, fast=off)\r\n[gateway] http server listening (9 plugins: acpx, browser, canvas, device-pair,\r\n           file-transfer, memory-core, ollama, phone-control, talk-voice; 9.6s)\r\n[gateway] log file: /tmp/openclaw/openclaw-2026-07-07.log\r\n[gateway] ready\r\n```\r\n\r\nGateway config reload detected the midTurnPrecheck + MCP changes:\r\n\r\n```\r\n[gateway/reload] config change detected; evaluating reload\r\n  (agents.defaults.compaction.midTurnPrecheck, mcp)\r\n```\r\n\r\n### Real Agent Instance Verification\r\n\r\n```\r\n=== Gateway+MCP Equivalent Verification: MidTurnPrecheckSignal ===\r\n\r\n[Test 1] Large tool output triggers MidTurnPrecheckSignal — no UI error leak\r\n  ✅ agent.continue() completed normally (did not throw)\r\n  ✅ agent.state.errorMessage = undefined\r\n  ✅ User does NOT see \"Context overflow\" error\r\n\r\n[Test 2] controlFlowError sentinel marking\r\n  ✅ sentinel direct access: true\r\n  ✅ Symbol.for discoverable: true\r\n\r\n[Test 3] Real errors still recorded normally\r\n  ✅ agent.continue() completed normally\r\n  ✅ agent.state.errorMessage = \"provider connection refused\"\r\n  ✅ Real errors still visible (no regression)\r\n\r\n=== Conclusion ===\r\n✅ MidTurnPrecheckSignal — no UI error leak\r\n✅ controlFlowError sentinel — correctly marked via Symbol.for\r\n✅ Real errors — handleRunFailure behavior preserved\r\n✅ Environment: Node v22.19.0, real Agent instances, MCP SDK available\r\n```\r\n\r\n### Verification Summary\r\n\r\n| Scenario | Expected | Actual |\r\n|----------|---------|--------|\r\n| Control-flow error (sentinel marked) | No error event, errorMessage=undefined | ✅ |\r\n| Real error (no sentinel) | Error event emitted, errorMessage set | ✅ |\r\n| Gateway startup with patch | Build + start successfully | ✅ |\r\n| Config reload (midTurnPrecheck+MCP) | Detected and evaluated | ✅ |\r\n\r\n## Risk checklist\r\n\r\nmerge-risk: Low\r\n\r\n- Only errors carrying `Symbol.for(\"agent-core.controlFlowError\")` are suppressed (currently only `MidTurnPrecheckSignal`)\r\n- Real errors (without sentinel) still trigger normal `handleRunFailure` — regression test included\r\n- Symbol uses a generic `agent-core.controlFlowError` name owned by agent-core, not OpenClaw-specific\r\n- Check scoped to `Agent.handleRunFailure` only (production path); not applied to `agent-loop.ts` EventStream API\r\n- No breaking API changes, no new dependencies\r\n\r\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\r\nCo-Authored-By: Claude <noreply@anthropic.com>\r\n",
+        "branch": "fix/issue-101621-midturn-precheck-signal-leak",
+        "head_sha": "254ed8cd72d46bd907c1c5c810f4daffdf9dd589",
+        "author": "chenyangjun-xy",
+        "labels": [
+          "agents",
+          "size: S",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "packages/agent-core/src/agent-loop.test.ts",
+            "additions": 47,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/agent-core/src/agent.ts",
+            "additions": 34,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/midturn-precheck.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 85,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101762",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101762.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 104,
+          "gatingTotal": 99,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 34,
+            "SUCCESS": 64,
+            "IN_PROGRESS": 2,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS",
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "QA Smoke CI (telegram 1/2):IN_PROGRESS",
+            "QA Smoke CI (telegram 2/2):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 692,
+    "total_ms": 2031,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 383
+        "ms": 280
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1547
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,7 +181,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 298
+        "ms": 179
       },
       {
         "name": "append_ledger",
