@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-08T08:55:33.347Z",
+  "generated_at": "2026-07-08T08:56:32.658Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T05:55:31.127Z",
+  "since": "2026-07-08T05:56:30.169Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    102063
+    101715
   ],
   "comment_ids": [
-    4913054693
+    4913072907
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4913073457,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:102063:4913054693:2026-07-08T08:52:43Z:re_review",
-      "comment_id": "4913054693",
-      "comment_version_key": "4913054693:2026-07-08T08:52:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102063#issuecomment-4913054693",
+      "idempotency_key": "comment-router:openclaw/openclaw:101715:4913072907:2026-07-08T08:55:00Z:re_review",
+      "comment_id": "4913072907",
+      "comment_version_key": "4913072907:2026-07-08T08:55:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101715#issuecomment-4913072907",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 102063,
-      "author": "zw-xysk",
-      "author_id": 294457748,
+      "target_branch": "main",
+      "issue_number": 101715,
+      "author": "LZY3538",
+      "author_id": 293718838,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-08T08:52:43Z",
-      "comment_updated_at": "2026-07-08T08:52:43Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-08T08:55:00Z",
+      "comment_updated_at": "2026-07-08T08:55:00Z",
+      "status_comment_id": 4913073457,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,78 +68,227 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 101715,
+          "dispatch_key": "router-643cdcd0df884a97",
+          "dispatched_at": "2026-07-08T08:56:33.743Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-08T08:56:34.977Z",
+          "response_comment_id": "4913073457",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "[F3] fix(trajectory): record session.ended after cleanup instead of reusing model.completed timestamp",
-        "body": "## What Problem This Solves\n\nThe `session.ended` span had the **exact same timestamp** as the last `model.completed` span because both were recorded back-to-back in the main try block, before any cleanup work (acquiring cleanup lock, `cleanupEmbeddedAttemptResources`) executed. This made it impossible to measure actual session duration vs model compute time and broke latency analysis for cleanup operations.\n\n## Changes\n\n**1 file changed, 32 insertions(+), 34 deletions(-) (net −2)**\n\nMoved `session.ended` recording from the main try block to the inner `finally` block, **after** cleanup work completes:\n\n1. **Capture** `trajectoryTerminalStatus` / `trajectoryTerminalError` before the return\n2. **Remove** early `session.ended` recording, old `trajectoryEndRecorded` flag, old fallback\n3. **Record** `session.ended` after `cleanupEmbeddedAttemptResources`, using captured terminal data with `\"cleanup\"` fallback\n4. **Flush** after `session.ended`\n\nPrevious: `model.completed` → `trace.artifacts` → `session.ended` (early) → return → cleanup → flush\nNew:      `model.completed` → `trace.artifacts` → return → cleanup → `session.ended` → flush\n\n## Evidence\n\n### Codex review acceptance criteria (all passed)\n```\npnpm test:  runtime.test.ts                         16/16\n           attempt-trajectory-flush-cleanup.test.ts   2/2\n           attempt.spawn-workspace.context-engine    70/70\n           attempt-trajectory-status.test.ts         19/19\n           attempt.model-diagnostic-events.test.ts   36/36\n           Total: 5 suites, 143 tests, all passed   ✅\n```\n\n**TypeScript:** ✅ tsc --noEmit  **Lint:** ✅ clean\n\n### Real patched-runner path proof\n\nProof script that exactly mirrors the patched `attempt.ts` finally block structure:\n```\ntry {\n  recorder.recordEvent(\"model.completed\", ...)\n  recorder.recordEvent(\"trace.artifacts\", ...)\n} finally {\n  let cleanupError\n  try { /* cleanup work ~100ms */ } catch (e) { cleanupError = e }\n  recorder.recordEvent(\"session.ended\", ...)   // ← AFTER cleanup\n  recorder.flush()\n}\n```\n\nTerminal output (patched source, hostname `LIN-66D8BD4EA2C`, PID `1433209`):\n```\n── try: recording model.completed + trace.artifacts ──\n── finally: cleanup resources (async I/O, ~100ms) ──\n── finally: recording session.ended AFTER cleanup ← THE FIX ──\n\n── Verification ──\n  model.completed  ts=2026-07-08T08:39:52.425Z  Δ=0ms\n  trace.artifacts  ts=2026-07-08T08:39:52.454Z  Δ=29ms\n  session.ended    ts=2026-07-08T08:39:52.567Z  Δ=142ms   ✅\n\n✅ PASS: session.ended ≠ model.completed\n         Δ=142ms — real cleanup work\n         status=\"success\" preserved\n         flush after session.ended ✅\n```\n\nThe proof directly mirrors the patched code flow: model.completed → (cleanup) → session.ended → flush. Timestamps are distinct because cleanup work takes real wall-clock time.\n\n## Codex Review\n\n| Finding | Status |\n|---------|--------|\n| Move session.ended to post-cleanup | ✅ Done |\n| Preserve terminal status data | ✅ Done |\n| Flush after session.ended | ✅ Done |\n| Fallback: `\"cleanup\"` (existing vocabulary) | ✅ Done |\n| Real patched-runner path proof | ✅ Δ=142ms, code mirrors attempt.ts |\n\n## Review\n- Manually reviewed and verified\n- AI-assisted: Yes\n- Fixes #102014",
-        "branch": "fix/issue-102014-session-ended-timestamp",
-        "head_sha": "f2b7fb3ed8e5dfc13815b06ad6ee50857cd83d44",
-        "author": "zw-xysk",
+        "title": "fix(model-fallback): re-throw LiveSessionModelSwitchError for outer retry loop (#101676)",
+        "body": "## What Problem This Solves\n\nWhen a user changes the model mid-turn (via `/model`, session_status override, or cron job) while the AI is actively generating a response, the run terminates with an error instead of retrying the turn against the newly-selected model.\n\n**Observed before fix (#101676):**\n```\ninfo: live session model switch requested: claude-sonnet-5 -> claude-sonnet-4-6\nwarn: model_fallback_decision decision=candidate_failed ... fallbackConfigured=false\nerror: Embedded agent failed before reply: Live session model switch requested\n```\n\n## Why This Change Was Made\n\nThe `runWithModelFallback` loop catches `LiveSessionModelSwitchError` from the embedded runner. When the switch target is not a later fallback candidate, it was wrapping the error as `FailoverError`. With no more candidates, `throwFallbackFailureSummary` produced `FallbackSummaryError` — not `LiveSessionModelSwitchError` — so the outer retry loop never caught it.\n\n**Fix:** A new helper `isLiveSessionModelSwitchTargetInCandidates` distinguishes between:\n\n| Scenario | Behavior |\n|----------|----------|\n| Target IS a later fallback candidate | Redirect there (preserves #57471) |\n| Target IS in candidates but stale (same/earlier) | Failover → continue fallback (preserves #58496) |\n| Target NOT in candidates (user-requested switch) | **Rethrow → outer loop retries** |\n| Auth-profile set, change, or clear | **Rethrow → outer loop applies credential change** |\n\nThe helper checks `authProfileId || authProfileIdSource` to handle credential set, change, and clear (not just set).\n\n## Evidence\n\n### Runtime Before/After: Reproduced on This PR Head\n\n**Before fix (origin/main):** LiveSessionModelSwitchError wrapped as FailoverError → turn fails.\n\n```\nlive session model switch requested: anthropic/claude-haiku-3-5 -> openrouter/openrouter/free\nmodel_fallback/decision: decision=candidate_failed reason=unknown next=none\n                         detail=Live session model switch requested: openrouter/openrouter/free\nFailoverError: Live session model switch requested: openrouter/openrouter/free\n```\n\n**After fix (this PR head):** LiveSessionModelSwitchError re-thrown → outer loop retries → turn completes.\n\n```\nlive session model switch requested: anthropic/claude-haiku-3-5 -> openrouter/openrouter/free\nLive session model switch in subagent run: switching to openrouter/openrouter/free\n\"winnerProvider\": \"openrouter\"\n\"winnerModel\": \"openrouter/free\"\n```\n\n### Focused Tests — Eight Control-Flow Branches\n\n```\n ✓ re-throws when switch target is not a configured candidate (#101676)\n ✓ re-throws when target is not a later fallback candidate (#101676)\n ✓ re-throws on last candidate when switch target not in candidates (#101676)\n ✓ retries with switched model after re-throw (#101676 end-to-end)\n ✓ re-throws for auth-profile set on same model (#101676)\n ✓ re-throws for auth-profile clear on same model (#101676)\n ✓ jumps to a later candidate (#57471, preserved)\n ✓ keeps stale same-candidate switch in fallback rotation (#58496, preserved)\n```\n\n### Full Test Suite\n\n```\nmodel-fallback.test.ts:               119 passed\nlive-model-switch.test.ts:             21 passed\nagent-command.live-model-switch.test.ts: 76 passed\nTotal: 216 passed\n```\n\n### Changes\n\n| File | + | - | Net |\n|------|---|---|-----|\n| `src/agents/model-fallback.ts` | +68 | -29 | +39 |\n| `src/agents/model-fallback.test.ts` | +207 | -19 | +188 |\n| `scripts/live-model-switch-proof.ts` | +325 | 0 | +325 |\n\nCloses #101676.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/live-model-switch-mid-attempt-101676",
+        "head_sha": "4877ddd0ef91e1a356d00afe83180f719bf5c057",
+        "author": "lzy3538",
         "labels": [
+          "scripts",
           "agents",
-          "size: S",
-          "P2"
+          "size: L",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 40,
-            "deletions": 34,
+            "path": "scripts/live-model-switch-proof.ts",
+            "additions": 325,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/proof-harness.ts",
+            "additions": 158,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/model-fallback.test.ts",
+            "additions": 174,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 66,
+            "deletions": 29,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 1,
-        "additions": 40,
-        "deletions": 34,
+        "changedFiles": 4,
+        "additions": 723,
+        "deletions": 48,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102063",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102063.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101715",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101715.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 99,
-          "gatingTotal": 94,
+          "total": 97,
+          "gatingTotal": 92,
           "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 28,
+            "IN_PROGRESS": 10,
+            "SUCCESS": 19,
+            "SKIPPED": 25,
+            "QUEUED": 42,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "pnpm-store-warmup:QUEUED",
+            "build-artifacts:QUEUED",
+            "checks-fast-bundled-protocol:QUEUED",
+            "checks-fast-bun-launcher:QUEUED",
+            "QA Smoke CI (matrix):QUEUED",
+            "QA Smoke CI (telegram 1/2):QUEUED",
+            "QA Smoke CI (telegram 2/2):QUEUED",
+            "checks-fast-contracts-plugins-a:QUEUED",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:QUEUED",
+            "checks-fast-contracts-channels-a:QUEUED",
+            "checks-fast-contracts-channels-b:QUEUED",
+            "checks-node-compact-large-1:QUEUED",
+            "checks-node-compact-large-2:QUEUED",
+            "checks-node-compact-large-3:QUEUED",
+            "checks-node-compact-large-whole-1:QUEUED",
+            "checks-node-compact-small-1:QUEUED",
+            "checks-node-compact-small-10:QUEUED",
+            "checks-node-compact-small-2:QUEUED",
+            "checks-node-compact-small-3:QUEUED",
+            "checks-node-compact-small-4:QUEUED",
+            "checks-node-compact-small-5:QUEUED",
+            "checks-node-compact-small-6:QUEUED",
+            "checks-node-compact-small-7:QUEUED",
+            "checks-node-compact-small-8:QUEUED",
+            "checks-node-compact-small-9:QUEUED",
+            "checks-node-compact-small-whole-1:QUEUED",
+            "checks-node-compact-small-whole-2:QUEUED",
+            "checks-node-compact-small-whole-3:QUEUED",
+            "check-guards:QUEUED",
+            "check-shrinkwrap:QUEUED",
+            "check-bundled-channel-config-metadata:QUEUED",
+            "check-prod-types:QUEUED",
+            "check-lint:QUEUED",
+            "check-dependencies:QUEUED",
+            "check-test-types:QUEUED",
+            "check-additional-boundaries-a:QUEUED",
+            "check-additional-boundaries-bcd:QUEUED",
+            "check-session-accessor-boundary:QUEUED",
+            "check-session-transcript-reader-boundary:QUEUED",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:QUEUED",
+            "check-additional-runtime-topology-architecture:QUEUED",
+            "check-docs:QUEUED"
+          ],
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "pnpm-store-warmup:QUEUED",
+            "build-artifacts:QUEUED",
+            "checks-fast-bundled-protocol:QUEUED",
+            "checks-fast-bun-launcher:QUEUED",
+            "QA Smoke CI (matrix):QUEUED",
+            "QA Smoke CI (telegram 1/2):QUEUED",
+            "QA Smoke CI (telegram 2/2):QUEUED",
+            "checks-fast-contracts-plugins-a:QUEUED",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:QUEUED",
+            "checks-fast-contracts-channels-a:QUEUED",
+            "checks-fast-contracts-channels-b:QUEUED",
+            "checks-node-compact-large-1:QUEUED",
+            "checks-node-compact-large-2:QUEUED",
+            "checks-node-compact-large-3:QUEUED",
+            "checks-node-compact-large-whole-1:QUEUED",
+            "checks-node-compact-small-1:QUEUED",
+            "checks-node-compact-small-10:QUEUED",
+            "checks-node-compact-small-2:QUEUED",
+            "checks-node-compact-small-3:QUEUED",
+            "checks-node-compact-small-4:QUEUED",
+            "checks-node-compact-small-5:QUEUED",
+            "checks-node-compact-small-6:QUEUED",
+            "checks-node-compact-small-7:QUEUED",
+            "checks-node-compact-small-8:QUEUED",
+            "checks-node-compact-small-9:QUEUED",
+            "checks-node-compact-small-whole-1:QUEUED",
+            "checks-node-compact-small-whole-2:QUEUED",
+            "checks-node-compact-small-whole-3:QUEUED",
+            "check-guards:QUEUED",
+            "check-shrinkwrap:QUEUED",
+            "check-bundled-channel-config-metadata:QUEUED",
+            "check-prod-types:QUEUED",
+            "check-lint:QUEUED",
+            "check-dependencies:QUEUED",
+            "check-test-types:QUEUED",
+            "check-additional-boundaries-a:QUEUED",
+            "check-additional-boundaries-bcd:QUEUED",
+            "check-session-accessor-boundary:QUEUED",
+            "check-session-transcript-reader-boundary:QUEUED",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:QUEUED",
+            "check-additional-runtime-topology-architecture:QUEUED",
+            "check-docs:QUEUED"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "processed_at": "2026-07-08T08:56:32.987Z"
     }
   ],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2403,
+    "total_ms": 5494,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 527
+        "ms": 665
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1679
+        "ms": 1811
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -151,11 +300,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 183
+        "ms": 2994
       },
       {
         "name": "append_ledger",
