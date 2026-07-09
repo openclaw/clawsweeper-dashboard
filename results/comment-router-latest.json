@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T01:43:31.367Z",
+  "generated_at": "2026-07-09T01:44:05.937Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T22:43:28.951Z",
+  "since": "2026-07-08T22:44:03.601Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    102333
+    97189
   ],
   "comment_ids": [
-    4920744197
+    4920750025
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:102333:4920744197:2026-07-09T01:40:27Z:re_review",
-      "comment_id": "4920744197",
-      "comment_version_key": "4920744197:2026-07-09T01:40:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102333#issuecomment-4920744197",
+      "idempotency_key": "comment-router:openclaw/openclaw:97189:4920750025:2026-07-09T01:41:15Z:re_review",
+      "comment_id": "4920750025",
+      "comment_version_key": "4920750025:2026-07-09T01:41:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97189#issuecomment-4920750025",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 102333,
-      "author": "LZY3538",
-      "author_id": 293718838,
+      "issue_number": 97189,
+      "author": "anyech",
+      "author_id": 8743351,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-09T01:40:27Z",
-      "comment_updated_at": "2026-07-09T01:40:27Z",
+      "comment_created_at": "2026-07-09T01:41:15Z",
+      "comment_updated_at": "2026-07-09T01:41:15Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -73,57 +73,170 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(settings): deep-merge nested settings objects across scopes (#102318)",
-        "body": "## Summary\n\n`deepMergeSettings` in `src/agents/sessions/settings-manager.ts` claimed to merge nested settings objects recursively, but the nested-object branch used a one-level spread (`{ ...baseValue, ...overrideValue }`). As a result, a higher-precedence settings scope that set only **one** `retry.provider` field replaced the entire `retry.provider` object from a lower-precedence scope, silently dropping its sibling fields.\n\nFixes #102318.\n\n## What Problem This Solves\n\nWhen `retry.provider` fields are split across settings scopes, the higher-precedence scope erases the sibling fields set by a lower-precedence scope:\n\n- Global `settings.json`: `{ \"retry\": { \"provider\": { \"timeoutMs\": 30000, \"maxRetries\": 5 } } }`\n- Project `.openclaw/settings.json`: `{ \"retry\": { \"provider\": { \"maxRetryDelayMs\": 5000 } } }`\n- Effective `getProviderRetrySettings()` returned `{ maxRetryDelayMs: 5000 }` — the global `timeoutMs` and `maxRetries` were lost and silently reverted to SDK defaults.\n\nThose values flow into the provider request path (`src/agents/sessions/sdk.ts` → `streamSimple`), so dropped fields change live provider request timeout and retry-count behavior for any user who splits `retry.provider` fields across scopes.\n\n## Why This Change Was Made\n\nThe comment on the branch says \"merge recursively,\" but `{ ...baseValue, ...overrideValue }` only merges one level deep. `retry.provider` is the only two-level-deep setting in the `Settings` shape today, so it is the field that observably loses siblings. All three scope-merge paths (global, project, runtime overrides) route through this one shared helper, so the fix is at a single location. Arrays and primitives are untouched and keep override-wins semantics, so no other nested setting changes behavior.\n\n## Changes\n\n- `src/agents/sessions/settings-manager.ts`: the nested-object branch now recurses via `deepMergeSettings(baseValue, overrideValue)` instead of a one-level spread.\n- `src/agents/sessions/settings-manager.test.ts`: added focused regression coverage.\n\n## User Impact\n\nUsers who set `retry.provider` fields in different scopes (e.g. global timeout/retries + project-specific delay) now get all fields merged field-by-field, so their configured provider request timeout and retry count are honored instead of silently reverting to SDK defaults.\n\n## Evidence\n\n### 1. Real setup transcript (standalone, not a test harness)\n\nA standalone script wrote real global (`agentDir/settings.json`) and project (`cwd/.openclaw/settings.json`) files, constructed the production `SettingsManager.create(cwd, agentDir)`, and printed `getProviderRetrySettings()`. Run once against `origin/main` and once with this patch (same script, same inputs):\n\n```\n# BEFORE (origin/main — line 145 one-level spread)\nGLOBAL settings.json  retry.provider = {\"timeoutMs\":30000,\"maxRetries\":5}\nPROJECT settings.json retry.provider = {\"maxRetryDelayMs\":5000}\neffective getProviderRetrySettings() = {\"maxRetryDelayMs\":5000}\n\n# AFTER (this PR — line 145 recurses)\nGLOBAL settings.json  retry.provider = {\"timeoutMs\":30000,\"maxRetries\":5}\nPROJECT settings.json retry.provider = {\"maxRetryDelayMs\":5000}\neffective getProviderRetrySettings() = {\"timeoutMs\":30000,\"maxRetries\":5,\"maxRetryDelayMs\":5000}\n```\n\nBefore the fix the global `timeoutMs` and `maxRetries` are dropped; after the fix all three fields survive.\n\n### 2. Regression tests\n\n`src/agents/sessions/settings-manager.test.ts` exercises the real `SettingsManager` over on-disk global + project files, the runtime-override path, and overlapping override-wins semantics.\n\nBefore the fix (reproduces the bug):\n```\nAssertionError: expected { timeoutMs: undefined, …(2) } to deeply equal { timeoutMs: 30000, …(2) }\n- Expected\n+ Received\n  {\n    \"maxRetries\": 9,\n    \"maxRetryDelayMs\": 60000,\n-   \"timeoutMs\": 30000,\n+   \"timeoutMs\": undefined,\n  }\n Test Files  2 failed (2)\n      Tests  6 failed | 4 passed (10)\n```\n\nAfter the fix:\n```\n ✓ SettingsManager nested settings merge > merges nested retry.provider fields set in global and project scopes\n ✓ SettingsManager nested settings merge > merges nested retry.provider fields from runtime overrides onto base scope\n ✓ SettingsManager nested settings merge > keeps override-wins semantics for overlapping nested fields\n Test Files  2 passed (2)\n      Tests  10 passed (10)\n```\n\n`oxlint` on the changed files passes clean, and full PR CI is green.\n\n## AI-assisted\n\nThis PR was AI-assisted (Claude Code).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
-        "branch": "fix/deep-merge-settings-nested-102318",
-        "head_sha": "331c48b98e82c764a086b3b8a9599eb260a924c1",
-        "author": "lzy3538",
+        "title": "Persist gateway restart audit events",
+        "body": "## Summary\n\n- add durable `gateway_restart_audit` rows for restart scheduling/coalescing/rescheduling/deferral-bypass/emission events\n- carry restart source/session/audit context through `/restart`, gateway restart tool, config writes, update runs, restart request API, and safe restart coordination\n- persist safe-restart preflight details so incidents like `cron.isolated_agent_setup_timeout` can be attributed from state instead of inferred from timing\n\n## What Problem This Solves\n\nGateway restart forensics currently loses the initiating reason/source for internal safe restart requests. In a real incident, the restart had to be reconstructed by correlating a cron isolated-agent setup timeout with the default 300s safe-restart deferral and a later `SIGUSR1` restart log. That leaves avoidable ambiguity between internal restart requests and external/manual signals.\n\nThis change writes durable audit records when restart requests are scheduled, coalesced, rescheduled, bypass deferral, or emit the restart signal. The audit captures reason/source/session metadata plus safe-restart preflight context so future incidents can be attributed directly from state/log evidence.\n\n## Evidence\n\nLocal validation run under guarded `openclaw-heavy-run`:\n\n- `pnpm format:check src/agents/tools/gateway-tool.ts src/auto-reply/reply/commands-session.ts src/gateway/server-methods/config-write-flow.ts src/gateway/server-methods/restart.test.ts src/gateway/server-methods/restart.ts src/gateway/server-methods/update.ts src/infra/restart-coordinator.test.ts src/infra/restart-coordinator.ts src/infra/restart.ts src/state/openclaw-state-db.generated.d.ts src/state/openclaw-state-schema.generated.ts src/state/openclaw-state-schema.sql`\n- `pnpm exec oxlint src/agents/tools/gateway-tool.ts src/auto-reply/reply/commands-session.ts src/gateway/server-methods/config-write-flow.ts src/gateway/server-methods/restart.test.ts src/gateway/server-methods/restart.ts src/gateway/server-methods/update.ts src/infra/restart-coordinator.test.ts src/infra/restart-coordinator.ts src/infra/restart.ts`\n- `pnpm check:architecture`\n- `pnpm tsgo:core`\n- `pnpm tsgo:core:test`\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/infra-runtime.test.ts --maxWorkers=1` — 36 tests passed\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/restart.test.ts src/infra/restart-coordinator.test.ts --maxWorkers=1` — 13 tests passed\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway-methods.config.ts src/gateway/server-methods/restart.test.ts --maxWorkers=1` — 6 tests passed\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway-server.config.ts src/gateway/server-cron.test.ts src/gateway/server-restart-deferral.test.ts --maxWorkers=1` — 28 tests passed\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-tools.config.ts src/agents/tools/gateway-tool.test.ts src/agents/openclaw-gateway-tool.test.ts --maxWorkers=1` — 14 tests passed\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.auto-reply-reply.config.ts src/auto-reply/reply/commands-session-restart.test.ts --maxWorkers=1` — 6 tests passed\n\nAdditional fix after first CI pass:\n\n- generated Kysely/schema files were regenerated with `pnpm db:kysely:gen`\n- changed-file oxlint and `pnpm check:architecture` now pass locally\n",
+        "branch": "restart-audit-pr",
+        "head_sha": "67e353dadc016141484afc05fb55abc71844218d",
+        "author": "anyech",
         "labels": [
+          "gateway",
           "agents",
-          "size: S",
+          "size: XL",
+          "proof: sufficient",
           "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/agents/sessions/settings-manager.test.ts",
-            "additions": 64,
+            "path": "src/agents/model-selection.ts",
+            "additions": 33,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/sessions/settings-manager.ts",
+            "path": "src/agents/tools/gateway-tool.ts",
             "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-session.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/config-write-flow.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/restart.test.ts",
+            "additions": 8,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/restart.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-reload-handlers.test.ts",
+            "additions": 213,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-reload-handlers.ts",
+            "additions": 41,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/infra-runtime.test.ts",
+            "additions": 147,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/restart-coordinator.test.ts",
+            "additions": 81,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/restart-coordinator.ts",
+            "additions": 65,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/restart.test.ts",
+            "additions": 186,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/restart.ts",
+            "additions": 382,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 18,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 20,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 68,
-        "deletions": 1,
+        "changedFiles": 17,
+        "additions": 1227,
+        "deletions": 39,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102333",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102333.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97189",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97189.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
+        "merge_state_status": "BLOCKED",
         "review_decision": "",
         "checks": {
           "total": 103,
           "gatingTotal": 98,
           "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 35,
+            "SUCCESS": 58,
+            "SKIPPED": 28,
+            "IN_PROGRESS": 9,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -136,15 +249,15 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2728,
+    "total_ms": 2520,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 460
+        "ms": 564
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1942
+        "ms": 1759
       },
       {
         "name": "classify_comment_commands",
@@ -160,11 +273,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 312
+        "ms": 185
       },
       {
         "name": "append_ledger",
