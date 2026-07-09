@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T15:17:15.023Z",
+  "generated_at": "2026-07-09T15:18:01.061Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T12:17:14.586Z",
+  "since": "2026-07-09T12:17:58.382Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102918
+    102917
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,128 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102917:4926579540:2026-07-09T15:17:54Z:clawsweeper_auto_repair",
+      "comment_id": "4926579540",
+      "comment_version_key": "4926579540:2026-07-09T15:17:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102917#issuecomment-4926579540",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102917,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T15:09:18Z",
+      "comment_updated_at": "2026-07-09T15:17:54Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=4046cbd6c0de44e743bdab6eee7aea4c832e3d33)",
+      "review_summary": "The PR lowercases Matrix outbound media `contentType` before resolving the Matrix media `msgtype` and adds formatting tests for mixed-case image, audio, and video MIME values.\n\nPR surface: Source +4, Tests +41. Total +45 across 2 files.\n\nReproducibility: yes. at the helper boundary: current main passes raw `contentType` into a case-sensitive `mediaKindFromMime`, so mixed-case image/audio/video values resolve to `MsgType.File`. I did not run a live Matrix homeserver send in this read-only review.",
+      "review_followup": "- [P2] Queue a narrow PR-branch repair because the remaining issues are mechanical test-boundary fixes rather than product judgment.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "4046cbd6c0de44e743bdab6eee7aea4c832e3d33",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(matrix): treat outbound media content types case-insensitively",
+        "body": "## What Problem This Solves\n\nMatrix outbound media picks the event `msgtype` from the media `contentType` without normalizing case, so it treats MIME types as case-sensitive. MIME types are case-insensitive (RFC 2045 §5.1), and this `contentType` can be a raw upstream HTTP `Content-Type` header (via `loadOutboundMediaFromUrl` → `loadWebMedia`, which passes the fetched header through for non-image media), so it can arrive in any case.\n\nIn `extensions/matrix/src/matrix/send/formatting.ts`, `resolveMatrixMsgType()` classifies every outbound media send via `mediaKindFromMime(contentType)` — the raw (non-normalizing) classifier, whose checks are `startsWith(\"image/\")` / `\"audio/\"` / `\"video/\"`. So `Image/PNG`, `Audio/Ogg`, and `Video/MP4` match none of them, fall through to `undefined`, and the send degrades to a plain **file** (`MsgType.File`) instead of `MsgType.Image` / `Audio` / `Video`.\n\n## Why This Change Was Made\n\nThis is the Matrix sibling of three fixes applying the same RFC 2045 rule:\n\n- #102431 `fix(msteams): ...` (merged)\n- #102753 `fix(qqbot): treat inbound attachment content types case-insensitively` (merged)\n- #102820 `fix(feishu): treat outbound media content types case-insensitively` (open)\n\nThe fix case-normalizes `contentType` once at the single classification call using the SDK's `normalizeLowercaseStringOrEmpty` (already used across this plugin), which trims and lowercases the value (and yields `\"\"` for nullish input, matching the previous `?? \"\"`). It does not strip MIME parameters, and it does not change any passthrough value — `resolveMatrixMsgType` returns only the `msgtype` enum, never the content type. `media.contentType` is untouched everywhere else (upload, `info.mimetype`, duration probe).\n\nNormalizing here (rather than swapping in the normalizing `kindFromMime` wrapper) is the minimal correct fix: the runtime media surface injected into plugins exposes only the raw `mediaKindFromMime`, not `kindFromMime`, and this plugin reaches core media helpers only through that injected runtime — so a wrapper swap would require widening the shared plugin runtime contract. A single local normalize keeps the change inside the one affected function.\n\nScope is limited to this one classification site. It deliberately does not touch the core `mediaKindFromMime` helper (its raw-vs-normalizing split — `kindFromMime` wraps it with `normalizeMimeType` — is intentional), the separate `info.mimetype` header field, or any other channel.\n\nVoice sends are already case-safe and are not changed: `resolveMatrixVoiceDecision` routes through the core `isVoiceCompatibleAudio`, which normalizes MIME case internally, and `send.ts` composes `msgtype = useVoice ? MsgType.Audio : baseMsgType`, so a voice-intent audio message is unaffected. The degrade this fixes is the msgtype classification of **non-voice** image / audio / video.\n\n## User Impact\n\nOn Matrix, outbound media whose `contentType` uses non-lowercase casing now sends with the correct msgtype instead of degrading to a generic file: images render as images, audio as audio, video as video. Lowercase content types are unaffected. No config, schema, or API changes.\n\n## Evidence\n\nReal-behavior boundary capture — drives the shipped `resolveMatrixMsgType` and `resolveMatrixVoiceDecision`, composed exactly as `send.ts` composes them (`msgtype = useVoice ? MsgType.Audio : baseMsgType`), under `node --import tsx`. The matrix runtime is wired with the **real** core `mediaKindFromMime` and the **real** core `isVoiceCompatibleAudio` — no classifier is faked. A live Matrix homeserver send is not exercised (infeasible here); the classification below is the shipped code that selects the outgoing event's msgtype.\n\n```\n                                 contentType     before (unfixed)          after (fixed)\nmixed-case image                 \"Image/PNG\"     msgtype=m.file            msgtype=m.image\nmixed-case audio (non-voice)     \"Audio/Ogg\"     msgtype=m.file            msgtype=m.audio\nmixed-case video                 \"Video/MP4\"     msgtype=m.file            msgtype=m.video\nmixed-case audio (voice intent)  \"Audio/Ogg\"     msgtype=m.audio          msgtype=m.audio   (unchanged; already correct)\nlowercase image (regression)     \"image/png\"     msgtype=m.image          msgtype=m.image   (unchanged)\n```\n\nUnit tests (`extensions/matrix/src/matrix/send/formatting.test.ts`, 4 added) drive `resolveMatrixMsgType` through the real core `mediaKindFromMime`: mixed-case image/audio/video → their proper MsgType, plus a lowercase-image regression. Reverting the production change fails exactly the three mixed-case tests and leaves the lowercase one green.\n\nLocal: matrix extension prod + test typecheck clean (`tsgo:extensions`, `tsgo:test:extensions`); `oxfmt` clean; targeted matrix formatting suite green. Full `check:changed` (extension prod + extension test lanes) runs on CI.\n",
+        "branch": "fix/matrix-outbound-msgtype-content-type-case",
+        "head_sha": "4046cbd6c0de44e743bdab6eee7aea4c832e3d33",
+        "author": "masatohoshino",
+        "labels": [
+          "channel: matrix",
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/matrix/src/matrix/send/formatting.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/send/formatting.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 46,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102917",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102917.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 36,
+            "SUCCESS": 55,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 768,
+    "total_ms": 2956,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 426
+        "ms": 358
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2307
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +166,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 331
+        "ms": 240
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
