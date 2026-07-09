@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T04:18:56.949Z",
+  "generated_at": "2026-07-09T04:18:59.470Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T01:18:54.547Z",
+  "since": "2026-07-09T01:18:57.123Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    97731
+    102407
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97731:4830748742:2026-07-09T04:18:50Z:clawsweeper_auto_repair",
-      "comment_id": "4830748742",
-      "comment_version_key": "4830748742:2026-07-09T04:18:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97731#issuecomment-4830748742",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102407:4921499707:2026-07-09T04:18:52Z:clawsweeper_auto_repair",
+      "comment_id": "4921499707",
+      "comment_version_key": "4921499707:2026-07-09T04:18:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102407#issuecomment-4921499707",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97731,
+      "issue_number": 102407,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T09:06:43Z",
-      "comment_updated_at": "2026-07-09T04:18:50Z",
+      "comment_created_at": "2026-07-09T04:13:22Z",
+      "comment_updated_at": "2026-07-09T04:18:52Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=cd3307897f0bd3b0ac0d333e826ff342faa11df4)",
-      "review_summary": "The PR adds a zombie reaper that sends SIGCHLD from gateway startup and post-kill process paths, plus unit/proof files and a dead-code allowlist entry.\n\nPR surface: Source +216, Tests +70, Other +1. Total +287 across 7 files.\n\nReproducibility: yes. for the PR defect: libuv source shows SIGCHLD handling waits tracked child PIDs, while this PR relies on it to reap untracked direct zombies. The full production leak still needs branch-tied Linux/Docker before-and-after proof.",
-      "review_followup": "- [P1] Human process-lifecycle review is needed because the blocker is fix direction plus real behavior proof, not a narrow mechanical repair.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=9d2d398c811bf5d604476a906f6b5d9066a20a74)",
+      "review_summary": "The PR replaces the Matrix inbound verbose preview raw slice with `truncateUtf16Safe` and adds a UTF-16 boundary regression test.\n\nPR surface: Source +1, Tests +48. Total +49 across 2 files.\n\nReproducibility: yes. from source inspection. Current `main` raw-slices `bodyText` at 200 UTF-16 code units, so a 199-code-unit prefix followed by an emoji reaches the lone-surrogate cut point.",
+      "review_followup": "- [P1] The PR needs contributor or maintainer follow-up for the test type error and real behavior proof; ClawSweeper should not open repair markers while the external proof gate remains contributor-owned.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "cd3307897f0bd3b0ac0d333e826ff342faa11df4",
+      "expected_head_sha": "9d2d398c811bf5d604476a906f6b5d9066a20a74",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,37 +70,30 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(process): add zombie reaper to prevent child process leak",
-        "body": "Closes #97616\n\n## What Problem This Solves\n\nLong-running openclaw gateway processes in Docker accumulate zombie processes over time. One user reported 800+ zombie processes (`openclaw-hooks`, `bash`, `codex`, `chrome-headless`) after running openclaw 2026.6.10 for several months. Each zombie consumes a PID slot and kernel resources. When the process limit is exhausted, the runtime degrades (`spawn EAGAIN`, `uv_thread_create`, gateway instability, connector silence).\n\n**Root cause**: When openclaw kills a process tree via `kill(-pid, SIGKILL)`, grandchildren may exit and become zombies **before** their parent (openclaw's direct child) is killed. When the group leader dies, the zombie grandchildren are reparented to PID 1, but **no new SIGCHLD is sent** because the grandchildren already exited. The zombies remain permanently unreaped.\n\nlibuv already calls `waitpid(-1, WNOHANG)` in a loop inside its SIGCHLD handler, which would reap these zombies — but the SIGCHLD never fires for processes that exited before being reparented.\n\n## Why This Change Was Made\n\nThe fix adds a lightweight zombie reaper (`src/process/zombie-reaper.ts`) with two mechanisms:\n\n1. **Post-kill reaping**: After every process-tree kill (in `process/exec.ts` and `process/supervisor/supervisor.ts`), call `reapZombies()` which sends `SIGCHLD` to the current process. This triggers libuv's `waitpid(-1, WNOHANG)` loop, reaping any zombie children — including grandchildren reparented to us.\n\n2. **Periodic fallback** (every 30s): A background `unref()`d timer in the gateway server triggers the same SIGCHLD sweep, catching zombies that accumulated outside kill-tree paths.\n\nThis approach is pure Node.js (`process.kill(process.pid, 'SIGCHLD')`) — no native addons, no external dependencies, no Python helpers. It leverages libuv's existing waitpid loop.\n\n**Why not use tini?** The Docker image already uses `tini -s` as PID 1, which should reap orphans. But tini cannot reap grandchildren that exit *before* being reparented — the race is intrinsic to `kill(-pid, SIGKILL)` timing. The fix closes the gap at the source: reaping happens immediately after every process-tree kill.\n\n## User Impact\n\nGateway processes running in Docker (or as PID 1 in any container) no longer accumulate zombie processes over weeks/months. The periodic reaper runs every 30s with no measurable CPU overhead. Windows is a no-op (SIGCHLD doesn't exist).\n\n## Evidence\n\n### Code quality\n- `oxlint --tsconfig config/tsconfig/oxlint.core.json` on all 5 changed files: **0 errors, 0 warnings**\n- `git diff --check`: passed (no whitespace errors)\n\n### Unit tests\n- `src/process/zombie-reaper.test.ts` (6 tests): coverage of `reapZombies()` safety, `startZombieReaper`/`stopZombieReaper` lifecycle, idempotency, and platform no-ops\n\n### Behavior proof\n- `src/process/zombie-reaper.proof.ts`: run on Linux with `node --import tsx`. All 6 invariants verified:\n  ```\n  [zombie-reaper.proof] === Zombie Reaper Behavior Proof ===\n  [zombie-reaper.proof] Step 1: reapZombies() does not throw\n  [zombie-reaper.proof]   PASS: reapZombies() completed without error\n  [zombie-reaper.proof] Step 2: Spawn child processes\n  [zombie-reaper.proof]   PASS: 5 child processes spawned and reaped by Node.js\n  [zombie-reaper.proof] Step 3: reapZombies() is idempotent\n  [zombie-reaper.proof]   PASS: reapZombies() called 3 times consecutively without errors\n  [zombie-reaper.proof] Step 4: startZombieReaper / stopZombieReaper lifecycle\n  [zombie-reaper.proof]   PASS: restart after stop works\n  [zombie-reaper.proof] Step 5: Post-reaping process state\n  [zombie-reaper.proof]   System zombies: 0 (485 total)\n  [zombie-reaper.proof] === All proofs passed ===\n  ```\n\n### Before/after (Docker simulation)\n```\n# Before fix — zombie accumulation scenario (from #97616 reporter):\n  total processes: 336\n  zombies: 225\n  zombie_comm openclaw-hooks: 113\n  zombie_comm bash:          108\n\n# After fix — with zombie reaper active:\n  $ ps aux | grep defunct | wc -l\n  0\n  # Periodic reaper (30s) + post-kill reaping prevent accumulation.\n```\n\n### Not tested\n- Multi-month soak test in a real Docker deployment (requires extended runtime)\n- Interaction with seccomp/SELinux blocking SIGCHLD delivery (silently caught)\n\n## Merge Risk\n\n**Low**. The change:\n- Only sends SIGCHLD to the current process, which libuv already handles safely\n- Is a no-op on Windows\n- Catches all errors silently (seccomp/SELinux restrictions are non-fatal)\n- The periodic timer is `.unref()`'d so it doesn't keep the event loop alive\n- 6 unit tests + behavior proof included\n- No external dependencies or native addons\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/zombie-reaper-97616",
-        "head_sha": "cd3307897f0bd3b0ac0d333e826ff342faa11df4",
-        "author": "krissding",
+        "title": "fix(matrix): truncate inbound preview on UTF-16 code-point boundary",
+        "body": "## What Problem This Solves\n\nThe Matrix inbound message handler builds a verbose log preview with `bodyText.slice(0, 200)`. When an inbound message contains a supplementary-plane character (emoji, extended CJK, etc.) whose surrogate pair straddles the 200th UTF-16 code unit, the slice splits the pair and emits a **lone surrogate** into the verbose log line. Lone surrogates corrupt JSON log serialization, break terminal rendering, and can crash UTF-8-validating log shippers.\n\nThis is the same defect class that #101630 just fixed for the Mattermost sibling monitor (`extensions/mattermost/src/mattermost/monitor.ts:1681`); the Matrix monitor has the identical pre-fix line.\n\n## Why This Change Was Made\n\n- **Root cause:** `String.prototype.slice(0, N)` operates on UTF-16 code units, so it can cut between the high and low surrogate of an astral character.\n- **Fix:** Use the shared `truncateUtf16Safe` helper (re-exported via `openclaw/plugin-sdk/text-utility-runtime`, the exact path the Mattermost fix uses) which backtracks to keep complete surrogate pairs intact.\n- The helper already exists and is the canonical pattern; this PR only migrates the one remaining Matrix inbound-preview call site.\n\n## User Impact\n\nVerbose Matrix inbound logs no longer contain malformed lone surrogates. ASCII-only previews are unchanged (still capped at 200 code units). No effect on message routing, delivery, or the agent turn — only the verbose diagnostic preview string.\n\n## Linked context\n\nN/A (no existing issue). Sibling fix: #101630.\n\n## Real behavior proof\n\n| # | Field | Value |\n|---|-------|-------|\n| 1 | Behavior or issue addressed | Matrix inbound verbose preview (`bodyText.slice(0, 200)`) splits a surrogate pair when an emoji straddles the 200-code-unit boundary, emitting a lone surrogate into the log line. |\n| 2 | Real environment tested | Linux x64, Node 22, commit `9d2d398c811bf5d604476a906f6b5d9066a20a74` |\n| 3 | Exact steps or command run | `node --import tsx /tmp/verify-matrix-preview.mjs` — builds an inbound body whose 200th code unit is a high surrogate (😀 = `\\uD83D\\uDE00`) and compares the old `slice(0,200)` path against `truncateUtf16Safe(body, 200)`. |\n| 4 | Evidence after fix | Terminal capture of `node` runtime verification (copied live output):\\n```\\n[BEFORE] wellFormed=false preview-end=\"xx\\ud83d\"\\n[AFTER]  wellFormed=true preview-end=\"xxx\"\\n[PASS] old slice(0,200) splits surrogate pair (reproduces bug)\\n[PASS] truncateUtf16Safe keeps complete pair at boundary\\n[PASS] plain ASCII still truncates to 200 (got 200)\\n[PASS] short input unchanged\\n``` |\n| 5 | Observed result after fix | The fixed preview is well-formed UTF-16 (no lone surrogate); the old path is provably malformed (`wellFormed=false`, ending in the lone high surrogate `\\ud83d`). Plain ASCII still truncates to exactly 200 code units; short input is unchanged. |\n| 6 | What was not tested | End-to-end live Matrix homeserver traffic (no credentialled homeserver in this environment); the colocated unit test covers the truncation invariant directly. |\n\n## Tests and validation\n\n```\n$ node scripts/run-vitest.mjs extensions/matrix/src/matrix/monitor/handler.inbound-preview.test.ts\n✓ extensions/matrix/src/matrix/monitor/handler.inbound-preview.test.ts (4 tests)\nTest Files  1 passed (1)\n     Tests  4 passed (4)\n```\n\nNew test `handler.inbound-preview.test.ts` protects the truncation invariant: emoji-straddling-boundary stays well-formed, naive slice is documented as malformed, ASCII truncates to the limit, short input unchanged.\n\n## Risk checklist\n\n- [x] One concern, one PR — only the Matrix inbound preview truncation.\n- [x] No config/env/default surface change.\n- [x] No SDK/protocol/auth/provider behavior change (reuses an already-exported helper).\n- [x] Backward compatible — ASCII previews byte-identical; only malformed lone surrogates are removed.\n- [x] No new deps (helper already in the SDK barrel the handler imports).\n- [x] No CHANGELOG edit (per release policy).\n- [x] Tests added.\n\n- [x] Allow edits by maintainers\n",
+        "branch": "fix/matrix-inbound-preview-surrogate-truncation",
+        "head_sha": "9d2d398c811bf5d604476a906f6b5d9066a20a74",
+        "author": "miorbnli",
         "labels": [
-          "gateway",
-          "scripts",
-          "size: M",
-          "P1",
+          "channel: matrix",
+          "size: S",
+          "P3",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "scripts/deadcode-unused-files.allowlist.mjs",
-            "additions": 1,
+            "path": "extensions/matrix/src/matrix/monitor/handler.inbound-preview.test.ts",
+            "additions": 48,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/exec.ts",
-            "additions": 6,
-            "deletions": 0,
+            "path": "extensions/matrix/src/matrix/monitor/handler.ts",
+            "additions": 2,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
@@ -128,31 +121,44 @@
             "changeType": "ADDED"
           }
         ],
-        "changedFiles": 7,
-        "additions": 287,
-        "deletions": 0,
+        "changedFiles": 2,
+        "additions": 50,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97731",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97731.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102407",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102407.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 104,
-          "gatingTotal": 99,
+          "total": 96,
+          "gatingTotal": 91,
           "counts": {
-            "SUCCESS": 67,
+            "CANCELLED": 1,
+            "SUCCESS": 55,
             "SKIPPED": 36,
+            "FAILURE": 3,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
@@ -164,19 +170,19 @@
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2707,
+    "total_ms": 2650,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 385
+        "ms": 421
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2004
+        "ms": 1912
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -192,11 +198,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 296
+        "ms": 294
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
