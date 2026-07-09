@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T11:34:52.922Z",
+  "generated_at": "2026-07-09T11:34:50.755Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T08:34:52.565Z",
+  "since": "2026-07-09T08:34:48.636Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102702
+    102189
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 18,
+  "commands_seen": 7,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,736 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102189:4924299470:2026-07-09T10:53:38Z:re_review",
+      "comment_id": "4924299470",
+      "comment_version_key": "4924299470:2026-07-09T10:53:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102189#issuecomment-4924299470",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102189,
+      "author": "baanish",
+      "author_id": 47579874,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-09T10:53:38Z",
+      "comment_updated_at": "2026-07-09T10:53:38Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: stabilize room-event prompt cache mode",
+        "body": "Related: #102175\n\n## What Problem This Solves\n\nFixes prompt-cache churn in long-lived channel sessions where OpenClaw was changing cache-visible prompt/request prefixes between turns.\n\nThe user-visible symptom was same-session provider traces with stable model/cache key but cached prefixes swinging from warm (`~49k-52k`) to much smaller prefixes (`~2k-10k`, later `~37k-40k` ceilings) as room-event, sender-policy, and Responses prompt-boundary details changed the request prefix.\n\n## What Changed\n\nThis PR now covers three cache invalidators found in the same Discord/channel flow:\n\n1. **Room-event delivery mode vs prompt mode**\n   - keeps actual non-internal room-event delivery strict `message_tool_only`\n   - adds/threads a prompt-facing delivery mode so system prompts, embedded runs, Codex app-server prompts, dynamic-tool construction, memory/flush runners, and queued followups can use a session-stable prompt contract\n\n2. **Ambient room-event tool inventory**\n   - prevents owner/non-owner room-event sender flips from changing cache-visible Gateway tool schemas\n   - keeps explicit non-owner execution of owner-only tools blocked\n   - preserves the owner-only boundary while avoiding prompt/tool-list churn for ambient room events\n\n3. **Responses prompt cache boundary preservation**\n   - stops flattening OpenClaw's internal system-prompt cache boundary into one pre-history `instructions`/system message\n   - keeps the stable prefix before replayed history and appends the dynamic/current-turn suffix after replayed history\n   - applies this to the agent OpenAI Responses transport, shared OpenAI Responses conversion, and ChatGPT/Codex Responses provider path\n   - preserves old behavior when no cache boundary is present\n\n## Why This Shape\n\nThe cache-stable prefix should contain durable instructions and tool schemas. Current-turn routing notes, authorization notes, and other dynamic prompt suffixes should not be prepended ahead of replayed history, because that makes the provider see a different prefix every turn.\n\nThis PR keeps delivery and authorization semantics intact while making the cache-visible request prefix stable for the reporter's long-lived channel sessions.\n\n## Evidence\n\nOriginal room-event prompt-mode invalidator:\n- Same session/model/cache-key family alternated between automatic-reply prompt text and `message_tool_only` prompt text.\n- Prompt-cache reuse varied from near-cold prefixes to warm prefixes despite same provider/model family.\n- Source path showed non-internal room events forced effective delivery to `message_tool_only`, and prompt construction consumed the effective mode.\n\nTool-inventory invalidator:\n- Same-session traces differed between `tools=47` and `tools=44`.\n- Missing cache-visible tools were `cron`, `gateway`, and `nodes`.\n- Sanitized gateway log: `[agents/tool-policy] tool policy removed 3 tool(s) via gateway sender owner-only tools.deny: cron, gateway, nodes`.\n- After the earlier PR head, live same-session GLM-5.2 traces showed stable `47` tools and cached prefixes around `46.9k-52.2k` on warm turns.\n\nResponses boundary invalidator:\n- Later live turns still got low cache even with stable tool inventory.\n- Backtrace showed the internal prompt cache boundary was flattened into one pre-history `instructions` string / system prompt message before provider transport.\n- The new tests pin the corrected shape: stable prefix before input/history, dynamic suffix as the final input item, and no leaked cache-boundary marker.\n\nPrivate user IDs, channel IDs, hostnames, API keys, and full trace identifiers are intentionally omitted.\n\n## Validation\n\n- `pnpm vitest run src/agents/openai-transport-stream.test.ts packages/ai/src/providers/openai-chatgpt-responses.test.ts packages/ai/src/providers/openai-responses-shared.test.ts` — passed, 656 tests.\n- `pnpm tsgo:core` — passed.\n- `git diff --check` — passed.\n- `pnpm build` — passed.\n- Local install smoke: rebuilt `7470c22565f`, installed into LaunchAgent, gateway status running with connectivity probe OK.\n\nEarlier validation on this PR also covered queued followups, embedded runners, Codex app-server prompt-facing mode, dynamic-tool construction, effective `message_tool_only` delivery, and owner-only tool execution boundaries.\n\nDisclaimer: This PR was filed and updated autonomously by Codex on behalf of the reporter; private identifiers were stripped from evidence before submission.",
+        "branch": "codex/stabilize-room-event-prompt-cache",
+        "head_sha": "4fd99b492c159558aa22e7b0fa739a8e8a70a1fb",
+        "author": "baanish",
+        "labels": [
+          "agents",
+          "size: M",
+          "extensions: codex",
+          "P2"
+        ],
+        "files": [
+          {
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/thread-lifecycle.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-chatgpt-responses.test.ts",
+            "additions": 15,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-chatgpt-responses.ts",
+            "additions": 39,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-responses-shared.test.ts",
+            "additions": 13,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-responses-shared.ts",
+            "additions": 22,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.create-openclaw-coding-tools.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compaction-runtime-context.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 5,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/params.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 28,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 99,
+            "deletions": 40,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-run-params.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-utils.test.ts",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.media-only.test.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 26,
+        "additions": 385,
+        "deletions": 89,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102189",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102189.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 59,
+            "SKIPPED": 29,
+            "IN_PROGRESS": 4,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102189:4924292973:2026-07-09T10:52:54Z:freeform_assist",
+      "comment_id": "4924292973",
+      "comment_version_key": "4924292973:2026-07-09T10:52:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102189#issuecomment-4924292973",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102189,
+      "author": "baanish",
+      "author_id": 47579874,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-09T10:52:54Z",
+      "comment_updated_at": "2026-07-09T10:52:54Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review\\n\\ncurrent head: `7470c22565f9511600173633ad7a08c2d37a05c5`. the pr body now includes exact `## what problem this solves` and `## evidence` sections plus validation for the widened responses cache-boundary fix.",
+      "intent": "freeform_assist",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "re-review\\n\\nCurrent head: `7470c22565f9511600173633ad7a08c2d37a05c5`. The PR body now includes exact `## What Problem This Solves` and `## Evidence` sections plus validation for the widened Responses cache-boundary fix.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: stabilize room-event prompt cache mode",
+        "body": "Related: #102175\n\n## What Problem This Solves\n\nFixes prompt-cache churn in long-lived channel sessions where OpenClaw was changing cache-visible prompt/request prefixes between turns.\n\nThe user-visible symptom was same-session provider traces with stable model/cache key but cached prefixes swinging from warm (`~49k-52k`) to much smaller prefixes (`~2k-10k`, later `~37k-40k` ceilings) as room-event, sender-policy, and Responses prompt-boundary details changed the request prefix.\n\n## What Changed\n\nThis PR now covers three cache invalidators found in the same Discord/channel flow:\n\n1. **Room-event delivery mode vs prompt mode**\n   - keeps actual non-internal room-event delivery strict `message_tool_only`\n   - adds/threads a prompt-facing delivery mode so system prompts, embedded runs, Codex app-server prompts, dynamic-tool construction, memory/flush runners, and queued followups can use a session-stable prompt contract\n\n2. **Ambient room-event tool inventory**\n   - prevents owner/non-owner room-event sender flips from changing cache-visible Gateway tool schemas\n   - keeps explicit non-owner execution of owner-only tools blocked\n   - preserves the owner-only boundary while avoiding prompt/tool-list churn for ambient room events\n\n3. **Responses prompt cache boundary preservation**\n   - stops flattening OpenClaw's internal system-prompt cache boundary into one pre-history `instructions`/system message\n   - keeps the stable prefix before replayed history and appends the dynamic/current-turn suffix after replayed history\n   - applies this to the agent OpenAI Responses transport, shared OpenAI Responses conversion, and ChatGPT/Codex Responses provider path\n   - preserves old behavior when no cache boundary is present\n\n## Why This Shape\n\nThe cache-stable prefix should contain durable instructions and tool schemas. Current-turn routing notes, authorization notes, and other dynamic prompt suffixes should not be prepended ahead of replayed history, because that makes the provider see a different prefix every turn.\n\nThis PR keeps delivery and authorization semantics intact while making the cache-visible request prefix stable for the reporter's long-lived channel sessions.\n\n## Evidence\n\nOriginal room-event prompt-mode invalidator:\n- Same session/model/cache-key family alternated between automatic-reply prompt text and `message_tool_only` prompt text.\n- Prompt-cache reuse varied from near-cold prefixes to warm prefixes despite same provider/model family.\n- Source path showed non-internal room events forced effective delivery to `message_tool_only`, and prompt construction consumed the effective mode.\n\nTool-inventory invalidator:\n- Same-session traces differed between `tools=47` and `tools=44`.\n- Missing cache-visible tools were `cron`, `gateway`, and `nodes`.\n- Sanitized gateway log: `[agents/tool-policy] tool policy removed 3 tool(s) via gateway sender owner-only tools.deny: cron, gateway, nodes`.\n- After the earlier PR head, live same-session GLM-5.2 traces showed stable `47` tools and cached prefixes around `46.9k-52.2k` on warm turns.\n\nResponses boundary invalidator:\n- Later live turns still got low cache even with stable tool inventory.\n- Backtrace showed the internal prompt cache boundary was flattened into one pre-history `instructions` string / system prompt message before provider transport.\n- The new tests pin the corrected shape: stable prefix before input/history, dynamic suffix as the final input item, and no leaked cache-boundary marker.\n\nPrivate user IDs, channel IDs, hostnames, API keys, and full trace identifiers are intentionally omitted.\n\n## Validation\n\n- `pnpm vitest run src/agents/openai-transport-stream.test.ts packages/ai/src/providers/openai-chatgpt-responses.test.ts packages/ai/src/providers/openai-responses-shared.test.ts` — passed, 656 tests.\n- `pnpm tsgo:core` — passed.\n- `git diff --check` — passed.\n- `pnpm build` — passed.\n- Local install smoke: rebuilt `7470c22565f`, installed into LaunchAgent, gateway status running with connectivity probe OK.\n\nEarlier validation on this PR also covered queued followups, embedded runners, Codex app-server prompt-facing mode, dynamic-tool construction, effective `message_tool_only` delivery, and owner-only tool execution boundaries.\n\nDisclaimer: This PR was filed and updated autonomously by Codex on behalf of the reporter; private identifiers were stripped from evidence before submission.",
+        "branch": "codex/stabilize-room-event-prompt-cache",
+        "head_sha": "4fd99b492c159558aa22e7b0fa739a8e8a70a1fb",
+        "author": "baanish",
+        "labels": [
+          "agents",
+          "size: M",
+          "extensions: codex",
+          "P2"
+        ],
+        "files": [
+          {
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/thread-lifecycle.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-chatgpt-responses.test.ts",
+            "additions": 15,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-chatgpt-responses.ts",
+            "additions": 39,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-responses-shared.test.ts",
+            "additions": 13,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-responses-shared.ts",
+            "additions": 22,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.create-openclaw-coding-tools.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compaction-runtime-context.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 5,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/params.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 28,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 99,
+            "deletions": 40,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-run-params.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-utils.test.ts",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.media-only.test.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 26,
+        "additions": 385,
+        "deletions": 89,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102189",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102189.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 59,
+            "SKIPPED": 29,
+            "IN_PROGRESS": 4,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "author association NONE and repository permission read are not allowed"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102189:4919682825:2026-07-08T22:13:26Z:re_review",
+      "comment_id": "4919682825",
+      "comment_version_key": "4919682825:2026-07-08T22:13:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102189#issuecomment-4919682825",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102189,
+      "author": "baanish",
+      "author_id": 47579874,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-08T22:13:26Z",
+      "comment_updated_at": "2026-07-08T22:13:26Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review please",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "please.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102189:4919476169:2026-07-08T21:42:42Z:re_review",
+      "comment_id": "4919476169",
+      "comment_version_key": "4919476169:2026-07-08T21:42:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102189#issuecomment-4919476169",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102189,
+      "author": "baanish",
+      "author_id": 47579874,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-08T21:42:42Z",
+      "comment_updated_at": "2026-07-08T21:42:42Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review please",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "please.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102189:4919154973:2026-07-08T20:59:43Z:re_review",
+      "comment_id": "4919154973",
+      "comment_version_key": "4919154973:2026-07-08T20:59:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102189#issuecomment-4919154973",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102189,
+      "author": "baanish",
+      "author_id": 47579874,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-08T20:59:43Z",
+      "comment_updated_at": "2026-07-08T20:59:43Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102189:4918868193:2026-07-08T20:20:48Z:re_review",
+      "comment_id": "4918868193",
+      "comment_version_key": "4918868193:2026-07-08T20:20:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102189#issuecomment-4918868193",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102189,
+      "author": "baanish",
+      "author_id": 47579874,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-08T20:20:48Z",
+      "comment_updated_at": "2026-07-08T20:20:48Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102189:4916632116:2026-07-08T15:50:23Z:re_review",
+      "comment_id": "4916632116",
+      "comment_version_key": "4916632116:2026-07-08T15:50:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102189#issuecomment-4916632116",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102189,
+      "author": "baanish",
+      "author_id": 47579874,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-08T15:50:23Z",
+      "comment_updated_at": "2026-07-08T15:50:23Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 580,
+    "total_ms": 4156,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 346
+        "ms": 454
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1649
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,7 +774,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 222
+        "ms": 2022
       },
       {
         "name": "append_ledger",
