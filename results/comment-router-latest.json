@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T06:57:24.927Z",
+  "generated_at": "2026-07-09T06:57:25.488Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T03:57:24.710Z",
+  "since": "2026-07-09T03:57:22.431Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102472
+    102473
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,19 +29,126 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102473:4922413400:2026-07-09T06:57:18Z:clawsweeper_auto_repair",
+      "comment_id": "4922413400",
+      "comment_version_key": "4922413400:2026-07-09T06:57:18Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102473#issuecomment-4922413400",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102473,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T06:51:09Z",
+      "comment_updated_at": "2026-07-09T06:57:18Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=eeb181c324be039abfeb44814f8d69e0c4736212)",
+      "review_summary": "The PR changes Slack inbound threading so `replyToId` is only set for genuine thread replies and updates Slack threading tests for non-reply message cases.\n\nPR surface: Source 0, Tests +32. Total +32 across 2 files.\n\nReproducibility: yes. at source level. Current main self-references `replyToId` for non-replies, and the PR regression is also source-reproducible because Slack tool context derives `currentThreadTs` from `ReplyToId` before action delivery injects `threadTs`.",
+      "review_followup": "- [P2] The blocker is a concrete Slack threading repair on the PR branch, not a product decision or broad redesign.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "eeb181c324be039abfeb44814f8d69e0c4736212",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(slack): omit reply_to_id for non-reply inbound messages (#102457)",
+        "body": "## Summary\n\nIn the Slack channel plugin, `resolveSlackThreadContext` computed `replyToId` as `incomingThreadTs ?? messageTs` without checking the `isThreadReply` flag it derives one line above. As a result, the `reply_to_id` field of the inbound \"Conversation info\" prompt metadata equaled `message_id` for every inbound message that is not a genuine thread reply.\n\nFixes #102457.\n\n## What Problem This Solves\n\n`reply_to_id` should identify the message a reply is responding to, and be omitted when the message is not a reply. Before this fix it was wrong for the majority of Slack traffic:\n\n- **Standalone message** (no `thread_ts`): `replyToId` fell through the `??` to `messageTs`, so it equaled `message_id`.\n- **Thread-root message** (`thread_ts == ts`, including the Slack Agents/Assistants DM root case): `replyToId` became `incomingThreadTs`, which equals `messageTs`, so it again equaled `message_id`.\n- Only a **genuine reply** (`thread_ts` present and different from `ts`) was correct.\n\nThat corrupts a semantic signal in the untrusted prompt metadata that both the model and internal logic read — e.g. `chatWindowCoversReplyContext` in `src/auto-reply/reply/inbound-meta.ts` branches on `replyToId` truthiness to decide reply-chain coverage.\n\n## Why This Change Was Made\n\n`resolveSlackThreadContext` already derives `isThreadReply`, and its sibling `resolveSlackThreadTargets` in the same file already gates on it correctly for outbound threading. The inbound `replyToId` formula simply never applied the same gate. Gating it is narrowly scoped: `threadContext.replyToId` is consumed at exactly one call site (the inbound prompt metadata field), so the fix does not touch outbound reply threading, session routing, or thread-id derivation, which use separate fields (`messageThreadId`, `incomingThreadTs`, `isThreadReply`).\n\n## Changes\n\n- `extensions/slack/src/threading.ts`: `replyToId = isThreadReply ? incomingThreadTs : undefined` (was `incomingThreadTs ?? messageTs`).\n- `extensions/slack/src/threading.test.ts`: added focused `replyToId` gating tests and corrected existing assertions that had frozen the buggy `replyToId == message_id` value for non-reply messages.\n\n## User Impact\n\nEvery Slack integration: non-reply inbound messages (the majority of traffic) now get `reply_to_id` omitted instead of falsely equal to `message_id`. Genuine threaded replies are unaffected — they still carry the parent message's timestamp.\n\n## Evidence\n\n### 1. Real setup transcript (standalone, not a test harness)\n\nA standalone script drove the real `resolveSlackThreadContext` with the three inbound shapes, run against `origin/main` and against this patch on identical inputs:\n\n```\n# BEFORE (origin/main — replyToId = incomingThreadTs ?? messageTs)\nstandalone (no thread_ts)     | message_id=1751234567.123456 isThreadReply=false reply_to_id=\"1751234567.123456\"\nthread-root (thread_ts==ts)   | message_id=1751234567.123456 isThreadReply=false reply_to_id=\"1751234567.123456\"\ngenuine reply (thread_ts!=ts) | message_id=1751234599.999999 isThreadReply=true reply_to_id=\"1751234567.123456\"\n\n# AFTER (this PR — replyToId = isThreadReply ? incomingThreadTs : undefined)\nstandalone (no thread_ts)     | message_id=1751234567.123456 isThreadReply=false reply_to_id=undefined\nthread-root (thread_ts==ts)   | message_id=1751234567.123456 isThreadReply=false reply_to_id=undefined\ngenuine reply (thread_ts!=ts) | message_id=1751234599.999999 isThreadReply=true reply_to_id=\"1751234567.123456\"\n```\n\nBefore the fix, `reply_to_id` equals `message_id` for both non-reply shapes; after the fix it is omitted, and the genuine reply still points at the parent message.\n\n### 2. Regression tests\n\n```\n Test Files  1 passed (1)\n      Tests  14 passed (14)\n```\n\nThe new `replyToId gating` tests fail on `origin/main` and pass with this patch. `oxlint` on the changed files passes clean.\n\n## AI-assisted\n\nThis PR was AI-assisted (Claude Code).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+        "branch": "fix/slack-reply-to-id-non-reply-102457",
+        "head_sha": "eeb181c324be039abfeb44814f8d69e0c4736212",
+        "author": "lzy3538",
+        "labels": [
+          "channel: slack",
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/slack/src/threading.test.ts",
+            "additions": 36,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/threading.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 37,
+        "deletions": 5,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102473",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102473.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "gatingTotal": 91,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 36,
+            "SUCCESS": 57,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 345,
+    "total_ms": 3341,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 204
+        "ms": 1040
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2000
       },
       {
         "name": "classify_comment_commands",
@@ -61,11 +168,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 128
+        "ms": 275
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
