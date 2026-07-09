@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-954"
 mode: "autonomous"
-run_id: "29046252006"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29046252006"
-head_sha: "43c407bfea5efcc66b5b7c2a39b12829471e3739"
+run_id: "29049607934"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29049607934"
+head_sha: "3709212459fa2278c93a8fd6396462646ddb2e80"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-09T20:02:33.346Z"
+published_at: "2026-07-09T20:59:40.119Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/954"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/954"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29046252006](https://github.com/openclaw/clawsweeper/actions/runs/29046252006)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29049607934](https://github.com/openclaw/clawsweeper/actions/runs/29049607934)
 
 Workflow conclusion: failure
 
