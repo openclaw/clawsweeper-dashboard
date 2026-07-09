@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T04:01:41.178Z",
+  "generated_at": "2026-07-09T04:01:47.484Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T01:01:38.455Z",
+  "since": "2026-07-09T01:01:47.141Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    101946
+    102394
   ],
-  "comment_ids": [
-    4921431826
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,130 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:101946:4921431826:2026-07-09T03:58:31Z:re_review",
-      "comment_id": "4921431826",
-      "comment_version_key": "4921431826:2026-07-09T03:58:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101946#issuecomment-4921431826",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101946,
-      "author": "xydt-tanshanshan",
-      "author_id": 291969148,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-09T03:58:31Z",
-      "comment_updated_at": "2026-07-09T03:58:31Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "[AI] fix(memory): use truncateUtf16Safe for dreaming snippet truncation",
-        "body": "## What Problem This Solves\r\n\r\nFixes an issue where dreaming snippet truncation in `memory-core` can produce invalid UTF-16 output. When a complex emoji or surrogate pair straddles the 280-character truncation boundary, `.slice(0, 280)` cuts between the high and low surrogate code units, producing a lone surrogate that can cause display corruption, JSON encoding failures, or database rejections downstream.\r\n\r\n## Why This Change Was Made\r\n\r\nReplace all 5 `.slice(0, N)` calls in `extensions/memory-core/src/dreaming-phases.ts` with `truncateUtf16Safe` from `openclaw/plugin-sdk/memory-core-host-engine-foundation` (the standard SDK facade, already used by `manager-search.ts` in the same extension). `truncateUtf16Safe` checks whether the cut position falls inside a surrogate pair (high surrogate `0xD800–0xDBFF` followed by low surrogate `0xDC00–0xDFFF`) and drops the orphaned high surrogate. The change is +12/-5 in a single file.\r\n\r\n## User Impact\r\n\r\nNone for typical text content. For memory content that happens to contain an emoji or complex Unicode character at the truncation boundary, the dreaming snippet no longer includes a lone surrogate character, preventing potential downstream encoding issues.\r\n\r\n## Evidence\r\n\r\n**Environment**: Linux x86_64, Node v24.13.1, OpenClaw branch `fix/dreaming-emoji-safe-truncation`.\r\n\r\n### 1. Disposable real Node.js run — 5 call sites, emoji at truncation boundary\r\n\r\nBoth `DAILY_INGESTION_MAX_SNIPPET_CHARS` and `SESSION_INGESTION_MAX_SNIPPET_CHARS` are `280` (`dreaming-phases.ts:100,110`). Each call site is constructed so the emoji surrogate pair (🌍, 2 code units) straddles the exact truncation boundary. Run on a disposable Node.js process with no vitest, no test harness, no SQLite.\r\n\r\n```\r\n$ node --import tsx -e \"\r\nimport { truncateUtf16Safe } from '@openclaw/normalization-core/utf16-slice';\r\n\r\nfunction hasLone(str) {\r\n  for (let i = 0; i < str.length; i++) {\r\n    const c = str.charCodeAt(i);\r\n    if (c >= 0xd800 && c <= 0xdbff) {\r\n      const n = str.charCodeAt(i + 1);\r\n      if (Number.isNaN(n) || n < 0xdc00 || n > 0xdfff) return [true, i, '0x' + c.toString(16)];\r\n      i++;\r\n    } else if (c >= 0xdc00 && c <= 0xdfff) return [true, i, '0x' + c.toString(16)];\r\n  }\r\n  return [false, -1, ''];\r\n}\r\n\r\n// Before: raw slice(0,280) produces lone surrogate\r\nconst before = 'A'.repeat(279) + '😀';\r\nconst sliced = before.slice(0, 280);\r\nconst [bad] = hasLone(sliced);\r\nconsole.log('Before fix - slice(0,280) on emoji boundary:', sliced.length, 'code units, lone:', bad ? 'YES (0xD83D)' : 'NO');\r\n\r\nconst emoji = '🌍';\r\n\r\nfunction check(label, input, limit) {\r\n  const out = truncateUtf16Safe(input, limit);\r\n  const [isBad, pos, code] = hasLone(out);\r\n  console.log('  ' + (isBad ? 'FAIL' : 'PASS') + ' ' + label + ' | output: ' + out.length + ' | lone: ' + (isBad ? 'YES at ' + pos + ' ' + code : 'NO'));\r\n}\r\n\r\ncheck('normalizeDailyHeading',     'Standup ' + 'x'.repeat(271) + emoji, 280);\r\ncheck('normalizeDailySnippet',     'x'.repeat(279) + emoji, 280);\r\ncheck('buildDailyChunkSnippet',    'Topic: ' + 'x'.repeat(272) + emoji, 280);\r\ncheck('normalizeSessionCorpusSnippet', 'x'.repeat(279) + emoji, 280);\r\ncheck('buildSessionRenderedLine',  '[main/sessions/s1.jsonl#L42] ' + 'z'.repeat(314) + emoji, 344);\r\n\"\r\n\r\n=== Dreaming Snippet Truncation Proof ===\r\nEnvironment: linux Node v24.13.1\r\n\r\nBefore fix - slice(0,280) on emoji boundary: 280 code units, lone surrogate: YES (0xD83D)\r\n\r\n--- 5 call sites after fix (truncateUtf16Safe) ---\r\n  PASS normalizeDailyHeading | output: 279 | lone: NO\r\n  PASS normalizeDailySnippet | output: 279 | lone: NO\r\n  PASS buildDailyChunkSnippet | output: 279 | lone: NO\r\n  PASS normalizeSessionCorpusSnippet | output: 279 | lone: NO\r\n  PASS buildSessionRenderedLine | output: 343 | lone: NO\r\n\r\nResult: All 5 call sites produce clean UTF-16 - zero lone surrogates.\r\nBefore fix: slice(0,280) on emoji boundary produces lone surrogate 0xD83D.\r\n```\r\n\r\nAll 5 call sites produce clean UTF-16 with zero lone surrogates. Before fix: `slice(0,280)` produces a lone high surrogate `0xD83D`.\r\n\r\n### 2. Full test suite — zero regressions\r\n\r\n```\r\n$ pnpm test extensions/memory-core/src/surrogate-proof.test.ts\r\n\r\n Test Files  1 passed (1)\r\n      Tests  1 passed (1)\r\n\r\n$ pnpm test extensions/memory-core/src/dreaming-phases.test.ts\r\n\r\n Test Files  1 passed (1)\r\n      Tests  50 passed (50)\r\n\r\n$ pnpm test packages/normalization-core/src/utf16-slice.test.ts\r\n\r\n Test Files  1 passed (1)\r\n      Tests  18 passed (18)\r\n```\r\n\r\nAll 69 tests pass: surrogate-proof sweep (1), existing dreaming-phase behavior (50), and the underlying utf16-slice helper (18).\r\n\r\n## What was NOT tested\r\n\r\nFull production workspace dreaming sweep with subagent execution. The unit test suite (50 dreaming-phase tests + 18 utf16-slice tests + 1 surrogate-proof sweep) covers the truncation logic at both the helper level and the dreaming-phase call site level.\r\n\r\n## AI Assistance\r\n\r\n- AI-assisted: Yes\r\n",
-        "branch": "fix/dreaming-emoji-safe-truncation",
-        "head_sha": "709d8d33d30866defe86c31c20c470edd2724bfe",
-        "author": "xydt-tanshanshan",
-        "labels": [
-          "extensions: memory-core",
-          "scripts",
-          "size: M",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/memory-core/src/dreaming-phases.ts",
-            "additions": 12,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/surrogate-proof.test.ts",
-            "additions": 191,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scripts/proof/dreaming-surrogate-truncation-proof.mjs",
-            "additions": 89,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 292,
-        "deletions": 5,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101946",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101946.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3015,
+    "total_ms": 570,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 680
+        "ms": 333
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2030
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -166,11 +57,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 293
+        "ms": 227
       },
       {
         "name": "append_ledger",
