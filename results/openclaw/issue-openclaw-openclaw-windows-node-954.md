@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-954"
 mode: "autonomous"
-run_id: "29042264264"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29042264264"
+run_id: "29042571098"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29042571098"
 head_sha: "dda199e48a1002b92b5643782ae93f3643cd2336"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-09T18:58:21.858Z"
+published_at: "2026-07-09T19:01:29.124Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/954"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/954"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29042264264](https://github.com/openclaw/clawsweeper/actions/runs/29042264264)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29042571098](https://github.com/openclaw/clawsweeper/actions/runs/29042571098)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/954
 
 ## Summary
 
-Current main c8cd9869d828ae9414917add4867aae21d9f517c still has the reported Sessions page duplicate-title path: native chat formats non-main agent session titles with an agent/slot qualifier, while SessionsPage row view models still use raw SessionInfo.DisplayName or Key. A narrow new fix PR is appropriate; local code changes and validation were not applied in this run because the target checkout is mounted read-only.
+Verified on current main c8cd9869d828ae9414917add4867aae21d9f517c that #954 remains valid: native chat has a private agent/slot-aware session title formatter, but SessionsPage still renders raw SessionInfo.DisplayName or Key for row names. No GitHub mutation, merge, close, or local patch was performed; this run emits a narrow fix artifact for the applicator/executor.
 
 ## Impact
 
@@ -72,7 +72,7 @@ Current main c8cd9869d828ae9414917add4867aae21d9f517c still has the reported Ses
 | #951 | keep_closed | skipped | independent |  |
 | cluster:issue-openclaw-openclaw-windows-node-954 | fix_needed | planned |  | A narrow new fix PR is needed because #954 is open, valid on current main, non-security-sensitive, and has no viable canonical PR. |
 | cluster:issue-openclaw-openclaw-windows-node-954 | build_fix_artifact | planned |  |  |
-| cluster:issue-openclaw-openclaw-windows-node-954 | open_fix_pr | blocked |  | The current worker cannot create the branch or PR from a read-only target checkout. |
+| cluster:issue-openclaw-openclaw-windows-node-954 | open_fix_pr | blocked |  | Executor must apply the planned patch on a writable checkout, run required validation, then open or update the target branch PR. |
 
 ## Needs Human
 
