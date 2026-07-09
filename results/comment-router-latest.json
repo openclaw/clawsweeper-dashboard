@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T14:43:33.760Z",
+  "generated_at": "2026-07-09T14:43:44.705Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T11:43:31.456Z",
+  "since": "2026-07-09T11:43:42.228Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102855
+    102595
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 0,
+  "scanned_comments": 4,
+  "commands_seen": 2,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,34 +31,188 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102855:4925781359:2026-07-09T14:43:28Z:clawsweeper_needs_human",
-      "comment_id": "4925781359",
-      "comment_version_key": "4925781359:2026-07-09T14:43:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102855#issuecomment-4925781359",
+      "idempotency_key": "comment-router:openclaw/openclaw:102595:4925965762:2026-07-09T14:15:10Z:re_review",
+      "comment_id": "4925965762",
+      "comment_version_key": "4925965762:2026-07-09T14:15:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102595#issuecomment-4925965762",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 102855,
+      "issue_number": 102595,
+      "author": "lzyyzznl",
+      "author_id": 41978486,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T14:15:10Z",
+      "comment_updated_at": "2026-07-09T14:15:10Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-09T14:43:46.512Z",
+          "response_comment_id": "4925966432",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): persist startup catch-up deferral markers across restarts",
+        "body": "## Summary\n\n**Problem**: A startup overflow catch-up slot persists its `nextRunAtMs` to SQLite but its protection marker (`pendingCatchupDeferralJobIds`) exists only in memory. A second gateway restart before the deferred slot fires loses the marker, and `recomputeNextRunsForMaintenance` silently advances the staggered slot to the next natural schedule.\n\n**Solution**: Move the deferral marker onto `CronJobState.pendingCatchupDeferral`, which is serialized via the existing `state_json` SQLite column. Remove the redundant in-memory-only `CronServiceState.pendingCatchupDeferralJobIds` Set and its parallel rollback bookkeeping. Additionally, strip the internal `pendingCatchupDeferral` from cron read-view responses so it is not leaked through `cron.list`/`cron.get`.\n\n**What changed**: 10 files, +36/-47 lines. `pendingCatchupDeferral` is set when staggering a deferred catch-up slot, cleared on execution or maintenance cleanup, and automatically survives restarts through `state_json`. The maintenance gate now reads `job.state.pendingCatchupDeferral` directly instead of a separate Set. `cronJobReadView` strips the internal marker from public responses.\n\n**What NOT changed**: No schema migration. No lockfile change. Behavior for `agentTurn` payloads, `every` schedules, and non-deferred jobs is unaffected.\n\nFixes #102236\n\n---\n\n## What Problem This Solves\n\n**Problem**: Non-agentTurn cron jobs overflowing `maxMissedJobsPerRestart` at startup are staggered into the near future. A second restart before the staggered slot fires loses the marker, and maintenance silently advances the slot to the next natural schedule — the catch-up run is dropped with no error or log.\n\n**Why This Change Was Made**: The existing `state_json` column already persists arbitrary `CronJobState` fields. Adding `pendingCatchupDeferral` there requires no schema migration. The redundant in-memory Set is removed because each job's own state is now the single source of truth. The rollback snapshot (`persistOrRestore`) is simpler too — `structuredClone(store)` captures the flag alongside each job. The public cron response is sanitised so the internal scheduler marker does not leak via `cron.list`/`cron.get`.\n\n**User Impact**: Overflow system-event cron jobs keep their staggered startup catch-up run across repeated gateway restarts. No user-visible behavior changes for non-overflow jobs, `agentTurn` payloads, or `every` schedules.\n\n---\n\n## Real behavior proof\n\n**Behavior addressed**: Cross-restart persistence of startup overflow catch-up deferral markers so staggered slots survive a second gateway restart, and sanitisation of the internal marker from public cron API responses.\n\n**Real environment tested**: Linux x86_64, commit 5948e2a679 (worktree, upstream/main at base), gateway running on port 18789 with the fix code via tsx.\n\n**Exact steps or command run after this patch**: Standalone process-restart persistence demo using the real cron service code with an on-disk SQLite store, plus the gateway serving with the fix active.\n\n**After-fix evidence**: The standalone demo exercises every phase of the fix with a real SQLite store:\n\n```\n==============================================\nREAL BEHAVIOR PROOF: Cron Deferral Persistence\n==============================================\n\n1. Create on-disk cron store (SQLite-backed)\n   Store key: cron-demo-1783601212601\n   6 jobs written (5 hourly = overflow trigger, 1 daily = overflow target)\n\n2. Start cron service (process A)\n   nextRunAtMs: 1765645205000\n   pendingCatchupDeferral: true\n   ✓ DEFERRAL MARKER SET on daily-overflow job\n\n3. Verify persistence in SQLite (fresh load from DB)\n   pendingCatchupDeferral from fresh SQLite read: true\n   ✓ DEFERRAL PERSISTED TO SQLITE\n\n4. Simulate process restart (fresh CronServiceState, same SQLite store)\n   pendingCatchupDeferral after restart: true\n   nextRunAtMs preserved: 1765645205000\n   ✓ DEFERRAL SURVIVED PROCESS RESTART!\n\n5. Deferred slot fires when deferral window expires\n   lastRunStatus: ok\n   pendingCatchupDeferral cleared: true\n   nextRunAtMs restored to natural: true\n   ✓ DEFERRED JOB EXECUTED SUCCESSFULLY\n```\n\nThe gateway is running on port 18789 with the worktree code, health endpoint responds 200, and the cron service started successfully:\n\n```\n$ curl -s -w \"\\nHTTP_CODE: %{http_code}\\n\" -H \"Authorization: Bearer <redacted>\" http://localhost:18789/health\n{\"ok\":true,\"status\":\"live\"}\nHTTP_CODE: 200\n\n$ grep 'cron: started\\|http server listening' /tmp/gateway-dev.log\nhttp server listening (9 plugins: acpx, browser, canvas, device-pair, file-transfer, memory-core, ollama, phone-control, talk-voice; 1.7s)\ncron: started (storePath: /home/lizeyu/.openclaw/cron/jobs.json, enabled: true, jobs: 0)\n```\n\nThe P2 fix is in place — `cronJobReadView` strips `pendingCatchupDeferral` from the public response:\n\n```\n$ grep -n 'pendingCatchupDeferral\\|cronJobReadView' src/gateway/server-methods/cron.ts\n76:function cronJobReadView(job: CronJob) {\n77:  const { pendingCatchupDeferral: _pd, ...state } = job.state;\n78:  return {\n79:    ...job,\n80:    state,\n```\n\n**Observed result after the fix**: The deferred catch-up slot (`startNow + 5000`) survives a fresh CronServiceState constructed from the same on-disk SQLite store, simulating an OS process restart. The job executes once, reports `lastRunStatus: \"ok\"`, and clears `pendingCatchupDeferral`. Without the fix, the second start would advance `nextRunAtMs` to the natural slot (next day 09:00) and the catch-up run would be lost. The internal `pendingCatchupDeferral` marker is no longer exposed through `cron.list`/`cron.get`.\n\n**What was not tested**: The standalone demo constructs a fresh service state to simulate an OS-process restart; it does not kill and respawn a full gateway process boundary. The `agentTurn` and `every` schedule kinds are not exercised, which the gate leaves unaffected.\n\n## Tests and validation\n\n### Unit tests\n\n```\n$ npx vitest run src/cron/ --no-color 2>/dev/null | tail -3\nPASS (1308) FAIL (0)\n```\n\nAll 1308 cron tests pass. Key files:\n- `src/cron/service.jobs.test.ts` — 78 tests (deferral maintenance, disabled job cleanup)\n- `src/cron/service/ops.test.ts` — 17 tests (rollback snapshot, deferral flag restore)\n- `src/cron/service.startup-overflow-clobber.test.ts` — 11 tests (cross-restart survival)\n- `src/cron/service/timer.regression.test.ts` — 81 tests (no regression from timer changes)\n\n### Gateway cron server tests\n\n```\n$ npx vitest run src/gateway/server.cron.test.ts\nPASS (40) FAIL (0)\n```\n\nAll 40 gateway cron server tests pass — confirms `cron.list`/`cron.get` still work correctly with the read-view sanitisation.\n\n## Risk checklist\n\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [ ] I have updated relevant documentation (internal refactor, no doc impact)\n- [ ] Breaking changes (if any) are documented in Summary\n- **Merge-risk explanation**: Low. The fix touches only cron service internals within `src/cron/service/` and one read-view file in `src/gateway/server-methods/cron.ts`. The deferral marker is a new optional field on `CronJobState`; an absent value (old rows, non-deferred jobs) behaves identically to the original code.\n\n## Current review state\n\n- [x] Self-review completed\n- [ ] At least one maintainer review\n- [ ] All CI checks passed\n\n<!-- RF-001: P2 finding — pendingCatchupDeferral leaked through cron.list/cron.get. Fixed by stripping the internal marker in cronJobReadView. -->\n",
+        "branch": "fix/issue-102236-persist-catchup-deferral",
+        "head_sha": "5948e2a6793fe6dc3406b40d061b9624efc9eb87",
+        "author": "lzyyzznl",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cron/service.jobs.test.ts",
+            "additions": 6,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service.startup-overflow-clobber.test.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service.test-harness.ts",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/jobs.ts",
+            "additions": 10,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/ops.test.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/ops.ts",
+            "additions": 4,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/state.ts",
+            "additions": 0,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/types.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 9,
+        "additions": 34,
+        "deletions": 47,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102595",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102595.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "gatingTotal": 98,
+          "counts": {
+            "SUCCESS": 66,
+            "SKIPPED": 35,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "re-review requires an open issue or PR"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102595:4923613248:2026-07-09T09:45:20Z:clawsweeper_auto_repair",
+      "comment_id": "4923613248",
+      "comment_version_key": "4923613248:2026-07-09T09:45:20Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102595#issuecomment-4923613248",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102595,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-09T13:56:31Z",
-      "comment_updated_at": "2026-07-09T14:43:28Z",
+      "comment_created_at": "2026-07-09T09:29:06Z",
+      "comment_updated_at": "2026-07-09T09:45:20Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] No repair lane is needed; maintainer review should choose the canonical PR and accept or reject the env-zero compatibility change before merge.; Cleared: The diff only changes a local numeric guard and a colocated test, with no dependency, CI, secret, permission, install, or supply-chain surface. (sha=1b9dd43e6d7a2d17805cd339d5c965073ab30ddf)",
-      "review_summary": "The PR changes bash finished-job TTL clamping so numeric zero reaches the min/max clamp and adds a regression test for zero-TTL cleanup timing.\n\nPR surface: Source 0, Tests +29. Total +29 across 2 files.\n\nReproducibility: yes. from source inspection: current main parses env zero as numeric zero, `setJobTtlMs` forwards it, and `clampTtl` then treats `!0` as unset. I did not run a failing current-main runtime test in this read-only review.",
-      "review_followup": "- [P1] No repair lane is needed; maintainer review should choose the canonical PR and accept or reject the env-zero compatibility change before merge.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=5948e2a6793fe6dc3406b40d061b9624efc9eb87)",
+      "review_summary": "The PR moves startup catch-up deferral tracking from a process-local CronServiceState Set into persisted CronJobState and updates maintenance, timer cleanup, rollback, and cron tests.\n\nPR surface: Source -8, Tests -5. Total -13 across 9 files.\n\nReproducibility: yes. Source inspection shows current main persists the deferred nextRunAtMs but keeps the protection marker in process-local service state, so a fresh service state before the deferred slot can run maintenance without that marker.",
+      "review_followup": "- [P1] Needs contributor or maintainer follow-up for the cron response/schema blocker and real restart proof; automation should not be used as the merge path while contributor real-behavior proof is missing.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "1b9dd43e6d7a2d17805cd339d5c965073ab30ddf",
+      "expected_head_sha": "5948e2a6793fe6dc3406b40d061b9624efc9eb87",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -68,90 +222,25 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): clamp zero bash job TTLs",
-        "body": "## What Problem This Solves\n\nAn explicit zero bash-job TTL was treated like a missing value by `clampTtl`, so it selected the 30-minute default before clamping instead of the documented one-minute minimum.\n\nThis is a clean maintainer replacement for #102520 after GitHub's signed fork refresh expanded stale ancestry into hundreds of unrelated files and the original PR was closed automatically.\n\n## Why This Change Was Made\n\nDefault only when the TTL is `undefined`; let numeric zero continue through the existing finite-number clamp. The regression drives the real registry setter under fake timers, distinguishes the one-minute minimum from the old 30-minute default, and proves the job survives before—but is swept after—the minimum boundary.\n\nThe replacement is one current-main commit with `0668000787` preserved as co-author.\n\n## User Impact\n\n`OPENCLAW_BASH_JOB_TTL_MS=0` and equivalent explicit zero configuration now resolve to the documented minimum instead of unexpectedly retaining completed jobs for 30 minutes. Missing and invalid values still use the default.\n\n## Evidence\n\n- Fresh branch autoreview: clean, confidence 0.98.\n- Exact predecessor-tree isolated AWS proof: `run_ac5687282487`, 11/11 focused tests passed; final replacement SHA will be re-proved before merge.\n- Formatting and `git diff --check origin/main...HEAD` passed.\n- Full exact-head hosted CI will be attached before merge.\n\nSupersedes #102520 while preserving contributor credit.\n",
-        "branch": "codex/fix-zero-bash-job-ttl",
-        "head_sha": "1b9dd43e6d7a2d17805cd339d5c965073ab30ddf",
-        "author": "steipete",
-        "labels": [
-          "agents",
-          "maintainer",
-          "size: XS",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/bash-process-registry.test.ts",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-process-registry.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 30,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102855",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102855.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 37,
-            "SUCCESS": 61,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2512,
+    "total_ms": 4939,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 225
+        "ms": 351
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2061
+        "ms": 2110
       },
       {
         "name": "classify_comment_commands",
-        "ms": 5
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -167,11 +256,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 197
+        "ms": 2446
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
