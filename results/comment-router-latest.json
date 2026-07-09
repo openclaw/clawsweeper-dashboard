@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T10:48:21.822Z",
+  "generated_at": "2026-07-09T10:49:36.186Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T07:48:17.923Z",
+  "since": "2026-07-09T07:49:31.510Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    99025
+    102665
   ],
   "comment_ids": [
-    4924217637
+    4924244664
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4924245165,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:99025:4924217637:2026-07-09T10:45:13Z:re_review",
-      "comment_id": "4924217637",
-      "comment_version_key": "4924217637:2026-07-09T10:45:13Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99025#issuecomment-4924217637",
+      "idempotency_key": "comment-router:openclaw/openclaw:102665:4924244664:2026-07-09T10:47:56Z:re_review",
+      "comment_id": "4924244664",
+      "comment_version_key": "4924244664:2026-07-09T10:47:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102665#issuecomment-4924244664",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 99025,
-      "author": "maweibin",
-      "author_id": 18023423,
+      "target_branch": "main",
+      "issue_number": 102665,
+      "author": "wm0018",
+      "author_id": 13618944,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-09T10:45:13Z",
-      "comment_updated_at": "2026-07-09T10:45:13Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-09T10:47:56Z",
+      "comment_updated_at": "2026-07-09T10:47:56Z",
+      "status_comment_id": 4924245165,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,156 +68,99 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 102665,
+          "dispatch_key": "router-b14684f023102876",
+          "dispatched_at": "2026-07-09T10:49:37.103Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-09T10:49:38.174Z",
+          "response_comment_id": "4924245165",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(find): prevent recursive re-entry in child kill via sentinel guard (#98961)",
-        "body": "Fixes #98961.\n\n## What Problem This Solves\n\nIn `find.ts`, `child.on(\"error\")` only called `cleanup()` (which closed readline), while `child.on(\"close\")` called both `cleanup()` and `stopChild?.()`. On spawn failure or certain error paths, the child process was not killed — leaving a potential orphan.\n\n## Why This Change Was Made\n\nTwo changes with a safety sentinel:\n\n1. **`cleanup()` now calls `stopChild?.()`** — so both error and close handlers stop the child symmetrically.\n\n2. **`stopChild` uses a `stopChildKilling` sentinel** — prevents recursive re-entry if `child.kill()` triggers Node's `error` event before `settle` clears the hook.\n\nThe direct fix proposed in #98854 (calling `stopChild` in the error handler without a sentinel) risks recursive kill — if `child.kill()` emits another `error` event, the handler re-enters, calls `kill()` again, and potentially loops. The sentinel prevents this.\n\n## User Impact\n\nNo user-visible behavior change. Fixes an edge case where a spawn-failing fd find could leave an orphan child process.\n\n## Evidence\n\n**Real environment tested:** local OpenClaw source checkout, Node v24.13.1, PR head.\n\n**Proof — focused regression test exercises the real `createFindToolDefinition` with mocked child process (same pattern as merged #99446):**\n\n```\n$ node scripts/run-vitest.mjs src/agents/sessions/tools/find.test.ts --run\n\n Test Files  1 passed (1)\n      Tests  3 passed (3)\n```\n\nThe new test \"stops child on spawn error and prevents recursive kill via sentinel\":\n1. Creates the real `createFindToolDefinition(\"/workspace\")` \n2. Mocks `spawn` and `ensureTool(\"fd\")` (same pattern as `find.fd.test.ts` from merged #99446)\n3. Triggers `child.emit(\"error\", new Error(\"ENOENT\"))` — the spawn failure path\n4. Asserts `expect(result).rejects.toThrow(\"Failed to run fd\")` — error → cleanup → stopChild → kill → settle\n5. Asserts `expect(child.killMock).toHaveBeenCalledTimes(1)` — child was killed\n6. Triggers `child.emit(\"close\", null, \"SIGTERM\")` — Node's post-kill close event\n7. Asserts `expect(child.killMock).toHaveBeenCalledTimes(1)` — sentinel prevented recursive second kill\n\n```\n$ npx oxlint src/agents/sessions/tools/find.ts src/agents/sessions/tools/find.test.ts\n→ exit 0\n```\n\n**Observed result after fix:** On spawn error, `cleanup()` calls `stopChild?.()` → `child.kill()`. When Node then emits `close`, `cleanup()` is called again but `stopChildKilling` is `true`, so the sentinel returns without a second `kill()`. No orphan process, no recursive re-entry.\n\n**What was not tested:** Live end-to-end with a real `fd` binary (fd is not installed in this environment). The test exercises the full production tool path through `createFindToolDefinition` with a mocked child process — same pattern as the already-merged `find.fd.test.ts` from #99446 (diamond lobster).\n\n## Regression Test Plan\n\n- `$ node scripts/run-vitest.mjs src/agents/sessions/tools/find.test.ts --run` — **1 passed, 3 tests passed** (2 existing + 1 new sentinel test)\n- `$ npx oxlint src/agents/sessions/tools/find.ts src/agents/sessions/tools/find.test.ts` — **exit 0**\n- `$ git diff --stat` — **2 files, +68/-3**\n\n## Root Cause\n\nIn `createFindToolDefinition`, the `error` handler called `cleanup()` (rl.close only) but not `stopChild?.()`. The `close` handler called both. A direct fix adding `stopChild?.()` to the error handler risks recursive re-entry if `child.kill()` emits an `error` event before `settle` runs. The fix uses a `stopChildKilling` sentinel boolean — set before `child.kill()`, checked at entry — to prevent re-entry.\n\nAI-assisted: Claude Opus 4.8",
-        "branch": "fix/fd-find-error-stopchild-98961",
-        "head_sha": "4a6a7fa32bf3a12949ad68a69010317e6f8322ad",
-        "author": "maweibin",
+        "title": "fix(workboard): prevent custom select menu flash to top-left before positioning",
+        "body": "## What Problem This Solves\n\nWhen clicking a custom `<details>`-based select (status, priority, agent, session) inside the workboard card modal, the dropdown menu briefly flashes at the viewport origin before jumping to the correct position.\n\nRoot cause: `positionWorkboardSelectMenu` computes and applies CSS custom properties synchronously during `@toggle`, but the menu's CSS default (`top: 0; left: 0`) may be painted for one frame before the JS-delivered values take effect.\n\n## Why This Change Was Made\n\nSet `visibility: hidden` as the menu's default CSS state. After positioning values are applied, toggle `visibility: visible` in the same synchronous handler.\n\n`visibility: hidden` keeps the element in layout so `getBoundingClientRect` returns correct measurements, unlike `display: none` which would remove it from layout entirely.\n\n## User Impact\n\nCustom select dropdowns in the workboard card-modal form now appear directly at their correct position with no flash.\n\n## Evidence\n\n### Existing regression tests\n\n```\n$ node scripts/run-vitest.mjs ui/src/pages/workboard/view.test.ts\n\n Test Files  1 passed (1)\n      Tests  70 passed (70)\n```\n\n### After fix\n\n<img width=\"600\" alt=\"workboard select after fix\" src=\"https://github.com/user-attachments/assets/c60cfa0e-7485-4426-ac7b-783fe9c47a11\" />\n\n### Fix invariants\n\n| State | CSS | Effect |\n|-------|-----|--------|\n| Default (closed) | `display: none` + `visibility: hidden` | Not in layout, not painted |\n| `[open]` fires | `display: grid` (CSS) + `visibility: hidden` (inline) | In layout, not painted |\n| After positioning | `--top`/`--left` set + `visibility: visible` | In layout, painted at correct position |\n| Close | `display: none` + `visibility: hidden` | Reset for next open |\n\n### Files Changed (2 files, +3 lines)\n\n```\n ui/src/pages/workboard/view.ts | 2 ++\n ui/src/styles/workboard.css    | 1 +\n```",
+        "branch": "fix/workboard-select-reposition-scroll",
+        "head_sha": "8d2d704c57167dea650a2dc25eac5220a77b1f87",
+        "author": "wm0018",
         "labels": [
-          "agents",
-          "size: S",
+          "app: web-ui",
+          "size: XS",
           "P3",
           "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/sessions/tools/find.test.ts",
-            "additions": 62,
-            "deletions": 1,
+            "path": "ui/src/pages/workboard/view.ts",
+            "additions": 2,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/sessions/tools/find.ts",
-            "additions": 6,
-            "deletions": 2,
+            "path": "ui/src/styles/workboard.css",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 68,
-        "deletions": 3,
+        "additions": 3,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99025",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99025.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102665",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102665.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 100,
-          "gatingTotal": 95,
+          "total": 75,
+          "gatingTotal": 70,
           "counts": {
-            "SUCCESS": 51,
-            "SKIPPED": 33,
-            "IN_PROGRESS": 15,
-            "NEUTRAL": 1
+            "SUCCESS": 54,
+            "SKIPPED": 21
           },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:102625:4923939196:2026-07-09T10:10:06Z:re_review",
-      "comment_id": "4923939196",
-      "comment_version_key": "4923939196:2026-07-09T10:10:06Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102625#issuecomment-4923939196",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 102625,
-      "author": "zhangguiping-xydt",
-      "author_id": 275915537,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-09T10:10:06Z",
-      "comment_updated_at": "2026-07-09T10:10:06Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "newer re-review command supersedes this request"
+      "processed_at": "2026-07-09T10:49:36.451Z"
     }
   ],
-  "ledger_claimed": false,
+  "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4211,
+    "total_ms": 7265,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2317
+        "ms": 2506
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1566
+        "ms": 2157
       },
       {
         "name": "classify_comment_commands",
@@ -233,15 +176,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 311
+        "ms": 2579
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
