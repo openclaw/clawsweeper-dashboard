@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T16:27:05.186Z",
+  "generated_at": "2026-07-09T16:27:37.152Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T13:27:04.858Z",
+  "since": "2026-07-09T13:27:34.269Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102988
+    102853
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,139 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102853:4925735825:2026-07-09T16:27:30Z:clawsweeper_needs_human",
+      "comment_id": "4925735825",
+      "comment_version_key": "4925735825:2026-07-09T16:27:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102853#issuecomment-4925735825",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102853,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T13:51:45Z",
+      "comment_updated_at": "2026-07-09T16:27:30Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] A narrow code/test repair can address the stale async preserved-mode lookup, but secops review is still needed before merge because the wrapper is security-sensitive and plugin-facing.; Needs attention: The patch improves the auth symlink path, but a shared security-sensitive replacement wrapper currently has a mode-preservation ordering bug and still needs secops owner approval.; Review finding: [P2] Resolve... (sha=705efdf2b01641535c1b45e56f57cbe2ce6ae5bc)",
+      "review_summary": "The PR routes missing auth.json bootstrap through atomic replacement and wraps shared async/sync atomic file replacement helpers to avoid final-path chmod through swapped symlinks while preserving requested modes.\n\nPR surface: Source +178, Tests +335. Total +513 across 4 files.\n\nReproducibility: yes. Current main source still creates missing auth.json through final-path writeFileSync/chmodSync, and the PR body gives before/after terminal output for the bootstrap symlink and post-rename chmod scenarios; I did not execute those filesystem repros in this read-only review.",
+      "review_followup": "- [P2] A narrow code/test repair can address the stale async preserved-mode lookup, but secops review is still needed before merge because the wrapper is security-sensitive and plugin-facing.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "705efdf2b01641535c1b45e56f57cbe2ce6ae5bc",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): avoid symlink-follow in auth.json bootstrap",
+        "body": "## What Problem This Solves\n\nFixes an issue where a local attacker with write access to the `auth.json` parent directory can redirect credential-store bootstrap writes through a symlink. `AuthStorage` is the default credential backend for agent sessions, and its bootstrap path creates `auth.json` when the file is missing. On current `main`, a planted dangling `auth.json` symlink causes bootstrap to create, truncate, and chmod the symlink target outside the auth directory.\n\nThis also closes the follow-up hardening gap ClawSweeper found in the atomic replacement wrapper: after `@openclaw/fs-safe` renames the temp file into place, it performs a best-effort final `chmod` by target path. An attacker who can write the parent directory can swap `auth.json` back to a symlink in that post-rename window and redirect the chmod to another path.\n\n## Why This Change Was Made\n\nRoot cause is in `src/agents/sessions/auth-storage.ts`, `FileAuthStorageBackend.ensureFileExists()`:\n\n```ts\nprivate ensureFileExists(): void {\n  if (!existsSync(this.authPath)) {\n    writeFileSync(this.authPath, \"{}\", \"utf-8\");\n    chmodSync(this.authPath, 0o600);\n  }\n}\n```\n\n`existsSync`, `writeFileSync`, and `chmodSync` all operate on the final path. When `auth.json` is a symlink to a missing target, the check sees no existing target and the create/chmod operations land on the symlink target.\n\nThe existing persist path already uses `replaceAuthFileAtomic()`, which writes a sibling temp file with the requested file mode and renames it into place. This PR routes bootstrap through that path:\n\n```ts\nprivate ensureFileExists(): void {\n  if (!existsSync(this.authPath)) {\n    this.replaceAuthFileAtomic(\"{}\");\n  }\n}\n```\n\nTo close the active swap gap, `src/infra/replace-file.ts` now wraps both async and sync `replaceFileAtomic` calls so OpenClaw sets the temp file to the requested or preserved mode before rename through a no-follow file descriptor, then skips the redundant final chmod of the replacement path. The wrapper keeps parent-directory chmod behavior and exact final file modes while removing the post-rename target-path chmod that can follow a swapped symlink. If fs-safe takes its copy fallback, the wrapper restores the resolved mode on the opened destination descriptor instead of chmodding the final path.\n\n## User Impact\n\nOperators no longer expose an arbitrary-file create/truncate/chmod primitive through the credential store when `auth.json` is absent and its parent directory is writable by another local user. Normal behavior is unchanged: missing `auth.json` is still created as a real `{}` file at mode `0o600`.\n\n## Evidence\n\nLocal verification:\n\n- `node scripts/run-vitest.mjs src/infra/replace-file.test.ts src/infra/json-files.test.ts`: 2 files passed, 23 assertions passed.\n- `node scripts/run-vitest.mjs src/agents/sessions/auth-storage.symlink-bootstrap.test.ts src/agents/sessions/auth-storage.test.ts`: 2 files passed, 3 assertions passed.\n- `./node_modules/.bin/oxfmt --check src/infra/replace-file.ts src/infra/replace-file.test.ts src/agents/sessions/auth-storage.ts src/agents/sessions/auth-storage.symlink-bootstrap.test.ts`: clean.\n- `node scripts/run-oxlint.mjs src/infra/replace-file.ts src/infra/replace-file.test.ts src/agents/sessions/auth-storage.ts src/agents/sessions/auth-storage.symlink-bootstrap.test.ts`: clean.\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo`: clean.\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo`: clean.\n\n## Real behavior proof\nBehavior addressed: `AuthStorage` bootstrap no longer writes through a planted `auth.json` symlink, and OpenClaw's atomic replacement wrapper no longer chmods a symlink target swapped into place after rename while still preserving exact requested modes on rename and copy fallback.\nReal environment tested: the real `AuthStorage` class from `src/agents/sessions/auth-storage.ts` and the real `replaceFileAtomicSync` wrapper from `src/infra/replace-file.ts` were driven against real on-disk temp directories on pristine `origin/main` 4f9a371c9530e9d2eb2912a44054a44228a59612 and PR head 705efdf2b01641535c1b45e56f57cbe2ce6ae5bc. The static symlink scenario used normal filesystem calls. The post-rename swap and fallback scenarios used an instrumented filesystem object only to force the relevant filesystem outcome at the production helper boundary.\nExact steps or command run after this patch: `PATH=/opt/node/bin:$PATH node --import tsx /tmp/openclaw-bug-repros/102853/proof-driver.ts` from `/root/openclaw`, first with `src/agents/sessions/auth-storage.ts` and `src/infra/replace-file.ts` reset to pristine `origin/main`, then with the same files restored from PR head 705efdf2b01641535c1b45e56f57cbe2ce6ae5bc.\nEvidence after fix:\n```\n# BEFORE (pristine main 4f9a371c9530e9d2eb2912a44054a44228a59612)\nstatic victim exists before: false\nstatic auth.json is symlink before: true\nstatic victim exists after create: true\nstatic victim content after create: \"{}\"\nstatic victim mode after create: 600\nstatic auth.json is symlink after create: true\nstatic auth.json is regular after create: false\nswap victim mode before replace: 644\nswap chmod paths: <parent>,auth.json\nswap victim mode after replace: 600\nswap auth.json is symlink after replace: true\nmode requested with umask 077: 644\nmode chmod paths: <parent>,public.json\nmode final file mode: 644\nfallback mode requested with umask 077: 644\nfallback replacement method: copy-fallback\nfallback chmod paths: <parent>,public.json\nfallback final file mode: 644\n\n# AFTER (this patch, identical inputs, head 705efdf2b01641535c1b45e56f57cbe2ce6ae5bc)\nstatic victim exists before: false\nstatic auth.json is symlink before: true\nstatic victim exists after create: false\nstatic victim content after create: \"<none>\"\nstatic victim mode after create: <none>\nstatic auth.json is symlink after create: false\nstatic auth.json is regular after create: true\nswap victim mode before replace: 644\nswap chmod paths: <parent>\nswap victim mode after replace: 644\nswap auth.json is symlink after replace: true\nmode requested with umask 077: 644\nmode chmod paths: <parent>\nmode final file mode: 644\nfallback mode requested with umask 077: 644\nfallback replacement method: copy-fallback\nfallback chmod paths: <parent>\nfallback final file mode: 644\n```\nObserved result after fix: the planted bootstrap target is not created or chmodded, a symlink swapped into the replacement path after rename does not receive the final chmod, and requested 644 modes are still preserved under umask 077 for both rename and copy fallback.\nWhat was not tested: no live multi-process attacker race was staged; the proof performs the parent-directory swap and fallback deterministically at the exact replacement points. Full build was not run because this changes no packaging, dynamic import, or module boundary.\n",
+        "branch": "fix/auth-storage-symlink-bootstrap",
+        "head_sha": "705efdf2b01641535c1b45e56f57cbe2ce6ae5bc",
+        "author": "yetval",
+        "labels": [
+          "agents",
+          "size: L",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/sessions/auth-storage.symlink-bootstrap.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/sessions/auth-storage.ts",
+            "additions": 2,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/replace-file.test.ts",
+            "additions": 295,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/replace-file.ts",
+            "additions": 186,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 524,
+        "deletions": 11,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102853",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102853.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 101,
+          "gatingTotal": 96,
+          "counts": {
+            "CANCELLED": 1,
+            "SKIPPED": 35,
+            "SUCCESS": 64,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 542,
+    "total_ms": 3194,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 316
+        "ms": 426
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2439
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -57,15 +173,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 214
+        "ms": 300
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
