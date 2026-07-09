@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T05:02:44.925Z",
+  "generated_at": "2026-07-09T05:02:45.461Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T02:02:44.523Z",
+  "since": "2026-07-09T02:02:40.716Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    102425
+    87544
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4921712595
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +31,94 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:87544:4921712595:2026-07-09T04:59:30Z:re_review",
+      "comment_id": "4921712595",
+      "comment_version_key": "4921712595:2026-07-09T04:59:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/issues/87544#issuecomment-4921712595",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 87544,
+      "author": "solavrc",
+      "author_id": 145330217,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T04:59:30Z",
+      "comment_updated_at": "2026-07-09T04:59:30Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "issue",
+        "state": "open",
+        "locked": false,
+        "title": "Ensure transcript-to-client delivery consistency for channel-scoped sessions",
+        "body": "## Summary\nChannel-scoped sessions currently have a durable transcript as the source of truth, but delivery to the originating client/channel can drift. In Discord, we sometimes see assistant final replies present in the session transcript / Control UI while the corresponding Discord message is missing.\n\nBecause Discord session keys explicitly include the client/channel target, for example `agent:<agentId>:discord:channel:<channelId>[:thread:<threadId>]`, OpenClaw should be able to reconcile whether each transcripted assistant message has been delivered to its expected Discord surface.\n\n## Problem\nWhen delivery fails or silently drops after a model response is written to the transcript:\n\n- Control UI shows the assistant response\n- the Discord thread/channel may not show it\n- the user cannot tell whether this is generation failure or delivery failure\n- there is no durable receipt linking transcript entry -> provider message id\n- there is no safe automatic or operator-triggered reconciliation path\n\nThis creates session log / client-visible log inconsistency.\n\n## Expected behavior\nFor channel-scoped sessions, OpenClaw should track delivery state for assistant outputs that are expected to appear in the originating client/channel.\n\nAt minimum, operators should be able to tell:\n\n- generated but not delivered\n- delivery attempted and failed\n- delivered successfully, with provider message id\n- redelivered / reconciled\n\n## Proposed shape\nAdd a delivery receipt / reconciliation layer rather than treating this as cross-client fan-out.\n\nPossible implementation:\n\n- record delivery target metadata for final assistant transcript entries\n- record provider message ids on successful sends\n- mark delivery status in transcript metadata or a sidecar delivery ledger\n- expose delivery state in Control UI/session preview\n- add a best-effort reconciler for missing/failed client deliveries\n- make re-delivery idempotent using transcript entry id -> provider message id mapping\n\nThis should not automatically mirror all client activity across surfaces. The guarantee should apply only to the expected origin delivery target for channel-scoped sessions.\n\n## Related behavior\nThis is adjacent to, but distinct from:\n\n- multi-surface fan-out issues, where replies from WebChat/Control UI get delivered to another channel\n- `sessions_send` internal replies not appearing in a bound Discord worker thread\n- Control UI transcript rendering diverging from channel-visible logs\n\nThe core issue here is delivery-state drift between the durable transcript and the client-visible log.\n\n## Why this matters\nFor Discord-first operation, the Discord thread is the user-facing operational log, while Control UI is the canonical transcript viewer. If Discord delivery occasionally drops, the system needs a way to detect and repair that divergence rather than leaving users to manually compare Control UI and Discord.\n\n\n---\n\n## Current state as of main `e2a4973edf3b` (re-audited 2026-07-09)\n\nRe-audited against source, six weeks after filing. Since then, the delivery queue moved to SQLite (#88665), dead-lettered failures are now retained and surfaced in health (#99842), a channel-final/suppressed transcript marker was added (#100607), and a duplicate-send hardening campaign landed (#96247, #99600, #101024). That work is real but orthogonal — it improves queue durability and prevents *duplicate/replayed* sends; it does not address delivery-state drift between the transcript and the client-visible log.\n\n### Still absent on main\n\n- **No transcript-entry → provider-message-id receipt.** `QueuedDelivery` and the `delivery_queue_entries` SQLite schema have no provider/transcript column (`src/infra/outbound/delivery-queue-storage.ts:79`, `src/infra/state-migrations.ts:1469`). `SessionTranscriptDeliveryMirror.sourceMessageId` is the inbound source id, not the delivered provider id (`src/config/sessions/transcript.ts:39`). Successful sends are deleted on ack (`delivery-queue-storage.ts:142`), so the absence of a queue row cannot distinguish \"delivered\" from \"never sent\".\n- **No per-entry delivery state.** The only surface is aggregate dead-letter counts in health (`src/commands/health.ts:250`) — failed-only, queue-namespace granularity, with no generated-not-delivered / delivered / redelivered distinction per message or per transcript entry.\n- **No origin reconciler.** `reconcileUnknownSend` (`src/infra/outbound/delivery-queue-recovery.ts:178`) is queue crash-recovery (\"did my in-flight entry land?\"), not a transcript-vs-channel reconciler; it cannot detect \"transcript entry X was never delivered\".\n- **Silent drop still reachable with no trace.** The post-send transcript mirror is non-fatal and success-gated (`src/infra/outbound/deliver.ts:2358`); queue-bypass/`skipQueue`/best-effort-fallback paths and the crash window between the canonical turn write and enqueue can leave a transcript reply with no pending queue row.\n\n### Scope correction: this is channel-generic, not Discord-specific\n\nThe original report framed this around Discord because that is where it was observed. On re-audit, every failure mode above lives in channel-agnostic core (outbound deliver/queue/transcript layers), none in the Discord adapter. The one real per-channel asymmetry cuts the other way: **only Slack implements the `reconcileUnknownSend` capability** (`extensions/slack/src/channel.ts:591`, text-only), so ambiguous post-send rows on Discord and every other channel are currently unreconcilable, and `queuePolicy: \"required\"` is only satisfiable on Slack today (`src/infra/outbound/message.ts:241`; default is `best_effort` for all channels, `deliver.ts:1344`). The receipt ledger and reconciler should be designed channel-generically, with per-adapter reconciliation capabilities.\n\n### Rescoped ask\n\n1. A durable receipt keyed by transcript entry id → provider message id, recorded on successful send.\n2. Per-entry delivery state surfaced in session/Control UI (not just aggregate dead-letter health).\n3. An origin-delivery reconciler with transcript-keyed idempotent redelivery, built on per-adapter reconciliation capabilities.\n\nThe existing SQLite delivery queue is the right substrate to extend rather than a new sidecar. #87552 remains a narrow, complementary mitigation on the queue side (keeps no-reconciler ambiguous rows recoverable) and does not close this issue.\n",
+        "author": "solavrc",
+        "labels": [
+          "P2",
+          "clawsweeper:no-new-fix-pr",
+          "clawsweeper:fix-shape-clear",
+          "clawsweeper:needs-maintainer-review",
+          "clawsweeper:needs-product-decision",
+          "clawsweeper:needs-live-repro",
+          "impact:session-state",
+          "impact:message-loss",
+          "issue-rating: 🐚 platinum hermit"
+        ],
+        "cluster_id": null,
+        "job_path": null,
+        "open_prs": [
+          "#87552"
+        ],
+        "issue_implementation_cluster_id": "issue-openclaw-openclaw-87544",
+        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-87544.md",
+        "mode": "autonomous"
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 597,
+    "total_ms": 4951,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 387
+        "ms": 2341
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 278
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2112
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,7 +134,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 195
+        "ms": 206
       },
       {
         "name": "append_ledger",
