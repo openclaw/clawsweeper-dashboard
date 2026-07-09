@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T09:39:43.258Z",
+  "generated_at": "2026-07-09T09:39:47.519Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T06:39:40.665Z",
+  "since": "2026-07-09T06:39:45.407Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102602
+    102574
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102602:4923639471:2026-07-09T09:39:34Z:clawsweeper_needs_human",
-      "comment_id": "4923639471",
-      "comment_version_key": "4923639471:2026-07-09T09:39:34Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102602#issuecomment-4923639471",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102574:4923445928:2026-07-09T09:39:41Z:clawsweeper_auto_repair",
+      "comment_id": "4923445928",
+      "comment_version_key": "4923445928:2026-07-09T09:39:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102574#issuecomment-4923445928",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 102602,
+      "issue_number": 102574,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-09T09:32:31Z",
-      "comment_updated_at": "2026-07-09T09:39:34Z",
+      "comment_created_at": "2026-07-09T09:08:19Z",
+      "comment_updated_at": "2026-07-09T09:39:41Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=f82ae5d6886c3be1a9f2800aceeb35f37847807d)",
-      "review_summary": null,
-      "review_followup": null,
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=3187383a6a1817708b9b3033fe2e740753c3d500)",
+      "review_summary": "The PR replaces seven `behaviour` spellings with `behavior` in one ACP docs page and six extension comment/JSDoc blocks.\n\nPR surface: Source 0, Docs 0. Total 0 across 7 files.\n\nReproducibility: not applicable. This is a spelling cleanup, and source inspection verifies current main contains the targeted wording.",
+      "review_followup": "- [P1] A narrow automated follow-up can finish the remaining comment-only spelling occurrences so the branch matches its stated scope.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "f82ae5d6886c3be1a9f2800aceeb35f37847807d",
+      "expected_head_sha": "3187383a6a1817708b9b3033fe2e740753c3d500",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,82 +70,242 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(googlechat): retry racing reply-session-init conflict on inbound",
-        "body": "## What Problem This Solves\n\nFixes an issue where a valid inbound Google Chat message is dropped when two paths race the same reply session key. Core throws `reply session initialization conflicted for <sessionKey>` during session init (webhook redelivery, overlapping dispatch, or a gateway restart mid-processing), and the Google Chat webhook path had no recovery, so it logged `Google Chat webhook failed` and never replied.\n\nFixes #102557\n\n## Why This Change Was Made\n\nCore raises this at `src/auto-reply/reply/session.ts:1032` — `throw new Error(\\`reply session initialization conflicted for ${sessionKey}\\`)` — after its own single stale-snapshot retry (line 1029) still loses the CAS race. Telegram, Slack, and WhatsApp already detect this exact error (`REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE`) and retry the inbound turn; Google Chat was the only channel missing it, so the webhook logged `Google Chat webhook failed` and dropped the message.\n\nThe conflict is raised during session init, before any reply is delivered, so a bounded retry (3 attempts, 250 ms linear backoff) around `core.channel.inbound.run` recovers without double-sending. The retry wraps only the inbound run, so the access policy and typing indicator are not re-run.\n\n## User Impact\n\nIntermittent Google Chat message-processing failures under webhook retries, bursty sends, or gateway restarts now recover automatically instead of silently dropping a valid message.\n\n## Evidence\n\n**1. Real-module proof (`tsx`, no mocks).** Imports the shipped detector from `extensions/googlechat/src/monitor.ts` and feeds it the exact string core builds at `session.ts:1032`, plus the nested-cause shape the webhook catch sees:\n\n```text\n$ npx tsx proof-live.ts\nPASS  detect=true  expected=true   core error string (session.ts:1032)\nPASS  detect=true  expected=true   conflict wrapped as nested cause (webhook catch)\nPASS  detect=false expected=false  unrelated inbound error\nPASS  detect=false expected=false  undefined\n\nbounded retry attempts (production constant): 3\n\nALL REAL-MODULE CHECKS PASSED\n```\n\n<details>\n<summary>proof-live.ts</summary>\n\n```ts\nimport { testing } from \"./extensions/googlechat/src/monitor.js\";\n\n// Reproduce, verbatim, how core constructs the conflict at session.ts:1032.\nfunction coreReplySessionInitConflict(sessionKey: string): Error {\n  return new Error(`reply session initialization conflicted for ${sessionKey}`);\n}\n\nconst real = coreReplySessionInitConflict(\"agent:main:main\");\nconst wrapped = new Error(`[work] Google Chat webhook failed: ${real.message}`, { cause: real });\nconst cases: Array<[string, unknown, boolean]> = [\n  [\"core error string (session.ts:1032)\", real, true],\n  [\"conflict wrapped as nested cause (webhook catch)\", wrapped, true],\n  [\"unrelated inbound error\", new Error(\"fetch failed\"), false],\n  [\"undefined\", undefined, false],\n];\nfor (const [label, err, expected] of cases) {\n  const got = testing.isReplySessionInitConflictError(err);\n  console.log(`${got === expected ? \"PASS\" : \"FAIL\"}  detect=${got} expected=${expected}  ${label}`);\n}\nconsole.log(`bounded retry attempts: ${testing.REPLY_SESSION_INIT_CONFLICT_MAX_ATTEMPTS}`);\n```\n\n</details>\n\n**2. Behavioral test** drives the real production `processMessageWithPipeline` retry loop (only the injected `core` seam and transport API are stubbed): a conflict-then-success re-runs the inbound turn (`run` called twice, `255ms` = one 250 ms backoff), while the negative control — an unrelated error — is not retried (`4ms`, `run` called once).\n\n```text\n$ node scripts/run-vitest.mjs extensions/googlechat/src/monitor.reply-session-conflict.test.ts\n✓ isReplySessionInitConflictError > matches the core conflict message 12ms\n✓ isReplySessionInitConflictError > matches the conflict wrapped as a nested cause 3ms\n✓ isReplySessionInitConflictError > does not match unrelated errors 1ms\n✓ googlechat reply session init conflict recovery > retries the inbound run when a reply session init conflict is thrown, then succeeds 255ms\n✓ googlechat reply session init conflict recovery > does not retry unrelated inbound run failures 4ms\nTest Files  1 passed (1)\n     Tests  5 passed (5)\n```\n\nExisting `monitor.test.ts` still green (15 passed) — no regression.\n\n**3. Sibling precedent** for the same detection: `extensions/telegram/src/bot-handlers.runtime.ts`, `extensions/slack/src/monitor/message-handler.ts`, `extensions/whatsapp/src/inbound/monitor.ts` all use `/reply session initialization conflicted for \\S+/u`.\n\nAI-assisted: built with Codex\n",
-        "branch": "sunlit/fix/issue-102557",
-        "head_sha": "f82ae5d6886c3be1a9f2800aceeb35f37847807d",
-        "author": "sunlit-deng",
+        "title": "docs: use American spelling (behaviour → behavior)",
+        "body": "## What Problem This Solves\n\nAGENTS.md specifies American English spelling for the repository. A handful of British `behaviour` spellings remain in extension JSDoc, inline comments, and documentation.\n\n## Why This Change Was Made\n\nStandardizes remaining occurrences to American `behavior` to match the repo's stated [language policy](AGENTS.md).\n\n## Evidence\n\n- `git diff --check` clean\n- 7 files, zero runtime impact (all in comments, JSDoc, and docs)",
+        "branch": "fix/american-spelling-behaviour",
+        "head_sha": "3187383a6a1817708b9b3033fe2e740753c3d500",
+        "author": "gary-jia-new",
         "labels": [
-          "channel: googlechat",
-          "size: M",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
+          "docs",
+          "channel: telegram",
+          "size: XS",
+          "extensions: fal",
+          "channel: qqbot",
+          "extensions: google",
+          "P3",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/googlechat/src/monitor.reply-session-conflict.test.ts",
-            "additions": 153,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "docs/tools/acp-agents.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/googlechat/src/monitor.ts",
-            "additions": 109,
-            "deletions": 62,
+            "path": "extensions/browser/src/browser/cdp-proxy-bypass.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/fal/image-generation-provider.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/vertex-adc.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/config/group.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/gateway/types.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/shared.ts",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 262,
-        "deletions": 62,
+        "changedFiles": 7,
+        "additions": 8,
+        "deletions": 8,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102602",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102602.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102574",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102574.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 94,
-          "gatingTotal": 89,
+          "total": 19,
+          "gatingTotal": 14,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 36,
-            "SUCCESS": 55,
-            "NEUTRAL": 1
+            "SUCCESS": 9,
+            "SKIPPED": 10
           },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102574:4923436737:2026-07-09T09:07:11Z:re_review",
+      "comment_id": "4923436737",
+      "comment_version_key": "4923436737:2026-07-09T09:07:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102574#issuecomment-4923436737",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102574,
+      "author": "Gary-Jia-new",
+      "author_id": 294680224,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-09T09:07:11Z",
+      "comment_updated_at": "2026-07-09T09:07:11Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "docs: use American spelling (behaviour → behavior)",
+        "body": "## What Problem This Solves\n\nAGENTS.md specifies American English spelling for the repository. A handful of British `behaviour` spellings remain in extension JSDoc, inline comments, and documentation.\n\n## Why This Change Was Made\n\nStandardizes remaining occurrences to American `behavior` to match the repo's stated [language policy](AGENTS.md).\n\n## Evidence\n\n- `git diff --check` clean\n- 7 files, zero runtime impact (all in comments, JSDoc, and docs)",
+        "branch": "fix/american-spelling-behaviour",
+        "head_sha": "3187383a6a1817708b9b3033fe2e740753c3d500",
+        "author": "gary-jia-new",
+        "labels": [
+          "docs",
+          "channel: telegram",
+          "size: XS",
+          "extensions: fal",
+          "channel: qqbot",
+          "extensions: google",
+          "P3",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "docs/tools/acp-agents.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/browser/cdp-proxy-bypass.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/fal/image-generation-provider.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/vertex-adc.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/config/group.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/gateway/types.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/shared.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 7,
+        "additions": 8,
+        "deletions": 8,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102574",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102574.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 19,
+          "gatingTotal": 14,
+          "counts": {
+            "SUCCESS": 9,
+            "SKIPPED": 10
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2922,
+    "total_ms": 2436,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 379
+        "ms": 434
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2198
+        "ms": 1661
       },
       {
         "name": "classify_comment_commands",
@@ -165,11 +325,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 314
+        "ms": 313
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
