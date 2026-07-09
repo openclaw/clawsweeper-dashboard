@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T01:59:23.780Z",
+  "generated_at": "2026-07-09T01:59:24.342Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-08T22:59:21.788Z",
+  "since": "2026-07-08T22:59:22.399Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    95419
+    102201
   ],
   "comment_ids": [
-    4920850240
+    4920850248
   ],
-  "status_comment_id": 4920850439,
+  "status_comment_id": 4920850476,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:95419:4920850240:2026-07-09T01:58:04Z:re_review",
-      "comment_id": "4920850240",
-      "comment_version_key": "4920850240:2026-07-09T01:58:04Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/95419#issuecomment-4920850240",
+      "idempotency_key": "comment-router:openclaw/openclaw:102201:4920850248:2026-07-09T01:58:04Z:re_review",
+      "comment_id": "4920850248",
+      "comment_version_key": "4920850248:2026-07-09T01:58:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102201#issuecomment-4920850248",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 95419,
+      "issue_number": 102201,
       "author": "Alix-007",
       "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-09T01:58:04Z",
       "comment_updated_at": "2026-07-09T01:58:04Z",
-      "status_comment_id": 4920850439,
+      "status_comment_id": 4920850476,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -76,83 +76,58 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 95419,
-          "dispatch_key": "router-ff63506421a68e70",
-          "dispatched_at": "2026-07-09T01:59:24.393Z"
+          "item_number": 102201,
+          "dispatch_key": "router-b1d10bf207b2a1e3",
+          "dispatched_at": "2026-07-09T01:59:25.044Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-09T01:59:25.314Z",
-          "response_comment_id": "4920850439",
+          "commented_at": "2026-07-09T01:59:26.172Z",
+          "response_comment_id": "4920850476",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): keep isolated run status ok when delivery fails",
-        "body": "## Summary\n\nScheduled isolated `agentTurn` cron jobs could finish a successful isolated session yet have the outer scheduled run persisted with `status=error` when the post-run delivery phase failed. This patch keeps execution `status=ok` and records the delivery failure separately, so cron run logs report `status=ok` with `deliveryStatus=not-delivered` instead of a false execution failure.\n\n## Root cause\n\nIn `finalizeCronRun` (`src/cron/isolated-agent/run.ts`), when the agent payload was non-fatal (`!hasFatalErrorPayload`), the dispatch outcome was returned verbatim:\n\n```ts\nif (!hasFatalErrorPayload || deliveryResult.result.status !== \"ok\") {\n  return resultWithDeliveryMeta; // carries deliveryResult.result.status === \"error\"\n}\n```\n\nA `dispatchCronDelivery` result of `status: \"error\"` (unresolved target / outbound send failure) therefore collapsed into the isolated agent execution status. `applyJobResult` then set `lastRunStatus=error`, incremented `consecutiveErrors`, and could trigger backoff / failure alerts for a session that actually succeeded.\n\nThe storage layer already keeps `status` (`CronRunStatus`) and `deliveryStatus` (`CronDeliveryStatus`) as separate columns; the bug was purely that `run.ts` contaminated `status` before persistence.\n\n## Changes\n\n- `finalizeCronRun`: when the agent payload is non-fatal and the run was not aborted, a delivery dispatch `status: \"error\"` now routes through `resolveRunOutcome` so execution `status` stays `ok`. Delivery failure is recorded via `delivered`/`deliveryAttempted` and delivery diagnostics, which drive the decoupled run-log `deliveryStatus` (`not-delivered`). Aborted runs and fatal agent payloads keep their `error` status.\n- `resolveRunOutcome`: carries optional `deliveryDiagnostics` so the delivery error remains operator-visible in run diagnostics even when `status=ok`.\n- Adds a regression test asserting a successful final report followed by a delivery dispatcher failure keeps `status=ok` with delivery failure metadata.\n\nScope is limited to cron finalization; no provider/channel code is touched.\n\n## Decoupling rationale (status vs deliveryStatus)\n\n`status` answers \"did the isolated agent turn execute successfully\" and `deliveryStatus` answers \"did the result reach its destination\". These are orthogonal: a turn can succeed and the announce/direct send can still fail. Collapsing them made every transient delivery error look like an agent failure and drove backoff/alerting. Keeping them decoupled means a delivery failure is surfaced (`deliveryStatus=not-delivered`, delivery diagnostics) without falsely failing the execution — avoiding any cross-cutting product-decision change to the scheduler's error semantics.\n\n## Semantic change — for maintainer review\n\nThis PR changes one observable behavior — the run-log `status` for the \"execution succeeded, delivery failed\" path — so I want to lay out the semantics and blast radius explicitly rather than asking you to infer them. This is the only judgement call in the change; the code is otherwise a verbatim re-route.\n\n**1. Why `status` / `deliveryStatus` decoupling is the correct semantics.** An isolated `agentTurn` is a self-contained unit of work: it either executes successfully and produces a final assistant report, or it does not. Post-run *delivery* (announce / direct send) is a separate, downstream phase that depends on transient externals (channel resolution, outbound network, provider availability). Today a successful, completed isolated session is retroactively re-labelled `status=error` purely because the announce send failed afterwards — i.e. work that finished is recorded as failed work. The storage layer already models these as two independent columns (`CronRunStatus` + `CronDeliveryStatus`); this PR just stops `run.ts` from contaminating the first with the second. The user who filed #94058 reached the same conclusion independently — their stated expected behavior is exactly \"preserve the successful agent execution outcome and separately record the delivery failure phase.\"\n\n**2. Blast radius on backoff / failure-alert is deliberately narrow.** Only one path changes: agent payload non-fatal (`!hasFatalErrorPayload`) **and** `deliveryResult.result.status === \"error\"` **and** the run was not aborted (`!params.isAborted()`). That path goes from `status=error` to `status=ok` + `deliveryStatus=not-delivered`. Everything else is untouched:\n\n   - A genuine execution failure (`hasFatalErrorPayload`) still records `status=error` → `consecutiveErrors++` → backoff / failure alerts fire exactly as before.\n   - An aborted run still records `status=error`.\n   - A successful delivery still records `status=ok` + delivered.\n\n   So real execution failures continue to drive backoff and alerting; only the false positives (succeeded-but-undelivered) stop doing so. The delivery failure is **not** swallowed — it remains operator-visible via `delivered=false`, `deliveryAttempted`, the `deliveryStatus=not-delivered` column, and the merged delivery diagnostics.\n\n**3. Compatibility note (the `merge-risk: compatibility` label).** The risk to weigh is operators/tooling that currently key off `status=error` to detect *undelivered* runs. After this change those runs surface as `status=ok` + `deliveryStatus=not-delivered`, so any such consumer should read `deliveryStatus` (the column already exists for this purpose) rather than overloading `status`. There is no schema/migration change and no provider/channel code touched. I have kept the code change to the minimum re-route and surfaced the trade-off here so the call on the error-semantics is yours to make — happy to adjust framing or gate the behavior if you'd prefer a more conservative landing.\n\n## Real behavior proof\n\n- **Behavior addressed:** A successful isolated `agentTurn` whose post-run delivery fails was persisted to the cron run log with `status=error`, making a successful session look like a failed run (and feeding error backoff/alerting).\n- **Real environment tested:** Local OpenClaw source checkout on Linux at `upstream/main` head `7217477553f64701d2ba36e344ca1cd6be8ba54f`, dependencies hydrated, commands run from the repo root.\n- **Exact steps or command run after this patch:** Drove the REAL `CronService` finalization (`applyJobResult` + `resolveDeliveryState`) for a successful isolated turn with a failing post-run delivery, persisted the resulting `finished` run record through the REAL `appendCronRunLog` into a REAL on-disk SQLite database (`OPENCLAW_STATE_DIR`), then READ IT BACK across the SQLite disk boundary via the REAL `readCronRunLogEntriesSync`. The injected finalization outcome is exactly what patched `run.ts` returns, validated independently by the new vitest regression test.\n- **Evidence after fix:** SQLite disk readback (console-intercept disabled):\n\n  ```text\n  [PROOF after-fix] finished event: {\"jobId\":\"16ede2af-...\",\"status\":\"ok\",\"delivered\":false,\"deliveryStatus\":\"not-delivered\"}\n  [PROOF after-fix] SQLite readback: {\"status\":\"ok\",\"deliveryStatus\":\"not-delivered\",\"delivered\":false}\n  ```\n\n- **Negative control (pre-fix behavior reproduced):** Reverting only `run.ts` and re-running the regression test reproduces the bug (real `run.ts` output), and the same SQLite readback flow persists the collapsed status:\n\n  ```text\n  AssertionError: expected 'error' to be 'ok' // Object.is equality   (run.ts regression test, fix reverted)\n\n  [PROOF pre-fix] SQLite readback: {\"status\":\"error\",\"deliveryStatus\":\"not-delivered\",\"delivered\":false,\"deliveryError\":\"Message failed\"}\n  ```\n\n- **Validation commands (all green after fix):**\n  - `node scripts/run-vitest.mjs src/cron/isolated-agent/run.message-tool-policy.test.ts src/cron/isolated-agent/run.meta-error-status.test.ts src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts src/cron/service.persists-delivered-status.test.ts src/cron/service.runs-one-shot-main-job-disables-it.test.ts` -> 166 passed\n  - `node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental false` -> exit 0\n  - `oxfmt --check` on changed files -> all formatted\n  - `oxlint` on changed files -> exit 0\n\n**Label**: proof: live SQLite run-log readback across disk (status=ok / deliveryStatus=not-delivered) + negative control reproducing the pre-fix collapsed status=error.\n\nAI-assisted.\n\nFixes #94058\n\n",
-        "branch": "fix/cron-isolated-status-not-overwritten-by-delivery",
-        "head_sha": "678b58a0b65f62812f8596d8910fd39d71b6820e",
+        "title": "fix(cli): require own update selection install entries",
+        "body": "## Summary\n- Use own-key checks when selecting installed plugin and hook-pack update targets from CLI input.\n- Preserve npm package matching for prototype-named package names such as constructor.\n- Add focused regression coverage for plugin and hook update selection.\n\n## What Problem This Solves\nThe plugin and hook update selectors used rawId in installs to decide whether CLI input named an installed entry. Because install maps are normal objects, inherited Object prototype keys such as constructor were treated as installed ids even when no own install record existed. That can make plugin update skip npm-package matching for a real tracked package, and can make hook-pack update try to update a non-existent hook id.\n\n## Evidence\nReal environment tested: Local OpenClaw checkout on Linux, Node.js v22.22.0, using the real exported resolvePluginUpdateSelection and resolveHookPackUpdateSelection functions.\n\nBefore fix on current main, this input used an installed npm plugin package whose resolved name is constructor but whose tracked install id is tracked-constructor. It also checked an empty hook install map with rawId constructor:\n~~~js\nconst pluginInstall = { source: 'npm', spec: 'constructor', resolvedName: 'constructor', installPath: '/tmp/plugin' };\nconsole.log(JSON.stringify({\n  plugin: resolvePluginUpdateSelection({ installs: { 'tracked-constructor': pluginInstall }, rawId: 'constructor' }),\n  hook: resolveHookPackUpdateSelection({ installs: {}, rawId: 'constructor' }),\n}, null, 2));\n~~~\n\nCurrent main misclassified the inherited constructor key as an installed id:\n~~~text\n{\n  \"plugin\": {\n    \"pluginIds\": [\n      \"constructor\"\n    ]\n  },\n  \"hook\": {\n    \"hookIds\": [\n      \"constructor\"\n    ]\n  }\n}\n~~~\n\nAfter fix on this branch, the same real selector calls use only own install records:\n~~~text\n{\n  \"plugin\": {\n    \"pluginIds\": [\n      \"tracked-constructor\"\n    ],\n    \"specOverrides\": {\n      \"tracked-constructor\": \"constructor\"\n    }\n  },\n  \"hook\": {\n    \"hookIds\": []\n  }\n}\n~~~\n\n## Verification\n- node scripts/run-vitest.mjs src/cli/plugins-update-selection.test.ts -- --reporter=verbose - passed, 1 file / 8 tests.\n- ./node_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.core.json src/cli/plugins-update-selection.ts src/cli/plugins-update-selection.test.ts - passed.\n- git diff --check - passed.\n- Collision check: open PR changed-file search found no open PR modifying src/cli/plugins-update-selection.ts or src/cli/plugins-update-selection.test.ts before opening.\n",
+        "branch": "alix/cli-update-selection-own-keys",
+        "head_sha": "406b6a80568ba00bcb4db9c6476b2420faaa37b0",
         "author": "alix-007",
         "labels": [
-          "size: M",
+          "cli",
+          "size: S",
           "proof: sufficient",
           "P2",
           "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/cron/isolated-agent/run.message-tool-policy.test.ts",
-            "additions": 82,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.ts",
-            "additions": 36,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.persists-delivered-status.test.ts",
-            "additions": 85,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 13,
+            "path": "src/cli/plugins-update-selection.test.ts",
+            "additions": 66,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/types.ts",
-            "additions": 12,
-            "deletions": 0,
+            "path": "src/cli/plugins-update-selection.ts",
+            "additions": 2,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 6,
-        "additions": 229,
+        "changedFiles": 2,
+        "additions": 68,
         "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-95419",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-95419.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102201",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102201.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
@@ -173,21 +148,21 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-09T01:59:23.967Z"
+      "processed_at": "2026-07-09T01:59:24.557Z"
     }
   ],
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3945,
+    "total_ms": 4311,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 643
+        "ms": 470
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1333
+        "ms": 1459
       },
       {
         "name": "classify_comment_commands",
@@ -207,7 +182,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1941
+        "ms": 2356
       },
       {
         "name": "append_ledger",
