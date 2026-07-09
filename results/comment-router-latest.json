@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T04:22:37.209Z",
+  "generated_at": "2026-07-09T04:22:35.918Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T01:22:35.010Z",
+  "since": "2026-07-09T01:22:35.609Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102403
+    102408
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,128 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102403:4921479327:2026-07-09T04:22:29Z:clawsweeper_needs_human",
-      "comment_id": "4921479327",
-      "comment_version_key": "4921479327:2026-07-09T04:22:29Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102403#issuecomment-4921479327",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 102403,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-09T04:09:02Z",
-      "comment_updated_at": "2026-07-09T04:22:29Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] The remaining action is maintainer/security acceptance of a compatibility-sensitive permission-default change, not a narrow code repair for automation.; Cleared: Cleared: the diff narrows local backup artifact exposure and does not change dependencies, workflows, package scripts, network behavior, or secret-loading paths. (sha=02bad9160dba32eaff4bbc94e3dc634878cf552e)",
-      "review_summary": "The branch creates backup archive temp files with `0o600` permissions and adds a regression test asserting the published archive is owner-only.\n\nPR surface: Source 0, Tests +23. Total +23 across 2 files.\n\nReproducibility: yes. at source level. Current main calls `createWriteStream` without a mode, Node defaults that to `0o666` before umask, and the PR body includes a real before/after `createBackupArchive` run showing `0644` then `0600`.",
-      "review_followup": "- [P2] The remaining action is maintainer/security acceptance of a compatibility-sensitive permission-default change, not a narrow code repair for automation.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "02bad9160dba32eaff4bbc94e3dc634878cf552e",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(backup): write backup archive with owner-only 0o600 permissions",
-        "body": "## What Problem This Solves\n\nFixes an issue where `openclaw backup` writes its `.tar.gz` archive world-readable (0644), so any other local user can read every credential out of the published backup. The archive bundles `auth.json` (OAuth access and refresh tokens), `openclaw.json` (provider API keys), and the state database, all in one file that lands group- and world-readable.\n\nThe intermediate SQLite snapshot inside the flow is already hardened to `0o600` (`src/infra/backup-create.ts:732`), so the module already treats these bytes as secret, but that mitigation never reached the final archive that actually leaves the machine.\n\n## Why This Change Was Made\n\nRoot cause is `src/infra/backup-create.ts:194`. The single shared archive writer creates the output stream with no `mode`, so the file is created 0644 (minus umask):\n\n```ts\n// before\nawait pipeline(params.archiveStream, createWriteStream(params.archivePath));\n```\n\n`publishTempArchive` then hard-links (`fs.link`, :357) or copies (`fs.copyFile`, :371) that temp file to the final output path, and both carry the 0644 mode through to the published artifact.\n\nThe fix creates the stream owner-only from the start:\n\n```ts\n// after\nawait pipeline(params.archiveStream, createWriteStream(params.archivePath, { mode: 0o600 }));\n```\n\n`createWriteStream` opens the file with `O_CREAT` and this mode, so there is no world-readable window. `writeArchiveStreamToFile` is the one funnel every archive write (initial attempt and every `.retry-N` retry) passes through before publish, so hardening it once covers all callers. `fs.link` shares the inode (same mode) and `fs.copyFile` copies the source mode, so the single write-site change reaches both publish paths without touching `publishTempArchive`. This mirrors the existing `0o600` chmod already applied to the SQLite snapshot in the same module. Only the file mode changes; archive contents, layout, and verification are untouched.\n\n## User Impact\n\nBackups created by `openclaw backup` are now owner-only (`-rw-------`). Operators on shared or multi-user hosts no longer leak OAuth tokens, provider API keys, and state to other local accounts through a world-readable backup file. Existing archives are unaffected; the new mode applies to newly created backups.\n\n## Evidence\n\nDrove the real `createBackupArchive` production entry point on a real on-disk OpenClaw state tree seeded with a provider API key in `openclaw.json`, on pristine `origin/main` 735dbd2 and on the patched tree, then `ls -l` on the produced archive and extracted its bytes with `tar -xzO | grep`. State discovery, the tar archiver, and the publish path all stayed real; nothing was faked.\n\nSteps: seed `openclaw.json` with `sk-PROOF-SECRET-TOKEN-0123456789`, run `createBackupArchive({ output, includeWorkspace: false })`, then `ls -l <archive>` and `tar -xzOf <archive> | grep -c <secret>`.\n\n```\n# BEFORE (pristine main 735dbd2)\nls -l archive: -rw-r--r-- 1 root root 20919 Jul  9 03:46 .../backups/2026-05-09T12-00-00.000+00-00-openclaw-backup.tar.gz\narchived files containing the raw API key: 1\n# AFTER (this patch, identical inputs)\nls -l archive: -rw------- 1 root root 20918 Jul  9 03:46 .../backups/2026-05-09T12-00-00.000+00-00-openclaw-backup.tar.gz\narchived files containing the raw API key: 1\n```\n\nBefore the change the produced archive is `-rw-r--r--` (readable by every local user) while carrying the raw API key inside it; after the change the same archive is `-rw-------`, owner-only, so the credential is no longer exposed to other local users.\n\nRegression and checks:\n- `node scripts/run-vitest.mjs src/infra/backup-create.test.ts`: 42 passed, including the new `writes the published archive with owner-only 0o600 permissions`.\n- The new test fails on pristine `origin/main` (`expected 420 to be 384`, i.e. 0o644 vs 0o600) and passes with the patch.\n- `oxfmt --check`, `oxlint`, and `tsgo -p tsconfig.core.json` / `-p test/tsconfig/tsconfig.core.test.json` are clean on the changed files.\n\nNot covered: no live provider request and no full build were run; the `fs.copyFile` publish fallback (only reached when the target filesystem rejects hard links) was not driven end to end, though it provably preserves the source `0o600` mode.\n",
-        "branch": "fix/backup-archive-mode-0600",
-        "head_sha": "02bad9160dba32eaff4bbc94e3dc634878cf552e",
-        "author": "yetval",
-        "labels": [
-          "size: XS",
-          "proof: sufficient",
-          "P0",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/infra/backup-create.test.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/backup-create.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 24,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102403",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102403.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 105,
-          "gatingTotal": 100,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 38,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2394,
+    "total_ms": 520,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 282
+        "ms": 299
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1905
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -162,11 +57,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 185
+        "ms": 211
       },
       {
         "name": "append_ledger",
