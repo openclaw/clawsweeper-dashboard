@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T09:46:43.834Z",
+  "generated_at": "2026-07-09T09:46:42.429Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T06:46:41.876Z",
+  "since": "2026-07-09T06:46:38.980Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102619
+    99025
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 6,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,22 +31,121 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102619:4923706984:2026-07-09T09:46:37Z:clawsweeper_auto_repair",
-      "comment_id": "4923706984",
-      "comment_version_key": "4923706984:2026-07-09T09:46:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102619#issuecomment-4923706984",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:99025:4864192183:2026-07-09T09:46:32Z:clawsweeper_needs_human",
+      "comment_id": "4864192183",
+      "comment_version_key": "4864192183:2026-07-09T09:46:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99025#issuecomment-4864192183",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 102619,
+      "issue_number": 99025,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-09T09:40:47Z",
-      "comment_updated_at": "2026-07-09T09:46:37Z",
+      "comment_created_at": "2026-07-02T09:23:16Z",
+      "comment_updated_at": "2026-07-09T09:46:32Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The remaining blocker is contributor real-behavior proof or an explicit maintainer source-review override, not a narrow automation-repairable code defect.; Cleared: No concrete security or supply-chain concern was found; the diff only changes local child-process cleanup logic. (sha=7fa27b35474d16bc1c6c125523d91d9a95483087)",
+      "review_summary": "The PR changes the fd-backed find session tool so shared cleanup calls the child stop hook and the stop hook uses a sentinel to avoid recursive child.kill re-entry.\n\nPR surface: Source +4. Total +4 across 1 file.\n\nReproducibility: yes. for the source-level asymmetry: current main's fd child error handler closes readline and rejects without invoking the child stop hook. No high-confidence runtime reproduction has proven an orphaned fd process on current main.",
+      "review_followup": "- [P1] The remaining blocker is contributor real-behavior proof or an explicit maintainer source-review override, not a narrow automation-repairable code defect.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "7fa27b35474d16bc1c6c125523d91d9a95483087",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(find): prevent recursive re-entry in child kill via sentinel guard (#98961)",
+        "body": "Fixes #98961.\n\n## What Problem This Solves\n\nIn `find.ts`, `child.on(\"error\")` only called `cleanup()` (which closed readline), while `child.on(\"close\")` called both `cleanup()` and `stopChild?.()`. On spawn failure or certain error paths, the child process was not killed — leaving a potential orphan.\n\n## Why This Change Was Made\n\nTwo changes with a safety sentinel:\n\n1. **`cleanup()` now calls `stopChild?.()`** — so both error and close handlers stop the child symmetrically.\n\n2. **`stopChild` uses a `stopChildKilling` sentinel** — prevents recursive re-entry if `child.kill()` triggers Node's `error` event before `settle` clears the hook.\n\nThe direct fix proposed in #98854 (calling `stopChild` in the error handler without a sentinel) risks recursive kill — if `child.kill()` emits another `error` event, the handler re-enters, calls `kill()` again, and potentially loops. The sentinel (`stopChildKilling = true` before `child.kill()`, checked on entry) prevents this.\n\n### Sentinel flow\n\n```\nerror event → cleanup() → stopChild?.()\n  → stopChildKilling? NO → set stopChildKilling=true → child.kill()\n    → (kill triggers close event)\nclose event → cleanup() → stopChild?.()\n  → stopChildKilling? YES → return (no recursive kill) ✅\n```\n\n## User Impact\n\nNo user-visible behavior change. Fixes an edge case where a spawn-failing fd find could leave an orphan child process.\n\n## Evidence\n\n**Real environment tested:** local OpenClaw source checkout, Node v24.13.1, PR head.\n\n**Proof 1 — Diff analysis (sentinel correctness):**\n\n```\n--- a/src/agents/sessions/tools/find.ts\n+++ b/src/agents/sessions/tools/find.ts\n\n+        let stopChildKilling = false;         // NEW: re-entry guard\n\n         stopChild = () => {\n-          if (!child.killed) {                // BEFORE: no re-entry guard\n-            child.kill();\n+          if (stopChildKilling || child.killed) {  // AFTER: guard OR already killed\n+            return;\n           }\n+          stopChildKilling = true;            // set before kill\n+          child.kill();\n         };\n\n         const cleanup = () => {\n           rl.close();\n+          stopChild?.();                      // NOW: error path also calls stopChild\n         };\n```\n\nThree guard scenarios covered by the diff:\n\n| Scenario | `stopChildKilling` | `child.killed` | Action |\n|----------|:---:|:---:|--------|\n| First entry (error or close) | false | false | → kill child |\n| Re-entry via recursive event | true | false | → skip (sentinel) |\n| Already killed externally | false | true | → skip (killed) |\n\n**Proof 2 — Regression tests:**\n\n```\n$ node scripts/run-vitest.mjs src/agents/sessions/tools/find.test.ts --run\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n```\n\n```\n$ npx oxlint src/agents/sessions/tools/find.ts\n→ exit 0\n```\n\n**Proof 3 — Production module loads and is structurally correct:**\n\n```\n$ node --import tsx -e \"\nimport { createFindToolDefinition } from './src/agents/sessions/tools/find.js';\nconst toolDef = createFindToolDefinition('/tmp', { maxConcurrency: 1 });\nconsole.log('createFindToolDefinition returned:', typeof toolDef);\nconsole.log('Has execute:', typeof toolDef.execute);\n\"\ncreateFindToolDefinition returned: object\nHas execute: function\n```\n\nThe production module imports, constructs, and exports without error.\n\n**Observed result after fix:** The `stopChildKilling` sentinel provides a standard re-entry guard pattern. The diff adds +6/-2 lines covering all three guard states (first entry, recursive re-entry, already killed). No behavioral change for the normal (non-error) path — `cleanup()` was always called by `close`, and `stopChild?.()` was already called by `close` before this fix. The only new behavior is that `error`-then-`close` now also stops the child, which is the intended fix.\n\n**What was not tested:** Live end-to-end fd spawn-failure with a real fd binary on this machine (fd is not installed, and the auto-download falls back to GitHub which is unavailable in this environment). The sentinel pattern is a standard re-entry guard — correctness is verifiable from the diff. The close path already exercised `stopChild?.()`; this fix adds the same call to the error path with a guard against recursive re-entry.\n\n## Regression Test Plan\n\n- `$ node scripts/run-vitest.mjs src/agents/sessions/tools/find.test.ts --run` — **1 passed, 2 tests passed**\n- `$ npx oxlint src/agents/sessions/tools/find.ts` — **exit 0**\n- `$ git diff --stat` — **1 file, +6/-2**\n\n## Root Cause\n\nIn `createFindToolDefinition`, the `error` handler called `cleanup()` (rl.close only) but not `stopChild?.()`. The `close` handler called both. A direct fix adding `stopChild?.()` to the error handler risks recursive re-entry if `child.kill()` emits an `error` event before `settle` runs. The fix uses a `stopChildKilling` sentinel boolean — set before `child.kill()`, checked at entry — to prevent re-entry.\n\nAI-assisted: Claude Opus 4.8",
+        "branch": "fix/fd-find-error-stopchild-98961",
+        "head_sha": "7fa27b35474d16bc1c6c125523d91d9a95483087",
+        "author": "maweibin",
+        "labels": [
+          "agents",
+          "size: XS",
+          "P3",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/sessions/tools/find.ts",
+            "additions": 6,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 6,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-99025",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99025.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 63,
+            "SKIPPED": 33,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:99025:4923610128:2026-07-09T09:28:42Z:re_review",
+      "comment_id": "4923610128",
+      "comment_version_key": "4923610128:2026-07-09T09:28:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99025#issuecomment-4923610128",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99025,
+      "author": "maweibin",
+      "author_id": 18023423,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T09:28:42Z",
+      "comment_updated_at": "2026-07-09T09:28:42Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -68,101 +167,61 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(config): reject zero-value cron.sessionRetention to prevent silent data loss",
-        "body": "## What Problem This Solves\n\nConfiguring `cron.sessionRetention: \"0h\"` (or `\"0d\"`, `\"0ms\"`) is silently accepted by Zod config validation. `parseDurationMs(\"0h\")` returns `0` without throwing, so the `superRefine` passes the value through. Unlike `heartbeat.every` — which has a runtime `ms <= 0` guard in `resolveHeartbeatIntervalMs` — the runtime handler `resolveRetentionMs` returns `0ms` directly. `sweepCronRunSessions` then computes `cutoff = now - 0 = now`, matching all cron run sessions for immediate deletion.\n\n## Why This Change Was Made\n\nThe existing `superRefine` only checks whether `parseDurationMs` throws — it treats any non-throwing return value (including `0`) as valid. `parseDurationMs` itself intentionally returns `0` for zero inputs (not an error), and `resolveRetentionMs` does not defend against it, so the positivity gate belongs in schema validation where config-level diagnostics are surfaced before any runtime damage occurs.\n\n## User Impact\n\nAn operator who accidentally sets `cron.sessionRetention: \"0h\"` (e.g. mistyping `\"24h\"`) will see all cron run sessions immediately deleted on the next sweep cycle, with no error or warning. After this fix, the misconfiguration is caught at config load time with a clear diagnostic.\n\n## Evidence\n\n- **Claim proved**: `cron.sessionRetention` rejects zero intervals while still accepting positive intervals and preserving the existing invalid-format diagnostic.\n- **Current head proved**: `d7bf7eca9d2281ee66a330fd8309278475fa50b2`.\n- **Commands / artifacts**:\n  - Runtime bug proof (before fix — `resolveRetentionMs` returns 0ms):\n    ```text\n    $ node --import tsx -e \"\n    import { resolveRetentionMs } from './src/cron/session-reaper.ts';\n    console.log(resolveRetentionMs({sessionRetention: '0h'}));\n    \"\n    0\n    ```\n  - Schema validation proof (after fix — `config validate` rejects zero):\n    ```text\n    $ OPENCLAW_CONFIG_PATH=/tmp/cfg.json5 pnpm --silent openclaw config validate --json\n    {\n      \"valid\": false,\n      \"path\": \"/tmp/cfg.json5\",\n      \"issues\": [\n        {\n          \"path\": \"cron.sessionRetention\",\n          \"message\": \"duration must be positive (use ms, s, m, h, d), e.g. 24h\"\n        }\n      ]\n    }\n    ```\n  - Positive intervals still accepted:\n    ```text\n    $ OPENCLAW_CONFIG_PATH=/tmp/cfg.json5 pnpm --silent openclaw config validate --json\n    {\"valid\":true,\"path\":\"/tmp/cfg.json5\",\"warnings\":[]}\n    ```\n  - Invalid format still caught (existing behavior preserved):\n    ```text\n    $ OPENCLAW_CONFIG_PATH=/tmp/cfg.json5 pnpm --silent openclaw config validate --json\n    {\n      \"issues\": [\n        {\n          \"path\": \"cron.sessionRetention\",\n          \"message\": \"invalid duration (use ms, s, m, h, d)\"\n        }\n      ]\n    }\n    ```\n  - Focused Vitest: 1 test file, 59 tests passed (3 new + 56 existing unaffected).\n  - Diff whitespace checks passed.\n- **Not tested / proof gaps**: None.\n",
-        "branch": "fix/reject-zero-duration-configs",
-        "head_sha": "d7bf7eca92243d741e1f40eb945bc7e8e4693ee4",
-        "author": "monkey-wusky",
-        "labels": [
-          "cli",
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/update-cli.test.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/update-cli/update-command.ts",
-            "additions": 36,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.test.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.ts",
-            "additions": 11,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 83,
-        "deletions": 11,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102619",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102619.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 36,
-            "SUCCESS": 61,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-compact-small-whole-1:FAILURE"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [
-            "checks-node-compact-small-whole-1:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:99025:4864342887:2026-07-02T09:42:05Z:re_review",
+      "comment_id": "4864342887",
+      "comment_version_key": "4864342887:2026-07-02T09:42:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/99025#issuecomment-4864342887",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 99025,
+      "author": "maweibin",
+      "author_id": 18023423,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-02T09:42:05Z",
+      "comment_updated_at": "2026-07-02T09:42:05Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2144,
+    "total_ms": 5216,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 287
+        "ms": 395
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1656
+        "ms": 3041
       },
       {
         "name": "classify_comment_commands",
@@ -182,7 +241,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 175
+        "ms": 1758
       },
       {
         "name": "append_ledger",
