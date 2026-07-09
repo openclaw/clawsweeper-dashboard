@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T09:59:31.456Z",
+  "generated_at": "2026-07-09T10:00:04.873Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T06:59:31.036Z",
+  "since": "2026-07-09T07:00:02.410Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102632
+    102569
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,131 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102569:4923418363:2026-07-09T09:59:58Z:clawsweeper_auto_repair",
+      "comment_id": "4923418363",
+      "comment_version_key": "4923418363:2026-07-09T09:59:58Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102569#issuecomment-4923418363",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102569,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T09:04:55Z",
+      "comment_updated_at": "2026-07-09T09:59:58Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=4f1dd8784ae504122c053027e5ff8bf102f658f9)",
+      "review_summary": "The PR passes Gateway `replace` from chat delta payloads into the ACP translator, resets sent text/thought offsets for replacement deltas, and adds ACP translator regression tests for divergent and shorter revisions.\n\nPR surface: Source +4, Tests +167. Total +171 across 2 files.\n\nReproducibility: yes. Source inspection shows Gateway emits replace=true/deltaText for non-prefix revisions while current ACP output paths append agent_message_chunk text; I did not run a fresh live ACP reproduction in this read-only review.",
+      "review_followup": "- [P1] A maintainer should decide the ACP replacement semantics before automation tries to repair this PR, because buffering, messageId behavior, and metadata extensions have different client-visible tradeoffs.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "4f1dd8784ae504122c053027e5ff8bf102f658f9",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(acp): handle Gateway replace deltas in translator, not byte-offset slices",
+        "body": "## What Problem This Solves\n\nThe ACP translator in `src/acp/translator.ts` assumes Gateway assistant text only ever grows as an append-only prefix. When the model revises in-progress output so the new text is **not** a prefix extension, the translator slices the new full text at the old byte length. This produces corrupted output:\n\n- **Divergent revision** \"Hello world\" → \"Goodbye world\": the delta becomes `\"Goodbye world\".slice(11)` = `\"d\"`, so the ACP client renders \"Hello world\" + \"d\" = \"Hello worldd\" — a stale prefix with a nonsensical tail.\n- **Shorter revision** \"Hello world!\" → \"Hi\": `\"Hi\".length (2) <= sentSoFar (12)` returns early, so the client never sees \"Hi\" and stays stuck on the stale longer text.\n\nThe Gateway already signals non-append revisions via `replace: true` on the chat event payload (per `packages/gateway-protocol/src/schema/logs-chat.ts:150`), but the translator ignored it entirely.\n\nFixes #102322\n\n## Why This Change Was Made\n\nThe root cause is two-fold:\n\n1. `handleChatEvent` never passed the `replace` flag from `payload.replace` into `handleDeltaEvent`.\n2. `handleDeltaEvent` used `pending.sentTextLength` / `pending.sentThoughtLength` to compute a byte-offset slice (`fullText.slice(sentSoFar)`), which is only correct for strict append-only frames.\n\n**Fix** (2 files, +174/-3 lines):\n\n- `src/acp/translator.ts`: Extract `replace` from the payload (delta frames only) and pass it to `handleDeltaEvent`. When `replace` is true, reset sentLength tracking to 0 so the full revised text (and thought) is emitted.\n- `src/acp/translator.stop-reason.test.ts`: 2 regression tests covering divergent revision and shorter revision scenarios.\n\nThe `replace` flag is only used for delta frames (`state === \"delta\"`); final frames continue to use the existing tracking (after a replace delta, sentLength matches the revised text, so the final frame's delta produces an empty slice — no duplicate emission).\n\n## Evidence\n\nAll 105 ACP test files pass (828 tests, zero failures or regressions):\n\n```\n$ npx vitest run src/acp/ --no-coverage\n\n Test Files  105 passed (105)\n      Tests  828 passed (828)\n   Start at  16:41:14\n   Duration  55.29s\n```\n\nNew regression tests specifically exercise the two failure modes:\n\n```\n$ npx vitest run src/acp/translator.stop-reason.test.ts --no-coverage\n\n Test Files  1 passed (1)\n      Tests  20 passed (20)\n   Start at  16:36:01\n   Duration  1.35s\n```\n\n**\"emits the full revised text on a replace delta, not a byte-offset slice\"**\n- Sends append delta \"Hello world\", then replace delta \"Goodbye world\"\n- Asserts the second `agent_message_chunk` contains the full \"Goodbye world\" (13 chars), not a corrupted byte-offset slice\n- Before fix: would emit \"d\" (offset 11 slice), client renders \"Hello worldd\"\n\n**\"emits the full revised text on a replace delta for a shorter revision\"**\n- Sends append delta \"Hello world!\" (12 chars), then replace delta \"Hi\" (2 chars)\n- Asserts the second chunk emits \"Hi\"\n- Before fix: `fullText.length (2) <= sentSoFar (12)` → return early, client stuck on stale text\n\n## Merge Risk\n\nLow — 7 lines added in production code (one `replace` flag extraction, two `replace ? 0 : ...` tracking resets), 167 lines in regression tests. No changes to session handling, prompt lifecycle, or Gateway protocol. The `replace` flag was already defined in the protocol schema and already produced by the Gateway.\n\n- [x] Backwards compatible — normal append deltas are unchanged (replace is undefined/false)\n- [x] Existing tests pass — 828/828\n- [x] Focused fix — single file, three logical changes",
+        "branch": "fix/issue-102322-acp-replace-delta",
+        "head_sha": "4f1dd8784ae504122c053027e5ff8bf102f658f9",
+        "author": "krissding",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/acp/translator.stop-reason.test.ts",
+            "additions": 167,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/translator.ts",
+            "additions": 7,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 174,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102569",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102569.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 101,
+          "gatingTotal": 96,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 36,
+            "SUCCESS": 61,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [
+            "check-test-types:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 771,
+    "total_ms": 2767,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 407
+        "ms": 301
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2151
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -57,11 +165,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 352
+        "ms": 295
       },
       {
         "name": "append_ledger",
