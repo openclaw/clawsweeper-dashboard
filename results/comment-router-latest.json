@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T08:58:34.318Z",
+  "generated_at": "2026-07-09T08:58:47.486Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T05:58:33.903Z",
+  "since": "2026-07-09T05:58:45.306Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102557
+    102479
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 4,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,277 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102479:4922466368:2026-07-09T08:58:37Z:clawsweeper_needs_human",
+      "comment_id": "4922466368",
+      "comment_version_key": "4922466368:2026-07-09T08:58:37Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102479#issuecomment-4922466368",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102479,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T06:59:25Z",
+      "comment_updated_at": "2026-07-09T08:58:37Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] No repair job is needed: the patch is focused and proof-backed, and the remaining action is protected auth-provider maintainer review plus refreshed exact-head validation before merge.; Cleared: No concrete security or supply-chain issue was found; the diff adds no dependencies or secret surface and reduces expired bearer-token WHAM calls while preserving valid-token 401 handling. (sha=aba4b267504a699213fc644ddd5b3c50da3d0c36)",
+      "review_summary": "The PR adds an access-token expiry check before OpenAI OAuth WHAM cooldown probes and adds a regression test for expired access tokens using normal transient cooldown instead of a 12-hour WHAM cooldown.\n\nPR surface: Source +3, Tests +18. Total +21 across 2 files.\n\nReproducibility: yes. at source level. Current main probes WHAM with any stored OpenAI OAuth access token and maps a 401 to a 12-hour cooldown, while the PR body also includes live before/after output for the expired-token case.",
+      "review_followup": "- [P2] No repair job is needed: the patch is focused and proof-backed, and the remaining action is protected auth-provider maintainer review plus refreshed exact-head validation before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "aba4b267504a699213fc644ddd5b3c50da3d0c36",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: transient failures no longer trigger false 12h OpenAI cooldown on expired access tokens",
+        "body": "Closes #102471\n\n## What Problem This Solves\n\nFixes an issue where OpenAI ChatGPT OAuth users would see the provider go dark for 12 hours (and get told to re-authenticate) after a single transient failure, whenever the failure happened while their stored access token had routinely expired. In fallback-configured setups this surfaces as recurring half-day OpenAI \"outages\" with the fallback model silently taking over.\n\n## Why This Change Was Made\n\n`markAuthProfileFailure` fires a live WHAM usage probe with the stored access token and never refreshes it; a locally expired token guarantees an HTTP 401, which the probe maps to a 12h `wham_token_expired` cooldown. An expired-by-clock access token is routine and refreshable, not a health signal, so `shouldProbeWhamForFailure` now also requires the token to be unexpired — a skipped probe leaves the normal 30s/1m/5m transient cooldown in place and the next attempt refreshes normally. A 401 with a locally valid token still means server-side revocation and keeps the intentional 12h cooldown. One-condition prod change; no config or behavior surface otherwise.\n\n## User Impact\n\nNo more false 12-hour OpenAI cooldowns and unnecessary re-login prompts from transient failures that coincide with routine access-token expiry.\n\n## Evidence\n\n- Regression test: expired token + `rate_limit` → probe fetch never called, cooldown 30s with reason `rate_limit` (`usage.test.ts`). Negative proof: with only the test added and no prod change, it fails (fetch called with the expired bearer token, 78 passed / 1 failed).\n- Existing 401-with-valid-token 12h test unchanged and green.\n- `node scripts/run-vitest.mjs` — `usage.test.ts` 79 passed, `auth-profiles.markauthprofilefailure.test.ts` 14 passed; `pnpm tsgo:core` exit 0.\n- Changed-lane gate: Blacksmith Testbox `tbx_01kx2t3m46bchejzg97esna88g`, `pnpm check:changed` exit 0.\n- Autoreview (codex/gpt-5.5): clean.\n\n\n## Review Follow-up (ClawSweeper round 1)\n\n**Real behavior proof added** — production `markAuthProfileFailure` against a real on-disk agent SQLite store, hitting the **live** `chatgpt.com/backend-api/wham/usage` endpoint. The profile holds a deliberately fake, locally-expired access token (redaction-safe by construction; nothing real is transmitted). Same scenario both sides:\n\n- `main` @ `f246fa39012` — the probe fires with the expired bearer token, the live endpoint returns a real 401, and the profile is parked:\n  ```\n  [repro] cooldown length: ~720 minutes\n  [repro] RESULT: FALSE OUTAGE — live WHAM probe 401 on an expired-but-refreshable token parked the profile for 12h\n  ```\n- this branch, identical store and failure:\n  ```\n  [repro] cooldown length: ~1 minutes\n  [repro] RESULT: SAFE — probe skipped for locally expired token; normal transient cooldown\n  ```\n\nAlso rebased onto current `main` (past #102493's `usage.test.ts` isolation changes); focused suites re-run green after rebase: `usage.test.ts` + `auth-profiles.markauthprofilefailure.test.ts` — 93 passed.\n",
+        "branch": "fix/wham-probe-expired-token",
+        "head_sha": "aba4b267504a699213fc644ddd5b3c50da3d0c36",
+        "author": "obviyus",
+        "labels": [
+          "agents",
+          "maintainer",
+          "size: XS",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 auth-provider",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/auth-profiles/usage.test.ts",
+            "additions": 18,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/auth-profiles/usage.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 21,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102479",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102479.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 104,
+          "gatingTotal": 99,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 37,
+            "SUCCESS": 64,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102479:4923125203:2026-07-09T08:27:16Z:re_review",
+      "comment_id": "4923125203",
+      "comment_version_key": "4923125203:2026-07-09T08:27:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102479#issuecomment-4923125203",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102479,
+      "author": "obviyus",
+      "author_id": 22031114,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T08:27:16Z",
+      "comment_updated_at": "2026-07-09T08:27:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: transient failures no longer trigger false 12h OpenAI cooldown on expired access tokens",
+        "body": "Closes #102471\n\n## What Problem This Solves\n\nFixes an issue where OpenAI ChatGPT OAuth users would see the provider go dark for 12 hours (and get told to re-authenticate) after a single transient failure, whenever the failure happened while their stored access token had routinely expired. In fallback-configured setups this surfaces as recurring half-day OpenAI \"outages\" with the fallback model silently taking over.\n\n## Why This Change Was Made\n\n`markAuthProfileFailure` fires a live WHAM usage probe with the stored access token and never refreshes it; a locally expired token guarantees an HTTP 401, which the probe maps to a 12h `wham_token_expired` cooldown. An expired-by-clock access token is routine and refreshable, not a health signal, so `shouldProbeWhamForFailure` now also requires the token to be unexpired — a skipped probe leaves the normal 30s/1m/5m transient cooldown in place and the next attempt refreshes normally. A 401 with a locally valid token still means server-side revocation and keeps the intentional 12h cooldown. One-condition prod change; no config or behavior surface otherwise.\n\n## User Impact\n\nNo more false 12-hour OpenAI cooldowns and unnecessary re-login prompts from transient failures that coincide with routine access-token expiry.\n\n## Evidence\n\n- Regression test: expired token + `rate_limit` → probe fetch never called, cooldown 30s with reason `rate_limit` (`usage.test.ts`). Negative proof: with only the test added and no prod change, it fails (fetch called with the expired bearer token, 78 passed / 1 failed).\n- Existing 401-with-valid-token 12h test unchanged and green.\n- `node scripts/run-vitest.mjs` — `usage.test.ts` 79 passed, `auth-profiles.markauthprofilefailure.test.ts` 14 passed; `pnpm tsgo:core` exit 0.\n- Changed-lane gate: Blacksmith Testbox `tbx_01kx2t3m46bchejzg97esna88g`, `pnpm check:changed` exit 0.\n- Autoreview (codex/gpt-5.5): clean.\n\n\n## Review Follow-up (ClawSweeper round 1)\n\n**Real behavior proof added** — production `markAuthProfileFailure` against a real on-disk agent SQLite store, hitting the **live** `chatgpt.com/backend-api/wham/usage` endpoint. The profile holds a deliberately fake, locally-expired access token (redaction-safe by construction; nothing real is transmitted). Same scenario both sides:\n\n- `main` @ `f246fa39012` — the probe fires with the expired bearer token, the live endpoint returns a real 401, and the profile is parked:\n  ```\n  [repro] cooldown length: ~720 minutes\n  [repro] RESULT: FALSE OUTAGE — live WHAM probe 401 on an expired-but-refreshable token parked the profile for 12h\n  ```\n- this branch, identical store and failure:\n  ```\n  [repro] cooldown length: ~1 minutes\n  [repro] RESULT: SAFE — probe skipped for locally expired token; normal transient cooldown\n  ```\n\nAlso rebased onto current `main` (past #102493's `usage.test.ts` isolation changes); focused suites re-run green after rebase: `usage.test.ts` + `auth-profiles.markauthprofilefailure.test.ts` — 93 passed.\n",
+        "branch": "fix/wham-probe-expired-token",
+        "head_sha": "aba4b267504a699213fc644ddd5b3c50da3d0c36",
+        "author": "obviyus",
+        "labels": [
+          "agents",
+          "maintainer",
+          "size: XS",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 auth-provider",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/auth-profiles/usage.test.ts",
+            "additions": 18,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/auth-profiles/usage.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 21,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102479",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102479.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 104,
+          "gatingTotal": 99,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 37,
+            "SUCCESS": 64,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102479:4922789544:2026-07-09T07:42:46Z:re_review",
+      "comment_id": "4922789544",
+      "comment_version_key": "4922789544:2026-07-09T07:42:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102479#issuecomment-4922789544",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102479,
+      "author": "obviyus",
+      "author_id": 22031114,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T07:42:46Z",
+      "comment_updated_at": "2026-07-09T07:42:46Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 753,
+    "total_ms": 2602,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 403
+        "ms": 326
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1835
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +315,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 338
+        "ms": 411
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 2
       }
     ]
   }
