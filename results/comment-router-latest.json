@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T03:44:12.600Z",
+  "generated_at": "2026-07-09T03:45:21.933Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T00:44:10.554Z",
+  "since": "2026-07-09T00:45:19.374Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    97731
+    97629
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4921360985
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -31,34 +33,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:97731:4830748742:2026-07-09T03:44:06Z:clawsweeper_auto_repair",
-      "comment_id": "4830748742",
-      "comment_version_key": "4830748742:2026-07-09T03:44:06Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97731#issuecomment-4830748742",
+      "idempotency_key": "comment-router:openclaw/openclaw:97629:4921360985:2026-07-09T03:42:24Z:re_review",
+      "comment_id": "4921360985",
+      "comment_version_key": "4921360985:2026-07-09T03:42:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/97629#issuecomment-4921360985",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97731,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 97629,
+      "author": "krissding",
+      "author_id": 296022613,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-29T09:06:43Z",
-      "comment_updated_at": "2026-07-09T03:44:06Z",
+      "comment_created_at": "2026-07-09T03:42:24Z",
+      "comment_updated_at": "2026-07-09T03:42:24Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=2aba5b00152ce761c572c797158c4f163ecea44a)",
-      "review_summary": "Adds a zombie-reaper module that sends SIGCHLD to the OpenClaw process and PID 1 from gateway startup and post-kill paths, plus unit and proof scripts.\n\nPR surface: Source +216, Tests +70. Total +286 across 6 files.\n\nReproducibility: yes. for the PR defect: libuv source shows SIGCHLD handling waits tracked child PIDs, while this PR relies on it to reap untracked direct zombies. The full production leak still needs branch-tied Linux/Docker before-and-after proof.",
-      "review_followup": "- [P1] Human process-lifecycle review is needed because the blocker is fix direction plus real behavior proof, not a narrow mechanical repair.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "2aba5b00152ce761c572c797158c4f163ecea44a",
+      "expected_head_sha": null,
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -68,115 +70,140 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(process): add zombie reaper to prevent child process leak",
-        "body": "Closes #97616\n\n## What Problem This Solves\n\nLong-running openclaw gateway processes in Docker accumulate zombie processes over time. One user reported 800+ zombie processes (`openclaw-hooks`, `bash`, `codex`, `chrome-headless`) after running openclaw 2026.6.10 for several months. Each zombie consumes a PID slot and kernel resources. When the process limit is exhausted, the runtime degrades (`spawn EAGAIN`, `uv_thread_create`, gateway instability, connector silence).\n\n**Root cause**: When openclaw kills a process tree via `kill(-pid, SIGKILL)`, grandchildren may exit and become zombies **before** their parent (openclaw's direct child) is killed. When the group leader dies, the zombie grandchildren are reparented to PID 1, but **no new SIGCHLD is sent** because the grandchildren already exited. The zombies remain permanently unreaped.\n\nlibuv already calls `waitpid(-1, WNOHANG)` in a loop inside its SIGCHLD handler, which would reap these zombies — but the SIGCHLD never fires for processes that exited before being reparented.\n\n## Why This Change Was Made\n\nThe fix adds a lightweight zombie reaper (`src/process/zombie-reaper.ts`) with two mechanisms:\n\n1. **Post-kill reaping**: After every process-tree kill (in `process/exec.ts` and `process/supervisor/supervisor.ts`), call `reapZombies()` which sends `SIGCHLD` to the current process. This triggers libuv's `waitpid(-1, WNOHANG)` loop, reaping any zombie children — including grandchildren reparented to us.\n\n2. **Periodic fallback** (every 30s): A background `unref()`d timer in the gateway server triggers the same SIGCHLD sweep, catching zombies that accumulated outside kill-tree paths.\n\nThis approach is pure Node.js (`process.kill(process.pid, 'SIGCHLD')`) — no native addons, no external dependencies, no Python helpers. It leverages libuv's existing waitpid loop.\n\n**Why not use tini?** The Docker image already uses `tini -s` as PID 1, which should reap orphans. But tini cannot reap grandchildren that exit *before* being reparented — the race is intrinsic to `kill(-pid, SIGKILL)` timing. The fix closes the gap at the source: reaping happens immediately after every process-tree kill.\n\n## User Impact\n\nGateway processes running in Docker (or as PID 1 in any container) no longer accumulate zombie processes over weeks/months. The periodic reaper runs every 30s with no measurable CPU overhead. Windows is a no-op (SIGCHLD doesn't exist).\n\n## Evidence\n\n### Code quality\n- `oxlint --tsconfig config/tsconfig/oxlint.core.json` on all 5 changed files: **0 errors, 0 warnings**\n- `git diff --check`: passed (no whitespace errors)\n\n### Unit tests\n- `src/process/zombie-reaper.test.ts` (6 tests): coverage of `reapZombies()` safety, `startZombieReaper`/`stopZombieReaper` lifecycle, idempotency, and platform no-ops\n\n### Behavior proof\n- `src/process/zombie-reaper.proof.ts`: run on Linux with `node --import tsx`. All 6 invariants verified:\n  ```\n  [zombie-reaper.proof] === Zombie Reaper Behavior Proof ===\n  [zombie-reaper.proof] Step 1: reapZombies() does not throw\n  [zombie-reaper.proof]   PASS: reapZombies() completed without error\n  [zombie-reaper.proof] Step 2: Spawn child processes\n  [zombie-reaper.proof]   PASS: 5 child processes spawned and reaped by Node.js\n  [zombie-reaper.proof] Step 3: reapZombies() is idempotent\n  [zombie-reaper.proof]   PASS: reapZombies() called 3 times consecutively without errors\n  [zombie-reaper.proof] Step 4: startZombieReaper / stopZombieReaper lifecycle\n  [zombie-reaper.proof]   PASS: restart after stop works\n  [zombie-reaper.proof] Step 5: Post-reaping process state\n  [zombie-reaper.proof]   System zombies: 0 (485 total)\n  [zombie-reaper.proof] === All proofs passed ===\n  ```\n\n### Before/after (Docker simulation)\n```\n# Before fix — zombie accumulation scenario (from #97616 reporter):\n  total processes: 336\n  zombies: 225\n  zombie_comm openclaw-hooks: 113\n  zombie_comm bash:          108\n\n# After fix — with zombie reaper active:\n  $ ps aux | grep defunct | wc -l\n  0\n  # Periodic reaper (30s) + post-kill reaping prevent accumulation.\n```\n\n### Not tested\n- Multi-month soak test in a real Docker deployment (requires extended runtime)\n- Interaction with seccomp/SELinux blocking SIGCHLD delivery (silently caught)\n\n## Merge Risk\n\n**Low**. The change:\n- Only sends SIGCHLD to the current process, which libuv already handles safely\n- Is a no-op on Windows\n- Catches all errors silently (seccomp/SELinux restrictions are non-fatal)\n- The periodic timer is `.unref()`'d so it doesn't keep the event loop alive\n- 6 unit tests + behavior proof included\n- No external dependencies or native addons\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/zombie-reaper-97616",
-        "head_sha": "2aba5b00152ce761c572c797158c4f163ecea44a",
+        "title": "fix(xai): gate server-side tools to xAI models only",
+        "body": "Closes #97621\n\n## What Problem This Solves\n\nThe xAI extension's `code_execution` and `x_search` tool factories use `ctx.activeModel?.provider` to decide whether to expose xAI-billed tools. The original guard `ctx.activeModel?.provider && ctx.activeModel.provider !== PROVIDER_ID` uses `&&` which is **fail-open**: when `activeModel` is missing or its `provider` field is undefined, the guard evaluates to `undefined` (falsy), and the tool is exposed to non-xAI sessions — potentially billing the xAI account from other providers' use.\n\n## Why This Change Was Made\n\nChanged both guards to `ctx.activeModel?.provider !== PROVIDER_ID`, which is **fail-closed**: when the provider is undefined, unknown, or any value other than \"xai\", the guard returns `null` and the tool is hidden. The tool-construction path must positively prove the active model is from xAI before billing the xAI account.\n\n## Evidence\n\n### Vitest factory-level tests (10 new tests)\n\nThe factory gating is tested directly through the exported `createLazyCodeExecutionTool` and `createLazyXSearchTool` functions — covering the real factory path at `extensions/xai/index.ts:118`, not a copied guard.\n\n```console\n$ npx vitest run extensions/xai/index.test.ts --no-coverage\n\n ✓ |extension-providers| ../../extensions/xai/index.test.ts (26 tests) 514ms\n   ✓ lazy tool factory provider gating > createLazyCodeExecutionTool > exposes the tool when activeModel.provider is xai\n   ✓ lazy tool factory provider gating > createLazyCodeExecutionTool > hides the tool when activeModel.provider is non-xAI (fail-closed)\n   ✓ lazy tool factory provider gating > createLazyCodeExecutionTool > hides the tool when activeModel.provider is undefined (fail-closed)\n   ✓ lazy tool factory provider gating > createLazyCodeExecutionTool > hides the tool when activeModel is missing entirely (fail-closed)\n   ✓ lazy tool factory provider gating > createLazyCodeExecutionTool > hides the tool when activeModel.provider is empty string (fail-closed)\n   ✓ lazy tool factory provider gating > createLazyXSearchTool > exposes the tool when activeModel.provider is xai\n   ✓ lazy tool factory provider gating > createLazyXSearchTool > hides the tool when activeModel.provider is non-xAI (fail-closed)\n   ✓ lazy tool factory provider gating > createLazyXSearchTool > hides the tool when activeModel.provider is undefined (fail-closed)\n   ✓ lazy tool factory provider gating > createLazyXSearchTool > hides the tool when activeModel is missing entirely (fail-closed)\n   ✓ lazy tool factory provider gating > createLazyXSearchTool > hides the tool when activeModel.provider is empty string (fail-closed)\n\n Test Files  1 passed (1)\n      Tests  26 passed (26)\n```\n\n### Guard comparison\n\n| Scenario | Old guard (fail-open) | New guard (fail-closed) |\n|---|---|---|\n| provider = \"xai\" | Tool exposed | Tool exposed |\n| provider = \"openai\" | null (hidden) | null (hidden) |\n| provider = undefined | **Tool exposed** (leak!) | null (hidden) |\n| no activeModel | **Tool exposed** (leak!) | null (hidden) |\n\n### Not tested\n\n- Live multi-provider tool resolution with xAI API keys (requires running gateway)\n\n## Merge Risk\n\n**Low**. The change only tightens an existing guard — the xAI tool path already required passing credential checks. The fail-closed behavior is the safer default for provider-billed resources.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "lzyyzznl/fix-97621-xai-model-gating",
+        "head_sha": "70525b636e2c4edae223749f4ee49c592460c765",
         "author": "krissding",
         "labels": [
-          "gateway",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
+          "size: S",
+          "extensions: xai",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 5,
+            "path": "extensions/xai/index.test.ts",
+            "additions": 109,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/process/exec.ts",
-            "additions": 6,
-            "deletions": 0,
+            "path": "extensions/xai/index.ts",
+            "additions": 18,
+            "deletions": 2,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/supervisor/supervisor.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/zombie-reaper.proof.ts",
-            "additions": 101,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/process/zombie-reaper.test.ts",
-            "additions": 70,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/process/zombie-reaper.ts",
-            "additions": 98,
-            "deletions": 0,
-            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 6,
-        "additions": 286,
-        "deletions": 0,
+        "changedFiles": 2,
+        "additions": 127,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97731",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97731.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-97629",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97629.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 98,
-          "gatingTotal": 93,
+          "total": 94,
+          "gatingTotal": 89,
           "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 29,
-            "FAILURE": 2,
-            "NEUTRAL": 1
+            "SUCCESS": 33,
+            "SKIPPED": 35,
+            "IN_PROGRESS": 26
           },
           "blockers": [
-            "check-lint:FAILURE",
-            "check-dependencies:FAILURE"
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-dependencies:FAILURE"
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2334,
+    "total_ms": 2897,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 303
+        "ms": 611
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1730
+        "ms": 1935
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -192,11 +219,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 278
+        "ms": 339
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
