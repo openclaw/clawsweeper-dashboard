@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T14:02:43.253Z",
+  "generated_at": "2026-07-09T14:02:43.795Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T11:02:42.900Z",
+  "since": "2026-07-09T11:02:41.280Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102857
+    102853
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,131 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102853:4925735825:2026-07-09T14:02:36Z:clawsweeper_needs_human",
+      "comment_id": "4925735825",
+      "comment_version_key": "4925735825:2026-07-09T14:02:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102853#issuecomment-4925735825",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102853,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T13:51:45Z",
+      "comment_updated_at": "2026-07-09T14:02:36Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] A secops/agent owner needs to choose the correct security-boundary fix for the atomic helper or auth-specific usage before automation should touch this security-sensitive dependency-backed behavior.; Needs attention: The patch improves the static dangling-symlink case but leaves a concrete post-rename symlink-follow chmod concern in the security-sensitive credential store.; Review finding: [P1] Close the post... (sha=66cb88b259a0edbbd3606d62b65bd69e97db5054)",
+      "review_summary": "The PR routes missing `auth.json` bootstrap creation through the existing atomic replace helper and adds a symlink regression test.\n\nPR surface: Source -1, Tests +41. Total +40 across 2 files.\n\nReproducibility: yes. Current main source shows the bootstrap path uses `existsSync` followed by raw `writeFileSync` and `chmodSync`, and the PR body supplies real on-disk before/after output for the pre-planted dangling-symlink case; I did not run a live attacker race in this read-only review.",
+      "review_followup": "- [P1] A secops/agent owner needs to choose the correct security-boundary fix for the atomic helper or auth-specific usage before automation should touch this security-sensitive dependency-backed behavior.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "66cb88b259a0edbbd3606d62b65bd69e97db5054",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): avoid symlink-follow in auth.json bootstrap",
+        "body": "## What Problem This Solves\n\nFixes an issue where a local attacker with write access to the `auth.json` parent directory can redirect the credential store's bootstrap write through a symlink. `AuthStorage` is the default credential backend for every agent session, and on every read, write, OAuth refresh, and login it runs a bootstrap step that creates `auth.json` when it is missing. That bootstrap follows symlinks. If the attacker plants `auth.json` as a symlink to a path they cannot otherwise reach but the app user can write, then whenever `auth.json` is transiently absent (first run, or any delete-then-recreate window) the app creates and truncates the symlink target and `chmod 600`s it, outside the attacker-writable directory.\n\n## Why This Change Was Made\n\nRoot cause is in `src/agents/sessions/auth-storage.ts`, `FileAuthStorageBackend.ensureFileExists()`:\n\n```ts\nprivate ensureFileExists(): void {\n  if (!existsSync(this.authPath)) {\n    writeFileSync(this.authPath, \"{}\", \"utf-8\");\n    chmodSync(this.authPath, 0o600);\n  }\n}\n```\n\n`existsSync` (check), `writeFileSync` (act), and `chmodSync` (act) all dereference symlinks with no `O_NOFOLLOW` guard, and there is a TOCTOU window between the check and the acts. When `auth.json` is a symlink to a missing target, `existsSync` returns false and the subsequent create/truncate/chmod land on the symlink target.\n\nThe content-write path in the same class, `replaceAuthFileAtomic()`, already avoids this: it delegates to `replaceFileAtomicSync` (`@openclaw/fs-safe`), which writes a sibling temp file with `O_CREAT|O_EXCL|O_NOFOLLOW` and atomically renames it into place, so it replaces the symlink node itself and never writes through it. PR #88029 introduced that atomic path for crash durability but only routed the persist writes through it; the bootstrap create was left on the raw `writeFileSync`/`chmodSync`.\n\nThe fix routes the bootstrap create through the same primitive the class already uses two methods below:\n\n```ts\nprivate ensureFileExists(): void {\n  if (!existsSync(this.authPath)) {\n    this.replaceAuthFileAtomic(\"{}\");\n  }\n}\n```\n\n`replaceAuthFileAtomic(\"{}\")` writes `{}` at mode `0o600` to a temp file and renames it over `auth.json`. If `auth.json` is a planted symlink, the rename replaces the link node with a real file; the symlink target is never created, truncated, or chmod-ed. Same content and permissions as before, now symlink-safe. `ensureFileExists` is the single bootstrap seam every session funnels through via `withLock`/`withLockAsync`, so fixing it here covers all callers; `InMemoryAuthStorageBackend` has no filesystem and is unaffected. The now-unused `writeFileSync`/`chmodSync` named imports are dropped.\n\n## User Impact\n\nOperators no longer expose an arbitrary-file create/truncate/chmod primitive through the credential store when `auth.json` is absent and its parent directory is writable by another local user. Normal behavior is unchanged: a missing `auth.json` is still created as a `{}` file at mode `0o600`.\n\n## Evidence\n\nLocal verification (kept out of the proof fields below):\n\n- `node scripts/run-vitest.mjs src/agents/sessions/auth-storage.symlink-bootstrap.test.ts src/agents/sessions/auth-storage.test.ts`: 2 files, 3 tests pass. The new regression suite fails on pristine main (`victim exists` reads `true`) and passes with the patch.\n- `node scripts/run-oxlint.mjs` and `oxfmt --check` on both changed files: clean.\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json`: clean.\n\n## Real behavior proof\nBehavior addressed: `AuthStorage` bootstrap creates, truncates, and chmods `auth.json`'s symlink target when `auth.json` is a dangling symlink planted by a local attacker with write access to the parent directory.\nReal environment tested: the real `AuthStorage` class from `src/agents/sessions/auth-storage.ts` driven via `tsx` against a real on-disk temp directory, on pristine `origin/main` cb7468fc58ace11ebd0d6849216fff73b9d84d9f and on the patched tree, with identical inputs. Nothing stubbed: a real symlink `auth.json -> ../victim-secret.json` is planted, then `AuthStorage.create(authPath)` runs, and the real filesystem outcome is read back with `lstat`/`existsSync`.\nExact steps or command run after this patch: plant `mkdir agent; ln -s ../victim-secret.json agent/auth.json` (dangling target), then `AuthStorage.create(agent/auth.json)`, then read whether the victim target exists and whether `auth.json` is still a symlink.\nEvidence after fix:\n```\n# BEFORE (pristine main cb7468fc58ace11ebd0d6849216fff73b9d84d9f)\nvictim exists before: false\nauth.json is symlink before: true\nvictim exists after AuthStorage.create: true\nvictim content written through symlink: \"{}\"\nvictim mode: 600\nauth.json is symlink after: true\nauth.json is regular file after: false\n\n# AFTER (this patch, identical inputs)\nvictim exists before: false\nauth.json is symlink before: true\nvictim exists after AuthStorage.create: false\nvictim content written through symlink: \"<none>\"\nvictim mode: <none>\nauth.json is symlink after: false\nauth.json is regular file after: true\n```\nObserved result after fix: the planted symlink target is never created, truncated, or given mode 600; instead the symlink node is atomically replaced by a real `{}` file in place, so the write no longer escapes the parent directory through the link.\nWhat was not tested: no live multi-process attacker race was staged; the proof plants the symlink deterministically before the bootstrap. Full `pnpm build` was not run (no packaging, dynamic-import, or module-boundary change).\n",
+        "branch": "fix/auth-storage-symlink-bootstrap",
+        "head_sha": "66cb88b259a0edbbd3606d62b65bd69e97db5054",
+        "author": "yetval",
+        "labels": [
+          "agents",
+          "size: XS",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/sessions/auth-storage.symlink-bootstrap.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/sessions/auth-storage.ts",
+            "additions": 2,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 43,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102853",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102853.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 101,
+          "gatingTotal": 96,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 35,
+            "SUCCESS": 62,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "pending": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-2:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 600,
+    "total_ms": 2782,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 342
+        "ms": 355
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2146
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,7 +169,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 247
+        "ms": 256
       },
       {
         "name": "append_ledger",
