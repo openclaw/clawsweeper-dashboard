@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-954"
 mode: "autonomous"
-run_id: "29042571098"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29042571098"
-head_sha: "dda199e48a1002b92b5643782ae93f3643cd2336"
+run_id: "29046252006"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29046252006"
+head_sha: "43c407bfea5efcc66b5b7c2a39b12829471e3739"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-09T19:01:29.124Z"
+published_at: "2026-07-09T20:02:33.346Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/954"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/954"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29042571098](https://github.com/openclaw/clawsweeper/actions/runs/29042571098)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29046252006](https://github.com/openclaw/clawsweeper/actions/runs/29046252006)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/954
 
 ## Summary
 
-Verified on current main c8cd9869d828ae9414917add4867aae21d9f517c that #954 remains valid: native chat has a private agent/slot-aware session title formatter, but SessionsPage still renders raw SessionInfo.DisplayName or Key for row names. No GitHub mutation, merge, close, or local patch was performed; this run emits a narrow fix artifact for the applicator/executor.
+Verified on current main c8cd9869d828ae9414917add4867aae21d9f517c that #954 remains valid: native chat has a private agent/slot-aware session title formatter, but SessionsPage still renders raw SessionInfo.DisplayName or Key for row names. No GitHub mutation, merge, close, local patch, or validation run was performed; this run emits a narrow fix artifact for the applicator/executor.
 
 ## Impact
 
