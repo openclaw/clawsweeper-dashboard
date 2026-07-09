@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T18:44:26.700Z",
+  "generated_at": "2026-07-09T18:44:35.217Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T15:44:26.288Z",
+  "since": "2026-07-09T15:44:33.260Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    103070
+    103058
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,94 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:103058:4928345602:2026-07-09T18:33:52Z:re_review",
+      "comment_id": "4928345602",
+      "comment_version_key": "4928345602:2026-07-09T18:33:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/issues/103058#issuecomment-4928345602",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 103058,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T18:33:52Z",
+      "comment_updated_at": "2026-07-09T18:33:52Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-run",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "issue",
+        "state": "open",
+        "locked": false,
+        "title": "/learn's skill-authoring-and-apply pipeline has no owner gate, unlike the equivalent plugin-install path",
+        "body": "## Summary\n\n`/learn` and its underlying `skill_workshop` agent tool and `/approve` submission path have no owner check anywhere in the chain, unlike the equivalent plugin-install path. Any sender in `commands.allowFrom` (not necessarily the configured owner) can author a new skill, apply it into the shared workspace `skills/` directory, and self-approve the required approval gate in the same chat, on the default (unconfigured) approvers posture that essentially every built-in channel ships with.\n\n## Environment\n\n- Commit: 9f248969f6c81141f8a513cb8b9209fe09d29b33 (origin/main at time of filing)\n- Surface: `/learn` command handler, `skill_workshop` agent tool, `/approve` command handler; channel-agnostic (reproduced against the internal/webchat-style command path with no channel plugin configured)\n\n## Steps to reproduce\n\n1. A sender who is in `commands.allowFrom` but is not the owner (`senderIsOwner: false`) sends `/learn write a skill that does X`. `commands-learn.ts:184` gates this with `rejectUnauthorizedCommand`, which only checks `isAuthorizedSender` (`command-gates.ts:16-30`), not `rejectNonOwnerCommand`/`senderIsOwner` (`command-gates.ts:32-46`).\n2. The agent calls the `skill_workshop` tool with `action=\"create\"` and drafts a proposal, then calls it again with `action=\"apply\"`. `skill-workshop-tool.ts`'s `execute()` (lines ~143-277) performs no sender-identity check for any of its 8 actions; `action=\"apply\"` (~170-181) calls `applySkillProposal` in `service.ts` (538-624) directly.\n3. `applySkillProposal` writes the proposal markdown straight into `<workspaceDir>/skills/<name>/SKILL.md` and calls `bumpSkillsSnapshotVersion` (607-611), so the new skill is immediately auto-discovered by every future conversation with that agent, including the owner's own.\n4. The only brake is `resolveSkillWorkshopToolApproval` in `policy.ts` (144-176), which by default (`approvalPolicy: \"pending\"`) requires a `plugin.approval.resolve` decision. The same non-owner sender submits that decision via `/approve <id> allow` in the same chat. `commands-approve.ts:177` gates this with `!params.command.isAuthorizedSender && !hasExplicitApprovalAuthorization` - again `isAuthorizedSender`, not `senderIsOwner`.\n5. The authorization behind that decision, `resolveApprovalCommandAuthorization` in `channel-approval-auth.ts`, does not take `senderIsOwner` as an input at all. When the channel has no separately configured `approvers`/`ownerAllowFrom` (the default for essentially every built-in channel), the underlying adapter (`approval-auth-helpers.ts:85-89`, `createResolvedApproverActionAuthAdapter`) returns `markImplicitSameChatApprovalAuthorization({ authorized: true })` unconditionally - anyone in the chat, regardless of owner status. For non-channel-plugin surfaces, `channel-approval-auth.ts` returns `{ authorized: true, explicit: false }` directly, again with no owner check.\n\nCompare to `/plugins install|enable|disable`, which is hard owner-gated via `rejectNonOwnerCommand` at `commands-plugins.ts:465-472` for the same class of workspace-write operation.\n\n## Expected\n\nAuthoring and applying a new skill (or approving that application) should require the same owner-tier check as installing a plugin: `rejectNonOwnerCommand`/`senderIsOwner`, not merely `isAuthorizedSender`.\n\n## Actual\n\nA non-owner authorized sender can single-handedly draft, apply, and self-approve a brand-new skill with zero owner participation, landing it in the shared workspace `skills/` directory at the same trust tier as an owner-approved skill.\n\n## Root cause\n\n- `src/auto-reply/reply/commands-learn.ts:184-190` - entry gate uses `rejectUnauthorizedCommand`, not `rejectNonOwnerCommand`.\n- `src/agents/tools/skill-workshop-tool.ts:36-45,143-277` - `execute()` performs no identity check for any action, including `apply`.\n- `src/skills/workshop/service.ts:538-624` - `applySkillProposal` writes directly into `workspaceDir/skills` and bumps the snapshot version with no owner check in the chain.\n- `src/skills/workshop/policy.ts:9,144-176` - the approval gate only checks `config.approvalPolicy`, not sender identity.\n- `src/auto-reply/reply/commands-approve.ts:177` - approval submission gate checks `isAuthorizedSender`, not `senderIsOwner`.\n- `src/plugin-sdk/approval-auth-helpers.ts:85-89` - implicit same-chat fallback grants `authorized: true` unconditional on owner status when no approvers are configured.\n- `src/auto-reply/reply/commands-plugins.ts:465-472` - sibling `/plugins` write path, for comparison, does call `rejectNonOwnerCommand`.\n\n## Sibling surfaces\n\n`/plugins install|enable|disable` is unaffected; it already owner-gates via `rejectNonOwnerCommand`. Did not check every other command tied to `plugin.approval.resolve`/`exec.approval.resolve` beyond `/learn` and `skill_workshop`; other tools that route lifecycle mutations through the same `resolveApprovalCommandAuthorization` implicit-fallback path may share this gap and were not individually enumerated here.\n\n## Real behavior proof\nBehavior addressed: non-owner authorized sender can author, apply, and self-approve a new skill through /learn with no owner check anywhere in the chain\nReal environment tested: real production functions driven directly at commit 9f248969f6c81141f8a513cb8b9209fe09d29b33 - handleLearnCommand from src/auto-reply/reply/commands-learn.ts, createSkillWorkshopTool().execute from src/agents/tools/skill-workshop-tool.ts (real filesystem writes under a temp workspaceDir, real applySkillProposal from src/skills/workshop/service.ts), and resolveApprovalCommandAuthorization from src/infra/channel-approval-auth.ts\nExact steps or command run after this patch: drove handleLearnCommand(params, true) with command.isAuthorizedSender=true and command.senderIsOwner=false; drove createSkillWorkshopTool({ workspaceDir, config: {} }).execute with action=\"create\" then action=\"apply\" and no sender-identity argument of any kind; drove resolveApprovalCommandAuthorization({ cfg, channel, senderId: \"not-the-owner\", kind: \"plugin\" }) with no channels.*.execApprovals/approvers configured\nEvidence after fix:\n```\nlearn_gate_nonowner_shouldContinue=true senderIsOwner=false isAuthorizedSender=true\nlearn_gate_unauthorized_shouldContinue=false senderIsOwner=false isAuthorizedSender=false\nskill_workshop_apply_status=applied sender_identity_param_passed_to_execute=none\nskill_file_written=/tmp/owner-gate-repro-LHC4uM/dir-0/skills/exfil-helper/SKILL.md\nskill_file_content=---\nname: \"exfil-helper\"\ndescription: \"Demonstrates unattended skill authoring\"\n---\n\n# Exfil Helper\n\nDo the thing an owner never reviewed.\napprove_authorization_nonowner={\"authorized\":true,\"explicit\":false} function_signature_has_senderIsOwner_param=false\n```\nObserved result after fix: the /learn gate lets a non-owner authorized sender through (shouldContinue=true) while correctly still blocking a fully unauthorized sender in the control run; the skill_workshop tool applies a proposal straight to a live SKILL.md file on disk with no sender-identity parameter available anywhere in its execute signature to check; and resolveApprovalCommandAuthorization grants authorized=true for a non-owner sender because its own parameter list has no senderIsOwner field to consult, confirming the gap spans the entry gate, the tool, and the approval-submission path\nWhat was not tested: did not exercise a real end-to-end chat transcript through a live channel plugin (Telegram/Discord/WhatsApp) with an actual configured approver list set to a different user than the sender; did not check every other tool wired through the same plugin.approval.resolve implicit-fallback path beyond skill_workshop for the identical gap\n",
+        "author": "yetval",
+        "labels": [
+          "clawsweeper:no-new-fix-pr",
+          "clawsweeper:fix-shape-clear",
+          "clawsweeper:needs-maintainer-review",
+          "clawsweeper:needs-security-review",
+          "clawsweeper:source-repro",
+          "impact:security",
+          "P0",
+          "issue-rating: 🦞 diamond lobster",
+          "maturity:stable"
+        ],
+        "cluster_id": null,
+        "job_path": null,
+        "open_prs": [
+          "#94383"
+        ],
+        "issue_implementation_cluster_id": "issue-openclaw-openclaw-103058",
+        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-103058.md",
+        "mode": "autonomous"
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 747,
+    "total_ms": 2150,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 399
+        "ms": 351
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 286
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 1307
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,11 +132,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 336
+        "ms": 192
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
