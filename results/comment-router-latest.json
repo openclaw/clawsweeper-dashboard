@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T04:29:14.063Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-09T04:29:15.124Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T01:29:11.722Z",
+  "since": "2026-07-09T01:29:14.254Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102403
+    2002
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,18 +31,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102403:4921479327:2026-07-09T04:29:08Z:clawsweeper_needs_human",
-      "comment_id": "4921479327",
-      "comment_version_key": "4921479327:2026-07-09T04:29:08Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102403#issuecomment-4921479327",
-      "repo": "openclaw/openclaw",
+      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:2002:4921556955:2026-07-09T04:29:12Z:clawsweeper_auto_repair",
+      "comment_id": "4921556955",
+      "comment_version_key": "4921556955:2026-07-09T04:29:12Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/2002#issuecomment-4921556955",
+      "repo": "steipete/CodexBar",
       "target_branch": null,
-      "issue_number": 102403,
+      "issue_number": 2002,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-09T04:09:02Z",
-      "comment_updated_at": "2026-07-09T04:29:08Z",
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-09T04:25:07Z",
+      "comment_updated_at": "2026-07-09T04:29:12Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -53,12 +53,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] The remaining action is maintainer/security acceptance of a compatibility-sensitive permission-default change, not a narrow code repair for automation.; Cleared: No security or supply-chain regression found; the diff narrows local backup artifact exposure and does not change dependencies, workflows, package scripts, network behavior, or secret-loading paths. (sha=02bad9160dba32eaff4bbc94e3dc634878cf552e)",
-      "review_summary": "The branch changes the backup archive writer to create temp archives with `0o600` permissions and adds a regression test asserting the published archive is owner-only.\n\nPR surface: Source 0, Tests +23. Total +23 across 2 files.\n\nReproducibility: yes. at source level. Current main calls `createWriteStream` without a mode, Node defaults that to `0o666` before umask, and the PR body includes a real before/after `createBackupArchive` run showing `0644` then `0600`.",
-      "review_followup": "- [P2] The remaining action is maintainer/security acceptance of a compatibility-sensitive permission-default change, not a narrow code repair for automation.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=791004f2602469896490a7de7241fe7de0d19d49)",
+      "review_summary": "Adds a Linux-only `/proc` fallback for Antigravity CLI listening-port detection when `lsof` is unavailable, plus parser tests under `TestsLinux`.\n\nReproducibility: yes. from source, though not from a live run here: current `main` only checks fixed `lsof` paths and throws `lsof not available` when neither exists. The PR body's live Linux check is claimed but not posted as proof.",
+      "review_followup": "- [P1] Human follow-up is needed because the contributor must add real behavior proof, and the PR also needs a lint-safe split before merge.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "02bad9160dba32eaff4bbc94e3dc634878cf552e",
+      "expected_head_sha": "791004f2602469896490a7de7241fe7de0d19d49",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,58 +70,73 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(backup): write backup archive with owner-only 0o600 permissions",
-        "body": "## What Problem This Solves\n\nFixes an issue where `openclaw backup` writes its `.tar.gz` archive world-readable (0644), so any other local user can read every credential out of the published backup. The archive bundles `auth.json` (OAuth access and refresh tokens), `openclaw.json` (provider API keys), and the state database, all in one file that lands group- and world-readable.\n\nThe intermediate SQLite snapshot inside the flow is already hardened to `0o600` (`src/infra/backup-create.ts:732`), so the module already treats these bytes as secret, but that mitigation never reached the final archive that actually leaves the machine.\n\n## Why This Change Was Made\n\nRoot cause is `src/infra/backup-create.ts:194`. The single shared archive writer creates the output stream with no `mode`, so the file is created 0644 (minus umask):\n\n```ts\n// before\nawait pipeline(params.archiveStream, createWriteStream(params.archivePath));\n```\n\n`publishTempArchive` then hard-links (`fs.link`, :357) or copies (`fs.copyFile`, :371) that temp file to the final output path, and both carry the 0644 mode through to the published artifact.\n\nThe fix creates the stream owner-only from the start:\n\n```ts\n// after\nawait pipeline(params.archiveStream, createWriteStream(params.archivePath, { mode: 0o600 }));\n```\n\n`createWriteStream` opens the file with `O_CREAT` and this mode, so there is no world-readable window. `writeArchiveStreamToFile` is the one funnel every archive write (initial attempt and every `.retry-N` retry) passes through before publish, so hardening it once covers all callers. `fs.link` shares the inode (same mode) and `fs.copyFile` copies the source mode, so the single write-site change reaches both publish paths without touching `publishTempArchive`. This mirrors the existing `0o600` chmod already applied to the SQLite snapshot in the same module. Only the file mode changes; archive contents, layout, and verification are untouched.\n\n## User Impact\n\nBackups created by `openclaw backup` are now owner-only (`-rw-------`). Operators on shared or multi-user hosts no longer leak OAuth tokens, provider API keys, and state to other local accounts through a world-readable backup file. Existing archives are unaffected; the new mode applies to newly created backups.\n\n## Evidence\n\nDrove the real `createBackupArchive` production entry point on a real on-disk OpenClaw state tree seeded with a provider API key in `openclaw.json`, on pristine `origin/main` 735dbd2 and on the patched tree, then `ls -l` on the produced archive and extracted its bytes with `tar -xzO | grep`. State discovery, the tar archiver, and the publish path all stayed real; nothing was faked.\n\nSteps: seed `openclaw.json` with `sk-PROOF-SECRET-TOKEN-0123456789`, run `createBackupArchive({ output, includeWorkspace: false })`, then `ls -l <archive>` and `tar -xzOf <archive> | grep -c <secret>`.\n\n```\n# BEFORE (pristine main 735dbd2)\nls -l archive: -rw-r--r-- 1 root root 20919 Jul  9 03:46 .../backups/2026-05-09T12-00-00.000+00-00-openclaw-backup.tar.gz\narchived files containing the raw API key: 1\n# AFTER (this patch, identical inputs)\nls -l archive: -rw------- 1 root root 20918 Jul  9 03:46 .../backups/2026-05-09T12-00-00.000+00-00-openclaw-backup.tar.gz\narchived files containing the raw API key: 1\n```\n\nBefore the change the produced archive is `-rw-r--r--` (readable by every local user) while carrying the raw API key inside it; after the change the same archive is `-rw-------`, owner-only, so the credential is no longer exposed to other local users.\n\nRegression and checks:\n- `node scripts/run-vitest.mjs src/infra/backup-create.test.ts`: 42 passed, including the new `writes the published archive with owner-only 0o600 permissions`.\n- The new test fails on pristine `origin/main` (`expected 420 to be 384`, i.e. 0o644 vs 0o600) and passes with the patch.\n- `oxfmt --check`, `oxlint`, and `tsgo -p tsconfig.core.json` / `-p test/tsconfig/tsconfig.core.test.json` are clean on the changed files.\n\nNot covered: no live provider request and no full build were run; the `fs.copyFile` publish fallback (only reached when the target filesystem rejects hard links) was not driven end to end, though it provably preserves the source `0o600` mode.\n",
-        "branch": "fix/backup-archive-mode-0600",
-        "head_sha": "02bad9160dba32eaff4bbc94e3dc634878cf552e",
-        "author": "yetval",
+        "title": "feat(antigravity): detect CLI listening ports via /proc when lsof is unavailable",
+        "body": "## Problem\nOn minimal Linux hosts without `lsof` installed, Antigravity CLI usage fails with `Antigravity language server not detected`. `AntigravityStatusProbe.listeningPorts` resolves the spawned `agy` language server's ports only through `lsof`, so when it is absent the lookup throws even though `agy` starts and begins listening normally. This affects both the fresh-spawn and warm-reuse paths, since both go through `listeningPorts`.\n\n## Solution\nKeep `lsof` as the primary resolver (the common denominator across macOS and Linux) and add a Linux-only fallback when it is missing: collect the process's socket inodes from `/proc/<pid>/fd` and match them against `/proc/net/tcp{,6}` LISTEN entries. This mirrors the existing `/proc/<pid>/cwd` fallback in `LocalAgentSessionScanner.cwdByPID`. macOS behavior is unchanged.\n\nThe `/proc/net/tcp` parsing lives in a small platform-independent `ProcNetTCPListeningPortParser` so it can be unit tested on any host, matching the existing `LSOFCWDOutputParser` pattern.\n\n## Tests\nAdded `ProcNetTCPListeningPortParserLinuxTests` covering owned listening ports, foreign inodes, non-listening sockets, and fd symlink inode parsing. Also verified end-to-end on a Linux host without `lsof`: the `/proc` fallback recovers the spawned `agy` listening ports and `usage --provider antigravity --source cli` returns live quota.\n",
+        "branch": "antigravity-ss-port-fallback",
+        "head_sha": "791004f2602469896490a7de7241fe7de0d19d49",
+        "author": "junmo-kim",
         "labels": [
-          "size: XS",
-          "proof: sufficient",
-          "P0",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof",
+          "P2"
         ],
         "files": [
           {
-            "path": "src/infra/backup-create.test.ts",
-            "additions": 23,
-            "deletions": 0,
+            "path": "Sources/CodexBarCore/Providers/Antigravity/AntigravityStatusProbe.swift",
+            "additions": 89,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/backup-create.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
+            "path": "TestsLinux/ProcNetTCPListeningPortParserLinuxTests.swift",
+            "additions": 47,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
         "changedFiles": 2,
-        "additions": 24,
-        "deletions": 1,
+        "additions": 136,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102403",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102403.md",
+        "automerge_cluster_id": "automerge-steipete-codexbar-2002",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-2002.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 105,
-          "gatingTotal": 100,
+          "total": 9,
+          "gatingTotal": 9,
           "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 38,
-            "NEUTRAL": 1
+            "SUCCESS": 2,
+            "FAILURE": 1,
+            "IN_PROGRESS": 3,
+            "QUEUED": 3
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
+          "blockers": [
+            "lint:FAILURE",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS",
+            "swift-test-macos (0, 4):QUEUED",
+            "swift-test-macos (1, 4):QUEUED",
+            "swift-test-macos (2, 4):QUEUED",
+            "swift-test-macos (3, 4):IN_PROGRESS"
+          ],
+          "pending": [
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS",
+            "swift-test-macos (0, 4):QUEUED",
+            "swift-test-macos (1, 4):QUEUED",
+            "swift-test-macos (2, 4):QUEUED",
+            "swift-test-macos (3, 4):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "lint:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
@@ -133,15 +148,15 @@
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2545,
+    "total_ms": 1002,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 308
+        "ms": 204
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2018
+        "ms": 653
       },
       {
         "name": "classify_comment_commands",
@@ -149,7 +164,7 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -161,7 +176,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 190
+        "ms": 121
       },
       {
         "name": "append_ledger",
