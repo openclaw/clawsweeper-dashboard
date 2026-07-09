@@ -1,24 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T04:28:53.908Z",
+  "generated_at": "2026-07-09T04:29:10.666Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T01:28:51.770Z",
+  "since": "2026-07-09T01:29:08.621Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    83933
-  ],
-  "comment_ids": [
-    4921566172
+    102409
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -32,23 +29,130 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102409:4921510872:2026-07-09T04:29:05Z:clawsweeper_auto_repair",
+      "comment_id": "4921510872",
+      "comment_version_key": "4921510872:2026-07-09T04:29:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102409#issuecomment-4921510872",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102409,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T04:15:42Z",
+      "comment_updated_at": "2026-07-09T04:29:05Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=3305e16f23bd8941675d31a786c25a5b99e89ce8)",
+      "review_summary": "The PR changes proxy-capture `persistEventPayload` to use `truncateUtf8Prefix` for inline `dataText` previews and adds focused UTF-8 boundary tests.\n\nPR surface: Source +3, Tests +46. Total +49 across 2 files.\n\nReproducibility: yes. at source level. Current main and the standalone proxy path both use byte-prefix decoding shapes that can produce trailing U+FFFD when a byte limit splits a multibyte UTF-8 sequence.",
+      "review_followup": "- [P1] Contributor follow-up is needed to address the blocking findings and provide real capture proof; ClawSweeper repair should not be requested while the proof gate requires contributor evidence.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "3305e16f23bd8941675d31a786c25a5b99e89ce8",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(proxy-capture): truncate inline preview on UTF-8 character boundary",
+        "body": "## What Problem This Solves\n\n`persistEventPayload` (`src/proxy-capture/store.sqlite.ts`) stores a small UTF-8 preview (`dataText`) inline for fast CLI listings and query output, capped at `previewLimit` bytes (default 8192). It built the preview with:\n\n```ts\ndataText: buffer.subarray(0, previewLimit).toString(\"utf8\"),\n```\n\nThis slices the buffer at an **arbitrary byte offset**. For any non-ASCII body — emoji, CJK, or accented text, all common in the model-provider HTTP traffic this capture store is built for — the cut lands mid-multibyte-sequence and Node emits a trailing **U+FFFD replacement character** (`�`) into the stored preview column. Every captured request/response preview that happens to straddle the byte boundary is permanently corrupted in the DB.\n\n## Why This Change Was Made\n\n- **Root cause:** `Buffer.subarray(0, N)` is a byte-level cut with no awareness of UTF-8 character boundaries; decoding the truncated bytes yields `U+FFFD` when the cut splits a multibyte sequence.\n- **Fix:** Decode the full buffer to a UTF-8 string first (safe — Node replaces any genuinely invalid bytes already present), then truncate with the existing `truncateUtf8Prefix` helper (`src/utils/utf8-truncate.ts`), which backtracks off UTF-8 continuation bytes so the preview ends on a complete character while staying within the byte budget.\n- The helper already exists and is the canonical pattern for byte-budgeted UTF-8 truncation in this repo; this PR migrates the one call site that re-derived the behavior unsafely.\n\n## User Impact\n\nCaptured proxy previews (`openclaw` debug proxy capture listings/query output) no longer end in a stray `�`. ASCII previews are byte-identical (same byte budget, same characters). Blob storage, sha256, and the full payload capture are unchanged — only the inline `dataText` preview string is affected.\n\n## Linked context\n\nN/A (no existing issue). Independent of #102407 (that one is UTF-16 code-unit truncation in a channel log preview; this is UTF-8 byte truncation in the capture store — different call site, different layer).\n\n## Real behavior proof\n\n| # | Field | Value |\n|---|-------|-------|\n| 1 | Behavior or issue addressed | `buffer.subarray(0, previewLimit).toString(\"utf8\")` splits a multibyte UTF-8 sequence at the byte boundary, emitting `U+FFFD` into the stored `dataText` preview. |\n| 2 | Real environment tested | Linux x64, Node 22, commit `3305e16f23bd8941675d31a786c25a5b99e89ce8` |\n| 3 | Exact steps or command run | `node --import tsx /tmp/verify-proxy-capture-preview.mjs` — builds a payload where `previewLimit=8` lands between the two UTF-8 bytes of `é`, compares the old `subarray(0,8)` path against `truncateUtf8Prefix(buf.toString(\"utf8\"), 8)`, plus ASCII/4-byte-emoji/byte-budget regressions. |\n| 4 | Evidence after fix | Terminal capture of `node` runtime verification (copied live output):\\n```\\n[BEFORE] endsWithFFFD=true preview=\"xxxxxxx�\" (byteLen=10)\\n[AFTER]  endsWithFFFD=false preview=\"xxxxxxx\" (byteLen=7)\\n[PASS] byte subarray splits multibyte sequence into U+FFFD (reproduces bug)\\n[PASS] truncateUtf8Prefix keeps sequence whole (no U+FFFD)\\n[PASS] ASCII under limit unchanged\\n[PASS] long multibyte payload within byte budget and boundary-safe (byteLen=8192)\\n[PASS] 4-byte emoji over byte budget kept whole (no lone surrogate/U+FFFD)\\n``` |\n| 5 | Observed result after fix | The fixed preview never ends in `U+FFFD`; the old byte-subarray path is provably malformed (`xxxxxxx�`). ASCII under the limit is unchanged; long multibyte payloads stay within the 8192-byte budget and end on a character boundary. |\n| 6 | What was not tested | Live capture of real provider HTTP traffic (no credentialled provider in this environment); the colocated unit test exercises `persistEventPayload` directly with a stub store. |\n\n## Tests and validation\n\n```\n$ node scripts/run-vitest.mjs src/proxy-capture/store.sqlite.test.ts\n✓ src/proxy-capture/store.sqlite.test.ts (14 tests)\nTest Files  1 passed (1)\n     Tests  14 passed (14)\n```\n\nNew tests cover: multibyte sequence not split into `U+FFFD`, the old byte-subarray path is documented as malformed, 4-byte emoji over budget kept whole, ASCII under limit unchanged.\n\n## Risk checklist\n\n- [x] One concern, one PR — only the inline `dataText` preview truncation.\n- [x] No config/env/default surface change.\n- [x] No SDK/protocol/auth/provider behavior change (`persistEventPayload` is core-internal; the `packages/plugin-sdk/dist` `.d.ts` mirror is a build artifact, not a declared `exports` entry).\n- [x] Backward compatible — ASCII previews byte-identical; byte budget preserved; only the malformed trailing `U+FFFD` is removed.\n- [x] No new deps (reuses the existing `truncateUtf8Prefix` helper).\n- [x] No CHANGELOG edit (per release policy).\n- [x] Tests added.\n\n- [x] Allow edits by maintainers\n",
+        "branch": "fix/proxy-capture-preview-utf8-boundary",
+        "head_sha": "3305e16f23bd8941675d31a786c25a5b99e89ce8",
+        "author": "miorbnli",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "src/proxy-capture/store.sqlite.test.ts",
+            "additions": 46,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/proxy-capture/store.sqlite.ts",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 51,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102409",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102409.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "gatingTotal": 98,
+          "counts": {
+            "FAILURE": 2,
+            "SUCCESS": 64,
+            "SKIPPED": 36,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2381,
+    "total_ms": 2249,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2123
+        "ms": 248
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1782
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -60,11 +164,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 244
+        "ms": 192
       },
       {
         "name": "append_ledger",
