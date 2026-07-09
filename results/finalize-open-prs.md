@@ -1,19 +1,19 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-07-09T13:44:18.999Z
+Generated: 2026-07-09T18:58:22.915Z
 
 ## Summary
 
 | Metric | Count |
 | --- | ---: |
-| open_prs | 1 |
+| open_prs | 0 |
 | ready_candidates | 0 |
 | security_hold | 0 |
 | needs_rebase | 0 |
 | mergeability_unknown | 0 |
-| needs_checks | 1 |
+| needs_checks | 0 |
 | needs_review | 0 |
-| needs_merge_preflight | 1 |
+| needs_merge_preflight | 0 |
 | needs_result_backfill | 0 |
 
 ## Dispatch
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#102300](https://github.com/openclaw/openclaw/pull/102300) | docs(config-channels): fix googlechat groups allow -> enabled to match schema | automerge-openclaw-openclaw-102124 | MERGEABLE | BEHIND | CANCELLED:16 SKIPPED:92 SUCCESS:21; blockers:7 | needs_merge_state:BEHIND, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| _None_ |  |  |  |  |  |  |  |
