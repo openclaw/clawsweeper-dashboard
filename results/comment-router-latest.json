@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T04:15:03.673Z",
+  "generated_at": "2026-07-09T04:15:16.455Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T01:15:01.250Z",
+  "since": "2026-07-09T01:15:13.928Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102403
+    101248
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 9,
+  "commands_seen": 6,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,34 +31,34 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102403:4921479327:2026-07-09T04:14:57Z:clawsweeper_needs_human",
-      "comment_id": "4921479327",
-      "comment_version_key": "4921479327:2026-07-09T04:14:57Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102403#issuecomment-4921479327",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:101248:4899156452:2026-07-09T04:15:09Z:clawsweeper_auto_repair",
+      "comment_id": "4899156452",
+      "comment_version_key": "4899156452:2026-07-09T04:15:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101248#issuecomment-4899156452",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 102403,
+      "issue_number": 101248,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-09T04:09:02Z",
-      "comment_updated_at": "2026-07-09T04:14:57Z",
+      "comment_created_at": "2026-07-07T01:17:13Z",
+      "comment_updated_at": "2026-07-09T04:15:09Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] Human maintainer/security review is needed to accept the shipped backup artifact permission-default change; there is no narrow code repair for ClawSweeper to apply.; Cleared: Cleared: the diff narrows local backup artifact exposure and does not change dependencies, workflows, package scripts, network behavior, or secret-loading paths. (sha=02bad9160dba32eaff4bbc94e3dc634878cf552e)",
-      "review_summary": "The PR changes the backup archive writer to create temp archives with `0o600` permissions and adds a regression test asserting the published archive mode.\n\nPR surface: Source 0, Tests +23. Total +23 across 2 files.\n\nReproducibility: yes. at source level. Current main writes the temp archive with `createWriteStream(params.archivePath)`, Node defaults that stream mode to `0o666` before umask, and the PR body includes a real before/after `createBackupArchive` run showing `0644` then `0600`.",
-      "review_followup": "- [P2] Human maintainer/security review is needed to accept the shipped backup artifact permission-default change; there is no narrow code repair for ClawSweeper to apply.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=646eacfab524fd1ab150e1663425b6188355ad07)",
+      "review_summary": "The branch adds native `sessions_spawn.announceTarget` routing, global and per-agent subagent config defaults, persisted `subagent_runs.announce_target` state, docs, prompt snapshots, and focused tests for parent-targeted completion handoff.\n\nPR surface: Source +98, Tests +224, Docs +8, Generated +2. Total +332 across 33 files.\n\nReproducibility: yes. source-reproducible: PR head normalizes the requester agent id before calling the new helper, but the helper compares that value to raw `agents.list[].id`; no live failing run was executed under the read-only review constraints.",
+      "review_followup": "- [P2] A narrow automated repair can fix the resolver and regression coverage; maintainer product acceptance remains a separate human gate before merge.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "02bad9160dba32eaff4bbc94e3dc634878cf552e",
+      "expected_head_sha": "646eacfab524fd1ab150e1663425b6188355ad07",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
@@ -70,82 +70,467 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(backup): write backup archive with owner-only 0o600 permissions",
-        "body": "## What Problem This Solves\n\nFixes an issue where `openclaw backup` writes its `.tar.gz` archive world-readable (0644), so any other local user can read every credential out of the published backup. The archive bundles `auth.json` (OAuth access and refresh tokens), `openclaw.json` (provider API keys), and the state database, all in one file that lands group- and world-readable.\n\nThe intermediate SQLite snapshot inside the flow is already hardened to `0o600` (`src/infra/backup-create.ts:732`), so the module already treats these bytes as secret, but that mitigation never reached the final archive that actually leaves the machine.\n\n## Why This Change Was Made\n\nRoot cause is `src/infra/backup-create.ts:194`. The single shared archive writer creates the output stream with no `mode`, so the file is created 0644 (minus umask):\n\n```ts\n// before\nawait pipeline(params.archiveStream, createWriteStream(params.archivePath));\n```\n\n`publishTempArchive` then hard-links (`fs.link`, :357) or copies (`fs.copyFile`, :371) that temp file to the final output path, and both carry the 0644 mode through to the published artifact.\n\nThe fix creates the stream owner-only from the start:\n\n```ts\n// after\nawait pipeline(params.archiveStream, createWriteStream(params.archivePath, { mode: 0o600 }));\n```\n\n`createWriteStream` opens the file with `O_CREAT` and this mode, so there is no world-readable window. `writeArchiveStreamToFile` is the one funnel every archive write (initial attempt and every `.retry-N` retry) passes through before publish, so hardening it once covers all callers. `fs.link` shares the inode (same mode) and `fs.copyFile` copies the source mode, so the single write-site change reaches both publish paths without touching `publishTempArchive`. This mirrors the existing `0o600` chmod already applied to the SQLite snapshot in the same module. Only the file mode changes; archive contents, layout, and verification are untouched.\n\n## User Impact\n\nBackups created by `openclaw backup` are now owner-only (`-rw-------`). Operators on shared or multi-user hosts no longer leak OAuth tokens, provider API keys, and state to other local accounts through a world-readable backup file. Existing archives are unaffected; the new mode applies to newly created backups.\n\n## Evidence\n\nDrove the real `createBackupArchive` production entry point on a real on-disk OpenClaw state tree seeded with a provider API key in `openclaw.json`, on pristine `origin/main` 735dbd2 and on the patched tree, then `ls -l` on the produced archive and extracted its bytes with `tar -xzO | grep`. State discovery, the tar archiver, and the publish path all stayed real; nothing was faked.\n\nSteps: seed `openclaw.json` with `sk-PROOF-SECRET-TOKEN-0123456789`, run `createBackupArchive({ output, includeWorkspace: false })`, then `ls -l <archive>` and `tar -xzOf <archive> | grep -c <secret>`.\n\n```\n# BEFORE (pristine main 735dbd2)\nls -l archive: -rw-r--r-- 1 root root 20919 Jul  9 03:46 .../backups/2026-05-09T12-00-00.000+00-00-openclaw-backup.tar.gz\narchived files containing the raw API key: 1\n# AFTER (this patch, identical inputs)\nls -l archive: -rw------- 1 root root 20918 Jul  9 03:46 .../backups/2026-05-09T12-00-00.000+00-00-openclaw-backup.tar.gz\narchived files containing the raw API key: 1\n```\n\nBefore the change the produced archive is `-rw-r--r--` (readable by every local user) while carrying the raw API key inside it; after the change the same archive is `-rw-------`, owner-only, so the credential is no longer exposed to other local users.\n\nRegression and checks:\n- `node scripts/run-vitest.mjs src/infra/backup-create.test.ts`: 42 passed, including the new `writes the published archive with owner-only 0o600 permissions`.\n- The new test fails on pristine `origin/main` (`expected 420 to be 384`, i.e. 0o644 vs 0o600) and passes with the patch.\n- `oxfmt --check`, `oxlint`, and `tsgo -p tsconfig.core.json` / `-p test/tsconfig/tsconfig.core.test.json` are clean on the changed files.\n\nNot covered: no live provider request and no full build were run; the `fs.copyFile` publish fallback (only reached when the target filesystem rejects hard links) was not driven end to end, though it provably preserves the source `0o600` mode.\n",
-        "branch": "fix/backup-archive-mode-0600",
-        "head_sha": "02bad9160dba32eaff4bbc94e3dc634878cf552e",
-        "author": "yetval",
+        "title": "feat(subagents): native announceTarget for subagent completion routing (#27445)",
+        "body": "Fixes #27445\n\n## What Problem This Solves\n\nNative `sessions_spawn` subagent completions always announce to the channel via delivery-mirror. Orchestrator patterns need the completion to come back to the **parent session** as a normal trigger message instead — without any direct channel announce — so the parent can integrate results and decide what (if anything) the user sees. Current parent handoff behavior exists but is hard-coded by activity/thread state, not caller-selectable, and thread-bound `mode:\"session\"` spawns can register no completion announce at all.\n\n## Fix\n\nAdds native `announceTarget: \"channel\" | \"parent\"` to `sessions_spawn` (default `\"channel\"`, current behavior unchanged):\n\n- `\"parent\"` wakes the requester session once with `deliver:false` through the existing `subagent_announce` internal-event path — no direct channel announce, no fallback to channel on parent failure\n- Thread-bound `thread:true, mode:\"session\"` spawns with `announceTarget:\"parent\"` keep direct child-thread delivery for the active run but now register completion (addresses the edge raised in the issue comments)\n- Config precedence: per-spawn arg > `agents.list[].subagents.announceTarget` > `agents.defaults.subagents.announceTarget` > `\"channel\"`\n- `announceTarget` persists in the subagent registry (JSON + SQLite) so pending completions after restart follow the original routing\n- ACP `streamTo` stays separate; `announceTarget` is native-only and never maps to ACP streaming\n\n## Evidence\n\n- New/updated tests: spawn tool schema, spawn registration (incl. thread-bound cases), announce delivery routing (parent `deliver:false`, no channel fallback, idempotent retries), config schema precedence — all pass\n- Full local `check:changed` (CI lane, `CI=1`) passes at branch head: lint, prod/test types, boundary guards, import cycles\n- `config:docs:gen`/`check` clean; generated config reference updated\n",
+        "branch": "feat/subagent-announce-target-27445",
+        "head_sha": "646eacfab524fd1ab150e1663425b6188355ad07",
+        "author": "nicknmorty",
         "labels": [
-          "size: XS",
+          "docs",
+          "agents",
+          "size: M",
           "proof: sufficient",
-          "P0",
-          "rating: 🐚 platinum hermit",
+          "P2",
+          "rating: 🦐 gold shrimp",
           "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "merge-risk: 🚨 message-delivery",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/infra/backup-create.test.ts",
-            "additions": 23,
+            "path": "docs/.generated/config-baseline.sha256",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/subagents.md",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 51,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/backup-create.ts",
-            "additions": 1,
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 23,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce.ts",
+            "additions": 3,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-lifecycle.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-run-manager.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.store.sqlite.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.types.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-spawn-plan.ts",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-spawn.thread-binding.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-spawn.ts",
+            "additions": 15,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-spawn.types.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/sessions-spawn-tool.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/sessions-spawn-tool.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.labels.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.agent-defaults.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.agents.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-defaults.test.ts",
+            "additions": 34,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-defaults.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-runtime.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.test.ts",
+            "additions": 42,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.discord-group.json",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.heartbeat-turn.json",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.telegram-direct.json",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md",
+            "additions": 4,
+            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 24,
-        "deletions": 1,
+        "changedFiles": 33,
+        "additions": 363,
+        "deletions": 31,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102403",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102403.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101248",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101248.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 58,
-          "gatingTotal": 53,
+          "total": 103,
+          "gatingTotal": 98,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 49,
-            "SUCCESS": 7
+            "SUCCESS": 68,
+            "SKIPPED": 34,
+            "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101248:4921453317:2026-07-09T04:03:17Z:re_review",
+      "comment_id": "4921453317",
+      "comment_version_key": "4921453317:2026-07-09T04:03:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101248#issuecomment-4921453317",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101248,
+      "author": "nicknmorty",
+      "author_id": 16600979,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T04:03:17Z",
+      "comment_updated_at": "2026-07-09T04:03:17Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101248:4921322546:2026-07-09T03:33:25Z:re_review",
+      "comment_id": "4921322546",
+      "comment_version_key": "4921322546:2026-07-09T03:33:25Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101248#issuecomment-4921322546",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101248,
+      "author": "nicknmorty",
+      "author_id": 16600979,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T03:33:25Z",
+      "comment_updated_at": "2026-07-09T03:33:25Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101248:4921307916:2026-07-09T03:29:48Z:re_review",
+      "comment_id": "4921307916",
+      "comment_version_key": "4921307916:2026-07-09T03:29:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101248#issuecomment-4921307916",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101248,
+      "author": "nicknmorty",
+      "author_id": 16600979,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T03:29:48Z",
+      "comment_updated_at": "2026-07-09T03:29:48Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101248:4920992186:2026-07-09T02:23:45Z:re_review",
+      "comment_id": "4920992186",
+      "comment_version_key": "4920992186:2026-07-09T02:23:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101248#issuecomment-4920992186",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101248,
+      "author": "nicknmorty",
+      "author_id": 16600979,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T02:23:45Z",
+      "comment_updated_at": "2026-07-09T02:23:45Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:101248:4899233391:2026-07-07T01:29:58Z:re_review",
+      "comment_id": "4899233391",
+      "comment_version_key": "4899233391:2026-07-07T01:29:58Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101248#issuecomment-4899233391",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 101248,
+      "author": "nicknmorty",
+      "author_id": 16600979,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-07T01:29:58Z",
+      "comment_updated_at": "2026-07-07T01:29:58Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2726,
+    "total_ms": 5094,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 461
+        "ms": 460
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1948
+        "ms": 2050
       },
       {
         "name": "classify_comment_commands",
@@ -165,7 +550,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 289
+        "ms": 2557
       },
       {
         "name": "append_ledger",
