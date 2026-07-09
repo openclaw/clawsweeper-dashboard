@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-09T08:52:20.918Z",
+  "generated_at": "2026-07-09T08:52:46.206Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T05:52:20.467Z",
+  "since": "2026-07-09T05:52:44.608Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102549
+    102394
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,128 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102394:4921379834:2026-07-09T08:52:40Z:clawsweeper_auto_repair",
+      "comment_id": "4921379834",
+      "comment_version_key": "4921379834:2026-07-09T08:52:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102394#issuecomment-4921379834",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102394,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-09T03:46:03Z",
+      "comment_updated_at": "2026-07-09T08:52:40Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=f37d15b1913feb82235c455966acdafa951e0210)",
+      "review_summary": "The branch extends tool-call-repair payload parsing, stream buffering/scrubbing, and plugin SDK tests to recognize standalone JSON tool-call text and multi-entry `tool_calls` wrappers.\n\nPR surface: Source +353, Tests +186. Total +539 across 3 files.\n\nReproducibility: yes. source-level for the review finding: the PR head accepts a JSON stream prefix based only on a matching `name`, while the payload parser rejects the same shape without arguments. I did not run a live Ollama repro in this read-only pass.",
+      "review_followup": "- [P1] Needs contributor revision, redacted real-provider proof, and maintainer product confirmation; ClawSweeper should not auto-repair while the external proof gate remains unmet.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "f37d15b1913feb82235c455966acdafa951e0210",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tool-call-repair): parse JSON-format plain-text tool calls alongside bracket/XML/Harmony",
+        "body": "## What Problem This Solves\n\nWhen a model emits tool calls as plain JSON text (e.g. `{\"name\": \"get_weather\", \"arguments\": {\"location\": \"Paris\"}}`) instead of through the native `tool_calls` response field, OpenClaw's `createPlainTextToolCallCompatWrapper` fails to promote it into an executable tool call. The diagnostic layer (`detectToolCallShapedText`) correctly classifies these JSON shapes, but the promotion layer (`parseStandalonePlainTextToolCallBlocks`) only recognizes bracket (`[name]`), XML (`<function=>`), and Harmony formats — leaving a gap where the system can see the tool call but cannot act on it.\n\nAdditionally, three related gaps discovered and fixed:\n\n- **Stream leakage**: The stream normalizer's buffer-state logic only checked bracket, XML, and Harmony prefixes. A provider streaming `{\"name\":\"read\",\"arguments\":...}` would emit that JSON as visible text before the final `done` event promotes it, violating the stream scrubbing invariant.\n- **Multi-call truncation**: The JSON `tool_calls` wrapper parser only read `toolCalls[0]`, silently dropping every subsequent entry in a multi-tool wrapper response.\n- **Overly broad stripping**: The JSON block-end helper returned the end offset of any balanced JSON object, so `stripPlainTextToolCallBlocks` would remove ordinary JSON prose like `{\"foo\":\"bar\"}` from user-visible text.\n\nThis affects providers that route through `createPlainTextToolCallCompatWrapper` (Ollama, LM Studio, xAI) when the underlying model embeds tool calls in the assistant content as JSON objects.\n\nFixes #99251\n\n## Why This Change Was Made\n\nThe fix operates in two layers of the `tool-call-repair` package:\n\n**1. Payload parser** (`payload.ts`): `parseJsonToolCallBlocksAt` recognizes 4 JSON tool-call shapes and returns an array — an OpenAI-style `tool_calls` wrapper with multiple entries emits one block per valid entry instead of silently truncating to the first. UTF-8 byte-length enforcement (`Buffer.byteLength`) prevents multibyte payloads from exceeding the `maxPayloadBytes` cap. `parseJsonToolCallBlockEndAt` validates tool-call shape before returning an end offset, so the stripper only removes actual tool calls.\n\n**2. Stream normalizer** (`stream-normalizer.ts`): Adds `couldStillBeJsonToolCall` and `hasJsonToolCallPrefix` so the buffer-state engine treats JSON-format stream text as buffered tool-call candidates instead of flushing it as visible text. Updated `getPlainTextToolCallBufferState` and `stripCompleteSerializedToolCallPrefix` to handle standalone JSON objects.\n\nExisting safety gates are preserved: `allowedToolNames` whitelist filtering, the standalone-only invariant (entire text must be consumed by tool-call blocks), and byte-limit enforcement matching the serialized JSON/XML paths.\n\n## User Impact\n\nAffected: users routing tool-calling agents through local/proxy providers (Ollama, LM Studio, xAI) with models that serialize tool calls as JSON text in `content` rather than through native `tool_calls` fields (observed with Qwen family models).\n\nAfter fix: JSON-embedded tool calls are buffered during streaming (preventing text leakage), all entries in multi-call wrappers are promoted (not just the first), ordinary JSON prose is preserved in visible text, and multibyte payload caps are enforced.\n\n## Evidence\n\n- `pnpm test src/plugin-sdk/tool-payload` — 37 passed (32 original + 5 new regression tests)\n- `pnpm tsgo:core` — clean\n- `oxlint` — clean\n- `oxfmt --check` — clean\n- `pnpm build` — passed (all packages built successfully)\n- CI: pending on latest commit `f37d15b191`\n\nClawSweeper rank-up moves addressed:\n- (rev 1: `c5c0853fa1`) [P1] JSON-aware stream buffering, [P2] Multi-call `tool_calls` promotion\n- (rev 2: `f37d15b191`) [P1] JSON shape validation before stripping, [P2] UTF-8 byte-limit enforcement\n\nEnvironment: Linux dev checkout, Node 22.\n\nCommands run:\n```\npnpm test src/plugin-sdk/tool-payload.test.ts\npnpm tsgo:core\nnode_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.json --quiet packages/tool-call-repair/src/payload.ts packages/tool-call-repair/src/stream-normalizer.ts src/plugin-sdk/tool-payload.test.ts\npnpm format:check packages/tool-call-repair/src/payload.ts packages/tool-call-repair/src/stream-normalizer.ts src/plugin-sdk/tool-payload.test.ts\npnpm build\n```\n\nEvidence after fix: All 37 tests pass. Typecheck, lint, format, and build all clean.\n\nWhat was not tested: Live end-to-end reproduction with a real Ollama instance and Qwen model — no local Ollama setup available. The gaps are verified at the source level with targeted regression tests covering the stripping fix (ordinary JSON preservation), multibyte byte-limit enforcement, and multi-call wrapper handling.\n",
+        "branch": "fix/issue-99251-ollama-json-tool-call",
+        "head_sha": "f37d15b1913feb82235c455966acdafa951e0210",
+        "author": "xialonglee",
+        "labels": [
+          "size: L",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "packages/tool-call-repair/src/payload.ts",
+            "additions": 201,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/tool-call-repair/src/stream-normalizer.ts",
+            "additions": 163,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/tool-payload.test.ts",
+            "additions": 186,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 550,
+        "deletions": 11,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102394",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102394.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 13,
+          "gatingTotal": 8,
+          "counts": {
+            "SKIPPED": 7,
+            "SUCCESS": 6
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 764,
+    "total_ms": 1793,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 437
+        "ms": 364
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1216
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -57,15 +162,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 313
+        "ms": 184
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
