@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T17:16:47.977Z",
+  "generated_at": "2026-07-10T17:17:12.391Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T14:16:44.882Z",
+  "since": "2026-07-10T14:17:10.361Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    103793
+    103727
   ],
   "comment_ids": [
-    4937760359
+    4937764842
   ],
-  "status_comment_id": 4937760729,
+  "status_comment_id": 4937765191,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:103793:4937760359:2026-07-10T17:15:05Z:re_review",
-      "comment_id": "4937760359",
-      "comment_version_key": "4937760359:2026-07-10T17:15:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103793#issuecomment-4937760359",
+      "idempotency_key": "comment-router:openclaw/openclaw:103727:4937764842:2026-07-10T17:15:41Z:re_review",
+      "comment_id": "4937764842",
+      "comment_version_key": "4937764842:2026-07-10T17:15:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103727#issuecomment-4937764842",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 103793,
-      "author": "yetval",
-      "author_id": 102706514,
+      "issue_number": 103727,
+      "author": "llagy007",
+      "author_id": 17695126,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-10T17:15:05Z",
-      "comment_updated_at": "2026-07-10T17:15:05Z",
-      "status_comment_id": 4937760729,
+      "comment_created_at": "2026-07-10T17:15:41Z",
+      "comment_updated_at": "2026-07-10T17:15:41Z",
+      "status_comment_id": 4937765191,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -78,129 +78,141 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 103793,
-          "dispatch_key": "router-930fca9a3aa4c1b2",
-          "dispatched_at": "2026-07-10T17:16:49.042Z"
+          "item_number": 103727,
+          "dispatch_key": "router-3f75021f58caa0cf",
+          "dispatched_at": "2026-07-10T17:17:13.265Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-10T17:16:50.389Z",
-          "response_comment_id": "4937760729",
+          "commented_at": "2026-07-10T17:17:14.372Z",
+          "response_comment_id": "4937765191",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): bound busy channel health by real run age",
-        "body": "## What Problem This Solves\n\n`evaluateChannelHealth` intentionally treats a channel as healthy while a run is in flight, even when the transport already reports `connected: false`. That busy override is meant to be bounded by a 25 minute stale ceiling, but the ceiling is measured from `lastRunActivityAt`, which the run-state heartbeat refreshes every 60 seconds for as long as any run is active.\n\nIf a per-message task hangs forever, for example a channel send blocking on a half-open or dead socket with no send timeout after the transport disconnected, `onRunEnd` never fires, the heartbeat keeps ticking, and `lastRunActivityAt` never ages past roughly 60 seconds. The `>= 25min` stuck branch, the only escape from busy-overrides-disconnected, becomes permanently unreachable. The account is then reported healthy forever by the channel health monitor (`if (health.healthy) continue`), the readiness probe (`src/gateway/server/readiness.ts`), and the `openclaw health` CLI (`src/commands/health.ts`). No restart fires and no operator-visible signal appears until the process is restarted. Transport disconnects mid-send with no send timeout are a normal production failure mode.\n\n## Why This Change Was Made\n\nThe busy override must be bounded by how long the run has actually been in flight, not by a timestamp the heartbeat keeps fresh. A single hung run must eventually breach the stale ceiling.\n\nRoot cause, `src/gateway/channel-health-policy.ts` busy branch (before):\n\n```ts\nconst runActivityAge =\n  lastRunActivityAt == null\n    ? Number.POSITIVE_INFINITY\n    : Math.max(0, policy.now - lastRunActivityAt);\nif (runActivityAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {\n  return { healthy: true, reason: \"busy\" };\n}\nreturn { healthy: false, reason: \"stuck\" };\n```\n\n`lastRunActivityAt` is republished as `now()` on every heartbeat tick in `createRunStateMachine`, so `runActivityAge` never grows while a run hangs.\n\nFix. `createRunStateMachine` now tracks each in-flight run's start time keyed by an opaque run handle returned from `onRunStart` and passed back to `onRunEnd`, and publishes the oldest still-active run's start as `activeRunStartedAt`. When the oldest run ends the reported start advances to the next-oldest, and it clears when no run is active. The health policy busy branch keys the ceiling off the real run age (after):\n\n```ts\nconst runStartAge =\n  activeRunStartedAt == null ? null : Math.max(0, policy.now - activeRunStartedAt);\nconst runActivityAge =\n  lastRunActivityAt == null ? null : Math.max(0, policy.now - lastRunActivityAt);\nconst busyAge =\n  runStartAge == null && runActivityAge == null\n    ? Number.POSITIVE_INFINITY\n    : Math.max(runStartAge ?? 0, runActivityAge ?? 0);\nif (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {\n  return { healthy: true, reason: \"busy\" };\n}\nreturn { healthy: false, reason: \"stuck\" };\n```\n\nBecause the oldest active run's start is fixed while that run is in flight and the heartbeat only advances `lastRunActivityAt`, a run stuck longer than the threshold now reports `stuck`. Because the reported start is the oldest active run and advances as runs complete, a channel churning through many short overlapping runs stays healthy; only a genuinely hung run breaches the ceiling. The `activeRunStartedAt` field flows through the same run-state to snapshot path as `lastRunActivityAt` (`run-state-machine.ts` publish, `account-snapshot-fields.ts` read, `types.core.ts` snapshot type), so all three consumers of `evaluateChannelHealth` (monitor, readiness, CLI) get the corrected verdict.\n\n## Why This Is The Right Boundary\n\nThe masking lives in one shared decision function, `evaluateChannelHealth`, consumed by the monitor, readiness probe, and health CLI, so a single change fixes all three surfaces. The heartbeat that defeats the ceiling lives in `createRunStateMachine`, the one owner of run activity status, so the run-age fact is surfaced where it is produced rather than re-derived per caller. `createChannelRunQueue` shares one run-state machine across all queue keys and `KeyedAsyncQueue` runs unrelated keys concurrently, so `activeRuns` routinely exceeds 1; tracking the oldest active run rather than a busy-streak start keeps a continuously busy account healthy while still catching a single hung run. Legitimate busy behavior is preserved: short, active, and overlapping runs stay healthy, and snapshots without a start time fall back to the previous `lastRunActivityAt` behavior. `onRunEnd` now takes the run handle returned by `onRunStart`; the only in-repo caller, `createChannelRunQueue`, is migrated in this same commit, and typed plugin consumers get a compile error rather than silent breakage. Restoring a no-argument `onRunEnd` overload was deliberately avoided because it would reintroduce the counter-decrement accounting this change removes and split run tracking across two paths. The 25 minute ceiling is the pre-existing `BUSY_ACTIVITY_STALE_THRESHOLD_MS` constant; this change only makes it reachable, so a single run in flight past it is now treated as stuck by design. This is distinct from PR #96198, which fixes the same class of heartbeat-hides-stuck bug in the agent diagnostic stuck-session detector (`src/agents/*`, `src/logging/diagnostic-run-activity.ts`), a different subsystem that does not touch channel health.\n\n## User Impact\n\nChannels whose per-message task hangs after a transport disconnect are now detected as stuck once the run exceeds the 25 minute ceiling, so the health monitor restarts them and the outage becomes visible to readiness and the `openclaw health` CLI instead of being silently masked as healthy until a manual process restart.\n\n## Evidence\n\n- New regression test in `src/gateway/channel-health-policy.test.ts`: a disconnected channel with a run in flight longer than the threshold and a fresh heartbeat now evaluates to `{ healthy: false, reason: \"stuck\" }`. Fails on pristine `main` (returns `busy`), passes with this patch. A companion case keeps a short-lived run `busy`.\n- New tests in `src/channels/run-state-machine.test.ts`: across 26 minutes of heartbeat ticks `activeRunStartedAt` stays fixed at the run start while `lastRunActivityAt` advances; and when an older run ends while a newer run is still active the reported start advances to the next-oldest run, so overlapping short runs do not accumulate false age.\n- Verification commands (from a deps-enabled checkout):\n  - `node scripts/run-vitest.mjs src/gateway/channel-health-policy.test.ts src/channels/run-state-machine.test.ts` passes on this patch.\n  - Same test files against pristine `origin/main` source fail on the new stuck assertion.\n  - `node scripts/run-oxlint.mjs`, `oxfmt --check`, and `node scripts/run-tsgo.mjs` (core and core-test) all clean on the changed files.\n\n## Real behavior proof\nBehavior addressed: a disconnected channel whose per-message run hangs forever is reported healthy forever, because the run-state heartbeat keeps refreshing the activity timestamp that the 25 minute busy ceiling is measured against, so the health monitor never restarts it.\nReal environment tested: drove the real periodic health monitor loop from `startChannelHealthMonitor` (`src/gateway/channel-health-monitor.ts`) over the real `evaluateChannelHealth` (`src/gateway/channel-health-policy.ts`) fed by a live `createRunStateMachine` (`src/channels/run-state-machine.ts`) with its real `setInterval` heartbeat, on real wall-clock (`Date.now`), on pristine main 091584b1972e86e782860a784607b04448e9b650 and on PR head fdac98daf6a97f378acd5b47ab40b7d8b9f3d241. Only the channel transport was stubbed, at the narrowest seam (the `ChannelManager` the monitor calls), so the monitor's real restart recovery path stays observable. Executed on a remote Crabbox AWS lease (c7a.xlarge, eu-west-1, lease cbx_452e9479c6de), not on the author machine. The 25 minute busy ceiling and the 60 second heartbeat were both scaled down 300x (to 5 seconds and 200 milliseconds) so a genuinely hung run breaches the ceiling in seconds of real elapsed time rather than 26 minutes; nothing else was altered and both runs used identical scaling.\nExact steps or command run after this patch: a run begins via the real run-state machine and then hangs (its end callback never fires); the real monitor evaluates the live snapshot every 250 milliseconds while the transport stays connected:false; the harness prints the live snapshot ages and health verdict once per second and the monitor's real restart actions as they occur.\nEvidence after fix:\n```\n# BEFORE (pristine main 091584b, run hung well past the scaled ceiling)\n[health-monitor] started (interval: 0s, startup-grace: 0s, channel-connect-grace: 3600s)\nt=1.0s connected=false activeRuns=1 lastRunActivityAtAge=0.2s activeRunStartedAtAge=n/a -> healthy=true reason=busy\nt=5.0s connected=false activeRuns=1 lastRunActivityAtAge=0.2s activeRunStartedAtAge=n/a -> healthy=true reason=busy\nt=7.0s connected=false activeRuns=1 lastRunActivityAtAge=0.2s activeRunStartedAtAge=n/a -> healthy=true reason=busy\nSUMMARY monitorRestarts=0 finalVerdict=busy\n# AFTER (PR head fdac98d, identical inputs, identical 300x scaling)\n[health-monitor] started (interval: 0s, startup-grace: 0s, channel-connect-grace: 3600s)\nt=1.0s connected=false activeRuns=1 lastRunActivityAtAge=0.2s activeRunStartedAtAge=1.0s -> healthy=true reason=busy\nt=4.0s connected=false activeRuns=1 lastRunActivityAtAge=0.2s activeRunStartedAtAge=4.0s -> healthy=true reason=busy\nt=5.0s connected=false activeRuns=1 lastRunActivityAtAge=0.2s activeRunStartedAtAge=5.0s -> healthy=false reason=stuck\n[health-monitor] [telegram:acct-1] health-monitor: restarting (reason: stuck)\n  RECOVERY stopChannel(telegram:acct-1)\n  RECOVERY startChannel(telegram:acct-1) -> monitor restart #1\nt=7.0s connected=false activeRuns=1 lastRunActivityAtAge=0.2s activeRunStartedAtAge=7.0s -> healthy=false reason=stuck\nSUMMARY monitorRestarts=5 finalVerdict=stuck\n```\nObserved result after fix: on identical live input, the heartbeat pins lastRunActivityAt age at 0.2s in both runs, so BEFORE the channel stays healthy and busy for the whole hang and the monitor never restarts it (monitorRestarts=0); AFTER, the fixed activeRunStartedAt age grows until it breaches the ceiling, the verdict flips to unhealthy and stuck, and the real health monitor completes its restart recovery path (stopChannel then startChannel) five times over the window. The one value that moves from wrong to right is the health verdict for a hung disconnected channel, and with it the monitor's restart action.\nWhat was not tested: no live provider socket was hung end to end; the hang was a real never-resolving run under the real heartbeat, and the transport was a stub at the ChannelManager seam. The busy ceiling and heartbeat were scaled 300x on real wall-clock so the breach happens in seconds; the unscaled 25 minute breach was not waited out. Full build not run; the change is not on a lazy or packaging boundary.\n",
-        "branch": "fix/channel-health-busy-run-age",
-        "head_sha": "fdac98daf6a97f378acd5b47ab40b7d8b9f3d241",
-        "author": "yetval",
+        "title": "fix(browser): normalize local dispatch request paths",
+        "body": "## What Problem This Solves\n\nThe in-process browser route dispatcher normalized request paths differently from the node/browser proxy path. Local dispatch accepted missing leading slashes, but did not trim whitespace or strip trailing slashes the same way the shared browser request policy does.\n\n## Why This Change Was Made\n\nBrowser request entry points should route and guard the same normalized path. This change reuses `normalizeBrowserRequestPath` in the local dispatcher instead of keeping a narrower local normalizer.\n\n## User Impact\n\nLocal browser request dispatch now behaves consistently with node-host browser requests for paths such as `snapshot`, `/snapshot/`, and `  snapshot/  `. Existing guarded route checks continue to use the same normalized path contract.\n\n## Evidence\n\n- Rebased cleanly onto latest `upstream/main` at `bf02b611eb`.\n- `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs extensions/browser/src/browser/routes/dispatcher.path-normalization.test.ts extensions/browser/src/browser/routes/dispatcher.abort.test.ts extensions/browser/src/node-host/invoke-browser.test.ts -- --reporter=verbose`\n  - 3 files passed, 25 tests passed.\n- `pnpm format:check extensions/browser/src/browser/routes/dispatcher.ts extensions/browser/src/browser/routes/dispatcher.path-normalization.test.ts`\n- `git diff --check upstream/main...HEAD`\n\n## Real Gateway Proof\n\nRan a real local Gateway test instance, connected over Gateway WebSocket with `operator.admin`, forced local browser dispatch with `gateway.nodes.browser.mode=off`, started the headless `openclaw` browser profile through `browser.request`, then called the actual `browser.request` handler for each raw path variant.\n\nRedacted terminal output:\n\n```json\n{\"path\":\"/start\",\"ok\":true,\"profile\":\"openclaw\"}\n{\"path\":\"snapshot\",\"ok\":true,\"format\":\"aria\",\"nodeCount\":3}\n{\"path\":\"/snapshot/\",\"ok\":true,\"format\":\"aria\",\"nodeCount\":3}\n{\"path\":\"  snapshot/  \",\"ok\":true,\"format\":\"aria\",\"nodeCount\":3}\n```\n\nThe proof exercises the real path from `browser.request` local Gateway dispatch into the browser route dispatcher and the `/snapshot` route. It does not use `openclaw browser snapshot`, because that CLI path hardcodes `/snapshot` and would not prove the raw slashless or whitespace/trailing-slash variants.\n",
+        "branch": "llagy007/browser-request-path-normalization",
+        "head_sha": "4343af2328f2abac16a2174f11a0bfce77a86737",
+        "author": "llagy007",
         "labels": [
-          "gateway",
-          "size: S",
-          "P1",
+          "size: XS",
+          "P2",
           "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/channels/account-snapshot-fields.ts",
-            "additions": 3,
+            "path": "extensions/browser/src/browser/routes/dispatcher.path-normalization.test.ts",
+            "additions": 34,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/channels/plugins/types.core.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/run-state-machine.test.ts",
-            "additions": 59,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/run-state-machine.ts",
-            "additions": 27,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/channel-health-policy.test.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/channel-health-policy.ts",
-            "additions": 12,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-lifecycle.core.ts",
+            "path": "extensions/browser/src/browser/routes/dispatcher.ts",
             "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-lifecycle.queue.test.ts",
-            "additions": 3,
-            "deletions": 1,
+            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 8,
-        "additions": 129,
-        "deletions": 22,
+        "changedFiles": 2,
+        "additions": 36,
+        "deletions": 4,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103793",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103793.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103727",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103727.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 104,
-          "gatingTotal": 99,
+          "total": 86,
+          "gatingTotal": 81,
           "counts": {
-            "SUCCESS": 68,
-            "SKIPPED": 35,
-            "NEUTRAL": 1
+            "SUCCESS": 35,
+            "SKIPPED": 27,
+            "IN_PROGRESS": 24
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 1/2):IN_PROGRESS",
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 1/2):IN_PROGRESS",
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-10T17:16:48.310Z"
+      "processed_at": "2026-07-10T17:17:12.622Z"
     }
   ],
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6273,
+    "total_ms": 4615,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 520
+        "ms": 633
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2564
+        "ms": 1383
       },
       {
         "name": "classify_comment_commands",
@@ -220,7 +232,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3169
+        "ms": 2571
       },
       {
         "name": "append_ledger",
