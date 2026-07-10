@@ -1,23 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T15:18:41.229Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-10T15:19:19.110Z",
+  "repo": "openclaw/rfcs",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T12:18:38.471Z",
+  "since": "2026-07-10T12:19:18.055Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
-  "item_numbers": [
-    103409
-  ],
-  "comment_ids": [
-    4936783424
-  ],
-  "status_comment_id": 4936783833,
+  "max_comments": 1000,
+  "item_numbers": [],
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,227 +27,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:103409:4936783424:2026-07-10T15:17:07Z:re_review",
-      "comment_id": "4936783424",
-      "comment_version_key": "4936783424:2026-07-10T15:17:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103409#issuecomment-4936783424",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 103409,
-      "author": "SunnyShu0925",
-      "author_id": 265248434,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-10T15:17:07Z",
-      "comment_updated_at": "2026-07-10T15:17:07Z",
-      "status_comment_id": 4936783833,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "review_lease_owner": null,
-      "review_lease_comment_id": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 103409,
-          "dispatch_key": "router-752570103bedce21",
-          "dispatched_at": "2026-07-10T15:18:42.385Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-10T15:18:43.684Z",
-          "response_comment_id": "4936783833",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): add separate inline avatar size cap for agents.list projection",
-        "body": "## What Problem This Solves\n\n`agents.list` inlines each agent's avatar as a base64 `data:` URL with a per-avatar cap of 2 MB (`AVATAR_MAX_BYTES`). Images carrying embedded metadata (C2PA provenance manifests, etc.) can easily hit that cap, ballooning the response.\n\n- **Observed**: 3 agents with PNG avatars → **4.15 MB `agents.list` response** (one avatar carried an embedded C2PA manifest).\n- **Projected**: 10 such agents → ~20 MB in a single RPC response.\n- **Impact**: Android client's default request timeout (15 s) was too short to receive a multi-MB `agents.list`, leaving the agent list empty on slow links. Mitigated client-side in #103248, but that's not a fix.\n\n## Linked Issue\n\n- Fixes #103265\n\n## Motivation\n\n`AVATAR_MAX_BYTES = 2 MB` was too generous for inline avatar data URLs. Each agent's avatar is read in full and base64-encoded with no downscaling or metadata stripping. A single ~2 MB PNG produces a ~2.7 MB base64 string.\n\n**Key design decision**: Rather than lowering the shared `AVATAR_MAX_BYTES` (which controls upload/acceptance), this PR introduces a separate `AVATAR_INLINE_MAX_BYTES = 256 KB` that only caps the inline projection in `resolveAgentAvatarUrlFromSource` (the function used exclusively by `agents.list` / `chat.startup` agent-list projection). The shared file opener and data-url reader retain the 2 MiB limit, so `assistant-avatar.ts` (dedicated avatar delivery via Control UI) is unaffected.\n\n## Changes\n\n5 files changed, +179/−3.\n\n| File | Change |\n|------|--------|\n| `src/shared/avatar-limits.ts` | +6: added `AVATAR_INLINE_MAX_BYTES = 256 * 1024` |\n| `src/shared/avatar-policy.ts` | +6/−3: re-export `AVATAR_INLINE_MAX_BYTES` |\n| `src/agents/identity-avatar-file.ts` | +28/−3: inline cap in `resolveAgentAvatarUrlFromSource` with deduplicated warning |\n| `src/agents/identity-avatar-file.test.ts` | +59/−1: inline cap tests + production proof test |\n| `src/gateway/proof-avatar-cap.server.test.ts` | +83: real gateway WebSocket RPC proof test |\n\n## Evidence\n\n### Production path test (listAgentsForGateway)\n\n```\n3× 1.4 MB avatars payload: 1,456 bytes\n```\nFrom the original 4.15 MB (3 agents) to 1,456 bytes — **99.97% reduction**.\n\n### Real gateway RPC test\n\nWebSocket → `chat.startup` → `agentsList`, passes under both `gateway-server` and `gateway-methods` Vitest configs.\n\n### Full suite\n\n```bash\npnpm test src/agents/identity-avatar-file.test.ts   # 8/8 passed\npnpm test src/agents/identity-avatar.test.ts         # 14/14 passed\npnpm test src/gateway/proof-avatar-cap.server.test.ts # 2/2 passed\n```\n\n## Compatibility\n\n- **Upload/acceptance limit**: stays 2 MiB (`AVATAR_MAX_BYTES`)\n- **Inline projection cap**: 256 KiB (`AVATAR_INLINE_MAX_BYTES`) — only in agent-list RPC responses\n- **Dedicated avatar delivery** (Control UI / `assistant-avatar.ts`): unaffected, retains 2 MiB\n- Avatars between 256 KiB and 2 MiB remain accepted and stored but return `avatarUrl: undefined` in `agents.list`",
-        "branch": "fix/avatar-cap-103265",
-        "head_sha": "bd85f9eb575c33fe1fb848903b5ac59248316ca6",
-        "author": "sunnyshu0925",
-        "labels": [
-          "gateway",
-          "agents",
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/identity-avatar-file.test.ts",
-            "additions": 58,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/identity-avatar-file.ts",
-            "additions": 27,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/proof-avatar-cap.server.test.ts",
-            "additions": 83,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/shared/avatar-limits.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/shared/avatar-policy.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 179,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103409",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103409.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 100,
-          "gatingTotal": 95,
-          "counts": {
-            "SUCCESS": 34,
-            "SKIPPED": 35,
-            "IN_PROGRESS": 28,
-            "QUEUED": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:QUEUED",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:QUEUED",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:QUEUED",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:QUEUED",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-10T15:18:41.563Z"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 5959,
+    "total_ms": 1252,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 555
+        "ms": 1041
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2187
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -267,7 +59,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3191
+        "ms": 197
       },
       {
         "name": "append_ledger",
