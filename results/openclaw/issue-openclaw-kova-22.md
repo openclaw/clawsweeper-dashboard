@@ -2,12 +2,12 @@
 repo: "openclaw/kova"
 cluster_id: "issue-openclaw-kova-22"
 mode: "autonomous"
-run_id: "29114089549"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29114089549"
+run_id: "29115966314"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29115966314"
 head_sha: "e73632396d2a41d0567ecc87f206c2cc4502962f"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-10T18:24:21.567Z"
+published_at: "2026-07-10T18:55:03.572Z"
 canonical: "https://github.com/openclaw/Kova/issues/22"
 canonical_issue: "https://github.com/openclaw/Kova/issues/22"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/kova
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29114089549](https://github.com/openclaw/clawsweeper/actions/runs/29114089549)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29115966314](https://github.com/openclaw/clawsweeper/actions/runs/29115966314)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/Kova/issues/22
 
 ## Summary
 
-Issue #22 remains a valid, non-security regression on main@24c26969e57d4d49f9d1a5071af85dd3d79daa2d. No active implementation PR exists; a narrow new fix PR is appropriate, but this read-only worker cannot create or validate the branch, so the writable executor must apply the artifact and run the gates.
+Issue #22 remains a valid, non-security regression on main@24c26969e57d4d49f9d1a5071af85dd3d79daa2d. No active implementation PR exists. A narrow new fix PR remains appropriate, but this read-only checkout cannot create or validate the branch; the writable executor must fetch the cited historical objects, apply the artifact, and complete the deterministic gates.
 
 ## Impact
 
@@ -67,9 +67,9 @@ Issue #22 remains a valid, non-security regression on main@24c26969e57d4d49f9d1a
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
 | #21 | keep_closed | skipped | related | Already-merged historical context; no mutation is valid. |
-| #22 | fix_needed | planned | canonical | The issue is reproducible from current code shape, is not security-sensitive, is not already fixed, and has no active viable PR. |
-| cluster:issue-openclaw-kova-22 | build_fix_artifact | planned |  | A writable executor is required to implement, validate, and open the new fix PR. |
-| cluster:issue-openclaw-kova-22 | open_fix_pr | blocked |  | This worker has read-only filesystem permissions and cannot prepare a locally validated branch. |
+| #22 | fix_needed | planned | canonical | The issue remains reproducible from current code shape, is not security-sensitive or already fixed, and has no active viable implementation PR. |
+| cluster:issue-openclaw-kova-22 | build_fix_artifact | planned |  | A writable executor is required to implement and validate the approved narrow repair. |
+| cluster:issue-openclaw-kova-22 | open_fix_pr | blocked |  | This worker has read-only filesystem permissions and cannot prepare or validate the target branch. |
 
 ## Needs Human
 
