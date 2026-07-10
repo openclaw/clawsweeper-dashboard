@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T16:23:33.522Z",
+  "generated_at": "2026-07-10T16:23:46.233Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T13:23:33.065Z",
+  "since": "2026-07-10T13:23:43.645Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    103778
+    103770
   ],
   "comment_ids": [
-    4937324075
+    4937338184
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4937338575,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:103778:4937324075:2026-07-10T16:20:23Z:re_review",
-      "comment_id": "4937324075",
-      "comment_version_key": "4937324075:2026-07-10T16:20:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/issues/103778#issuecomment-4937324075",
+      "idempotency_key": "comment-router:openclaw/openclaw:103770:4937338184:2026-07-10T16:22:16Z:re_review",
+      "comment_id": "4937338184",
+      "comment_version_key": "4937338184:2026-07-10T16:22:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103770#issuecomment-4937338184",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 103778,
-      "author": "yetval",
-      "author_id": 102706514,
+      "target_branch": "main",
+      "issue_number": 103770,
+      "author": "LZY3538",
+      "author_id": 293718838,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-10T16:20:23Z",
-      "comment_updated_at": "2026-07-10T16:20:23Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-10T16:22:16Z",
+      "comment_updated_at": "2026-07-10T16:22:16Z",
+      "status_comment_id": 4937338575,
       "trigger": "mention",
-      "command": "re-run",
+      "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -70,27 +70,127 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 103770,
+          "dispatch_key": "router-589f70d1c9543394",
+          "dispatched_at": "2026-07-10T16:23:46.994Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-10T16:23:47.987Z",
+          "response_comment_id": "4937338575",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): reconcile on-disk config after watcher recreate (#103729)",
+        "body": "## What Problem This Solves\n\nThe gateway watches `openclaw.json` for hot-reload. When that watcher hits an error (for example EMFILE/ENOSPC inotify exhaustion) it is closed and re-created after a backoff. The re-created watcher is built with `ignoreInitial: true` and no reconciliation read, so any config edit made by an **external process** while no watcher is alive (the error-recovery down window) — a manual edit, or a separate `openclaw doctor --fix` run, neither of which routes through the running gateway's in-process write channel — is silently adopted as the new watcher's baseline and **never scheduled for reload**. The gateway keeps running the stale pre-edit config indefinitely, with no log distinguishing a missed change from a normal quiet period. This is exactly the population the inotify-exhaustion retries exist to serve.\n\nCloses #103729\n\n## Why This Change Was Made\n\n`ignoreInitial: true` is correct for the very first watcher (startup already reads and applies the config). On **recreation**, however, there is an interval with no live watcher during which an on-disk change can occur, and the new watcher's `ignoreInitial: true` guarantees that change produces no event. Both recreate paths share the defect: the native-retry timer and the polling-degrade timer.\n\n## Changes\n\n- `createWatcher` gains an optional `reconcile` parameter. When `true`, it reconciles **once the recreated watcher emits `ready`** — i.e. after chokidar has finished its asynchronous initial scan and established its baseline — by scheduling one read (`scheduleAfter(0)`) of the current on-disk config through the existing scheduler (the canonical seam that owns snapshot reads, validation, diffing, and application). Reconciling on `ready` (rather than eagerly, right after `chokidar.watch()` returns) guarantees any edit that landed during the down window or the initial scan is on disk before the read, closing the construction→`ready` window. A `watcher !== next` guard drops the callback if the watcher was already replaced or stopped.\n- Both recreate timers (native-retry and polling-degrade) now call `createWatcher(true)`. The initial startup `createWatcher()` is unchanged, since startup already read and applied the config before the first watcher existed.\n- The watcher test mock now models `once` and the `ready` event; two regression tests cover both recreate paths and assert the reconcile fires only after `ready`.\n\n## User Impact\n\nExternal config edits (manual, or `openclaw doctor --fix`) that land while the watcher is recovering from an inotify/EMFILE error are now applied after the watcher is re-created, instead of being silently dropped until some later unrelated write touches the file again.\n\n## Evidence\n\n**Real behavior proof.** Drove the real `startGatewayConfigReloader` against a real on-disk `openclaw.json` with a real chokidar watcher. A real `error` event was emitted on the live watcher (as inotify exhaustion would raise it); the watcher, the file, the debounce/reload loop, and `readSnapshot` reading the file all stayed real. An external edit (`{\"v\":3}`) was written during the backoff gap while **no watcher was alive**. Chokidar was run in polling mode, whose down-window semantics are deterministic and cross-platform (a polling watcher snapshots the file at start and `ignoreInitial` suppresses that baseline; an edit predating the watch is folded into the baseline and never emits) — the same silent drop the issue author observed under native Linux inotify, which likewise does not replay events that predate the watch. Timeline (`[ms] event`):\n\n```\n# BEFORE (true origin/main, no reconcile)\n[0187] watch#0 constructed\n[0199] watch#0 EVENT ready\n[1113] watch#1 constructed        # recreate after backoff\n[1114] watch#1 EVENT ready\nreads_after_recreate=0\ndownwindow_edit(v3)_ever_read=false\nraw_config_contents_read=[]        # v3 silently dropped\n\n# AFTER (this PR, identical inputs)\n[0015] watch#0 constructed\n[0023] watch#0 EVENT ready\n[0941] watch#1 constructed        # recreate after backoff\n[0941] watch#1 EVENT ready\n[0965] readSnapshot -> {\"v\":3}     # reconcile fires AFTER ready\nreads_after_recreate=1\ndownwindow_edit(v3)_ever_read=true\nraw_config_contents_read=[\"{\\\"v\\\":3}\"]\n```\n\nThe reconcile read (965ms) occurs strictly after the recreated watcher's `ready` (941ms), demonstrating the readiness gating.\n\n**Focused tests.** Two tests in `config-reload.test.ts` assert a reconcile read runs after both recreate paths (native retry + polling degrade), and only after the recreated watcher's `ready` event (nothing is read before `ready`). Full suite green:\n\n```\n$ npx vitest run src/gateway/config-reload.test.ts\n Test Files  3 passed (3)\n      Tests  267 passed (267)\n```\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/config-reload-recreate-reconcile-103729",
+        "head_sha": "480a8154f4820f6ae3d1c5b0d0c06c37401cbb78",
+        "author": "lzy3538",
+        "labels": [
+          "gateway",
+          "size: S",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/config-reload.test.ts",
+            "additions": 101,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/config-reload.ts",
+            "additions": 23,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 124,
+        "deletions": 7,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103770",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103770.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "SUCCESS": 55,
+            "SKIPPED": 28,
+            "IN_PROGRESS": 10,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-10T16:23:46.473Z"
     }
   ],
-  "ledger_claimed": false,
+  "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1604,
+    "total_ms": 4900,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 443
+        "ms": 594
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1978
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -106,7 +206,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1147
+        "ms": 2302
       },
       {
         "name": "append_ledger",
