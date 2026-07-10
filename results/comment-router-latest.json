@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T09:52:55.313Z",
+  "generated_at": "2026-07-10T09:53:03.873Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T06:52:55.093Z",
+  "since": "2026-07-10T06:53:01.439Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    103291
+    102892
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 8,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,23 +29,271 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102892:4930976323:2026-07-10T00:58:10Z:re_review",
+      "comment_id": "4930976323",
+      "comment_version_key": "4930976323:2026-07-10T00:58:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102892#issuecomment-4930976323",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102892,
+      "author": "LZY3538",
+      "author_id": 293718838,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-10T00:58:10Z",
+      "comment_updated_at": "2026-07-10T00:58:10Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agent): return data URIs for workspace-relative identity card avatars (#97602)",
+        "body": "## Summary\n\n`agent.identity.get` returned inline data URIs for workspace-relative avatars, but the **Control UI Personal card** is initialized from the **bootstrap config** (`control-ui-config.json`), which still mapped workspace avatars through `resolveAssistantAvatarUrl` to the auth-gated `/avatar/<agentId>` route. An `<img>` tag cannot carry a Bearer header, so the linked Personal-card 401/broken-image symptom persisted despite the RPC fix.\n\nThis PR consolidates the workspace-safe avatar reader into **one shared, gateway-internal helper** (`readLocalAvatarDataUrl` in `session-utils.ts`) and uses it in **both** projections — `agent.identity.get` and the bootstrap config handler — so identity and bootstrap produce identical inline data URIs. Remote HTTP URLs, existing data URLs, text fallbacks, and the `/avatar/<agentId>` HTTP endpoint are unchanged.\n\nThe helper is **not** re-exported on the Plugin SDK surface (`session-utils.ts` is gateway-internal; the `identity-avatar` barrel does not re-export it). The workspace root is canonicalised with `realpathSync` to keep the containment check correct for symlinked workspaces.\n\nFixes #97602.\n\n## What Problem This Solves\n\nThe Personal card in Control UI showed a broken avatar image because its avatar comes from the bootstrap config, not from `agent.identity.get`:\n- UI chat avatar → `agent.identity.get` (already fixed in the first revision).\n- **Config Personal card** → `appConfig.assistantIdentity.avatar` → bootstrap `control-ui-config.json` → `/avatar/<agentId>` (auth-gated → `<img>` 401). **This PR fixes this path.**\n\nGiven a workspace with an avatar file `avatar.png`:\n- **Before**: bootstrap `assistantAvatar` = `/avatar/main` (route URL → `<img>` 401)\n- **After**: bootstrap `assistantAvatar` = `data:image/png;base64,...` (inline → renders)\n\n## Why This Change Was Made\n\nClawSweeper's P1: the earlier fix covered only `agent.identity.get`, leaving the bootstrap Personal-card path emitting the protected route. Rather than duplicate a third avatar reader, this revision lands **one canonical projection**:\n1. `readLocalAvatarDataUrl(filePath, workspaceDir)` moves from `agent.ts` into `session-utils.ts` (exported gateway-internal, off the SDK barrel).\n2. `agent.identity.get` imports the shared helper (behaviour unchanged).\n3. The bootstrap config handler resolves the avatar via the same `resolveAgentAvatar(...)` and, when `kind === \"local\"`, inlines the file with the shared helper before `resolveAssistantAvatarUrl` (which passes data URIs through untouched). On any failure it falls back to the route URL.\n\n## Changes\n\n- `src/gateway/session-utils.ts`: add exported gateway-internal `readLocalAvatarDataUrl` (shared reader).\n- `src/gateway/server-methods/agent.ts`: import the shared helper; remove the now-duplicated private copy and its now-unused imports.\n- `src/gateway/control-ui.ts`: inline workspace-local avatars as data URIs in the bootstrap config response.\n- `src/gateway/control-ui.http.test.ts`: bootstrap-config regression test asserting a workspace-local avatar is returned as a data URI (not `/avatar/main`).\n\n## Evidence\n\n**1. Bootstrap regression test (new) + identity/list regressions — all green**\n\n```\nnode vitest run src/gateway/control-ui.http.test.ts \\\n  src/gateway/server-methods/agent.test.ts \\\n  src/agents/identity-avatar.test.ts \\\n  src/gateway/session-utils.test.ts -t \"avatar|identity\"\n\nTest Files  10 passed (10)\n     Tests  77 passed | 898 skipped (975)\n```\n\nThe new test `inlines a workspace-local assistant avatar as a data URI in bootstrap config (#97602)` fails on the pre-fix bootstrap handler and passes after.\n\n**2. Real behavior proof — standalone harness driving the real `handleControlUiHttpRequest` bootstrap path**\n\nA standalone script (not a committed test) creates a real workspace with a real `avatar.png`, invokes the production bootstrap-config handler, and prints the `assistantAvatar` from the actual JSON response body:\n\n```\n========== BEFORE (PR head control-ui.ts) ==========\nhandled: true\nassistantAvatar (first 48 chars): \"/avatar/main\"\nstartsWith 'data:image/png;base64,' -> false\ncontains '/avatar/main' (broken auth-gated route) -> true\n\n========== AFTER (fix) ==========\nhandled: true\nassistantAvatar (first 48 chars): \"data:image/png;base64,YXZhdGFyLWJ5dGVzCg==\"\nstartsWith 'data:image/png;base64,' -> true\ncontains '/avatar/main' (broken auth-gated route) -> false\n```\n\n**3. Lint:** `oxlint` on the three changed source files — clean (exit 0).\n\n## AI-assisted\n\nThis PR was AI-assisted (Claude Code).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+        "branch": "fix/agent-identity-avatar-data-uri-97602",
+        "head_sha": "b88437330074e9c841f0739b24a644719a18c7fe",
+        "author": "lzy3538",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "scripts",
+          "agents",
+          "size: L",
+          "P2"
+        ],
+        "files": [
+          {
+            "path": "scripts/plugin-sdk-surface-report.mjs",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/identity-avatar-projection.ts",
+            "additions": 45,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/identity-avatar.test.ts",
+            "additions": 141,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/identity-avatar.ts",
+            "additions": 40,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/assistant-identity.test.ts",
+            "additions": 94,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/assistant-identity.ts",
+            "additions": 71,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/control-ui-shared.ts",
+            "additions": 0,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/control-ui.http.test.ts",
+            "additions": 53,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/control-ui.ts",
+            "additions": 16,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.test.ts",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.ts",
+            "additions": 7,
+            "deletions": 25,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 8,
+            "deletions": 76,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/lib/assistant-identity.test.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/lib/assistant-identity.ts",
+            "additions": 6,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 14,
+        "additions": 574,
+        "deletions": 194,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102892",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102892.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 100,
+          "gatingTotal": 95,
+          "counts": {
+            "SUCCESS": 29,
+            "SKIPPED": 35,
+            "IN_PROGRESS": 35,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 323,
+    "total_ms": 2706,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 205
+        "ms": 445
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1972
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -61,7 +309,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 104
+        "ms": 272
       },
       {
         "name": "append_ledger",
