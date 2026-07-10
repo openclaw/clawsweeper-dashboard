@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T19:46:10.572Z",
+  "generated_at": "2026-07-10T19:47:41.953Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T16:46:07.388Z",
+  "since": "2026-07-10T16:47:41.324Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,7 +14,7 @@
   "comment_ids": [
     4938915023
   ],
-  "status_comment_id": 4938915443,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -38,14 +38,14 @@
       "comment_version_key": "4938915023:2026-07-10T19:45:20Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/103046#issuecomment-4938915023",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 103046,
       "author": "LeonidasLux",
       "author_id": 294038793,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-10T19:45:20Z",
       "comment_updated_at": "2026-07-10T19:45:20Z",
-      "status_comment_id": 4938915443,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -70,122 +70,43 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 103046,
-          "dispatch_key": "router-af8941f9d15b9821",
-          "dispatched_at": "2026-07-10T19:46:11.336Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-10T19:46:13.442Z",
-          "response_comment_id": "4938685436",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): add size limit to LSP message parser",
-        "body": "## Summary\n\n**Problem**: The LSP message parser accepted unbounded `Content-Length`\nvalues. A malicious or misbehaving LSP server could send an arbitrarily\nlarge `Content-Length` header, causing unbounded buffer allocation and\nmemory exhaustion. Additionally, a very long decimal `Content-Length`\n(e.g., 400+ digits) causes `Number.parseInt` to return `Infinity`, which\nwas stored as an infinite drain counter — permanently suppressing all\nfuture LSP output and leaving pending requests to time out.\n\n**Root cause**: When `Content-Length` exceeded the 10 MB limit, the parser\nonly skipped the header + separator bytes but kept the declared body in\n`session.buffer`. If the oversized body arrived across multiple stream\nchunks, the buffer would grow unboundedly. For non-safe integer lengths\n(`Infinity` from `parseInt`), the arithmetic computed `bodyStart + Infinity\n= Infinity`, storing an infinite `oversizeDrainRemaining` that never\ndecrements.\n\n**Solution**: Add a 10 MB `Content-Length` limit that fully drains the\ndeclared oversized body when the frame is completely buffered, or tracks\nremaining bytes to skip via `session.oversizeDrainRemaining` when the body\narrives across chunks. Non-safe integer Content-Length values (Infinity)\nare detected before drain arithmetic and signal a fatal protocol error —\n`handleIncomingData` calls `failLspSession`, immediately rejecting all\npending requests through the existing failure lifecycle instead of leaving\nthem to time out.\n\n**What changed**: `src/agents/agent-bundle-lsp-runtime.ts`\n- `parseLspMessages`: accepts optional `oversizeDrainRemaining` out-param;\n  on oversized frames, drains the full frame or signals remaining bytes.\n  On non-safe integer Content-Length, signals a fatal condition via NaN.\n- `handleIncomingData`: drains `session.oversizeDrainRemaining` from raw\n  stream data before appending to the parse buffer. Detects non-finite\n  drain remaining and calls `failLspSession` to immediately fail the\n  session and reject pending requests.\n- `LspSession` type: added `oversizeDrainRemaining: number`\n\n**What did NOT change**: Valid message parsing, session lifecycle, tool\nmaterialization — all unchanged for frames within the 10 MB limit.\n\n## Real behavior proof\n\n**Behavior addressed**: LSP message parser now closes two gaps:\n1) fully drains finite oversized Content-Length frames (>10 MB) to\nprevent memory exhaustion, and 2) fails the session for non-safe integer\nContent-Length (Infinity from parseInt) instead of permanently suppressing\nall future LSP output.\n\n**Real environment tested**: Linux 4.19.112, Node 22.19.0, pnpm 11.2.2\n\n**Exact steps or command run after this patch**:\n```bash\nnpx tsx proof-oversized-lsp-frame.ts\nnpx tsx evidence/proof-unsafe-length.mjs\npnpm test src/agents/agent-bundle-lsp-runtime.test.ts\n```\n\n**After-fix evidence**:\n\nOversized finite frame handling:\n```text\nTest 1: Partial oversize (header only, no body)\n  Content-Length: 10485761, drain counter: 10.0 MB → buffer discarded OK\n\nTest 2: Full oversize frame + valid message after\n  Total input: 10.0 MB, messages parsed: 1 → frame drained OK\n\nTest 3: Multiple sequential oversize frames\n  Total input: 20.0 MB, messages parsed: 1 → frames drained OK\n```\n\nNon-safe integer Content-Length handling:\n```text\n1. Number.parseInt(\"9\".repeat(400), 10) = Infinity\n   isSafeInteger(Infinity) = false; Infinity > 10MB = true\n\n2. Before fix: bodyStart + Infinity → oversizeDrainRemaining = Infinity\n   → Infinity never decrements; all future LSP output silently dropped\n\n3. After fix: non-safe check BEFORE > MAX check\n   → oversizeDrainRemaining.value = NaN (fatal sentinel)\n   → handleIncomingData detects !isFinite → failLspSession called ✓\n\n4. Oversized finite (>10MB) still drains correctly (regression):\n   oversizeDrain.value = 10485761 (finite) → drains from next chunk ✓\n```\n\n**Observed result after the fix**: The parser correctly drains oversized\nframes. For non-safe Content-Length values, the session is failed\nimmediately and pending requests are rejected through the existing\nfailure lifecycle instead of being left to time out.\n\n**What was not tested**: A real LSP server sending non-safe Content-Length\nvalues. The handler-level path is exercised through the test suite's mock\nprocess stdout which triggers the identical `handleIncomingData` the\nproduction LSP session uses.\n\n**Risk level**: Low — only non-safe integer Content-Length values trigger\nthe new session-failure path. Finite oversized frames use the same drain\nlogic as before. All existing message sizes use the unchanged happy path.\nmerge-risk: low\n\n## Risk checklist\n\n- [x] This change is backwards compatible — 10 MB is well above realistic LSP message sizes\n- [x] This change has been tested with existing configurations — all 13 tests pass unchanged plus 4 new tests\n- [x] I have updated relevant documentation — no docs changes needed\n- [x] Breaking changes (if any) are documented in Summary — none",
-        "branch": "fix/security-lsp-message-size-limit",
-        "head_sha": "428540b4d3aeca7e64b85eba3bd9557f324907c7",
-        "author": "leonidaslux",
-        "labels": [
-          "agents",
-          "size: S",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-bundle-lsp-runtime.test.ts",
-            "additions": 105,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-bundle-lsp-runtime.ts",
-            "additions": 78,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 183,
-        "deletions": 6,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103046",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103046.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 35,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-10T19:46:10.808Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 6615,
+    "total_ms": 2126,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1023
+        "ms": 616
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2140
-      },
-      {
-        "name": "classify_comment_commands",
-        "ms": 3
-      },
-      {
-        "name": "prehydrate_repair_loop_sweeps",
-        "ms": 6008
-      },
-      {
-        "name": "classify_repair_loop_sweeps",
-        "ms": 6
-      },
-      {
-        "name": "claim_dispatch_commands",
         "ms": 0
       },
       {
+        "name": "classify_comment_commands",
+        "ms": 1
+      },
+      {
+        "name": "prehydrate_repair_loop_sweeps",
+        "ms": 0
+      },
+      {
+        "name": "classify_repair_loop_sweeps",
+        "ms": 0
+      },
+      {
+        "name": "claim_dispatch_commands",
+        "ms": 1
+      },
+      {
         "name": "execute_commands",
-        "ms": 3421
+        "ms": 1498
       },
       {
         "name": "append_ledger",
