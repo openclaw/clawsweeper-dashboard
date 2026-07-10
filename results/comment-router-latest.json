@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T09:57:40.654Z",
+  "generated_at": "2026-07-10T09:57:48.240Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T06:57:37.003Z",
+  "since": "2026-07-10T06:57:48.022Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    102341
+    103271
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,125 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:102341:4920787051:2026-07-10T09:57:31Z:clawsweeper_auto_repair",
-      "comment_id": "4920787051",
-      "comment_version_key": "4920787051:2026-07-10T09:57:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102341#issuecomment-4920787051",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 102341,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-09T01:47:17Z",
-      "comment_updated_at": "2026-07-10T09:57:31Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=5dd74f553427b1d4dfda6ec4ca7b4ce70760c859)",
-      "review_summary": "The PR adds a per-turn `progressDraftCollapsed` guard and reset to the Discord draft-preview controller, with focused tests for repeated finals, abort cancellation, and turn boundaries.\n\nPR surface: Source +12, Tests +183. Total +195 across 2 files.\n\nReproducibility: yes. from source inspection. The sticky latch remains true, current progress mode rechecks it for every final payload, and the PR’s only guard setter is no longer called from that current-main path; no live current-main Discord reproduction was run during this read-only review.",
-      "review_followup": "- [P1] The blocker is a bounded current-base lifecycle repair with clear implementation files and caller-level validation.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "5dd74f553427b1d4dfda6ec4ca7b4ce70760c859",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-10T09:55:57.389Z",
-      "review_lease_owner": "aa833e03-2669-45ef-ad2f-6cc309752ae2",
-      "review_lease_comment_id": "4934051417",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "41d620d3c4955c4348647ff0fef45d15a4ba3f6ffb55026364d1621061234bc4",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(discord): guard progress draft collapse to prevent re-collapse on cleaned stream",
-        "body": "## What Problem This Solves\n\nAfter v2026.6.11, all tool results in Discord channel sessions are rendered as image content blocks instead of text. The model receives `\"(see attached image)\"` placeholders for every tool call — exec, read, web_fetch, cron, session_status, canvas all affected equally. Tool-based interactions are non-functional in Discord.\n\nTwo users independently confirmed the regression. Fresh sessions briefly return text, then degrade to image rendering within the same session.\n\nFixes #100782\n\n## Root Cause\n\nCommit `86ea382` (\"fix(discord): preserve progress preview final edits\") added a `progressDraftStartedBeforeFinal` latch in `createDiscordDraftPreviewController`:\n\n```ts\n// markFinalReplyStarted() — latch captures hasStarted forever\nprogressDraftStartedBeforeFinal ||= progressDraft.hasStarted;\n\n// hasProgressDraftStarted — latch never cleared\nget hasProgressDraftStarted() {\n  return progressDraft.hasStarted || progressDraftStartedBeforeFinal;\n}\n```\n\n**Why the latch was added (real problem Vincent was fixing):** in the delivery path between `markFinalReplyStarted()` and `shouldCollapseProgressDraft`, an abort can trigger `gate.cancel()` which sets `gate.hasStarted = false`. Without the latch, `shouldCollapseProgressDraft` evaluates `hasProgressDraftStarted` → `false` → the progress draft never gets collapsed into a summary → user sees a permanently stuck progress bar.\n\n**Why the latch caused this bug:** the latch was a one-way door — set once, never cleared. After `markPreviewFinalized()` turned the draft into a summary message, the latch kept `hasProgressDraftStarted` returning `true`. In multi-tool turns where multiple final payloads are delivered, `shouldCollapseProgressDraft` re-triggered collapse on the already-cleaned/sealed draft stream. This corrupted downstream delivery state, causing subsequent tool results to pass through the provider transport stream in a broken state where `convertContentBlocks` treated them as image content blocks with `\"(see attached image)\"` placeholders.\n\n## Why This Change Was Made\n\nThe fix preserves Vincent's abort-race protection while adding the missing reset:\n\n| Change | Location | Purpose |\n|--------|----------|---------|\n| `progressDraftCollapsed` guard | `hasProgressDraftStarted` getter | `!progressDraftCollapsed && (...)` — collapse once, stay collapsed |\n| Set guard | `markPreviewFinalized()` | `progressDraftCollapsed = true` + clear latch — prevent re-collapse |\n| Reset guard | `handleAssistantMessageBoundary()` | `progressDraftCollapsed = false` — fresh guard for next turn |\n\n**Three invariants enforced:**\n\n1. **Latch survives gate cancellation** — abort between `markFinalReplyStarted()` and collapse check does not prevent the draft from being collapsed into a summary (Vincent's fix preserved)\n2. **Collapse guard prevents re-collapse** — after `markPreviewFinalized()`, `hasProgressDraftStarted` returns `false` permanently within the same turn, even if `markFinalReplyStarted()` is called again on a second final-payload delivery (#100782 regression fixed)\n3. **New turn resets the guard** — `handleAssistantMessageBoundary()` clears `progressDraftCollapsed` so followup/queued turns start with a fresh progress draft\n\n## User Impact\n\n**Affected**: All Discord channel session users on v2026.6.11+.\n\n**Symptoms**: Every tool result appears as `\"(see attached image)\"`. Model cannot read tool output text. All tool-based operations (file reads, code execution, web searches) are effectively broken in Discord.\n\n**After fix**: Tool results render as normal text content blocks. Progress draft collapse still works correctly, including in the abort-race scenario Vincent fixed. Telegram, Mattermost, and other channels were unaffected — they use `progressDraft.markFinalReplyStarted()` directly without a latch wrapper.\n\n## Evidence\n\n- `pnpm test extensions/discord` — **1872 tests pass** across 164 test files (Discord monitor process, queue, context, draft-stream, draft-chunking, outbound-adapter, outbound-payload, and progress-draft-compositor suites)\n- 8 new focused tests in `message-handler.draft-preview.collapse-guard.test.ts` covering all three invariants plus the abort-race scenario:\n  - **Latch survives gate cancellation (abort race)**: `cleanup()` cancels the compositor gate after `markFinalReplyStarted()`, but the latch preserves `hasProgressDraftStarted === true` so the draft still collapses into a summary instead of leaving a stuck progress bar — this is Vincent's original race-condition fix verified\n  - **Latch preserves hasStarted after markFinalReplyStarted**: gate started → final reply marks latch → `hasProgressDraftStarted` stays true\n  - **Collapse guard: false after markPreviewFinalized**: final → collapse → `hasProgressDraftStarted` returns false, preventing re-collapse\n  - **Collapse guard survives repeated markFinalReplyStarted**: multiple final-payload deliveries in same turn cannot flip the guard back\n  - **New turn resets collapse guard**: `handleAssistantMessageBoundary()` clears the guard so a fresh progress draft works in the next turn\n  - **Edge cases**: no progress + final reply delivered; no progress started at all\n- `pnpm tsgo:test` — clean (typecheck passed after fixing `tableMode`/`chunkMode` literals from `\"discord\"` to valid `\"off\"`/`\"length\"`)\n- `node_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.json --quiet` — clean\n- `pnpm format:check` — clean\n\nReal environment tested: `pnpm test extensions/discord` — full Discord test suite with 1872 passing tests.\nEvidence after fix: All Discord test suites pass with no regressions; new collapse-guard tests confirm the latch+guard behavior, including the abort-race scenario.\nWhat was not tested: Live E2E test with a real Discord connection and multi-tool agent turn. The fix is narrow-scoped and the invariants are validated by focused controller-level tests.",
-        "branch": "fix/issue-100782-tool-results-image",
-        "head_sha": "5dd74f553427b1d4dfda6ec4ca7b4ce70760c859",
-        "author": "xialonglee",
-        "labels": [
-          "channel: discord",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/discord/src/monitor/message-handler.draft-preview.collapse-guard.test.ts",
-            "additions": 183,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-handler.draft-preview.ts",
-            "additions": 15,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 198,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102341",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102341.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "gatingTotal": 92,
-          "counts": {
-            "SUCCESS": 56,
-            "SKIPPED": 40,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
+  "commands": [],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4007,
+    "total_ms": 323,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 481
+        "ms": 207
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1908
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1249
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -163,11 +61,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 346
+        "ms": 106
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
