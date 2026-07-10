@@ -393,7 +393,9 @@ still valid.
 
 - Updates the single marker-backed Codex automated review comment in place.
 - Closes only unchanged high-confidence proposals.
-- Reuses the review comment when closing; no duplicate close comment.
+- Keeps the durable review comment. Applied PR closes also post one idempotent,
+  marker-backed close receipt; issue closes currently leave the durable review
+  as ClawSweeper's sole comment.
 - Moves closed or already-closed reports to
   `records/<repo-slug>/closed/<number>.md`.
 - Moves reopened archived reports back to the repo’s `items/` folder as stale.
@@ -409,11 +411,25 @@ queues another apply run with a fresh token; a saturated scan that closes
 nothing stops and waits for the next scheduled tick instead of self-dispatching
 indefinitely.
 
+Apply health keeps the scheduler-admitted `apply_ready_count` separate from the
+full promotion backlog, cooldown-eligible probes, proof-required work, guarded
+retries, and inconsistent records. Its cycle estimate covers work actionable in
+the current scheduler window rather than presenting every probe as immediately
+closable.
+
 Exact event runs skip the bulk planner, shard matrix, artifact upload, and
 separate publish job. They still use the same review and apply code paths, but
 only for the selected item number and only with immediate-safe reasons enabled
 by default: `implemented_on_main`, `duplicate_or_superseded`, and
 `low_signal_unmergeable_pr`.
+Deterministic terminal and remain-open outcomes complete in that exact run.
+Ordinary synced verdicts publish their exact durable comment immediately, then
+queue an executing target-wide comment-router scan. Target-wide serialization
+coalesces concurrent handoffs without losing older durable verdicts, while the
+review and publication work remains parallel. Direct exact-event viable-issue
+implementation dispatch stays disabled; the bounded broad publish/backfill lane
+owns that separately revalidated intake. The exact run does not claim an atomic
+state-publish-and-route boundary.
 `stale_insufficient_info` issue reports and `mostly_implemented_on_main` PR
 reports are never applied to young items; apply requires those reports to be at
 least 60 days old unless a manual run explicitly changes the threshold.
