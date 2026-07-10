@@ -1,13 +1,13 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T10:04:30.513Z",
+  "generated_at": "2026-07-10T10:05:11.221Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T07:04:27.287Z",
+  "since": "2026-07-10T07:05:10.636Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     103312
   ],
@@ -37,184 +37,12 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/103312#issuecomment-4934215067",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 103312,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 103306,
+      "author": "ZOOWH",
+      "author_id": 265460861,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-10T10:04:22Z",
-      "comment_updated_at": "2026-07-10T10:04:22Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=52598f79320175e62ee7b171740e3b14952ed969)",
-      "review_summary": "The PR adds a shared helper that removes child-process lifecycle listeners and stdio data listeners on settlement across local bash, Docker, SSH command/upload, and shell-snapshot execution paths.\n\nPR surface: Source +38, Tests +84. Total +122 across 6 files.\n\nReproducibility: yes. at source level: current callers attach closure-backed listeners that can remain on reachable child or stream objects after settlement. No real repeated-execution heap or RSS reproduction was supplied, so runtime magnitude remains unmeasured.",
-      "review_followup": "- [P1] The blocker is mechanically repairable by narrowing cleanup ownership, preserving late error guards, refreshing against current main, and adding focused regression coverage; contributor-supplied real behavior proof remains required separately.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "52598f79320175e62ee7b171740e3b14952ed969",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-10T10:02:37.866Z",
-      "review_lease_owner": "9f9ea1ae-3b93-4d51-bfff-92eee05ba805",
-      "review_lease_comment_id": "4934151855",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "c5241930a006b741878ea4ba8bebd43c96997d51176ccda380a0035e21cfa025",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): release child process listeners on promise settle",
-        "body": "## What Problem This Solves\n\nAgent tool code (bash local exec, Docker sandbox, SSH sandbox commands,\ntar-over-SSH uploads, shell snapshot) registers data listeners on\n`child.stdout` and `child.stderr` inside `new Promise()` constructors.\nAfter the promise settles the pipe data listeners remain attached to\nthe ChildProcess object and its stdio streams.\n\nThose listeners keep accumulated `stdoutChunks` / `stderrChunks` buffer\narrays reachable through their closures. Under high agent throughput —\nrepeated exec, bash, Docker, or SSH calls — stale listeners delay GC of\nthose buffers, raising peak memory. The `{ stdio: [\"pipe\", \"pipe\", …] }`\nspawns are the heaviest: each pipe carries a Readable stream plus the\naccumulated `Buffer[]`.\n\n`waitForChildProcess` already cleans up its own internal listeners via\n`removeListener` / `once`. This fix adds the symmetric cleanup for the\nexternal data listeners each caller registers before the wait begins.\n\n## Why This Change Was Made\n\nAdd a shared `releaseChildProcessListeners(child)` utility to\n`src/agents/utils/child-process.ts` — co-located with the existing\n`waitForChildProcess` — and call it from every settle path in the five\nmodules that register child process data listeners.\n\n| module | settle points |\n|--------|--------------|\n| [bash.ts](src/agents/sessions/tools/bash.ts) | `.then()` + `.catch()` |\n| [docker.ts](src/agents/sandbox/docker.ts) | `error` + `close` callbacks |\n| [ssh.ts](src/agents/sandbox/ssh.ts) exec | `finish` callback |\n| [ssh.ts](src/agents/sandbox/ssh.ts) tar-over-SSH | `fail` + `maybeResolve` (two child processes) |\n| [shell-snapshot.ts](src/agents/shell-snapshot.ts) | `finish` callback |\n\nThe helper removes only `data` listeners from stdio streams — the heavy\nones that hold buffer references — while preserving `error` listeners so\nNode.js does not throw on late stream errors after settle.\n\n## User Impact\n\nNo visible impact for normal workloads. High-throughput agent fleets —\nespecially sandbox-heavy workloads — see lower peak memory from earlier\nrelease of pipe data listener closures.\n\n## Evidence\n\n- `pnpm tsgo:core:test` — no type errors on changed files.\n\n- Tests pass for the changed surface:\n  ```\n  $ pnpm test src/agents/utils/child-process.test.ts -- --run\n   ✓ 8 passed  (4 existing + 4 new)\n\n  $ pnpm test src/agents/sandbox/ssh.stream-errors.test.ts -- --run\n   ✓ 8 passed  (regression: late-stream-error behavior unchanged)\n\n  $ pnpm test src/agents/shell-snapshot.test.ts src/agents/bash-tools.shared.test.ts       src/agents/sandbox-merge.test.ts src/agents/sandbox-explain.test.ts -- --run\n   ✓ 57 passed  across 6 files, 2 Vitest shards, clean single-pass\n  ```\n\n- New test harness covers: clearing child lifecycle listeners, removing data\n  listeners while preserving error listeners on all three stdio streams,\n  null-safety for `spawn({ stdio: \"ignore\" })`, and verifying data events stop\n  firing after release.\n\n- The initial push exposed a CI failure in `ssh.stream-errors.test.ts`:\n  removing `error` listeners from stdio streams caused unhandled Node.js\n  \"error\" events (the test emits a deliberate late stream error after settle).\n  The fix — `removeAllListeners(\"data\")` instead of `removeAllListeners()` for\n  stdio — resolved the failure and the test passes cleanly.\n\n- Final diff: 124 additions across 6 files. 1 new 25-line public helper +\n  6 one-line call sites + 86-line test harness. No existing production lines\n  were altered or removed.\n\n- Bounded to `src/agents/`; no config, SDK, CLI, docs, or changelog surface\n  was added.",
-        "branch": "fix/child-process-listener-cleanup",
-        "head_sha": "52598f79320175e62ee7b171740e3b14952ed969",
-        "author": "wm0018",
-        "labels": [
-          "agents",
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/sandbox/docker.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/ssh.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/tools/bash.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/shell-snapshot.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/utils/child-process.test.ts",
-            "additions": 85,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/utils/child-process.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 124,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103312",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103312.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 65,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:103312:4932969765:2026-07-10T07:21:46Z:re_review",
-      "comment_id": "4932969765",
-      "comment_version_key": "4932969765:2026-07-10T07:21:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103312#issuecomment-4932969765",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 103312,
-      "author": "wm0018",
-      "author_id": 13618944,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-10T07:21:46Z",
-      "comment_updated_at": "2026-07-10T07:21:46Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "review_lease_owner": null,
-      "review_lease_comment_id": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:103312:4932336159:2026-07-10T05:38:18Z:re_review",
-      "comment_id": "4932336159",
-      "comment_version_key": "4932336159:2026-07-10T05:38:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103312#issuecomment-4932336159",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 103312,
-      "author": "wm0018",
-      "author_id": 13618944,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-10T05:38:18Z",
-      "comment_updated_at": "2026-07-10T05:38:18Z",
+      "comment_created_at": "2026-07-10T10:02:10Z",
+      "comment_updated_at": "2026-07-10T10:02:10Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -248,11 +76,11 @@
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5388,
+    "total_ms": 1940,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 349
+        "ms": 573
       },
       {
         "name": "prehydrate_comment_commands",
@@ -260,7 +88,7 @@
       },
       {
         "name": "classify_comment_commands",
-        "ms": 983
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -276,7 +104,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2153
+        "ms": 1356
       },
       {
         "name": "append_ledger",
