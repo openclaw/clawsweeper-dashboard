@@ -2,12 +2,12 @@
 repo: "openclaw/clawsweeper"
 cluster_id: "automerge-openclaw-clawsweeper-488"
 mode: "autonomous"
-run_id: "29121163680"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29121163680"
+run_id: "29121417544"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29121417544"
 head_sha: "e73632396d2a41d0567ecc87f206c2cc4502962f"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-10T20:25:27.545Z"
+published_at: "2026-07-10T21:03:59.023Z"
 canonical: "#488"
 canonical_issue: null
 canonical_pr: "#488"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/clawsweeper
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29121163680](https://github.com/openclaw/clawsweeper/actions/runs/29121163680)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29121417544](https://github.com/openclaw/clawsweeper/actions/runs/29121417544)
 
 Workflow conclusion: failure
 
@@ -54,7 +54,7 @@ Make PR #488 merge-ready for ClawSweeper automerge. Rebase onto latest main, add
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| execute_fix | blocked |  |  | Codex write preflight did not create the expected file: I’m creating the exact preflight marker now. |
+| repair_contributor_branch | blocked | https://github.com/openclaw/clawsweeper/pull/488 |  | source PR #488 changed during the repair settle window; requeue against the latest head |
 | automerge_repair_outcome_comment | updated | #488 |  |  |
 
 ## Apply Actions
