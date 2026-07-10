@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T16:26:13.356Z",
+  "generated_at": "2026-07-10T16:26:16.992Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T13:26:09.006Z",
+  "since": "2026-07-10T13:26:14.745Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    102175
+    103725
   ],
   "comment_ids": [
-    4937342595
+    4937343203
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:102175:4937342595:2026-07-10T16:22:53Z:re_review",
-      "comment_id": "4937342595",
-      "comment_version_key": "4937342595:2026-07-10T16:22:53Z",
-      "comment_url": "https://github.com/openclaw/openclaw/issues/102175#issuecomment-4937342595",
+      "idempotency_key": "comment-router:openclaw/openclaw:103725:4937343203:2026-07-10T16:22:57Z:re_review",
+      "comment_id": "4937343203",
+      "comment_version_key": "4937343203:2026-07-10T16:22:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103725#issuecomment-4937343203",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 102175,
-      "author": "baanish",
-      "author_id": 47579874,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-10T16:22:53Z",
-      "comment_updated_at": "2026-07-10T16:22:53Z",
+      "issue_number": 103725,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-10T16:22:57Z",
+      "comment_updated_at": "2026-07-10T16:22:57Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -74,34 +74,91 @@
       "actions": [],
       "author_repository_permission": "read",
       "target": {
-        "kind": "issue",
-        "state": "open",
-        "locked": false,
-        "title": "[Bug]: embedded prompt-cache continuity breaks across room events and native Responses",
-        "body": "### Bug type\n\nRegression (worked before, now fails)\n\n### Beta release blocker\n\nNo\n\n### Summary\n\nLong-lived embedded sessions lose prompt-cache continuity across ambient group `room_event` turns, queued/compaction reconstruction, and native `openai-chatgpt-responses` continuation.\n\nThe reproduction uses strict room events:\n\n```json\n{\n  \"messages\": {\n    \"groupChat\": {\n      \"visibleReplies\": \"automatic\",\n      \"unmentionedInbound\": \"room_event\"\n    }\n  }\n}\n```\n\nUnmentioned messages correctly require `message_tool_only` delivery. The regression is that current-turn delivery and sender policy also changed cache-visible prompt/tool state inside the same session. Some paths additionally dropped stable state during queueing or compaction, and built-in authenticated Responses sessions could replay full context instead of using native continuation.\n\n### Steps to reproduce\n\n1. Start OpenClaw 2026.6.11 with the configuration above.\n2. In one Discord group/channel session, trigger an initial addressed turn.\n3. Send unmentioned messages in the same session so they arrive as `room_event` turns.\n4. Exercise queued work or compaction in the same session.\n5. Compare serialized provider requests, prompt/tool digests, and cached-token metrics.\n6. On native GPT-5.5 or GPT-5.6, inspect whether the second `openai-chatgpt-responses` request uses `previous_response_id` plus only new-turn input.\n\n### Expected behavior\n\n- Effective room-event delivery remains strict `message_tool_only`.\n- Model-visible tool definitions, ordering, descriptions, and schemas stay stable when sender/event access changes.\n- A trusted full current-turn access-policy snapshot appears when permissions or model context change.\n- Runtime authorization blocks unavailable protected tools before side effects.\n- Queue, memory, compaction, reconstruction, and fallback restore complete policy state.\n- Built-in authenticated Responses sessions use native continuation; custom streams retain their routing.\n\n### Actual behavior\n\nSanitized original same-session traces showed:\n\n| turn | kind | prompt tokens | cached tokens |\n| --- | --- | ---: | ---: |\n| 1 | session start | 46,540 | 0 |\n| 2 | room_event | 46,826 | 9,856 |\n| 3 | room_event | 47,590 | 2,048 |\n| 4 | room_event | 48,660 | 47,616 |\n\nThe system prompt changed from 106,647 chars to 105,986 chars, and prompt-visible inventory changed between 44 and 47 tools. The missing protected tools were `cron`, `gateway`, and `nodes` in that trace. Queue/compaction paths could independently recreate the wrong shape, and the normal authenticated stream wrapper was not recognized for native continuation.\n\n### Candidate fix\n\nPR #102189, current head `be9ef558a98035f3d2f85f575d763dc09ba53276`, now uses three separate layers:\n\n1. stable model-visible tool definitions;\n2. trusted current-turn access-policy snapshots;\n3. hard runtime authorization before execution.\n\nIt also preserves actual source-reply delivery, restores policy after queue/memory/compaction/reconstruction boundaries, keeps Codex/Copilot reusable instructions stable, and retains native GPT-5.5/GPT-5.6 `previous_response_id` continuation for built-in streams.\n\nProtected tools are no longer hidden merely to stabilize caching. Ambient room events and unauthorized/unknown senders still receive structured non-retryable `TOOL_ACCESS_DENIED` results before hooks or implementations run.\n\nThe policy now distinguishes runtime-owned `cron`, `heartbeat`, and `memory` turns from genuinely unknown senders. Explicit non-owner identity and ambient room-event policy always override an internal trigger.\n\n### Evidence and validation\n\n- Previous post-fix live traces with stable prompt/tool shape reached roughly 49k-52k cached tokens on approximately 51k-55k context.\n- Latest changed regression set: 34 files, 1,231 tests passed.\n- Production, test, and package typechecks passed.\n- Core and extension lint passed.\n- Extension package boundaries passed for 120 plugins and 2 canaries.\n- Exact head built and installed locally; LaunchAgent loaded, gateway running, RPC probe OK, port 18789 listening, dashboard HTTP 200.\n\nThe tests explicitly cover stable schemas, policy transitions, spoof resistance, pre-side-effect denial, allowed owner execution, queue/memory/compaction restoration, strict room delivery, Codex/Copilot turn-scoping, and GPT-5.5/GPT-5.6 native continuation.\n\n### Environment\n\n- OpenClaw: 2026.6.11\n- Initial reproduction model: GLM-5.2 through an OpenAI-compatible proxy\n- Native continuation reproduction: GPT-5.5/GPT-5.6 via `openai-chatgpt-responses`\n- OS: macOS\n- Install: CLI/gateway LaunchAgent\n\nRaw traces are omitted because they contain private user, channel, account, and credential-adjacent metadata. All evidence above is sanitized.\n\nDisclaimer: This issue was filed and updated autonomously by Codex on behalf of the reporter; private identifiers were removed.\n",
-        "author": "baanish",
+        "kind": "pull_request",
+        "title": "fix(install-cli): track mktemp paths and clean up on EXIT",
+        "body": "## What Problem This Solves\n\n`scripts/install-cli.sh` created temporary directories during Node user-space\ninstall (and temp files for pnpm workspace rewrites) without tracking them\nfor EXIT cleanup. On failure paths (`fail` after download/shasum errors),\nthose paths leaked under `/tmp`.\n\n`scripts/install.sh` already uses `TMPFILES` + `trap cleanup_tmpfiles EXIT`.\nThis PR matches that contract for install-cli, using caller-side\n`tmp=\"$(mktemp -d)\"; TMPFILES+=(\"$tmp\")` because bash command substitution\ncannot mutate parent-shell arrays.\n\n## Evidence\n\nForced failure through the **real** installer (`OPENCLAW_INSTALL_CLI_SH_NO_RUN=1`\nsource of `scripts/install-cli.sh`, then the installer's own `fail()` after\nregistering a staging temp the same way `install_node` does).\n\n**Before (bare mktemp, no trap):** path still exists after exit 1.\n\n```console\n$ bash before-proof.sh\ncreated=/var/folders/.../T/tmp.5AoDqL1V2v\nexists_before_exit=yes\nBEFORE_RESULT=LEAKED /var/folders/.../T/tmp.5AoDqL1V2v\n```\n\n**After (patched installer fail() path):** EXIT trap removes the registered path.\n\n```console\n$ OPENCLAW_INSTALL_CLI_SH_NO_RUN=1 source ./scripts/install-cli.sh\n$ tmp=\"$(mktemp -d)\"; TMPFILES+=(\"$tmp\"); fail \"proof: forced failure after Node tarball staging temp was created\"\ncreated=/var/folders/.../T/tmp.pUp7NGjwt2\nTMPFILES=/var/folders/.../T/tmp.pUp7NGjwt2\nexists_before_fail=yes\nERROR: proof: forced failure after Node tarball staging temp was created\nAFTER_RESULT=CLEANED /var/folders/.../T/tmp.pUp7NGjwt2\n```\n\nProduction wiring:\n\n```console\n$ rg -n 'TMPFILES|trap cleanup|mktemp' scripts/install-cli.sh | head\n35:TMPFILES=()\n42:trap cleanup_tmpfiles EXIT\n834:  tmp=\"$(mktemp -d)\"\n835:  TMPFILES+=(\"$tmp\")\n1071:    tmp=\"$(mktemp)\"\n1072:    TMPFILES+=(\"$tmp\")\n\n$ bash -n scripts/install-cli.sh && shellcheck scripts/install-cli.sh\nbash -n OK; shellcheck OK\n```\n\n## Summary\n\n- Add `TMPFILES` + `cleanup_tmpfiles` + EXIT trap\n- Register Node install temp dir and pnpm workspace rewrite temp file\n- Avoid `tmp=\"$(helper)\"` helpers that run in a subshell (array never updates)\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** install-cli leaked mktemp dirs/files on fail/exit; registration via command-substitution helpers was a no-op under bash.\n- **Real environment tested:** macOS 15, bash 5.3.15, branch `fix/install-cli-tmpfile-cleanup` at current HEAD, shellcheck, real `scripts/install-cli.sh` sourced with `OPENCLAW_INSTALL_CLI_SH_NO_RUN=1`.\n- **Exact steps or command run after this patch:**\n\n  Step 1: source patched installer without running main\n  Step 2: register temp the same way install_node does\n  Step 3: call installer `fail()` to force EXIT cleanup\n  Step 4: assert path is gone; contrast bare mktemp without trap\n\n- **Evidence after fix:** terminal output from the patched installer (above Evidence section): `AFTER_RESULT=CLEANED` after real `fail()`; control `BEFORE_RESULT=LEAKED` without trap.\n- **Observed result after fix:** Forced failure through installer `fail()` removes the registered staging temp. Bare mktemp without the trap still leaks. `bash -n` and shellcheck pass.\n- **What was not tested:** full network Node tarball download fail on CI runners (shasum mismatch after real download).\n\n## Related\n\n- Pattern in `scripts/install.sh` (TMPFILES / trap)\n- ClawSweeper rank-up: terminal output from forced failure in patched installer\n",
+        "branch": "fix/install-cli-tmpfile-cleanup",
+        "head_sha": "49ffba57bb3fa57a1c0920b505f4afb8c432589b",
+        "author": "sebtardif",
         "labels": [
-          "bug",
-          "regression",
+          "scripts",
+          "size: XS",
           "P2",
-          "clawsweeper:no-new-fix-pr",
-          "clawsweeper:needs-security-review",
-          "clawsweeper:source-repro",
-          "impact:session-state",
-          "impact:message-loss",
-          "issue-rating: 🦞 diamond lobster",
-          "maturity:stable"
+          "rating: 🦐 gold shrimp",
+          "status: 📣 needs proof"
         ],
+        "files": [
+          {
+            "path": "scripts/install-cli.sh",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 15,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "open_prs": [
-          "#102189",
-          "#95859",
-          "#102440"
-        ],
-        "issue_implementation_cluster_id": "issue-openclaw-openclaw-102175",
-        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-102175.md",
-        "mode": "autonomous"
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103725",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103725.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 82,
+          "gatingTotal": 78,
+          "counts": {
+            "SUCCESS": 50,
+            "SKIPPED": 14,
+            "IN_PROGRESS": 17,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
@@ -111,15 +168,15 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4517,
+    "total_ms": 2412,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1874
+        "ms": 537
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 329
+        "ms": 1696
       },
       {
         "name": "classify_comment_commands",
@@ -139,7 +196,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 168
+        "ms": 164
       },
       {
         "name": "append_ledger",
