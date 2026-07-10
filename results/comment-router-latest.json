@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T16:23:46.233Z",
+  "generated_at": "2026-07-10T16:24:03.624Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T13:23:43.645Z",
+  "since": "2026-07-10T13:24:01.766Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    103770
+    102189
   ],
   "comment_ids": [
-    4937338184
+    4937339972
   ],
-  "status_comment_id": 4937338575,
+  "status_comment_id": 4937340271,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:103770:4937338184:2026-07-10T16:22:16Z:re_review",
-      "comment_id": "4937338184",
-      "comment_version_key": "4937338184:2026-07-10T16:22:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103770#issuecomment-4937338184",
+      "idempotency_key": "comment-router:openclaw/openclaw:102189:4937339972:2026-07-10T16:22:31Z:re_review",
+      "comment_id": "4937339972",
+      "comment_version_key": "4937339972:2026-07-10T16:22:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102189#issuecomment-4937339972",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 103770,
-      "author": "LZY3538",
-      "author_id": 293718838,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-10T16:22:16Z",
-      "comment_updated_at": "2026-07-10T16:22:16Z",
-      "status_comment_id": 4937338575,
+      "issue_number": 102189,
+      "author": "baanish",
+      "author_id": 47579874,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-10T16:22:31Z",
+      "comment_updated_at": "2026-07-10T16:22:31Z",
+      "status_comment_id": 4937340271,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -78,115 +78,499 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 103770,
-          "dispatch_key": "router-589f70d1c9543394",
-          "dispatched_at": "2026-07-10T16:23:46.994Z"
+          "item_number": 102189,
+          "dispatch_key": "router-152b68bc808a75ee",
+          "dispatched_at": "2026-07-10T16:24:04.652Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-10T16:23:47.987Z",
-          "response_comment_id": "4937338575",
+          "commented_at": "2026-07-10T16:24:06.031Z",
+          "response_comment_id": "4937340271",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): reconcile on-disk config after watcher recreate (#103729)",
-        "body": "## What Problem This Solves\n\nThe gateway watches `openclaw.json` for hot-reload. When that watcher hits an error (for example EMFILE/ENOSPC inotify exhaustion) it is closed and re-created after a backoff. The re-created watcher is built with `ignoreInitial: true` and no reconciliation read, so any config edit made by an **external process** while no watcher is alive (the error-recovery down window) — a manual edit, or a separate `openclaw doctor --fix` run, neither of which routes through the running gateway's in-process write channel — is silently adopted as the new watcher's baseline and **never scheduled for reload**. The gateway keeps running the stale pre-edit config indefinitely, with no log distinguishing a missed change from a normal quiet period. This is exactly the population the inotify-exhaustion retries exist to serve.\n\nCloses #103729\n\n## Why This Change Was Made\n\n`ignoreInitial: true` is correct for the very first watcher (startup already reads and applies the config). On **recreation**, however, there is an interval with no live watcher during which an on-disk change can occur, and the new watcher's `ignoreInitial: true` guarantees that change produces no event. Both recreate paths share the defect: the native-retry timer and the polling-degrade timer.\n\n## Changes\n\n- `createWatcher` gains an optional `reconcile` parameter. When `true`, it reconciles **once the recreated watcher emits `ready`** — i.e. after chokidar has finished its asynchronous initial scan and established its baseline — by scheduling one read (`scheduleAfter(0)`) of the current on-disk config through the existing scheduler (the canonical seam that owns snapshot reads, validation, diffing, and application). Reconciling on `ready` (rather than eagerly, right after `chokidar.watch()` returns) guarantees any edit that landed during the down window or the initial scan is on disk before the read, closing the construction→`ready` window. A `watcher !== next` guard drops the callback if the watcher was already replaced or stopped.\n- Both recreate timers (native-retry and polling-degrade) now call `createWatcher(true)`. The initial startup `createWatcher()` is unchanged, since startup already read and applied the config before the first watcher existed.\n- The watcher test mock now models `once` and the `ready` event; two regression tests cover both recreate paths and assert the reconcile fires only after `ready`.\n\n## User Impact\n\nExternal config edits (manual, or `openclaw doctor --fix`) that land while the watcher is recovering from an inotify/EMFILE error are now applied after the watcher is re-created, instead of being silently dropped until some later unrelated write touches the file again.\n\n## Evidence\n\n**Real behavior proof.** Drove the real `startGatewayConfigReloader` against a real on-disk `openclaw.json` with a real chokidar watcher. A real `error` event was emitted on the live watcher (as inotify exhaustion would raise it); the watcher, the file, the debounce/reload loop, and `readSnapshot` reading the file all stayed real. An external edit (`{\"v\":3}`) was written during the backoff gap while **no watcher was alive**. Chokidar was run in polling mode, whose down-window semantics are deterministic and cross-platform (a polling watcher snapshots the file at start and `ignoreInitial` suppresses that baseline; an edit predating the watch is folded into the baseline and never emits) — the same silent drop the issue author observed under native Linux inotify, which likewise does not replay events that predate the watch. Timeline (`[ms] event`):\n\n```\n# BEFORE (true origin/main, no reconcile)\n[0187] watch#0 constructed\n[0199] watch#0 EVENT ready\n[1113] watch#1 constructed        # recreate after backoff\n[1114] watch#1 EVENT ready\nreads_after_recreate=0\ndownwindow_edit(v3)_ever_read=false\nraw_config_contents_read=[]        # v3 silently dropped\n\n# AFTER (this PR, identical inputs)\n[0015] watch#0 constructed\n[0023] watch#0 EVENT ready\n[0941] watch#1 constructed        # recreate after backoff\n[0941] watch#1 EVENT ready\n[0965] readSnapshot -> {\"v\":3}     # reconcile fires AFTER ready\nreads_after_recreate=1\ndownwindow_edit(v3)_ever_read=true\nraw_config_contents_read=[\"{\\\"v\\\":3}\"]\n```\n\nThe reconcile read (965ms) occurs strictly after the recreated watcher's `ready` (941ms), demonstrating the readiness gating.\n\n**Focused tests.** Two tests in `config-reload.test.ts` assert a reconcile read runs after both recreate paths (native retry + polling degrade), and only after the recreated watcher's `ready` event (nothing is read before `ready`). Full suite green:\n\n```\n$ npx vitest run src/gateway/config-reload.test.ts\n Test Files  3 passed (3)\n      Tests  267 passed (267)\n```\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "fix/config-reload-recreate-reconcile-103729",
-        "head_sha": "480a8154f4820f6ae3d1c5b0d0c06c37401cbb78",
-        "author": "lzy3538",
+        "title": "fix: preserve embedded prompt caching across room events and native Responses",
+        "body": "Related: #102175\n\n## What Problem This Solves\n\nFixes an issue where long-lived embedded sessions could lose prompt-cache continuity when ordinary turns, ambient group `room_event` turns, queued work, compaction, and native Responses continuation shared one session.\n\nThe failure had three connected causes:\n\n- turn-specific reply delivery leaked into cache-visible prompt and tool construction;\n- owner/sender checks changed the prompt-visible tool catalogue from 47 schemas to 44 on some turns;\n- queue, memory, compaction, and provider-reconstruction paths independently rebuilt state, while OpenClaw's built-in authenticated Responses stream could miss native delta continuation.\n\nStrict room delivery and sender authorization are still required. The bug was making those current-turn decisions mutate reusable prompt prefixes and tool schemas.\n\n## Why This Change Was Made\n\nThis PR separates stable model context from current-turn behavior:\n\n- Actual source-reply delivery remains independent from the session-stable prompt-facing mode. Executable `message` tools receive the real turn mode, including the strict room-event source-reply sink.\n- The model sees one stable session/runtime tool catalogue. `cron`, `gateway`, `nodes`, and `computer` are no longer removed merely because sender or event policy changes.\n- One trusted `ToolAccessPolicy` resolver derives a deterministic full policy snapshot and drives the hard runtime gate. Unavailable protected tools return `TOOL_ACCESS_DENIED`, marked non-retryable, before hooks or implementations can run.\n- Sender trust is explicit: owners and runtime-owned `cron`, `heartbeat`, and `memory` turns are distinct from non-owner and genuinely unknown senders. Explicit non-owner identity and ambient `room_event` policy override an internal trigger.\n- Full policy snapshots are inserted before the current user content when permissions or provider route change, or when queueing, memory work, compaction, reconstruction, recovery, or fallback makes prior model state uncertain. Unchanged warm continuations do not repeat the full snapshot.\n- Pi/OpenClaw persists a hidden runtime-generated current-turn carrier; Codex uses turn-scoped developer instructions; Copilot prefixes only the current turn. Reusable thread/system instructions stay stable.\n- Preflight, manual, queued, and direct compaction; queue draining; memory runs; Codex; Copilot; and fallback/recovery paths all carry the same effective policy.\n- The existing native GPT-5.5/GPT-5.6 Responses continuation fix remains narrow: built-in authenticated streams can use `previous_response_id` plus delta input, while custom streams keep their existing routing.\n\n## User Impact\n\nUsers should get materially better warm-turn cache reuse without weakening room-event delivery or sender authorization.\n\nOwner-authorized direct turns can still execute protected tools. Ambient room events and unauthorized/unknown senders still cannot execute those tools, even though their schemas remain visible for cache stability. A user message cannot grant access because authorization is checked again immediately before execution.\n\nQueueing, memory maintenance, compaction, and runtime fallback no longer silently discard the active policy or rebuild from the wrong delivery mode.\n\n## Evidence\n\nSanitized same-session traces from the original Discord reproduction showed:\n\n- prompt-visible inventory flipping between 44 and 47 tools;\n- matching system-prompt hash changes;\n- cached prefixes collapsing to roughly 2k-10k tokens or ceilinging around 37k-40k;\n- after stabilizing prompt/tool shape, warm turns reaching roughly 49k-52k cached tokens on approximately 51k-55k context.\n\nThe latest head, `be9ef558a98035f3d2f85f575d763dc09ba53276`, adds the turn-scoped policy and hard runtime boundary while preserving that stable schema shape. Tests prove:\n\n- owner direct, owner room-event, non-owner room-event, and return-to-owner turns serialize identical ordered tool names, descriptions, and JSON schemas;\n- policy versions change independently of schemas when sender/event access changes;\n- all four protected tools remain described but denied calls cannot reach hooks or implementations, including repeated and spoof-like calls;\n- a permitted owner turn still reaches the original protected-tool implementation;\n- the full snapshot precedes current user content, is not repeated on unchanged continuation, and is restored after reconstruction, queue rebuilds, memory runs, fallback, recovery, and every compaction entry point;\n- Codex policy changes are current-turn developer instructions, never reusable thread instructions;\n- Copilot policy changes are current-turn prompt content, never reusable system instructions;\n- targetless strict room-event sends still reach the internal source-reply sink, and private final text does not become visible;\n- GPT-5.5 and GPT-5.6 second turns use `previous_response_id` with delta-only input; a changed policy is part of that delta; custom streams are not reclassified.\n\nValidation on the exact head:\n\n- changed regression set: 34 files, 1,231 tests passed;\n- final focused policy/schema/trust check: 5 files, 169 tests passed;\n- `pnpm tsgo:prod` passed;\n- `pnpm check:test-types` passed;\n- `pnpm tsgo:test:packages` passed;\n- `pnpm lint:core` and `pnpm lint:extensions` passed;\n- scoped `oxfmt --check` and `git diff --check` passed;\n- extension package boundary compile passed for 120 plugins and 2 canaries;\n- `pnpm build` passed;\n- exact head installed locally: LaunchAgent loaded, gateway running, RPC probe OK, port 18789 listening, dashboard HTTP 200.\n\n## Compatibility And Security Boundaries\n\n- This does not expose every installed plugin. It stabilizes the session/runtime superset that existing construction policy already makes available.\n- Prompt text is advisory. The outer runtime wrapper is the authorization boundary and preserves existing tool-specific checks on allowed calls.\n- Pi's generic LLM message contract has no developer role, so its trusted policy carrier is a hidden runtime-generated current-turn custom message that projects to model input; it is not a fake tool result. Runtime authorization does not trust that message.\n- No sender IDs, channel IDs, credentials, hosts, or private trace payloads appear in policy snapshots or evidence.\n- No persistent data migration is required.\n- The branch is intentionally not rebased on today's fast-moving `main`; maintainers can refresh it during merge preparation.\n\nDisclaimer: This PR was filed and updated autonomously by Codex on behalf of the reporter. Private user, channel, host, credential, and full trace identifiers were removed from the evidence.\n",
+        "branch": "codex/stabilize-room-event-prompt-cache",
+        "head_sha": "be9ef558a98035f3d2f85f575d763dc09ba53276",
+        "author": "baanish",
         "labels": [
-          "gateway",
-          "size: S",
+          "agents",
+          "size: XL",
+          "extensions: codex",
+          "proof: sufficient",
           "P2",
-          "rating: 🦐 gold shrimp",
-          "status: 📣 needs proof"
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author",
+          "extensions: copilot"
         ],
         "files": [
           {
-            "path": "src/gateway/config-reload.test.ts",
-            "additions": 101,
-            "deletions": 4,
+            "path": "extensions/codex/src/app-server/attempt-startup.test.ts",
+            "additions": 6,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/config-reload.ts",
+            "path": "extensions/codex/src/app-server/auth-profile-runtime-contract.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
+            "additions": 49,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/dynamic-tool-build.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt-test-harness.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt-thread-cleanup.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
+            "additions": 50,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/schema-normalization-runtime-contract.test.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/side-question.test.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/side-question.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/test-support.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/thread-lifecycle.test.ts",
+            "additions": 43,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/thread-lifecycle.ts",
+            "additions": 9,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/copilot/harness.test.ts",
+            "additions": 22,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/copilot/harness.ts",
+            "additions": 22,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/copilot/src/tool-bridge.test.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/copilot/src/tool-bridge.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-chatgpt-responses.test.ts",
+            "additions": 123,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools-agent-config.test.ts",
+            "additions": 22,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.create-openclaw-coding-tools.test.ts",
+            "additions": 50,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-tools.ts",
+            "additions": 30,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.hooks.test.ts",
+            "additions": 104,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.queued.ts",
             "additions": 23,
-            "deletions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.ts",
+            "additions": 6,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.types.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compaction-runtime-context.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compaction-runtime-context.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 49,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.prompt-helpers.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
+            "additions": 109,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.test-support.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 11,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/params.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/types.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/session-prompt-state.test.ts",
+            "additions": 88,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/session-prompt-state.ts",
+            "additions": 45,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/stream-resolution.test.ts",
+            "additions": 64,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/stream-resolution.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/lifecycle.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/selection.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-tools.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-tools.update-plan.test.ts",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sessions/default-stream.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/sessions/sdk.test.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/sessions/sdk.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tool-access-policy.test.ts",
+            "additions": 166,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/tool-access-policy.ts",
+            "additions": 193,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
+            "additions": 18,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-run-params.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-utils.test.ts",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-compact.test.ts",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-compact.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-inline-actions.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-native-slash-fast-path.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.media-only.test.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.tool-access-policy.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 24,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
+            "additions": 12,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
+            "additions": 12,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md",
+            "additions": 12,
+            "deletions": 10,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 124,
-        "deletions": 7,
+        "changedFiles": 69,
+        "additions": 1674,
+        "deletions": 120,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103770",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103770.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102189",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102189.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 94,
-          "gatingTotal": 89,
+          "total": 11,
+          "gatingTotal": 6,
           "counts": {
-            "SUCCESS": 55,
-            "SKIPPED": 28,
-            "IN_PROGRESS": 10,
-            "NEUTRAL": 1
+            "SUCCESS": 8,
+            "SKIPPED": 3
           },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-10T16:23:46.473Z"
+      "processed_at": "2026-07-10T16:24:03.914Z"
     }
   ],
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4900,
+    "total_ms": 5026,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 594
+        "ms": 698
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1978
+        "ms": 1142
       },
       {
         "name": "classify_comment_commands",
@@ -194,7 +578,7 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 5962
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -206,11 +590,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2302
+        "ms": 3157
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
