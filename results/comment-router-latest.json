@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T02:36:45.720Z",
+  "generated_at": "2026-07-10T02:38:09.182Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-09T23:36:43.083Z",
+  "since": "2026-07-09T23:38:08.707Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4931453514
   ],
-  "status_comment_id": 4931453744,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4931453514:2026-07-10T02:35:20Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/103282#issuecomment-4931453514",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 103282,
       "author": "wangmiao0668000666",
       "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-10T02:35:20Z",
       "comment_updated_at": "2026-07-10T02:35:20Z",
-      "status_comment_id": 4931453744,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -68,159 +68,27 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 103282,
-          "dispatch_key": "router-64086771534231cc",
-          "dispatched_at": "2026-07-10T02:36:46.662Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-10T02:36:47.735Z",
-          "response_comment_id": "4931453744",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(msteams): bound User Token service success-body JSON reads",
-        "body": "## What Problem This Solves\n\n`callUserTokenService` in `extensions/msteams/src/sso.ts` exchanges a Teams SSO\ntoken with the Bot Framework User Token service (`token.botframework.com`,\n`/api/usertoken/exchange` and `/api/usertoken/GetToken`). On the success path it\nparsed the response with a bare `await response.json()`, which fully buffers the\nbody before parsing.\n\nFrom openclaw's perspective the User Token service is an external endpoint: a\nbuggy intermediary (MITM proxy, cached CDN edge, misconfigured gateway) returning\n`200 OK` with a large or never-ending body would be buffered into memory before\nJSON parsing, an out-of-memory / DoS vector affecting any Teams SSO sign-in.\n\n## Why This Change Was Made\n\nThe same plugin already bounds every other external JSON read:\n\n- `oauth.token.ts` token exchange uses `readProviderJsonResponse`\n- `graph.ts`, `graph-upload.ts`, `attachments/graph.ts`, `attachments/bot-framework.ts` all use `readProviderJsonResponse`\n- the error path in this very function already uses `readMSTeamsHttpErrorDetail` (bounded via `extractProviderErrorDetail`)\n\n`sso.ts` was the lone outlier still using raw `response.json()`. This aligns it\nwith the sibling `oauth.token.ts:98` call form (same reader, same default cap,\nsame label style). No new abstraction is introduced — it reuses the existing\n`readProviderJsonResponse` helper from `openclaw/plugin-sdk/provider-http`.\n\nThe token-exchange response is tiny (`token`, `connectionName`, `channelId`,\n`expiration`), so the helper's 16 MiB default cap never affects a normal flow.\n\n## User Impact\n\nTeams SSO sign-in (`signin/tokenExchange` and `signin/verifyState` invoke flows)\nis unchanged for well-formed responses. An oversized success body that would\npreviously risk an unbounded buffer now fails soft: the caller still returns a\nstructured `{ ok: false, code, message, status }` result (message:\n\"invalid or oversized JSON from User Token service\") instead of growing memory.\n\n## Evidence\n\n- **Behavior addressed**: oversized/huge success body from the Bot Framework User Token service no longer fully buffered via `response.json()`; bounded reader cancels the stream.\n- **Real environment tested**: Linux x86_64, Node 22, local focused vitest run on `extensions/msteams/src/monitor-handler.sso.test.ts`.\n- **Exact steps or command run after this patch**:\n  ```bash\n  node scripts/run-vitest.mjs extensions/msteams/src/monitor-handler.sso.test.ts --run\n  node scripts/run-tsgo.mjs -p tsconfig.extensions.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions.tsbuildinfo\n  node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo\n  ```\n- **Evidence after fix**:\n  ```\n  Test Files  1 passed (1)\n       Tests  6 passed (6)\n  tsgo:extensions exit: 0\n  tsgo:extensions:test exit: 0\n  ```\n  New regression test `bounds an oversized User Token service success body and fails soft` constructs a 64 MiB ceiling ReadableStream (1 MiB chunks), asserts:\n  - result is `{ ok: false }` with message matching `/invalid or oversized JSON from User Token service/`\n  - raw `Response.prototype.json` is never called (spy throws if used)\n  - stream cancelled (`state.canceled === true`)\n  - reader stopped well before the 64 MiB ceiling (`state.enqueued < 32`)\n- **Observed result after fix**: the bounded reader cancels the oversized stream and the handler returns a structured soft-failure result; no token is persisted (store stays null).\n- **What was not tested**:\n  - Did not exercise the live `token.botframework.com` endpoint (would not reproduce a hostile oversized body and would require real Teams SSO credentials).\n  - Did not test the `signin/verifyState` (GetToken) path separately — it shares the same `callUserTokenService` success-body read, so the exchange-path regression covers the bounded-read contract for both callers.\n\n## Risk checklist\n\n- User-visible behavior change? No — well-formed token-exchange responses parse identically; only an oversized success body now fails soft instead of unbounded-buffering.\n- Config/env/migration change? No.\n- Security/auth/secrets/network/tool-execution change? Additive hardening only — bounds an external success-body read; no auth or request-shape change.\n- Highest-risk area: an oversized but valid token response being rejected. Not plausible: real User Token responses are < 1 KiB, cap is 16 MiB.\n\nMirrors the merged bounded-reader pattern already used in `oauth.token.ts` / `graph.ts`. No new abstraction — reuses `readProviderJsonResponse`.\n\nAI-assisted; reviewed before submission.\n",
-        "branch": "fix/msteams-sso-bound-user-token-response",
-        "head_sha": "1bf6331bc88e0dbf677f7a7f0a16824ec92b24f8",
-        "author": "wangmiao0668000666",
-        "labels": [
-          "channel: msteams",
-          "size: S"
-        ],
-        "files": [
-          {
-            "path": "extensions/msteams/src/monitor-handler.sso.test.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/sso.ts",
-            "additions": 6,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 62,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103282",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103282.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 92,
-          "gatingTotal": 87,
-          "counts": {
-            "SUCCESS": 29,
-            "SKIPPED": 35,
-            "IN_PROGRESS": 28
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-10T02:36:46.022Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5286,
+    "total_ms": 1730,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 908
+        "ms": 459
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1713
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -232,11 +100,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2641
+        "ms": 1256
       },
       {
         "name": "append_ledger",
