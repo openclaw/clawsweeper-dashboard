@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-07-10T11:49:31.398Z
+Generated: 2026-07-10T17:07:57.562Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#103331](https://github.com/openclaw/openclaw/pull/103331) | fix (Computer Use) Stabilize Codex Computer Use readiness | automerge-openclaw-openclaw-102264 | CONFLICTING | DIRTY | CANCELLED:17 SKIPPED:121 SUCCESS:68 FAILURE:2 NEUTRAL:2; blockers:12 | security_hold, needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | route to central security triage |
+| [#103331](https://github.com/openclaw/openclaw/pull/103331) | fix (Computer Use) Stabilize Codex Computer Use readiness | automerge-openclaw-openclaw-102264 | CONFLICTING | DIRTY | CANCELLED:17 SKIPPED:121 SUCCESS:71 FAILURE:2 NEUTRAL:2; blockers:12 | security_hold, needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | route to central security triage |
