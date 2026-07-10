@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T15:07:02.020Z",
+  "generated_at": "2026-07-10T15:07:23.544Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T12:06:59.324Z",
+  "since": "2026-07-10T12:07:23.067Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    103200
+    103743
   ],
-  "comment_ids": [
-    4936681277
-  ],
-  "status_comment_id": 4936681721,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 2,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,200 +29,23 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:103200:4936681277:2026-07-10T15:05:30Z:re_review",
-      "comment_id": "4936681277",
-      "comment_version_key": "4936681277:2026-07-10T15:05:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103200#issuecomment-4936681277",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 103200,
-      "author": "gitchrisqueen",
-      "author_id": 10469301,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-10T15:05:30Z",
-      "comment_updated_at": "2026-07-10T15:05:30Z",
-      "status_comment_id": 4936681721,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "review_lease_owner": null,
-      "review_lease_comment_id": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 103200,
-          "dispatch_key": "router-b0888d8e9b1aaa29",
-          "dispatched_at": "2026-07-10T15:07:02.769Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-10T15:07:03.829Z",
-          "response_comment_id": "4936681721",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(llm): stop retrying permanent errors and long-window rate limits",
-        "body": "Closes #102250\n\n## What Problem This Solves\n\nThe session auto-retry classifier (`isRetryableAssistantError`) treated **permanent** provider errors as transient, so the outer retry loop re-sent the entire conversation up to `maxRetries` (default 3) before giving up — re-billing full input/context tokens on a request that can never succeed. The trigger was substring matching of bare HTTP status tokens (`429`/`500`/`502`/`503`/`504`) anywhere in the error text, so any message that merely embedded those digits classified as retryable:\n\n- `model gpt-5.5-preview-0429 not found` → matched `429` → a permanent **404** was retried\n- `Image dimensions 1504x1504 exceed the maximum allowed size` → matched `504` → a permanent **400** was retried\n- `invalid api key sk-proj-abc502xyz` → matched `502` → a permanent **401** was retried\n- `maximum width is 500 pixels` → matched `500` → retried\n\n## Why This Change Was Made\n\nFollowing review, the classifier now uses **structured leading-HTTP-status detection** instead of substring matching:\n\n- A leading status code (`extractLeadingHttpStatus`, already used by the shared error-format helpers) is authoritative. Transient codes — `408`, `425`, `429`, and any `5xx` — remain retryable; every other status, including the permanent `4xx` family, fails fast. A standalone number in prose (`maximum width is 500 pixels`) has no leading status, so it is no longer mistaken for a `5xx`.\n- The bare `429/5xx` substring tokens are removed. Transient errors that don't lead with a status are still caught by the existing phrase patterns (`overloaded`, `rate limit`, `service unavailable`, `bad gateway`, timeouts, connection/socket/stream failures, explicit \"please retry\" guidance).\n\nLong-window rate-limit windowing is intentionally **not** handled here. That policy already has an owner — the embedded-agent failover path (`src/agents/embedded-agent-runner/run/assistant-failover.ts`: `LONG_WINDOW_RATE_LIMIT_RE` plus `Retry-After` duration parsing and the per-minute short-window exception). Encoding a second copy in the session classifier would create a drift-prone second source of truth (and naively would misclassify per-minute quota throttles that must stay retryable). The session classifier stays status/phrase-only; long-window handling remains with its owner.\n\nThe change is confined to the `llm` layer. `extractLeadingHttpStatus` lives in `src/shared/` and imports nothing from `agents`/`llm`, so there is no new module cycle (`pnpm check:import-cycles`: 0 cycles).\n\n## User Impact\n\nPermanent errors (bad model id, invalid image dimensions, invalid API key, other 4xx whose text embedded or led with a status number) now fail fast on the first response instead of being retried up to 3× with the full context re-sent each time — directly cutting token spend and surfacing the real error sooner. Genuine transient failures (real 429/5xx, overload, timeouts, connection resets, explicit retry guidance) retry exactly as before.\n\n## Evidence\n\n**Session-boundary proof.** The following replays the exact `AgentSession` retry budget (`isRetryableError` → `prepareRetry`: `retryCount++`, stop when `> maxRetries`, `delayMs = baseDelayMs * 2 ** (retryCount - 1)`; defaults `maxRetries=3`, `baseDelayMs=2000`) driving the **real** post-fix classifier imported from source, versus current `main`'s classifier. Each `auto_retry_start` event is one extra full-context provider call. Messages are synthetic; the API-key string is fake.\n\n```\nRetry budget: maxRetries=3, baseDelayMs=2000 (2s/4s/8s)\n\n[FIX ] permanent 404 (model id embeds 0429)   \"model gpt-5.5-preview-0429 not found\"\n   BEFORE (main): 3 extra provider calls (attempt 1/3 2s, 2/3 4s, 3/3 8s)\n   AFTER  (fix):  0\n[FIX ] permanent 400 (dims embed 1504)         \"Image dimensions 1504x1504 exceed the maximum allowed size\"\n   BEFORE: 3    AFTER: 0\n[FIX ] permanent 401 (key embeds 502)          \"invalid api key sk-proj-abc502xyz\"\n   BEFORE: 3    AFTER: 0\n[FIX ] permanent 400 (prose '500 pixels')      \"maximum width is 500 pixels\"\n   BEFORE: 3    AFTER: 0\n[KEEP] transient 503                            \"HTTP 503 Service Unavailable\"\n   BEFORE: 3    AFTER: 3  (unchanged)\n[KEEP] transient 429                            \"429 Too Many Requests\"\n   BEFORE: 3    AFTER: 3  (unchanged)\n[KEEP] transient overload                       \"overloaded_error: the model is overloaded\"\n   BEFORE: 3    AFTER: 3  (unchanged)\n\nPermanent errors:  12 wasted full-context provider calls  ->  0\nGenuine transient: retry identically before and after (9 -> 9)\n```\n\n**Tests** — `src/llm/utils/retry.test.ts`: permanent errors that embed a status-code-like number (including the standalone `maximum width is 500 pixels` regression case) → non-retryable; permanent errors with a leading `4xx` status → non-retryable; genuine transient HTTP status errors (429/503/500/502/504) → retryable. Existing cases (explicit retry guidance, quota failures, short-window `requests per minute` exhaustion, transient billing-service failure) still pass. `pnpm test src/llm/utils/retry.test.ts` → 18 passed.\n\n**Static checks** — `oxfmt`, `oxlint`, and `pnpm check:import-cycles` (0 cycles) pass on the changed files; `tsgo` reports no errors in the changed files.\n",
-        "branch": "fix/retry-permanent-errors",
-        "head_sha": "cf3b12620a8313b9752c90b5511dc092d547cc41",
-        "author": "gitchrisqueen",
-        "labels": [
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof",
-          "merge-risk: 🚨 other"
-        ],
-        "files": [
-          {
-            "path": "src/llm/utils/retry.test.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/utils/retry.ts",
-            "additions": 24,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 56,
-        "deletions": 7,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103200",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103200.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 94,
-          "gatingTotal": 89,
-          "counts": {
-            "SUCCESS": 38,
-            "SKIPPED": 28,
-            "IN_PROGRESS": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-10T15:07:02.218Z"
-    }
-  ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4979,
+    "total_ms": 799,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 510
+        "ms": 460
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2172
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -236,11 +57,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2274
+        "ms": 322
       },
       {
         "name": "append_ledger",
