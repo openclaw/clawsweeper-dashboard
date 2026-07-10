@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T07:27:27.874Z",
+  "generated_at": "2026-07-10T07:27:37.164Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T04:27:24.845Z",
+  "since": "2026-07-10T04:27:34.924Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    103153
+    103251
+  ],
+  "comment_ids": [
+    4932989618
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -30,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:103153:4933013965:2026-07-10T07:27:20Z:clawsweeper_auto_repair",
-      "comment_id": "4933013965",
-      "comment_version_key": "4933013965:2026-07-10T07:27:20Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103153#issuecomment-4933013965",
+      "idempotency_key": "comment-router:openclaw/openclaw:103251:4932989618:2026-07-10T07:24:33Z:re_review",
+      "comment_id": "4932989618",
+      "comment_version_key": "4932989618:2026-07-10T07:24:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103251#issuecomment-4932989618",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 103153,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 103251,
+      "author": "zw-xysk",
+      "author_id": 294457748,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-10T07:27:20Z",
-      "comment_updated_at": "2026-07-10T07:27:20Z",
+      "comment_created_at": "2026-07-10T07:24:33Z",
+      "comment_updated_at": "2026-07-10T07:24:33Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -72,50 +75,39 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): bound compaction planning worker payloads",
-        "body": "Addresses #100635\n\n## What Problem This Solves\n\nCompaction planning currently sanitizes private fields before worker handoff, but still sends full model-visible tool-result payloads through `workerData`. A single large browser/command result can therefore force multi-megabyte structured-clone work before the later summary-prompt truncation has a chance to help.\n\n## Why This Change Was Made\n\nThis adds a planning-only projection for oversized tool-result text/content before worker handoff. The projection keeps a bounded UTF-16-safe sample for planning, records omitted model-visible characters, and keeps token-pressure accounting conservative so chunking/pruning decisions still treat the original payload as large.\n\nThe projection is applied only to worker planning inputs. Existing local fallback behavior and private-field sanitization remain unchanged.\n\n## User Impact\n\nLong sessions with very large tool outputs should spend less time and memory cloning redundant payload text into the compaction planning worker, reducing event-loop stall/OOM risk while preserving the compaction pressure signal.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs run src/agents/compaction.token-sanitize.test.ts packages/agent-core/src/harness/compaction/compaction.test.ts` passed.\n- `OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 pnpm check:changed --base upstream/main --timed` passed.\n- `pnpm build` passed on the rebased final HEAD.\n- Microbenchmark, source projection:\n  - 1 x 120k-char tool result: `120,134` bytes -> `8,436` bytes (`92.98%` reduction), tokens `30,000` -> `30,001`.\n  - 65 x 40k-char tool results: `2,608,758` bytes -> `548,258` bytes (`78.98%` reduction), tokens `650,000` -> `650,065`.\n- Built-worker smoke: projected 65 x 40k-char payloads through `dist/agents/compaction-planning.worker.js`; output did not contain the full huge text and retained token pressure (`650,000` -> `650,065`).\n\nAI-assisted: yes. I reviewed the compaction planning and worker handoff paths, checked duplicate/open PR state for #100635, and validated the final branch locally.\n\nSigned-off-by: Ho Lim <subhoya@gmail.com>\n",
-        "branch": "codex/issue-100635-bounded-compaction-planning",
-        "head_sha": "091b4e131c9f5e01ef75113720c9485ccdcb2c2e",
-        "author": "hoyalim",
+        "title": "fix(gateway): prevent credential-mutation barrier from blocking all requests indefinitely",
+        "body": "## What Problem This Solves\n\nWhen a credential-mutating gateway method (`device.pair.remove`, `device.token.rotate`, `device.token.revoke`, `node.pair.remove`) is being dispatched, a barrier is set that blocks **all subsequent requests** on that WebSocket connection until the dispatch settles. If the dispatch hangs for any reason, the `for(;;)` barrier loop blocks every following request forever — the connection appears dead and requires a gateway restart.\n\n## Why This Change Was Made\n\nThe realistic deadlock chain (all links confirmed by source inspection):\n\n```\nwithLock (no-timeout mutex, @openclaw/fs-safe/async-lock.js:17)\n  └─ rotateDeviceToken acquires lock at device-pairing.ts:1431\n     └─ I/O stall / DB deadlock inside lock → lock never released\n        └─ handleGatewayRequest never returns\n           └─ barrier never cleared\n              └─ for(;;) loop blocks ALL subsequent WS requests\n                 └─ Connection dead — only gateway restart fixes it\n```\n\nThe barrier wait had **no timeout**, so a single stuck credential-mutation handler could permanently DoS the entire WebSocket connection.\n\n## User Impact\n\nWithout this fix, any I/O stall or deadlock inside a credential-mutating handler causes the affected WebSocket connection to silently stop processing requests. The gateway appears connected but ignores all inbound RPCs until restarted.\n\n## Evidence\n\n**Unit tests (6/6 passed):**\n\n```\n ✓ credential-mutation barrier timeout > does not delay requests when barrier resolves quickly 294ms\n ✓ credential-mutation barrier timeout > unblocks via timeout when barrier never settles 506ms\n ✓ credential-mutation barrier timeout > does not throw when barrier rejects 2ms\n ✓ credential-mutation barrier timeout > exits loop when isClosed returns true 256ms\n ✓ credential-mutation barrier timeout > breaks out of loop when barrier becomes undefined 2ms\n ✓ credential-mutation barrier timeout > re-checks barrier after timeout in case new barrier was set 254ms\n```\n\n**Live deadlock chain proof (transient, not committed):**\n\nAll 7 checks passed:\n\n1. `withLock`: second call blocked 501ms (no timeout) ✅\n2. Barrier blocked 5 iterations × 200ms without breaking ✅\n3. Barrier never cleared by stuck dispatch ✅\n4. `device-pairing.ts`: `withLock = createAsyncLock()` ✅\n5. `device-pairing.ts`: `rotateDeviceToken` uses `await withLock(...)` ✅\n6. Fix: 30s timeout unblocks after 2 iterations ✅\n7. Fix: connection recovers after timeout ✅\n\n**Proof method:** Used `@openclaw/fs-safe/advanced` `createAsyncLock` directly to verify the mutex has no timeout. Simulated the full barrier + timeout pattern with a never-settling Promise. Proof script is transient — not committed to the repo.\n\n## Review\n- Manually reviewed and verified\n- AI-assisted: Yes",
+        "branch": "fix/barrier-timeout-deadlock",
+        "head_sha": "4546c7a513673149c1109365334a6ebee62b8016",
+        "author": "zw-xysk",
         "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "gateway",
+          "size: S"
         ],
         "files": [
           {
-            "path": "src/agents/compaction-planning-worker.ts",
-            "additions": 13,
-            "deletions": 6,
-            "changeType": "MODIFIED"
+            "path": "src/gateway/server/ws-connection/message-handler.barrier-timeout.test.ts",
+            "additions": 145,
+            "deletions": 0,
+            "changeType": "ADDED"
           },
           {
-            "path": "src/agents/compaction-planning.ts",
-            "additions": 120,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/compaction.token-sanitize.test.ts",
-            "additions": 29,
+            "path": "src/gateway/server/ws-connection/message-handler.ts",
+            "additions": 10,
             "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 162,
-        "deletions": 9,
+        "changedFiles": 2,
+        "additions": 155,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103153",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103153.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103251",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103251.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
@@ -124,17 +116,12 @@
           "total": 101,
           "gatingTotal": 96,
           "counts": {
-            "CANCELLED": 2,
+            "SUCCESS": 63,
             "SKIPPED": 37,
-            "SUCCESS": 61,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [
-            "Real behavior proof:CANCELLED"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
@@ -145,21 +132,21 @@
     }
   ],
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3270,
+    "total_ms": 2456,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 233
+        "ms": 564
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1883
+        "ms": 1661
       },
       {
         "name": "classify_comment_commands",
-        "ms": 899
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -175,11 +162,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 229
+        "ms": 216
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
