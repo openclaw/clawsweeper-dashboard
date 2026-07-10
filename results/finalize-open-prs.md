@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-07-10T05:50:23.099Z
+Generated: 2026-07-10T07:15:14.898Z
 
 ## Summary
 
@@ -9,7 +9,7 @@ Generated: 2026-07-10T05:50:23.099Z
 | open_prs | 1 |
 | ready_candidates | 0 |
 | security_hold | 0 |
-| needs_rebase | 0 |
+| needs_rebase | 1 |
 | mergeability_unknown | 0 |
 | needs_checks | 1 |
 | needs_review | 0 |
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#103331](https://github.com/openclaw/openclaw/pull/103331) | fix (Computer Use) Stabilize Codex Computer Use readiness | automerge-openclaw-openclaw-102264 | MERGEABLE | BEHIND | CANCELLED:9 SKIPPED:72 SUCCESS:63 FAILURE:2 NEUTRAL:1; blockers:7 | needs_merge_state:BEHIND, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#103331](https://github.com/openclaw/openclaw/pull/103331) | fix (Computer Use) Stabilize Codex Computer Use readiness | automerge-openclaw-openclaw-102264 | CONFLICTING | DIRTY | CANCELLED:9 SKIPPED:72 SUCCESS:63 FAILURE:2 NEUTRAL:1; blockers:7 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |

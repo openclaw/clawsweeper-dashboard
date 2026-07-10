@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-103331"
 mode: "autonomous"
-run_id: "29070651526"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29070651526"
-head_sha: "493d27f0ccdb453d1e050738102d29b4b72fcfe3"
+run_id: "29074100996"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29074100996"
+head_sha: "6009879136d8bc9160c83978e3d27b5e9881cb6e"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-10T05:50:13.344Z"
+published_at: "2026-07-10T07:15:12.161Z"
 canonical: "#103331"
 canonical_issue: null
 canonical_pr: "#103331"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29070651526](https://github.com/openclaw/clawsweeper/actions/runs/29070651526)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29074100996](https://github.com/openclaw/clawsweeper/actions/runs/29074100996)
 
 Workflow conclusion: failure
 
@@ -54,8 +54,8 @@ Make PR #103331 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | Codex review-fix worker timed out after 436983ms |
-| execute_fix | blocked |  |  | Codex review-fix worker timed out after 436983ms |
+| repair_contributor_branch | failed |  |  | Codex /review timed out after 30000ms |
+| execute_fix | blocked |  |  | Codex /review timed out after 30000ms |
 | automerge_repair_outcome_comment | updated | #103331 |  |  |
 
 ## Apply Actions
