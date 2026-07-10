@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-10T14:27:19.863Z",
+  "generated_at": "2026-07-10T14:27:51.297Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T11:27:17.094Z",
+  "since": "2026-07-10T11:27:48.792Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    101777
+    103371
   ],
   "comment_ids": [
-    4936310966
+    4936334900
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4936335343,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:101777:4936310966:2026-07-10T14:23:48Z:re_review",
-      "comment_id": "4936310966",
-      "comment_version_key": "4936310966:2026-07-10T14:23:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/101777#issuecomment-4936310966",
+      "idempotency_key": "comment-router:openclaw/openclaw:103371:4936334900:2026-07-10T14:26:25Z:re_review",
+      "comment_id": "4936334900",
+      "comment_version_key": "4936334900:2026-07-10T14:26:25Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103371#issuecomment-4936334900",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 101777,
-      "author": "sunlit-deng",
-      "author_id": 253064511,
+      "target_branch": "main",
+      "issue_number": 103371,
+      "author": "Alix-007",
+      "author_id": 267018309,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-10T14:23:48Z",
-      "comment_updated_at": "2026-07-10T14:23:48Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-10T14:26:25Z",
+      "comment_updated_at": "2026-07-10T14:26:25Z",
+      "status_comment_id": 4936335343,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -70,111 +70,190 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 103371,
+          "dispatch_key": "router-737f65c2449dd04d",
+          "dispatched_at": "2026-07-10T14:27:52.238Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-10T14:27:53.391Z",
+          "response_comment_id": "4936335343",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(codex): suppress stdout/stderr stream errors in sandbox subprocesses",
-        "body": "## What Problem This Solves\n\nFixes an issue where stdout/stderr pipe errors from Codex sandbox exec-server subprocesses (both the process RPC path and the streaming HTTP helper) could surface as unhandled Node stream `error` events, crashing the exec-server WebSocket bridge.\n\n## Why This Change Was Made\n\nWhen a Codex sandbox child process exits or its pipes break, the Node stream layer emits `error` on the child's stdout/stderr `Readable` streams. With no `error` listener attached, Node re-throws the event, which bubbles into a process-fatal unhandled error and terminates the exec-server bridge. Both subprocess owners — `processes.ts` (process RPC) and `http.ts` (streaming HTTP) — had this gap.\n\nThe fix attaches a no-op `error` listener on `child.stdout`/`child.stderr` at each spawn point, mirroring the repo-standard pattern already used in `src/agents/sessions/exec.ts`. The process `close` handler stays authoritative for lifecycle and finalization.\n\nRebased onto current `main`; resolved a conflict with #103617 (defer sandbox cleanup until process close), which restructured both spawn sites into a `try/catch`. The no-op listeners are now attached after the guarded spawn, preserving that ownership.\n\n## User Impact\n\nThe Codex sandbox exec-server no longer crashes when a subprocess output pipe breaks in either the process RPC or streaming HTTP path. Output collection and close signalling continue to work normally.\n\n## Evidence\n\n**Production change (both subprocess owners):** after the guarded `spawn`, before the `data` listeners, each spawn site attaches no-op `error` listeners on `child.stdout`/`child.stderr` (`processes.ts`, `http.ts`), mirroring `src/agents/sessions/exec.ts`. The `close` handler stays authoritative for lifecycle/finalization.\n\n**Real runtime behavior proof (outside Vitest, real spawned child).** A standalone Node harness reproduces `runProcess()`'s exact stdout/stderr wiring (real `child.stdout`/`stderr` `data` listeners + the ChildProcess `error` listener + the `close` handler) against a real child that streams stdout, then breaks the real `child.stdout` with a stream `error` — `child.stdout.destroy(new Error(\"EPIPE…\"))`, i.e. real Node stream-error propagation and real `uncaughtException` semantics, the runtime equivalent of an OS output-pipe failure. No Vitest, no module mocking, no synthetic `emit`.\n\nWithout the fix, the unhandled stdout `error` crashes the host that owns the exec-server bridge:\n\n```text\n[host] streamed 24576 real bytes over the pipe (mode=without)\n[host] breaking child.stdout with a real EPIPE stream error ...\n[host] UNCAUGHT EPIPE: broken sandbox stdout pipe -> exec-server bridge host would crash\n[shell] exit code = 1\n```\n\nWith the fix, the host survives, the child `close` still fires, and follow-up work runs — the bridge stays usable:\n\n```text\n[host] streamed 24576 real bytes over the pipe (mode=with)\n[host] breaking child.stdout with a real EPIPE stream error ...\n[host] child close event received (code=1)\n[host] SURVIVED stdout pipe error; host still serving (childClosed=true)\n[host] follow-up work after the error ran; host exiting cleanly (code 0)\n[shell] exit code = 0\n```\n\n<details>\n<summary>Reproduction harness — <code>real-pipe-error-proof.mjs</code> (run: <code>node real-pipe-error-proof.mjs with</code> / <code>... without</code>)</summary>\n\n```js\n// Mirrors the exact stdout/stderr wiring of runProcess() in\n// extensions/codex/src/app-server/sandbox-exec-server/processes.ts and shows a\n// real stdout `error` crashing the host WITHOUT the fix and being survived WITH it.\n// Exit: 0 = host survived and kept serving; 1 = host crashed on the pipe error.\nimport { spawn } from \"node:child_process\";\n\nconst mode = process.argv[2] === \"without\" ? \"without\" : \"with\";\nconst sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\n\nlet hostCrashed = false;\nprocess.on(\"uncaughtException\", (error) => {\n  hostCrashed = true;\n  console.log(`[host] UNCAUGHT ${error.message} -> exec-server bridge host would crash`);\n  process.exit(1);\n});\n\n// A real, long-running child that continuously streams stdout.\nconst child = spawn(\n  process.execPath,\n  [\"-e\", \"setInterval(() => process.stdout.write('x'.repeat(4096)), 5)\"],\n  { stdio: [\"pipe\", \"pipe\", \"pipe\"] },\n);\n\n// --- production wiring mirror (processes.ts::runProcess) ---\nif (mode === \"with\") {\n  const ignoreOutputStreamError = () => {}; // the PR fix, verbatim\n  child.stdout.on(\"error\", ignoreOutputStreamError);\n  child.stderr.on(\"error\", ignoreOutputStreamError);\n}\nlet streamedBytes = 0;\nchild.stdout.on(\"data\", (chunk) => { streamedBytes += chunk.length; });\nchild.stderr.on(\"data\", () => {});\nchild.once(\"error\", () => {}); // ChildProcess-level listener current main already has\nlet childClosed = false;\nchild.once(\"close\", (code) => {\n  childClosed = true;\n  console.log(`[host] child close event received (code=${code})`);\n});\n\nawait sleep(60);\nconsole.log(`[host] streamed ${streamedBytes} real bytes over the pipe (mode=${mode})`);\nconsole.log(\"[host] breaking child.stdout with a real EPIPE stream error ...\");\nchild.stdout.destroy(new Error(\"EPIPE: broken sandbox stdout pipe\"));\n\nawait sleep(60);\nif (hostCrashed) process.exit(1);\nconsole.log(`[host] SURVIVED stdout pipe error; host still serving (childClosed=${childClosed})`);\nchild.kill(\"SIGTERM\");\nawait sleep(40);\nconsole.log(\"[host] follow-up work after the error ran; host exiting cleanly (code 0)\");\nprocess.exit(0);\n```\n\n</details>\n\n**Mutation-sensitive regression test** (`sandbox-exec-server.pipe-survival.test.ts`): spies on `node:child_process` `spawn` to capture the real spawned child, then emits `error` on the real `child.stdout`/`child.stderr` for both the process RPC and streaming HTTP paths. It asserts each stream carries an `error` listener, that emitting the error does not throw, that the WebSocket bridge stays `OPEN`, and (process path) that the bridge still runs follow-up work. Because emitting `error` on a stream with no `error` listener throws synchronously, removing either production listener makes the test fail — so it protects the exact fixed path.\n\n```text\n$ node scripts/run-vitest.mjs extensions/codex/src/app-server/sandbox-exec-server.pipe-survival.test.ts\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n```\n\nThe same no-op `error` listener pattern already ships in `src/agents/sessions/exec.ts`, confirming this is the repo-standard approach.\n\nAI-assisted: built with Codex\n",
-        "branch": "sunlit/fix/codex-processes-stream-errors-v2",
-        "head_sha": "924ec7a244620bd077b49b2d8890d5f7e6cd35a9",
-        "author": "sunlit-deng",
+        "title": "fix(qqbot): require own account credential entries",
+        "body": "## What Problem This Solves\n\nFixes an issue where QQBot logout/setup credential cleanup could treat prototype-inherited named account entries or inherited credential fields as if they were explicit user config. In affected programmatic config shapes, logout could either report cleanup for config the user did not own or continue resolving an inherited account as configured after cleanup skipped the write.\n\n## Why This Change Was Made\n\nQQBot credential cleanup now uses own-property checks across the whole logout/setup account path, not only the low-level credential remover. Named account resolution, default-account selection, setup account updates, bridge account resolution, and credential clearing now agree that only own `channels.qqbot.accounts.<id>` entries and own `clientSecret` / `clientSecretFile` fields are mutable user config.\n\n## User Impact\n\nQQBot logout and setup cleanup now ignore prototype-inherited account data and only clear credentials that are actually present on the user's config object. Normal own account logout still removes `clientSecret` / `clientSecretFile`, keeps non-secret fields such as `appId`, and writes the cleaned config through the existing runtime path.\n\n## Evidence\n\nExact head: `0b22e6b080f2e7c8293f3a50f423c3e0c54d64d3`\n\n- Focused regression tests: `node scripts/run-vitest.mjs extensions/qqbot/src/engine/config/credentials.test.ts extensions/qqbot/src/channel.logout.test.ts` passed, 6/6 tests.\n- Gateway logout proof: exact-head `qqbotPlugin.gateway.logoutAccount` was exercised with a redacted inherited-only named account and a redacted own named account. Output is below.\n- Format: `node_modules/.bin/oxfmt --check --threads=1 extensions/qqbot/src/engine/config/resolve.ts extensions/qqbot/src/bridge/config.ts extensions/qqbot/src/channel.logout.test.ts extensions/qqbot/src/engine/config/credentials.ts extensions/qqbot/src/engine/config/credentials.test.ts` passed.\n- Lint: `node_modules/.bin/oxlint --threads=1 extensions/qqbot/src/engine/config/resolve.ts extensions/qqbot/src/bridge/config.ts extensions/qqbot/src/channel.logout.test.ts extensions/qqbot/src/engine/config/credentials.ts extensions/qqbot/src/engine/config/credentials.test.ts` passed.\n- Whitespace: `git diff --check` passed.\n- Fresh autoreview: `env -u OPENAI_API_KEY -u OPENAI_ORG_ID -u OPENAI_PROJECT_ID .agents/skills/autoreview/scripts/autoreview --mode local` exited 0 with no findings.\n\n## Real behavior proof\n\nThe proof drove the QQBot gateway logout entry point with a runtime `replaceConfigFile` capture. It did not call the private helper directly.\n\n```text\nscenario=inherited-named-account\nresolvedBefore.secretSource=none\nresult={\"ok\":true,\"cleared\":false,\"envToken\":false,\"loggedOut\":true}\nwrites=0\nruntime-write: yes\nscenario=own-named-account\nresolvedBefore.secretSource=config\nresult={\"ok\":true,\"cleared\":true,\"envToken\":false,\"loggedOut\":true}\nwrites=1\n```\n\nWhy this covers the blocker: before the follow-up fix, the same gateway-level proof resolved the inherited-only named account as `secretSource=config` and returned `loggedOut=false` even though cleanup skipped the write. At this head, inherited entries are ignored end-to-end, and own credentials still go through the normal config write path.\n\nProof boundary: live QQBot traffic was not used. The proof exercises the real QQBot plugin logout/setup cleanup boundary with redacted config objects and a captured runtime write path; no QQBot token, app secret, or external API call is involved.\n",
+        "branch": "alix/qqbot-own-credential-entries",
+        "head_sha": "0b22e6b0801826a72a43538451c82f3ca00594ff",
+        "author": "alix-007",
         "labels": [
-          "size: S",
-          "extensions: codex",
+          "size: M",
+          "channel: qqbot",
           "P2",
-          "rating: 🦐 gold shrimp",
+          "rating: 🧂 unranked krab",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/codex/src/app-server/sandbox-exec-server.pipe-survival.test.ts",
-            "additions": 172,
+            "path": "extensions/qqbot/src/bridge/config.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/channel.logout.test.ts",
+            "additions": 121,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "extensions/codex/src/app-server/sandbox-exec-server/http.ts",
-            "additions": 7,
+            "path": "extensions/qqbot/src/engine/config/credentials.test.ts",
+            "additions": 99,
             "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/config/credentials.ts",
+            "additions": 5,
+            "deletions": 5,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/codex/src/app-server/sandbox-exec-server/processes.ts",
-            "additions": 4,
-            "deletions": 0,
+            "path": "extensions/qqbot/src/engine/config/resolve.ts",
+            "additions": 20,
+            "deletions": 7,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 183,
-        "deletions": 0,
+        "changedFiles": 5,
+        "additions": 257,
+        "deletions": 14,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101777",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101777.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103371",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103371.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 94,
-          "gatingTotal": 89,
+          "total": 91,
+          "gatingTotal": 86,
           "counts": {
-            "SUCCESS": 54,
-            "SKIPPED": 29,
-            "IN_PROGRESS": 10,
-            "NEUTRAL": 1
+            "FAILURE": 1,
+            "SUCCESS": 24,
+            "SKIPPED": 33,
+            "IN_PROGRESS": 33
           },
           "blockers": [
+            "Scan changed paths (precise):FAILURE",
             "build-artifacts:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
             "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
             "build-artifacts:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
             "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "Scan changed paths (precise):FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "processed_at": "2026-07-10T14:27:51.566Z"
     }
   ],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 3082,
+    "total_ms": 5208,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 868
+        "ms": 503
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1890
+        "ms": 1988
       },
       {
         "name": "classify_comment_commands",
@@ -190,11 +269,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 313
+        "ms": 2674
       },
       {
         "name": "append_ledger",
