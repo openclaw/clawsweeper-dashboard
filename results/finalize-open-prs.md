@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-07-10T03:55:44.731Z
+Generated: 2026-07-10T05:01:00.446Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#103331](https://github.com/openclaw/openclaw/pull/103331) | fix (Computer Use) Stabilize Codex Computer Use readiness | automerge-openclaw-openclaw-102264 | MERGEABLE | BEHIND | CANCELLED:9 SKIPPED:71 SUCCESS:31 IN_PROGRESS:33 FAILURE:1 NEUTRAL:1; blockers:39 | needs_merge_state:BEHIND, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#103331](https://github.com/openclaw/openclaw/pull/103331) | fix (Computer Use) Stabilize Codex Computer Use readiness | automerge-openclaw-openclaw-102264 | MERGEABLE | BEHIND | CANCELLED:9 SKIPPED:72 SUCCESS:63 FAILURE:2 NEUTRAL:1; blockers:7 | needs_merge_state:BEHIND, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
