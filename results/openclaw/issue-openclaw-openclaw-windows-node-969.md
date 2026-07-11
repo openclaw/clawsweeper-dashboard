@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-969"
 mode: "autonomous"
-run_id: "29170685417"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29170685417"
+run_id: "29171669791"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29171669791"
 head_sha: "7b2b88c900c1f4cf5b82aa1ff2f2e3de8b498cc8"
 workflow_conclusion: "failure"
 result_status: "blocked"
-published_at: "2026-07-11T22:38:55.760Z"
+published_at: "2026-07-11T23:14:56.734Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/969"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/969"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29170685417](https://github.com/openclaw/clawsweeper/actions/runs/29170685417)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29171669791](https://github.com/openclaw/clawsweeper/actions/runs/29171669791)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/969
 
 ## Summary
 
-Current main at 622c0e27c6b0473c57d087f595581cb9eb29c03b still lacks typed agents.workspace.list/get support and routes Workspace through sessions.files then agents.files. The issue is viable, narrow, and non-security-sensitive. A new-fix-PR artifact is planned, but implementation and validation are blocked because this checkout is read-only.
+Current main 622c0e27c6b0473c57d087f595581cb9eb29c03b still lacks typed agents.workspace.list/get support and routes Workspace through sessions.files then agents.files. The issue remains a narrow, non-security bug with no viable open PR. The fix path is planned, but this checkout and temporary filesystem are read-only, so implementation, validation, and current-head UI proof could not be performed.
 
 ## Impact
 
@@ -66,12 +66,12 @@ Current main at 622c0e27c6b0473c57d087f595581cb9eb29c03b still lacks typed agent
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #969 | fix_needed | planned | canonical | The canonical issue remains reproducible from source inspection and has no active implementation PR. |
-| #871 | keep_related | planned | related | Adjacent Workspace UX work has distinct remaining scope and should stay open. |
-| #876 | keep_closed | skipped | related | Closed historical foundation; no mutation is valid. |
-| #956 | keep_closed | skipped | related | Closed context only; use its design intent without copying unverified implementation. |
-| cluster:issue-openclaw-openclaw-windows-node-969 | build_fix_artifact | planned |  | No viable open PR exists and the current-main defect admits a focused implementation. |
-| cluster:issue-openclaw-openclaw-windows-node-969 | open_fix_pr | blocked |  | Implementation is blocked in this worker by the read-only checkout; a writable executor should apply and validate the fix artifact. |
+| #969 | fix_needed | planned | canonical | The canonical report remains valid from current-main source inspection and no active implementation PR owns the fix. |
+| #871 | keep_related | planned | related | The issues share the Workspace surface but retain distinct implementation scope. |
+| #876 | keep_closed | skipped | related | This merged PR is historical foundation, not a live mutation target. |
+| #956 | keep_closed | skipped | related | Closed context must not receive a closure or repair action; independently verify and type the contract in a new narrow PR. |
+| cluster:issue-openclaw-openclaw-windows-node-969 | build_fix_artifact | planned |  | The current-main bug is real, bounded, and has no viable canonical PR. |
+| cluster:issue-openclaw-openclaw-windows-node-969 | open_fix_pr | blocked |  | Only implementation is blocked: this worker cannot modify the checkout or create a locally validated PR branch under the read-only permission profile. |
 
 ## Needs Human
 
