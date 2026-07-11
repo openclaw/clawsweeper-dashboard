@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T15:47:27.225Z",
+  "generated_at": "2026-07-11T15:48:40.400Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T12:47:23.339Z",
+  "since": "2026-07-11T12:48:37.926Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4947243234
   ],
-  "status_comment_id": 4947243700,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4947243234:2026-07-11T15:45:57Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/93865#issuecomment-4947243234",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 93865,
-      "author": "sunlit-deng",
-      "author_id": 253064511,
+      "target_branch": null,
+      "issue_number": 104076,
+      "author": "sheyanmin",
+      "author_id": 44184140,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T15:45:57Z",
-      "comment_updated_at": "2026-07-11T15:45:57Z",
-      "status_comment_id": 4947243700,
+      "comment_created_at": "2026-07-11T15:45:40Z",
+      "comment_updated_at": "2026-07-11T15:45:40Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -70,198 +70,27 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 93865,
-          "dispatch_key": "router-08a7e25bcb46a00c",
-          "dispatched_at": "2026-07-11T15:47:27.983Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-11T15:47:28.982Z",
-          "response_comment_id": "4947243700",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(mattermost): backfill thread history from server when in-memory window is empty",
-        "body": "## What Problem This Solves\n\nFixes an issue where Mattermost users replying in an existing thread could lose earlier thread context after the OpenClaw monitor restarted or the agent session was reset.\n\nFixes #93204\n\n## Why This Change Was Made\n\nThe Mattermost monitor now backfills a cold local thread-history window from the Mattermost thread endpoint after inbound admission gates pass. The backfill marker is keyed by the stored thread `sessionId`, not the stable route session key, so a real `/new` or session reset in a thread gets its own recovery fetch while same-session follow-ups avoid repeated server fetches.\n\nWhen the first cold turn has no stored thread session entry yet, the monitor records a pending backfill marker and adopts it once `recordInboundSessionMeta` creates the stored session id. That keeps the marker stable for same-session follow-ups and failed-fetch no-retry, without blocking a later real session-id rotation.\n\nRecovery is now bounded on both axes flagged in review:\n\n- **Thread response size.** `fetchMattermostThreadPosts` requests only the newest `historyLimit + 1` posts via `?perPage=<limit>&direction=up`, then restores ascending chronological order. `GET /posts/{id}/thread` returns the entire thread at the Mattermost default (`perPage=0`), so an unbounded thread would otherwise allocate and parse on the inbound path. The endpoint reads camelCase `perPage` (not `per_page`), so the limit is actually applied.\n- **Marker lifecycle.** Backfill tracking uses one marker per thread history key (`Map<historyKey, sessionId>`) instead of a process-lifetime `Set` of `historyKey:session` compound keys. Marker memory and lookup cost stay bounded to live threads instead of accumulating an entry per session rotation and scanning the whole set on each candidate. The stored session id is read only after the admission gates, so dropped pre-admission posts never touch the session store.\n\n## User Impact\n\nMattermost thread replies keep useful prior context after restart or `/new`, without repeated thread-history requests, unbounded thread fetches, or unbounded per-session marker growth on long-lived monitors.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs extensions/mattermost/src/mattermost/client.test.ts extensions/mattermost/src/mattermost/monitor.test.ts extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts`: **3 files, 112 passed**. Covers stored thread `sessionId` rotation, same-session no-refetch, failed-fetch no-retry, dropped pre-admission posts, adopt-pending-marker without blocking later rotation, and the initially-missing session entry path.\n- `pnpm run lint:extensions:bundled`: **passed** on the current head (the lane that previously reported `unicorn/no-array-sort`).\n- Bounded fetch asserted (`client.test.ts`): a limited call issues `?perPage=2&direction=up` and re-sorts ascending so callers still build history oldest-first.\n- Bounded marker asserted (`monitor.test.ts`): the backfill requests `historyLimit + 1`, and `threadBackfillMarkers.get(historyKey)` carries the current session marker across the rotation / no-refetch / no-retry / adopt paths.\n- Rebased onto latest `origin/main` (0 behind) and refreshed exact-head repairs: the thread query now uses Mattermost's documented camelCase `perPage` (not `per_page`) so the response bound is actually applied, and the chronological re-sort uses non-mutating `toSorted()` to satisfy the bundled-extension `unicorn/no-array-sort` lint lane.\n\nLive proof: local Docker Mattermost Team Edition 10.11.21 at `http://localhost:8065`, with tokens and Mattermost ids redacted. The proof used real Mattermost REST auth, posts, and `/api/v4/posts/<root>/thread` through `monitorMattermostProvider`; a fake websocket only injected `posted` events into the monitor. The route/thread session key stayed stable while the stored thread `sessionId` rotated. Cold start included prior root/thread context, same-session server-only context stayed absent, and stored-thread-session reset included new server-only prior context:\n\n```json\n{\n  \"mattermost\": \"10.11.21 local Docker, token/id redacted\",\n  \"routeSessionKey\": \"stable, redacted\",\n  \"threadSessionKey\": \"stable, redacted\",\n  \"threadSessionKeyStable\": true,\n  \"storedThreadSessionIds\": [\n    \"stored-session-before-reset\",\n    \"stored-session-after-reset\"\n  ],\n  \"dispatchCount\": 3,\n  \"firstColdStartContainsPriorThreadContext\": true,\n  \"firstColdStartContainsRootContext\": true,\n  \"sameSessionSkippedServerOnlyContext\": true,\n  \"storedThreadSessionIdResetContainsNewPriorContext\": true\n}\n```\n\nAI-assisted: built with Codex\n",
-        "branch": "fix/issue-93204-Mattermost--thread-context-los",
-        "head_sha": "f1e097b22442eb932da5c53233714b260450a53e",
-        "author": "sunlit-deng",
-        "labels": [
-          "channel: mattermost",
-          "size: L",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "extensions/mattermost/src/mattermost/client.test.ts",
-            "additions": 72,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/client.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts",
-            "additions": 305,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/monitor.test.ts",
-            "additions": 252,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/monitor.ts",
-            "additions": 149,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 799,
-        "deletions": 9,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93865",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93865.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
-        "review_decision": "",
-        "checks": {
-          "total": 88,
-          "gatingTotal": 83,
-          "counts": {
-            "SUCCESS": 27,
-            "SKIPPED": 27,
-            "IN_PROGRESS": 34
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T15:47:27.445Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6205,
+    "total_ms": 3881,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2557
+        "ms": 2459
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1313
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -273,11 +102,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2288
+        "ms": 1406
       },
       {
         "name": "append_ledger",
