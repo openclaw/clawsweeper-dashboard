@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T02:33:04.823Z",
+  "generated_at": "2026-07-11T02:34:41.959Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T23:33:01.001Z",
+  "since": "2026-07-10T23:34:41.311Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4941688195
   ],
-  "status_comment_id": 4941688737,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4941688195:2026-07-11T02:31:32Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/103868#issuecomment-4941688195",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 103868,
       "author": "ZOOWH",
       "author_id": 265460861,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-11T02:31:32Z",
       "comment_updated_at": "2026-07-11T02:31:32Z",
-      "status_comment_id": 4941688737,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -70,137 +70,47 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 103868,
-          "dispatch_key": "router-b88a18d06ae95ebf",
-          "dispatched_at": "2026-07-11T02:33:05.749Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-11T02:33:07.733Z",
-          "response_comment_id": "4941312993",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): trigger model fallback on usage-limit promptError (#103734)",
-        "body": "## What Problem This Solves\n\nWhen a Codex-backed turn hits the subscription usage limit, the Codex harness\nreturns a `promptError` in the attempt result instead of throwing. The host's\nmodel fallback is throw-driven — it only engages when `FailoverError` is thrown.\n\nThe existing prompt-error handler already classifies the error and enters\n`resolveRunFailoverDecision`.  However `shouldRotatePrompt` always returns true\nfor rate/billing limits, so the handler first tries **auth profile rotation** —\nretrying the same harness with a different profile.  For harness-owned transports\n(Codex) the limit is on the harness session, not the profile, so every rotation\nfails identically.  This wastes the user's quota and burns retry budget\nbefore fallback can engage.\n\nFixes #103734.\n\n## Why This Change Was Made\n\nOne 8-line addition in `shouldRotatePrompt` (`failover-policy.ts`): when a\nplugin harness owns the transport **and** the failover reason is `rate_limit`\nor `billing`, skip profile rotation.  The decision falls through to\n`fallback_model` in `resolveRunFailoverDecision`, which throws a `FailoverError`\nthat the outer fallback loop catches immediately.\n\nNon-harness providers and non-limit errors are unchanged — they still rotate\nprofiles before falling back.\n\n## User Impact\n\n**Before:** Codex usage limit → profile rotation → all profiles fail →\nrun budget exhausted or model fallback with wasted quota.\n\n**After:** Codex usage limit → `rate_limit` → skips rotation → falls back\nto next configured model immediately.\n\n## Evidence\n\n### Live agent proof (Codex usage-limit → fallback model)\n\nPrimary `openai/gpt-5.5` (Codex) forced to return a redacted usage-limit error.\nFallback `zte/Qwen3-235B-A22B` configured.  Run completes on the fallback:\n\n```\n$ pnpm --filter openclaw openclaw agent --local \\\n    --message \"say hello in one word\" --session-key agent:proof:103734\n\n# (1) Codex turn fails with usage-limit → decision=fallback_model\n[agent/embedded] embedded run failover decision:\n  stage=prompt decision=fallback_model reason=rate_limit\n  from=openai/gpt-5.5\n\n# (2) FailoverError thrown → model fallback loop catches it\n[diagnostic] lane task error: FailoverError: You've reached your Codex\n  subscription usage limit.\n\n# (3) Fallback switches to zte/Qwen3-235B-A22B\n[model-fallback/decision] decision=candidate_failed\n  candidate=openai/gpt-5.5 reason=rate_limit\n  next=zte/Qwen3-235B-A22B\n\n# (4) Fallback model succeeds\n[provider-transport-fetch] [model-fetch] response\n  provider=zte model=Qwen3-235B-A22B status=200\n\n[model-fallback/decision] decision=candidate_succeeded\n  candidate=zte/Qwen3-235B-A22B\n\nHello\n\n[agent] run ended with stopReason=stop\n```\n\n✅ Codex usage-limit → `fallback_model` (no profile rotation) → ZTE succeeds.\n\n### Decision policy proof script\n\n```\n$ node --import tsx scripts/proof/codex-usage-limit-fallback.mts\n\nStep 1 — classify usage-limit → rate_limit: PASS\nStep 2 — harness-owned rate_limit → fallback_model: PASS\nStep 3 — harness-owned billing → fallback_model: PASS\nStep 4 — harness-owned server_error → rotate_profile: PASS\nStep 5 — non-harness rate_limit → rotate_profile: PASS\n\nOVERALL: ALL PASSED\n```\n\n### Unit tests\n\n```\n$ node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/failover-policy.test.ts\n\n Test Files  1 passed (1)\n      Tests  42 passed (42)\n```\n\n### Broader failover suite\n\n```\n$ node scripts/run-vitest.mjs \\\n    src/agents/embedded-agent-runner/run/failover-policy.test.ts \\\n    src/agents/embedded-agent-runner/run/failover-observation.test.ts \\\n    src/agents/embedded-agent-runner/run/assistant-failover.test.ts \\\n    src/agents/embedded-agent-runner/run.codex-server-error-fallback.test.ts\n\n Test Files  4 passed (4)\n      Tests  81 passed (81)\n```\n\n### Model-fallback E2E\n\n```\n$ node scripts/run-vitest.mjs src/agents/model-fallback.run-embedded.e2e.test.ts\n\n Test Files  1 passed (1)\n      Tests  21 passed (21)\n```\n\n### Pre-submit checks\n\n```\noxfmt --check → All matched files use the correct format\ngit diff --check → clean\n```\n\n### Diff summary\n\n```\nsrc/agents/embedded-agent-runner/run/failover-policy.ts       | 11 +++++\nsrc/agents/embedded-agent-runner/run/failover-policy.test.ts  | 58 ++++++++++++++\nscripts/proof/codex-usage-limit-fallback.mts                   | 102 ++++++++++++++++++++++++\n3 files changed, 171 insertions(+)\n```\n\n- [x] I understand what the code does\n- [x] Change is focused and does not mix unrelated concerns",
-        "branch": "fix/103734-codex-usage-limit-fallback",
-        "head_sha": "c0d981b19d7ebb71564c0924f34959de39178407",
-        "author": "zoowh",
-        "labels": [
-          "scripts",
-          "agents",
-          "size: S",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "scripts/proof/codex-usage-limit-fallback.mts",
-            "additions": 102,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/failover-policy.test.ts",
-            "additions": 58,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/failover-policy.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 171,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103868",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103868.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 33,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-whole-1:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-large-whole-1:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T02:33:05.088Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7429,
+    "total_ms": 2173,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 612
+        "ms": 635
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 3194
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 5203
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 5
+        "ms": 0
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3595
+        "ms": 1525
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
